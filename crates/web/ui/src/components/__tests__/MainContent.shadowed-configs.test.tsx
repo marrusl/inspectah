@@ -48,10 +48,15 @@ function view(overrides: Partial<ViewResponse> = {}): ViewResponse {
     generation: 0,
     repo_groups: [],
     version_changes: [],
-    service_states: [],
-    service_dropins: [],
+    unit_states: [],
+    unit_dropins: [],
+    mount_findings: [],
+    manual_links: [],
+    undetermined_installs: [],
     quadlets: [],
     flatpaks: [],
+    declined_generated: [],
+    generated_timers: [],
     sysctl: { state: "unavailable", reason: "not collected" },
     tuned: [],
     users_groups_decisions: [],
@@ -68,6 +73,7 @@ const DROPIN: DropInDecisionDto = {
   path: DROPIN_PATH,
   triage: TRIAGE,
   include: false,
+  locked: false,
 };
 
 const props = {
@@ -100,8 +106,8 @@ describe("shadowed config rows in the configs section", () => {
       <MainContent
         {...props}
         viewData={view({
-          config_files: [shadowedConfig(DROPIN_PATH, "services")],
-          service_dropins: [DROPIN],
+          config_files: [shadowedConfig(DROPIN_PATH, "units")],
+          unit_dropins: [DROPIN],
         })}
       />,
     );
@@ -120,18 +126,18 @@ describe("shadowed config rows in the configs section", () => {
       <MainContent
         {...props}
         viewData={view({
-          config_files: [shadowedConfig(DROPIN_PATH, "services")],
-          service_dropins: [DROPIN],
+          config_files: [shadowedConfig(DROPIN_PATH, "units")],
+          unit_dropins: [DROPIN],
         })}
         onNavigateToItem={onNavigateToItem}
       />,
     );
     await userEvent.click(screen.getByTestId("shadow-owner-link"));
-    expect(onNavigateToItem).toHaveBeenCalledWith("services", DROPIN_PATH);
+    expect(onNavigateToItem).toHaveBeenCalledWith("units", DROPIN_PATH);
   });
 
   it("leaves an unshadowed config row untouched", () => {
-    const plain = shadowedConfig("/etc/hosts", "services");
+    const plain = shadowedConfig("/etc/hosts", "units");
     plain.entry.disposition = { kind: "actionable", include: true };
     delete plain.entry.shadowed_by;
     render(

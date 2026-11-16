@@ -5,25 +5,294 @@
 //! - Repo files (snap.rpm.repo_files)
 //! - GPG keys (snap.rpm.gpg_keys)
 //! - Firewall zones (snap.network.firewall_zones)
-//! - Kernel/boot: the kargs.d file (the kernel config files themselves,
-//!   sysctl files included, are `snap.config.files` entries, written by
-//!   the config loop above on their own decision)
+//! - Kernel/boot: the kargs.d file, an offer of the stager's decision like
+//!   the others (the kernel config files themselves, sysctl files
+//!   included, are `snap.config.files` entries, written on their own
+//!   decision)
 //! - Systemd drop-ins (both config/ and drop-ins/)
-//! - Generated/local timer units
+//! - Generated timer units
 //! - Quadlet units
 //! - Flatpak manifests + provisioning service
 //! - Non-RPM env files
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderError;
-use std::collections::HashSet;
-use std::path::Path;
+use inspectah_core::types::units::{UNIT_TYPE_SUFFIXES, UnitName};
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 
-use super::safety::{BareWord, has_line_break_or_control, operator_kargs};
+use super::safety::{BareWord, MAX_EXPORT_PATH_LEN, has_line_break_or_control, operator_kargs};
 use crate::build::extract::is_single_normal_component;
 
 /// Path prefix for quadlet unit files — excluded from config tree copy.
-const QUADLET_PREFIX: &str = "etc/containers/systemd/";
+const QUADLET_PREFIX: &str = "/etc/containers/systemd/";
+
+/// The directory systemd reads the administrator's unit files from. A
+/// zero-length unit file directly in it is a mask.
+pub(crate) const ETC_UNIT_DIR: &str = "/etc/systemd/system";
+
+/// The longest path component a Linux filesystem holds (`NAME_MAX`), in
+/// bytes. A path's whole length is held to [`MAX_EXPORT_PATH_LEN`],
+/// Linux's `PATH_MAX`, the export's existing path-length policy.
+const MAX_PATH_COMPONENT_LEN: usize = 255;
+
+/// The provisioning service inspectah generates for flatpak applications.
+pub(crate) const FLATPAK_SERVICE: &str = "flatpak-provision.service";
+
+/// Where the export writes the kernel arguments it migrates from the
+/// host's cmdline (bootc's kargs.d).
+pub(crate) const KARGS_PATH: &str = "/usr/lib/bootc/kargs.d/inspectah-migrated.toml";
+
+/// Where a staged file lands in the image: a normalized absolute path.
+///
+/// The one constructor, [`Destination::new`], drops empty and `.`
+/// components, so `/etc/systemd/./system//x.timer`, a trailing separator
+/// and a path given without its leading `/` are all one destination. It
+/// refuses `..`, a NUL byte and a control character, a path that names no
+/// file, and a path or component longer than a Linux filesystem holds
+/// (checked first, so a pathological imported path costs no more than
+/// one pass). The reading is lexical: the staging directory is created
+/// empty by the export and only the stager writes into it, so no symlink
+/// sits on a path.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Destination(String);
+
+impl Destination {
+    /// The normalized form of `path`, or the rule it breaks.
+    pub fn new(path: &str) -> Result<Self, PathError> {
+        if path.len() > MAX_EXPORT_PATH_LEN {
+            return Err(PathError::TooLong);
+        }
+        if path.contains('\0') {
+            return Err(PathError::NulByte);
+        }
+        if has_line_break_or_control(path) {
+            return Err(PathError::LineBreakOrControl);
+        }
+        let mut normal = String::with_capacity(path.len() + 1);
+        for component in path.split('/') {
+            match component {
+                "" | "." => {}
+                ".." => return Err(PathError::Traversal),
+                name if name.len() > MAX_PATH_COMPONENT_LEN => {
+                    return Err(PathError::ComponentTooLong);
+                }
+                name => {
+                    normal.push('/');
+                    normal.push_str(name);
+                }
+            }
+        }
+        if normal.is_empty() {
+            return Err(PathError::NoFileName);
+        }
+        Ok(Self(normal))
+    }
+
+    /// The absolute path, `/` first.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The path below `/`, for joining under a staging directory.
+    fn relative(&self) -> &str {
+        &self.0[1..]
+    }
+
+    /// The directory this path is in, `None` for a top-level name. A
+    /// prefix of a normal path ending before a separator is normal too.
+    fn parent(&self) -> Option<Destination> {
+        let (dir, _) = self.0.rsplit_once('/')?;
+        (!dir.is_empty()).then(|| Destination(dir.to_owned()))
+    }
+
+    /// Whether a zero-length file here is a mask: a file directly in
+    /// `/etc/systemd/system` named with a unit type suffix.
+    fn is_unit_file_path(&self) -> bool {
+        self.0.rsplit_once('/').is_some_and(|(dir, name)| {
+            dir == ETC_UNIT_DIR
+                && name.rsplit_once('.').is_some_and(|(stem, suffix)| {
+                    !stem.is_empty() && UNIT_TYPE_SUFFIXES.contains(&suffix)
+                })
+        })
+    }
+}
+
+impl std::fmt::Display for Destination {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Why the export withholds a file it was offered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WithheldWhy {
+    /// A zero-length file at a unit path is a mask (§ 10.2 rule 1).
+    ZeroLengthUnitFile,
+    /// Another staged file has this destination, or needs it as a
+    /// directory.
+    Conflict { other: Destination },
+    /// A unit inspectah generates has the name of a collected unit,
+    /// `unit`, the file of the generated unit that collides; `reserved_by`
+    /// says where the reservation of that name came from (§ 10.2 item 3). Every file of the
+    /// generated unit is withheld, the paired service of a generated timer
+    /// included.
+    GeneratedNameCollision {
+        unit: UnitName,
+        reserved_by: Reservation,
+    },
+    /// An unmanaged file offered a path under `/etc/systemd/system`
+    /// ([`unmanaged_unit_path`]). The unmanaged-files section copies its
+    /// files after the unit state section, outside this decision, so it
+    /// would be a second writer of a unit path.
+    UnmanagedUnitPath,
+    /// The destination is [`MACHINE_ID_PATH`]. The image keeps the base
+    /// image's empty file, which is what makes first boot keep the
+    /// rendered unit states (§ 10.1, § 10.2 "Never the machine-id").
+    MachineId,
+}
+
+/// How the collected unit a generated unit's name collides with is known
+/// (§ 10.2 "What the plan takes" item 3), which decides the advice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reservation {
+    /// A row the operator can exclude: an included state change, or an
+    /// included config entry or drop-in row at the unit's path. Excluding
+    /// that row and the unit's file lets the generated unit back in.
+    Row,
+    /// The units section names the unit with no row to exclude: an
+    /// inventory entry with no state change, as a package's unit at its
+    /// preset is, or a mount finding.
+    Inventory,
+}
+
+impl WithheldWhy {
+    /// The variant's name, as refine's view names why a file is withheld
+    /// (§ 11.1). The one place it is spelled.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::ZeroLengthUnitFile => "ZeroLengthUnitFile",
+            Self::Conflict { .. } => "Conflict",
+            Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
+            Self::UnmanagedUnitPath => "UnmanagedUnitPath",
+            Self::MachineId => "MachineId",
+        }
+    }
+
+    /// What the Containerfile's FIXME says after the path of the file
+    /// withheld at `at`, and refine's text for the row that offered it.
+    /// The one place this text is written.
+    pub fn describe(&self, at: &Destination) -> String {
+        match self {
+            Self::ZeroLengthUnitFile => "a zero-length file at a unit path is a mask; \
+                 the export carries a mask only as a systemctl mask command"
+                .to_owned(),
+            Self::Conflict { other } if other == at => {
+                "another offer at this path has different content; \
+                 exclude one of the two"
+                    .to_owned()
+            }
+            Self::Conflict { other } => format!(
+                "{other} is also staged, and one of the two paths is a directory \
+                 of the other; exclude one of the two"
+            ),
+            Self::GeneratedNameCollision {
+                unit,
+                reserved_by: Reservation::Row,
+            } => format!(
+                "inspectah generates this file for a unit, and {} is a unit collected \
+                 from the host; the generated file is not written over it",
+                unit.as_str()
+            ),
+            Self::GeneratedNameCollision {
+                unit,
+                reserved_by: Reservation::Inventory,
+            } => format!(
+                "inspectah generates this file for a unit, and {} is a unit the host \
+                 already has, with no row to exclude; the generated file is not written \
+                 over it",
+                unit.as_str()
+            ),
+            Self::UnmanagedUnitPath => UNMANAGED_UNIT_PATH.to_owned(),
+            Self::MachineId => MACHINE_ID_KEPT.to_owned(),
+        }
+    }
+}
+
+/// [`WithheldWhy::UnmanagedUnitPath`]'s text.
+const UNMANAGED_UNIT_PATH: &str = "an unmanaged file is not written under /etc/systemd/system, \
+     where the export writes unit files only from their own rows; a unit file belongs under \
+     Configuration Files";
+
+/// The machine identity file. The export never writes it, so the image
+/// keeps the base image's zero-length file (§ 10.2 "Never the
+/// machine-id").
+pub const MACHINE_ID_PATH: &str = "/etc/machine-id";
+
+/// [`WithheldWhy::MachineId`]'s text.
+const MACHINE_ID_KEPT: &str = "the image keeps the base image's empty /etc/machine-id, which is \
+     what makes first boot keep the rendered unit states; the source host's machine identity is \
+     not copied";
+
+/// The one decision on an unmanaged file's path (§ 10.2 "No other writer
+/// under `/etc/systemd/system`"): whether it is `/etc/systemd/system` or
+/// any path below it, a file in a `.d` or `.wants` directory included,
+/// read as a [`Destination`] so every spelling of one path is one answer.
+/// Such a file is withheld: the scan does not bundle it, refine does not
+/// extract it, and the Containerfile copies or links nothing for it. A
+/// path that is not a `Destination` is not under the directory; the
+/// unmanaged section refuses it on its own test.
+pub fn unmanaged_unit_path(path: &str) -> bool {
+    Destination::new(path).is_ok_and(|dest| {
+        dest.as_str()
+            .strip_prefix(ETC_UNIT_DIR)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
+/// Whether `dest` is [`MACHINE_ID_PATH`], however the path was spelled.
+fn is_machine_id(dest: &Destination) -> bool {
+    dest.as_str() == MACHINE_ID_PATH
+}
+
+/// The one decision on whether an unmanaged file is withheld, and why: a
+/// path under `/etc/systemd/system` ([`unmanaged_unit_path`]), or the
+/// machine-id, which no section of an imported snapshot writes (§ 10.2
+/// "Never the machine-id"). The scan does not bundle such a file, refine
+/// does not extract it, and the Containerfile copies or links nothing for
+/// it.
+pub fn unmanaged_withheld(path: &str) -> Option<WithheldWhy> {
+    if Destination::new(path).is_ok_and(|dest| is_machine_id(&dest)) {
+        Some(WithheldWhy::MachineId)
+    } else if unmanaged_unit_path(path) {
+        Some(WithheldWhy::UnmanagedUnitPath)
+    } else {
+        None
+    }
+}
+
+/// One file the export writes: what offered it, and its content, borrowed
+/// from the snapshot or owned when inspectah generates it (the flatpak
+/// provisioning service).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedWrite<'a> {
+    pub source: StagedFileKind,
+    pub content: Cow<'a, str>,
+}
+
+/// Every file the export writes, and every file it was offered and does
+/// not write. The stager writes `writes` and nothing else.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StagedWrites<'a> {
+    /// One write per destination, keyed by where the file lands in the
+    /// image: what lands there.
+    pub writes: BTreeMap<Destination, StagedWrite<'a>>,
+    /// Offered files with a valid destination that are not written.
+    pub withheld: Vec<(Destination, StagedFileKind, WithheldWhy)>,
+    /// Offered files whose path is not a [`Destination`], as offered.
+    pub refused: Vec<(StagedFileKind, String, PathError)>,
+}
 
 /// Validate that a filesystem path is safe: no traversal, no NUL bytes,
 /// no line breaks or other control characters, no absolute paths.
@@ -100,131 +369,233 @@ pub enum PathError {
     Traversal,
     #[error("symlink escapes root")]
     SymlinkEscape,
+    #[error("path names no file")]
+    NoFileName,
+    #[error("path is longer than {MAX_EXPORT_PATH_LEN} bytes")]
+    TooLong,
+    #[error("a path component is longer than {MAX_PATH_COMPONENT_LEN} bytes")]
+    ComponentTooLong,
 }
 
-/// Returns the set of service drop-in paths owned by the services renderer.
-///
-/// These paths live under `etc/systemd/system/*.service.d/` and must NOT be
-/// materialized by the generic config tree — the services section handles
-/// them via its own COPY/enable logic.
-fn service_owned_paths(snap: &InspectionSnapshot) -> HashSet<String> {
-    let mut paths = HashSet::new();
-    if let Some(services) = &snap.services {
-        for dropin in &services.drop_ins {
-            let rel = dropin.path.trim_start_matches('/');
-            if !rel.is_empty() {
-                paths.insert(rel.to_string());
-            }
+impl PathError {
+    /// The variant's name, as refine's view names the rule a refused
+    /// offer broke. The one place it is spelled.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NulByte => "NulByte",
+            Self::LineBreakOrControl => "LineBreakOrControl",
+            Self::AbsolutePath => "AbsolutePath",
+            Self::Traversal => "Traversal",
+            Self::SymlinkEscape => "SymlinkEscape",
+            Self::NoFileName => "NoFileName",
+            Self::TooLong => "TooLong",
+            Self::ComponentTooLong => "ComponentTooLong",
         }
     }
-    paths
 }
 
-/// Returns the set of quadlet unit paths owned by the containers renderer.
+/// Destinations a config entry must not be staged at, because another
+/// section carries the file or it is not carried at all:
 ///
-/// These paths live under `etc/containers/systemd/` and must NOT be
-/// materialized by the generic config tree — the containers section handles
-/// them via its own quadlet/ directory and COPY logic.
-fn container_owned_paths(snap: &InspectionSnapshot) -> HashSet<String> {
-    let mut paths = HashSet::new();
+/// - every `units.drop_ins` path: the units section stages those under
+///   `drop-ins/` on the drop-in's own decision;
+/// - every quadlet unit path: the containers section stages those under
+///   `quadlet/`;
+/// - every NetworkManager connection that uses DHCP (`method=auto`).
+///
+/// A path that is not a [`Destination`] matches nothing.
+fn owned_elsewhere(snap: &InspectionSnapshot) -> HashSet<Destination> {
+    let mut paths: Vec<&str> = Vec::new();
+    if let Some(units) = &snap.units {
+        paths.extend(units.drop_ins.iter().map(|d| d.path.as_str()));
+    }
     if let Some(containers) = &snap.containers {
-        for quadlet in &containers.quadlet_units {
-            let rel = quadlet.path.trim_start_matches('/');
-            if !rel.is_empty() {
-                paths.insert(rel.to_string());
-            }
-        }
+        paths.extend(containers.quadlet_units.iter().map(|q| q.path.as_str()));
+    }
+    if let Some(network) = &snap.network {
+        paths.extend(
+            network
+                .connections
+                .iter()
+                .filter(|c| c.method == "auto")
+                .map(|c| c.path.as_str()),
+        );
     }
     paths
+        .into_iter()
+        .filter_map(|p| Destination::new(p).ok())
+        .collect()
 }
 
-/// Returns the set of NM connection paths that use DHCP (method=auto),
-/// which should be excluded from the config tree copy.
-fn dhcp_connection_paths(snap: &InspectionSnapshot) -> HashSet<String> {
-    let mut paths = HashSet::new();
-    if let Some(ref network) = snap.network {
-        for conn in &network.connections {
-            if conn.method == "auto" && !conn.path.is_empty() {
-                let rel = conn.path.trim_start_matches('/');
-                paths.insert(rel.to_string());
+/// Write one staged file, creating its parent directories. A write that
+/// does not land is an error naming the file, and fails the export.
+fn write_staged(path: &Path, content: &str) -> Result<(), RenderError> {
+    let named = |e: std::io::Error| {
+        RenderError::Io(std::io::Error::new(
+            e.kind(),
+            format!("cannot stage {}: {e}", path.display()),
+        ))
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(named)?;
+    }
+    std::fs::write(path, content).map_err(named)
+}
+
+/// Writes the stager's decision under the export, and never over or
+/// through an entry it did not create under that exact spelling.
+///
+/// Two destinations that differ only in a way the staging filesystem
+/// ignores (letter case on a default macOS volume, or Unicode
+/// normalization) are two files on Linux and one entry on disk. An
+/// ordinary write would put the second offer's bytes under the first
+/// offer's path with no conflict named. So below a kind's directory every
+/// directory is created by this stager or reused only when it created that
+/// exact path, and every file is created new. A collision fails the
+/// export, naming both files.
+///
+/// The decision itself stays lexical: [`staged_writes`] is read by the
+/// Containerfile, the unit plan and refine's view without a staging
+/// directory, and a Linux path's case is part of its identity.
+#[derive(Default)]
+struct Stager {
+    /// Every directory and file this stager created, with the staged file
+    /// it was created for.
+    created: Vec<(PathBuf, PathBuf)>,
+    /// The paths in `created`, for lookup.
+    known: HashSet<PathBuf>,
+}
+
+impl Stager {
+    /// Write `content` at `root/rel`, creating `root` and the directories
+    /// below it.
+    fn write(&mut self, root: &Path, rel: &Path, content: &str) -> Result<(), RenderError> {
+        let path = root.join(rel);
+        let named = |e: std::io::Error| {
+            RenderError::Io(std::io::Error::new(
+                e.kind(),
+                format!("cannot stage {}: {e}", path.display()),
+            ))
+        };
+        std::fs::create_dir_all(root).map_err(named)?;
+        let mut dir = root.to_path_buf();
+        for component in rel.parent().into_iter().flat_map(Path::components) {
+            dir.push(component);
+            if self.known.contains(&dir) {
+                continue;
+            }
+            match std::fs::create_dir(&dir) {
+                Ok(()) => self.record(dir.clone(), &path),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    return Err(self.collision(&path, &dir));
+                }
+                Err(e) => return Err(named(e)),
             }
         }
-    }
-    paths
-}
-
-/// Write content to dest, creating parent directories. Handles
-/// directory/file collisions gracefully (skips with warning).
-fn safe_write_file(dest: &Path, content: &str) {
-    if dest.exists() && dest.is_dir() {
-        eprintln!(
-            "inspectah: warning: skipping config file write -- path is already a directory: {}",
-            dest.display()
-        );
-        return;
-    }
-
-    if let Some(parent) = dest.parent()
-        && std::fs::create_dir_all(parent).is_err()
-    {
-        eprintln!(
-            "inspectah: warning: skipping config file write -- parent path conflict: {}",
-            dest.display()
-        );
-        return;
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(self.collision(&path, &path));
+            }
+            Err(e) => return Err(named(e)),
+        };
+        std::io::Write::write_all(&mut file, content.as_bytes()).map_err(named)?;
+        self.record(path.clone(), &path);
+        Ok(())
     }
 
-    let _ = std::fs::write(dest, content);
+    fn record(&mut self, entry: PathBuf, for_file: &Path) {
+        self.known.insert(entry.clone());
+        self.created.push((entry, for_file.to_path_buf()));
+    }
+
+    /// The error for staging `path` when `entry` (`path` or a directory on
+    /// the way to it) already exists: the staged file it is an alias of,
+    /// by device and inode, or an entry the stager did not create.
+    fn collision(&self, path: &Path, entry: &Path) -> RenderError {
+        use std::os::unix::fs::MetadataExt;
+        let same =
+            |a: &std::fs::Metadata, b: &std::fs::Metadata| a.dev() == b.dev() && a.ino() == b.ino();
+        let alias = std::fs::metadata(entry).ok().and_then(|meta| {
+            self.created
+                .iter()
+                .find(|(other, _)| std::fs::metadata(other).is_ok_and(|m| same(&m, &meta)))
+        });
+        let message = match alias {
+            Some((other, for_file)) => format!(
+                "cannot stage {}: the staging filesystem treats {} as {}, staged for {}; \
+                 the two are different files on the target, exclude one of the two",
+                path.display(),
+                entry.display(),
+                other.display(),
+                for_file.display()
+            ),
+            None => format!(
+                "cannot stage {}: {} already exists and the export did not create it",
+                path.display(),
+                entry.display()
+            ),
+        };
+        RenderError::Io(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            message,
+        ))
+    }
 }
 
 /// Write `content` to `dir/name`, where `name` comes from the snapshot.
 /// `name` must be one ordinary component: an absolute name would replace
 /// `dir` in the join and `..` would leave it. A refused name is skipped
-/// with a warning.
-fn write_named_file(dir: &Path, name: &str, content: &str) {
+/// with a warning; a write that fails is an error.
+fn write_named_file(dir: &Path, name: &str, content: &str) -> Result<(), RenderError> {
     if !is_single_normal_component(name) {
         eprintln!(
             "inspectah: warning: skipping {} -- not a plain file name",
             name.escape_debug()
         );
-        return;
+        return Ok(());
     }
-    let _ = std::fs::write(dir.join(name), content);
+    write_staged(&dir.join(name), content)
 }
 
 /// The file name a scheduled-task unit is staged under in
 /// `config/etc/systemd/system/`, or `None` when the name is refused: an
 /// absolute name or one with `..` would leave that directory.
 ///
-/// The stager and the Containerfile renderer both ask this, so the
-/// renderer never enables a unit that was not written.
+/// [`staged_writes`] and the Containerfile renderer both ask this, so the
+/// renderer never enables a unit under a name the stager refused.
 pub(crate) fn staged_unit_file(name: &str, suffix: &str) -> Option<String> {
     let file = format!("{name}.{suffix}");
     is_single_normal_component(&file).then_some(file)
 }
 
-/// Write `content` as the unit `name.suffix` in `dir`, if
-/// [`staged_unit_file`] accepts the name. A refused name is skipped with
-/// a warning.
-fn write_unit_file(dir: &Path, name: &str, suffix: &str, content: &str) {
-    match staged_unit_file(name, suffix) {
-        Some(file) => write_named_file(dir, &file, content),
-        None => eprintln!(
-            "inspectah: warning: skipping {}.{suffix} -- not a plain file name",
-            name.escape_debug()
-        ),
-    }
-}
-
-/// A kind of snapshot file the config tree stager writes at the file's
-/// own path, under `config/` or, for a drop-in, under `drop-ins/`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StagedFileKind {
+/// What offered a staged file. Each kind is staged under its own
+/// directory of the export: a drop-in under `drop-ins/`, the flatpak
+/// provisioning service under `flatpak/`, everything else under
+/// `config/`, at the file's image path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StagedFileKind {
     ConfigFile,
     RepoFile,
     GpgKey,
     FirewallZone,
     DropIn,
+    /// A `.timer` or `.service` the scheduled section generates from a
+    /// cron entry.
+    GeneratedUnit,
+    /// The flatpak provisioning service inspectah generates.
+    FlatpakService,
+    /// The kernel arguments file inspectah generates from the host's
+    /// cmdline, at [`KARGS_PATH`].
+    KargsFile,
+    /// An unmanaged file. Never staged here: the unmanaged-files section
+    /// copies its own. It is only ever withheld, as
+    /// [`WithheldWhy::UnmanagedUnitPath`].
+    UnmanagedFile,
 }
 
 impl StagedFileKind {
@@ -235,26 +606,89 @@ impl StagedFileKind {
             Self::RepoFile => "repo file",
             Self::GpgKey => "GPG key",
             Self::FirewallZone => "firewall zone",
-            Self::DropIn => "service drop-in",
+            Self::DropIn => "unit drop-in",
+            Self::GeneratedUnit => "generated unit",
+            Self::FlatpakService => "flatpak provisioning service",
+            Self::KargsFile => "kernel arguments file",
+            Self::UnmanagedFile => "unmanaged file",
+        }
+    }
+
+    /// Whether the file is an inventory's record of a host file the config
+    /// walk also records: a repo file, a GPG key or a firewall zone. These
+    /// three are the kinds the config walk can record at the same path on a
+    /// host (it excludes none of their directories).
+    fn is_inventory_record(self) -> bool {
+        matches!(self, Self::RepoFile | Self::GpgKey | Self::FirewallZone)
+    }
+
+    /// Whether inspectah generates the file from its own template: a
+    /// unit the scheduled section converts from cron, or the flatpak
+    /// provisioning service. The generated kargs file is not one: it is
+    /// decided like a collected offer.
+    fn is_generated_unit(self) -> bool {
+        matches!(self, Self::GeneratedUnit | Self::FlatpakService)
+    }
+
+    /// Where a file of this kind at `dest` is staged: the directory of the
+    /// export it goes under, and its path below that directory.
+    fn staged_at(self, output_dir: &Path, dest: &Destination) -> (PathBuf, PathBuf) {
+        match self {
+            Self::DropIn => (output_dir.join("drop-ins"), dest.relative().into()),
+            Self::FlatpakService => (output_dir.join("flatpak"), FLATPAK_SERVICE.into()),
+            _ => (output_dir.join("config"), dest.relative().into()),
         }
     }
 }
 
-/// One included snapshot file the stager writes at its own path.
-pub(crate) struct StagedSource<'a> {
-    pub(crate) kind: StagedFileKind,
-    pub(crate) path: &'a str,
-    content: &'a str,
+/// One file offered to the stager, before [`staged_writes`] decides.
+struct Offer<'a> {
+    kind: StagedFileKind,
+    path: Cow<'a, str>,
+    content: Cow<'a, str>,
 }
 
-/// Every included file the stager writes at its own path, in the order it
-/// writes them.
+impl<'a> Offer<'a> {
+    fn borrowed(kind: StagedFileKind, path: &'a str, content: &'a str) -> Self {
+        Self {
+            kind,
+            path: Cow::Borrowed(path),
+            content: Cow::Borrowed(content),
+        }
+    }
+
+    /// A scheduled-section unit `name.suffix` under `/etc/systemd/system`,
+    /// unless its body is empty (an `@reboot` entry has no timer) or
+    /// [`staged_unit_file`] refuses its name. The Containerfile names a
+    /// refused name in a FIXME where it would have enabled the unit.
+    fn scheduled_unit(
+        kind: StagedFileKind,
+        name: &str,
+        suffix: &str,
+        content: &'a str,
+    ) -> Option<Self> {
+        if content.is_empty() {
+            return None;
+        }
+        let file = staged_unit_file(name, suffix)?;
+        Some(Self {
+            kind,
+            path: Cow::Owned(format!("{ETC_UNIT_DIR}/{file}")),
+            content: Cow::Borrowed(content),
+        })
+    }
+}
+
+/// Every file a section offers the export, in section order: the
+/// included config files, repo files, GPG keys, firewall zones and
+/// drop-ins at their own paths; the units the scheduled section generates
+/// from cron entries, under `/etc/systemd/system`; the kargs file at
+/// [`KARGS_PATH`]; and the flatpak provisioning service.
 ///
-/// [`write_config_tree`] stages from this list and the Containerfile
-/// reports from [`unstaged_files`], which reads the same list through the
-/// same [`validate_path`], so a file the stager refuses is always one the
-/// Containerfile names in a FIXME.
-pub(crate) fn staged_sources(snap: &InspectionSnapshot) -> Vec<StagedSource<'_>> {
+/// A local timer's files are not offered here: each is a config entry, or
+/// a drop-in row when it shadows a vendor timer, and its row is its one
+/// control (§ 8).
+fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
     let mut out = Vec::new();
     if let Some(config) = &snap.config {
         out.extend(
@@ -262,11 +696,7 @@ pub(crate) fn staged_sources(snap: &InspectionSnapshot) -> Vec<StagedSource<'_>>
                 .files
                 .iter()
                 .filter(|f| f.disposition.is_included())
-                .map(|f| StagedSource {
-                    kind: StagedFileKind::ConfigFile,
-                    path: &f.path,
-                    content: &f.content,
-                }),
+                .map(|f| Offer::borrowed(StagedFileKind::ConfigFile, &f.path, &f.content)),
         );
     }
     if let Some(rpm) = &snap.rpm {
@@ -278,11 +708,7 @@ pub(crate) fn staged_sources(snap: &InspectionSnapshot) -> Vec<StagedSource<'_>>
                 files
                     .iter()
                     .filter(|f| f.disposition.is_included())
-                    .map(|f| StagedSource {
-                        kind,
-                        path: &f.path,
-                        content: &f.content,
-                    }),
+                    .map(|f| Offer::borrowed(kind, &f.path, &f.content)),
             );
         }
     }
@@ -292,41 +718,432 @@ pub(crate) fn staged_sources(snap: &InspectionSnapshot) -> Vec<StagedSource<'_>>
                 .firewall_zones
                 .iter()
                 .filter(|z| z.disposition.is_included())
-                .map(|z| StagedSource {
-                    kind: StagedFileKind::FirewallZone,
-                    path: &z.path,
-                    content: &z.content,
-                }),
+                .map(|z| Offer::borrowed(StagedFileKind::FirewallZone, &z.path, &z.content)),
         );
     }
-    if let Some(services) = &snap.services {
+    if let Some(units) = &snap.units {
         out.extend(
-            services
+            units
                 .drop_ins
                 .iter()
                 .filter(|d| d.disposition.is_included())
-                .map(|d| StagedSource {
-                    kind: StagedFileKind::DropIn,
-                    path: &d.path,
-                    content: &d.content,
-                }),
+                .map(|d| Offer::borrowed(StagedFileKind::DropIn, &d.path, &d.content)),
         );
+    }
+    if let Some(st) = &snap.scheduled_tasks {
+        use StagedFileKind::GeneratedUnit;
+        for u in st
+            .generated_timer_units
+            .iter()
+            .filter(|u| u.disposition.is_included())
+        {
+            out.extend(Offer::scheduled_unit(
+                GeneratedUnit,
+                &u.name,
+                "timer",
+                &u.timer_content,
+            ));
+            out.extend(Offer::scheduled_unit(
+                GeneratedUnit,
+                &u.name,
+                "service",
+                &u.service_content,
+            ));
+        }
+    }
+    if let Some(content) = snap.kernel_boot.as_ref().and_then(kargs_toml) {
+        out.push(Offer {
+            kind: StagedFileKind::KargsFile,
+            path: Cow::Borrowed(KARGS_PATH),
+            content: Cow::Owned(content),
+        });
+    }
+    if let Some(containers) = &snap.containers {
+        let included: Vec<_> = containers
+            .flatpak_apps
+            .iter()
+            .filter(|app| app.disposition.is_included())
+            .collect();
+        if !included.is_empty() {
+            out.push(Offer {
+                kind: StagedFileKind::FlatpakService,
+                path: Cow::Owned(format!("{ETC_UNIT_DIR}/{FLATPAK_SERVICE}")),
+                content: Cow::Owned(flatpak_provision_service(&included)),
+            });
+        }
     }
     out
 }
 
-/// Every included file [`write_config_tree`] does not write because
-/// [`validate_path`] refuses its path, with the reason.
-pub(crate) fn unstaged_files(snap: &InspectionSnapshot) -> Vec<(StagedSource<'_>, PathError)> {
-    staged_sources(snap)
-        .into_iter()
-        .filter_map(
-            |src| match validate_path(src.path.trim_start_matches('/')) {
-                Ok(()) => None,
-                Err(e) => Some((src, e)),
-            },
+/// The files of each unit inspectah generates, by unit: for each included
+/// cron unit its timer and paired service (or an `@reboot` service alone),
+/// and the flatpak provisioning service. Two cron units of one name share
+/// their destinations, and so their group. A file whose name is refused
+/// is in no group: it is never offered.
+fn generated_unit_groups(snap: &InspectionSnapshot) -> Vec<Vec<Destination>> {
+    let mut groups: Vec<Vec<Destination>> = Vec::new();
+    if let Some(st) = &snap.scheduled_tasks {
+        for u in st
+            .generated_timer_units
+            .iter()
+            .filter(|u| u.disposition.is_included())
+        {
+            let files: Vec<Destination> =
+                [("timer", &u.timer_content), ("service", &u.service_content)]
+                    .into_iter()
+                    .filter_map(|(suffix, content)| {
+                        Offer::scheduled_unit(
+                            StagedFileKind::GeneratedUnit,
+                            &u.name,
+                            suffix,
+                            content,
+                        )
+                    })
+                    .filter_map(|offer| Destination::new(&offer.path).ok())
+                    .collect();
+            if !files.is_empty() && !groups.contains(&files) {
+                groups.push(files);
+            }
+        }
+    }
+    let flatpak_included = snap.containers.as_ref().is_some_and(|c| {
+        c.flatpak_apps
+            .iter()
+            .any(|app| app.disposition.is_included())
+    });
+    if flatpak_included
+        && let Ok(dest) = Destination::new(&format!("{ETC_UNIT_DIR}/{FLATPAK_SERVICE}"))
+    {
+        groups.push(vec![dest]);
+    }
+    groups
+}
+
+/// The image paths of the units collected from the host, as § 10.2's
+/// generated-name collision reads them, and how each is collected.
+///
+/// [`Reservation::Row`]: the unit file path of every included state
+/// change, and every path an included config entry or drop-in row offers,
+/// whatever its content (a zero-length file there is the host's mask). An
+/// excluded row is not counted, so excluding the collected row and its
+/// file lets the generated unit back in.
+///
+/// [`Reservation::Inventory`]: every other unit the units section names,
+/// an inventory entry or a mount finding, unless the unit has a state
+/// change, whose row decides it as above. A package's unit at its preset
+/// has no row and is in the image all the same.
+fn collected_unit_paths(
+    snap: &InspectionSnapshot,
+    resolved: &[(Destination, StagedFileKind, Cow<'_, str>)],
+) -> BTreeMap<Destination, Reservation> {
+    let mut paths: BTreeMap<Destination, Reservation> = resolved
+        .iter()
+        .filter(|(_, kind, _)| matches!(kind, StagedFileKind::ConfigFile | StagedFileKind::DropIn))
+        .map(|(dest, _, _)| (dest.clone(), Reservation::Row))
+        .collect();
+    let Some(units) = &snap.units else {
+        return paths;
+    };
+    let unit_path =
+        |name: &UnitName| Destination::new(&format!("{ETC_UNIT_DIR}/{}", name.as_str()));
+    paths.extend(
+        units
+            .state_changes
+            .iter()
+            .filter(|sc| sc.disposition.is_included())
+            .filter_map(|sc| unit_path(sc.unit().name()).ok())
+            .map(|dest| (dest, Reservation::Row)),
+    );
+    let changed: BTreeSet<&UnitName> = units
+        .state_changes
+        .iter()
+        .map(|sc| sc.unit().name())
+        .collect();
+    let named = units
+        .inventory
+        .iter()
+        .map(|entry| &entry.unit)
+        .chain(
+            units
+                .mount_findings
+                .iter()
+                .map(|finding| finding.unit.name().as_unit_name()),
         )
-        .collect()
+        .filter(|name| !changed.contains(name));
+    for name in named {
+        if let Ok(dest) = unit_path(name) {
+            paths.entry(dest).or_insert(Reservation::Inventory);
+        }
+    }
+    paths
+}
+
+/// Every file of a generated unit whose name a collected unit shares, and
+/// why it is withheld (§ 10.2): [`WithheldWhy::GeneratedNameCollision`]
+/// naming the collected unit, or a [`WithheldWhy::Conflict`] with the
+/// collected path when its file name is not a unit name.
+fn generated_name_collisions(
+    groups: &[Vec<Destination>],
+    collected: &BTreeMap<Destination, Reservation>,
+) -> BTreeMap<Destination, WithheldWhy> {
+    let mut out = BTreeMap::new();
+    for files in groups {
+        let Some((hit, reserved_by)) = files
+            .iter()
+            .find_map(|dest| collected.get(dest).map(|by| (dest, *by)))
+        else {
+            continue;
+        };
+        let file_name = hit.as_str().rsplit('/').next().unwrap_or_default();
+        let why = match UnitName::try_from(file_name.to_owned()) {
+            Ok(unit) => WithheldWhy::GeneratedNameCollision { unit, reserved_by },
+            Err(_) => WithheldWhy::Conflict { other: hit.clone() },
+        };
+        for dest in files {
+            out.entry(dest.clone()).or_insert_with(|| why.clone());
+        }
+    }
+    out
+}
+
+/// The stager's decision: every file the export writes, keyed by where it
+/// lands in the image, and every offered file it withholds or refuses.
+///
+/// In order:
+///
+/// 1. A path that is not a [`Destination`] is refused.
+/// 2. A config entry at a destination another section carries
+///    ([`owned_elsewhere`]) or under `/etc/containers/systemd/` is left to
+///    that section, as before.
+/// 3. A unit inspectah generates whose name is also a collected unit's
+///    (an included state change, an included config entry or drop-in row
+///    at its path, or an inventory entry or mount finding with no state
+///    change, [`collected_unit_paths`]) has every file withheld as
+///    `GeneratedNameCollision`, the paired service of a generated timer
+///    included (§ 10.2). So a generated file never replaces the host's
+///    own, and none lands beside it. The plan declines the generated
+///    unit's request for the same reason.
+/// 4. A file two sections record: the config walk and the repo, GPG key
+///    or firewall inventory record one host file twice. Where a config
+///    entry is offered at the destination, the repo file, GPG key or
+///    firewall zone offer yields to it: the included config entry's
+///    content is the write. On a fleet aggregate that is the variant whose
+///    entry is included, which is not always the selected one: refine's
+///    `SelectVariant` sets only `variant_selection`, and `SetInclude` on
+///    the path includes the first-ranked entry.
+/// 5. Two cron units of one name (one cron file with two entries) offer
+///    one destination twice: the last one is the write, as the stager has
+///    always written them.
+/// 6. Offers at one destination with the same content are one write.
+///    Offers with different contents at one destination, and a
+///    destination another offer needs as a directory, are a `Conflict`:
+///    every file there is withheld, so neither silently replaces or
+///    blocks the other.
+/// 7. A zero-length file directly in `/etc/systemd/system` named as a
+///    unit is a mask, and is withheld as `ZeroLengthUnitFile` whichever
+///    section offered it (§ 10.2 rule 1).
+///
+/// Between 1 and 2, an offer whose destination is [`MACHINE_ID_PATH`] is
+/// withheld as `MachineId`, whichever section offered it and before any
+/// offer of one destination yields to another or is deduplicated, so
+/// every offering row keeps its reason (§ 10.2 "Never the machine-id").
+///
+/// An included unmanaged file whose path is under `/etc/systemd/system`
+/// ([`unmanaged_unit_path`]) is listed in `withheld` as
+/// `UnmanagedUnitPath`, and one at the machine-id as `MachineId`
+/// ([`unmanaged_withheld`]). It is not one of this decision's offers: the
+/// unmanaged-files section writes its own files, and leaves that one out.
+///
+/// Everything else is written. [`write_config_tree`] writes `writes` and
+/// nothing else, and [`unstaged_files`] names `withheld` and `refused` in
+/// the Containerfile, so the export and the Containerfile read one
+/// decision.
+pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
+    let owned = owned_elsewhere(snap);
+    let mut out = StagedWrites::default();
+    let mut resolved = Vec::new();
+    for offer in offers(snap) {
+        let dest = match Destination::new(&offer.path) {
+            Ok(dest) => dest,
+            Err(e) => {
+                out.refused.push((offer.kind, offer.path.into_owned(), e));
+                continue;
+            }
+        };
+        // Before any offer of one destination yields to another, so every
+        // offer of the machine-id keeps its own reason.
+        if is_machine_id(&dest) {
+            out.withheld
+                .push((dest, offer.kind, WithheldWhy::MachineId));
+            continue;
+        }
+        if offer.kind == StagedFileKind::ConfigFile
+            && (owned.contains(&dest) || dest.as_str().starts_with(QUADLET_PREFIX))
+        {
+            continue;
+        }
+        resolved.push((dest, offer.kind, offer.content));
+    }
+
+    let collected = collected_unit_paths(snap, &resolved);
+    let collisions = generated_name_collisions(&generated_unit_groups(snap), &collected);
+
+    // An unmanaged file under the unit directory, or at the machine-id, is
+    // withheld by name; the unmanaged-files section skips it on the same
+    // decision.
+    out.withheld.extend(
+        snap.unmanaged_files
+            .iter()
+            .flat_map(|section| &section.items)
+            .filter(|file| file.disposition.is_included())
+            .filter_map(|file| {
+                let why = unmanaged_withheld(&file.path)?;
+                let dest = Destination::new(&file.path).ok()?;
+                Some((dest, StagedFileKind::UnmanagedFile, why))
+            }),
+    );
+
+    let mut by_dest: BTreeMap<Destination, Vec<(StagedFileKind, Cow<'_, str>)>> = BTreeMap::new();
+    for (dest, kind, content) in resolved {
+        if kind.is_generated_unit()
+            && let Some(why) = collisions.get(&dest)
+        {
+            out.withheld.push((dest, kind, why.clone()));
+            continue;
+        }
+        by_dest.entry(dest).or_default().push((kind, content));
+    }
+
+    for offered in by_dest.values_mut() {
+        // The rule for a file two sections record: the repo, GPG key and
+        // firewall inventories keep one representative payload per path in
+        // a fleet aggregate, while the config entry keeps the content
+        // variants. The inventory copy yields to an included config entry,
+        // so that entry's content is the write (whichever variant is
+        // included, which refine's variant selection does not yet set) and
+        // the repo file, key or zone stays in the export.
+        if offered
+            .iter()
+            .any(|(kind, _)| *kind == StagedFileKind::ConfigFile)
+        {
+            offered.retain(|(kind, _)| !kind.is_inventory_record());
+        }
+        // Two cron units of one name: the last one is the write.
+        if offered.len() > 1
+            && offered
+                .iter()
+                .all(|(kind, _)| *kind == StagedFileKind::GeneratedUnit)
+            && let Some(last) = offered.pop()
+        {
+            *offered = vec![last];
+        }
+        // Offers with one content are one write.
+        if let Some((_, first)) = offered.first().cloned()
+            && offered.iter().all(|(_, content)| *content == first)
+        {
+            offered.truncate(1);
+        }
+    }
+
+    let mut conflicts: BTreeMap<Destination, Destination> = BTreeMap::new();
+    for (dest, offered) in &by_dest {
+        if offered.len() > 1 {
+            conflicts
+                .entry(dest.clone())
+                .or_insert_with(|| dest.clone());
+        }
+        let mut ancestor = dest.parent();
+        while let Some(dir) = ancestor {
+            if by_dest.contains_key(&dir) {
+                conflicts.entry(dest.clone()).or_insert_with(|| dir.clone());
+                conflicts.entry(dir.clone()).or_insert_with(|| dest.clone());
+            }
+            ancestor = dir.parent();
+        }
+    }
+
+    for (dest, offered) in by_dest {
+        if let Some(other) = conflicts.get(&dest) {
+            out.withheld.extend(offered.into_iter().map(|(kind, _)| {
+                (
+                    dest.clone(),
+                    kind,
+                    WithheldWhy::Conflict {
+                        other: other.clone(),
+                    },
+                )
+            }));
+            continue;
+        }
+        // At most one offer is left: more is a conflict, above.
+        let Some((source, content)) = offered.into_iter().next() else {
+            continue;
+        };
+        if content.is_empty() && dest.is_unit_file_path() {
+            out.withheld
+                .push((dest, source, WithheldWhy::ZeroLengthUnitFile));
+            continue;
+        }
+        out.writes.insert(dest, StagedWrite { source, content });
+    }
+    out
+}
+
+/// Why an offered file is not in the export.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UnstagedWhy {
+    /// The path is not a [`Destination`].
+    Refused(PathError),
+    /// [`staged_writes`] withholds the file at this destination.
+    Withheld(Destination, WithheldWhy),
+}
+
+impl std::fmt::Display for UnstagedWhy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(e) => e.fmt(f),
+            Self::Withheld(at, why) => f.write_str(&why.describe(at)),
+        }
+    }
+}
+
+/// An offered file the export does not write: its kind, its path (as
+/// offered when refused, its destination when withheld) and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Unstaged {
+    pub(crate) kind: StagedFileKind,
+    pub(crate) path: String,
+    pub(crate) why: UnstagedWhy,
+}
+
+/// Every offered file [`write_config_tree`] does not write, read from
+/// [`staged_writes`], for the Containerfile's FIXME lines.
+pub(crate) fn unstaged_files(snap: &InspectionSnapshot) -> Vec<Unstaged> {
+    let staged = staged_writes(snap);
+    let refused = staged.refused.into_iter().map(|(kind, path, e)| Unstaged {
+        kind,
+        path,
+        why: UnstagedWhy::Refused(e),
+    });
+    let withheld = staged
+        .withheld
+        .into_iter()
+        .map(|(dest, kind, why)| Unstaged {
+            kind,
+            path: dest.as_str().to_owned(),
+            why: UnstagedWhy::Withheld(dest, why),
+        });
+    refused.chain(withheld).collect()
+}
+
+/// How many files of `kind` the export writes, by [`staged_writes`].
+pub(crate) fn staged_count(staged: &StagedWrites<'_>, kind: StagedFileKind) -> usize {
+    staged.writes.values().filter(|w| w.source == kind).count()
+}
+
+/// Whether the export writes a file at `path`, by [`staged_writes`].
+pub(crate) fn is_staged(staged: &StagedWrites<'_>, path: &str) -> bool {
+    Destination::new(path).is_ok_and(|dest| staged.writes.contains_key(&dest))
 }
 
 /// The remote, application id and branch of a flatpak `install` line,
@@ -349,6 +1166,117 @@ fn flatpak_install_words(
     Ok((remote, app_id, branch))
 }
 
+/// The flatpak provisioning service for the included flatpak `apps`: a
+/// oneshot that adds each remote and installs each app on first boot.
+fn flatpak_provision_service(apps: &[&inspectah_core::types::containers::FlatpakApp]) -> String {
+    let mut seen = HashSet::new();
+    let mut remotes = Vec::new();
+    let mut unreconstructable = Vec::new();
+    for app in apps {
+        if app.remote.is_empty() || seen.contains(&app.remote) {
+            continue;
+        }
+        seen.insert(&app.remote);
+        if app.remote_url.is_empty() {
+            unreconstructable.push(&app.remote);
+        } else {
+            remotes.push((&app.remote, &app.remote_url));
+        }
+    }
+
+    let mut svc = String::new();
+    svc.push_str("[Unit]\n");
+    svc.push_str("Description=Provision Flatpak applications from inspectah manifest\n");
+    svc.push_str("After=network-online.target\n");
+    svc.push_str("Wants=network-online.target\n");
+    svc.push_str("ConditionPathExists=!/var/lib/inspectah/.flatpak-provisioned\n");
+    svc.push_str("\n[Service]\n");
+    svc.push_str("Type=oneshot\n");
+    svc.push_str("RemainAfterExit=yes\n");
+    svc.push_str("Restart=on-failure\n");
+    svc.push_str("RestartSec=30s\n\n");
+
+    if !unreconstructable.is_empty() {
+        svc.push_str("# WARNING: The following remote(s) could not be fully reconstructed\n");
+        svc.push_str("# because no URL was captured. You must configure them manually.\n");
+        svc.push_str("# See: flatpak remote-modify --help\n");
+        for name in &unreconstructable {
+            // A string-built file the join guard does not cover.
+            svc.push_str(&super::comment::escape_comment_text(&format!(
+                "# Remote '{name}': URL unknown"
+            )));
+            svc.push('\n');
+        }
+        svc.push('\n');
+    }
+
+    // Every value on an `Exec*=` line is a proved `BareWord`: the
+    // unit runs as root at boot, and a line break in a value would
+    // add a directive. A refused remote or app gets a FIXME, which
+    // this string-built file escapes at the site.
+    let mut fixmes = Vec::new();
+    let mut pre = Vec::new();
+    for (name, url) in &remotes {
+        match (BareWord::parse_name(name), BareWord::parse_url(url)) {
+            (Ok(name), Ok(url)) => pre.push(format!(
+                "ExecStartPre=/usr/bin/flatpak remote-add --if-not-exists {name} {url}\n"
+            )),
+            (Err(e), _) => fixmes.push(format!(
+                "# FIXME: flatpak remote {name} not added: the name is refused ({e})"
+            )),
+            (_, Err(e)) => fixmes.push(format!(
+                "# FIXME: flatpak remote {name} not added: the URL {url} is refused ({e})"
+            )),
+        }
+    }
+    let mut installs = Vec::new();
+    for app in apps {
+        match flatpak_install_words(app) {
+            Ok((remote, app_id, branch)) => installs.push(format!(
+                "ExecStart=/usr/bin/flatpak install -y --noninteractive {remote} {app_id}//{branch}\n"
+            )),
+            Err(why) => fixmes.push(format!(
+                "# FIXME: flatpak app {} from remote {} not installed: {why}",
+                app.app_id, app.remote
+            )),
+        }
+    }
+    for fixme in &fixmes {
+        svc.push_str(&super::comment::escape_comment_text(fixme));
+        svc.push('\n');
+    }
+    if !fixmes.is_empty() {
+        svc.push('\n');
+    }
+    for line in pre.iter().chain(&installs) {
+        svc.push_str(line);
+    }
+    svc.push_str("ExecStartPost=/usr/bin/mkdir -p /var/lib/inspectah\n");
+    svc.push_str("ExecStartPost=/usr/bin/touch /var/lib/inspectah/.flatpak-provisioned\n");
+    svc.push_str("\n[Install]\n");
+    svc.push_str("WantedBy=multi-user.target\n");
+    svc.push_str("\n[Unit]\n");
+    svc.push_str("StartLimitBurst=3\n");
+    svc.push_str("StartLimitIntervalSec=300s\n");
+    svc
+}
+
+/// The kargs.d file for the operator's kernel arguments on `kb`'s cmdline,
+/// or `None` when there are none.
+fn kargs_toml(kb: &inspectah_core::types::kernelboot::KernelBootSection) -> Option<String> {
+    let safe_kargs = operator_kargs(&kb.cmdline);
+    if safe_kargs.is_empty() {
+        return None;
+    }
+    let mut toml = String::new();
+    toml.push_str("[kargs]\n");
+    toml.push_str("# Migrated from kernel cmdline by inspectah\n");
+    for k in &safe_kargs {
+        toml.push_str(&format!("append = [\"{k}\"]\n"));
+    }
+    Some(toml)
+}
+
 /// Write all config files from snapshot to output_dir/config/ preserving
 /// paths. Writes all artifact categories listed in the module doc.
 ///
@@ -362,101 +1290,33 @@ pub fn write_config_tree(
 ) -> Result<Vec<String>, RenderError> {
     let config_dir = output_dir.join("config");
     std::fs::create_dir_all(&config_dir)?;
-    let dhcp_paths = dhcp_connection_paths(snap);
-    let svc_paths = service_owned_paths(snap);
-    let ctr_paths = container_owned_paths(snap);
 
-    // Config files, repo files, GPG keys and firewall zones under
-    // `config/`, systemd drop-ins under `drop-ins/`. Service-owned
-    // config paths are left to the services renderer, which handles their
-    // materialization. A path `validate_path` refuses is not written, and
-    // the Containerfile names it from `unstaged_files`.
-    let drop_ins_dir = output_dir.join("drop-ins");
-    for src in staged_sources(snap) {
-        let rel = src.path.trim_start_matches('/');
-        if rel.is_empty() {
-            continue;
-        }
-        if src.kind == StagedFileKind::ConfigFile
-            && (dhcp_paths.contains(rel)
-                || rel.starts_with(QUADLET_PREFIX)
-                || ctr_paths.contains(rel)
-                || svc_paths.contains(rel))
-        {
-            continue;
-        }
-        if validate_path(rel).is_err() {
-            continue;
-        }
-        let base = match src.kind {
-            StagedFileKind::DropIn => &drop_ins_dir,
-            _ => &config_dir,
-        };
-        safe_write_file(&base.join(rel), src.content);
+    // Every file `staged_writes` lists, and nothing else: config files,
+    // repo files, GPG keys, firewall zones, the scheduled section's units,
+    // the kargs file and the flatpak provisioning service under their
+    // kind's directory, drop-ins under `drop-ins/`. A file it withholds or
+    // refuses is not written, and the Containerfile names it from
+    // `unstaged_files`. A write that fails fails the export, and so does
+    // a write the staging filesystem would put over another ([`Stager`]).
+    let staged = staged_writes(snap);
+    let mut stager = Stager::default();
+    for (dest, write) in &staged.writes {
+        let (root, rel) = write.source.staged_at(output_dir, dest);
+        stager.write(&root, &rel, &write.content)?;
     }
 
-    // Kernel boot files
-    if let Some(ref kb) = snap.kernel_boot {
-        // The modules-load.d, modprobe.d and dracut.conf.d files are
-        // `config.files` entries, copied through `config/etc/` by the
-        // config loop above on their own decision. Writing them here
-        // too would materialize an excluded file on a path rule.
-
-        // Kernel arguments drop-in
-        let safe_kargs = operator_kargs(&kb.cmdline);
-        if !safe_kargs.is_empty() {
-            let kargs_dir = config_dir.join("usr/lib/bootc/kargs.d");
-            let _ = std::fs::create_dir_all(&kargs_dir);
-            let mut toml = String::new();
-            toml.push_str("[kargs]\n");
-            toml.push_str("# Migrated from kernel cmdline by inspectah\n");
-            for k in &safe_kargs {
-                toml.push_str(&format!("append = [\"{k}\"]\n"));
-            }
-            let _ = std::fs::write(kargs_dir.join("inspectah-migrated.toml"), &toml);
-        }
-    }
-
-    // Timer units (generated and local)
-    if let Some(ref st) = snap.scheduled_tasks
-        && (!st.generated_timer_units.is_empty() || !st.systemd_timers.is_empty())
-    {
-        let systemd_dir = config_dir.join("etc/systemd/system");
-        let _ = std::fs::create_dir_all(&systemd_dir);
-
-        for u in &st.generated_timer_units {
-            if !u.disposition.is_included() {
-                continue;
-            }
-            // @reboot entries have empty timer_content — only write a
-            // .timer file when there is actual timer content to emit.
-            if !u.timer_content.is_empty() {
-                write_unit_file(&systemd_dir, &u.name, "timer", &u.timer_content);
-            }
-            if !u.service_content.is_empty() {
-                write_unit_file(&systemd_dir, &u.name, "service", &u.service_content);
-            }
-        }
-        for t in &st.systemd_timers {
-            if t.source == "local" {
-                if !t.name.is_empty() && !t.timer_content.is_empty() {
-                    write_unit_file(&systemd_dir, &t.name, "timer", &t.timer_content);
-                }
-                if !t.name.is_empty() && !t.service_content.is_empty() {
-                    write_unit_file(&systemd_dir, &t.name, "service", &t.service_content);
-                }
-            }
-        }
-    }
+    // The kernel boot files: the kargs file is an offer of the decision
+    // above. The modules-load.d, modprobe.d and dracut.conf.d files are
+    // `config.files` entries, copied through `config/etc/` on their own
+    // decision. Writing them here too would materialize an excluded file
+    // on a path rule.
 
     if let Some(ref containers) = snap.containers {
         for u in &containers.quadlet_units {
             if !u.disposition.is_included() || u.name.is_empty() || u.content.is_empty() {
                 continue;
             }
-            let quadlet_dir = output_dir.join("quadlet");
-            let _ = std::fs::create_dir_all(&quadlet_dir);
-            write_named_file(&quadlet_dir, &u.name, &u.content);
+            write_named_file(&output_dir.join("quadlet"), &u.name, &u.content)?;
         }
 
         let included_flatpaks: Vec<_> = containers
@@ -466,7 +1326,6 @@ pub fn write_config_tree(
             .collect();
         if !included_flatpaks.is_empty() {
             let flatpak_dir = output_dir.join("flatpak");
-            let _ = std::fs::create_dir_all(&flatpak_dir);
 
             // Write JSON manifest
             #[derive(serde::Serialize)]
@@ -486,104 +1345,9 @@ pub fn write_config_tree(
                     remote_url: app.remote_url.clone(),
                 })
                 .collect();
-            if let Ok(data) = serde_json::to_string_pretty(&manifest) {
-                let _ = std::fs::write(flatpak_dir.join("flatpak-install.json"), &data);
-            }
-
-            // Build provisioning service file
-            let mut seen = HashSet::new();
-            let mut remotes = Vec::new();
-            let mut unreconstructable = Vec::new();
-            for app in &included_flatpaks {
-                if app.remote.is_empty() || seen.contains(&app.remote) {
-                    continue;
-                }
-                seen.insert(&app.remote);
-                if app.remote_url.is_empty() {
-                    unreconstructable.push(&app.remote);
-                } else {
-                    remotes.push((&app.remote, &app.remote_url));
-                }
-            }
-
-            let mut svc = String::new();
-            svc.push_str("[Unit]\n");
-            svc.push_str("Description=Provision Flatpak applications from inspectah manifest\n");
-            svc.push_str("After=network-online.target\n");
-            svc.push_str("Wants=network-online.target\n");
-            svc.push_str("ConditionPathExists=!/var/lib/inspectah/.flatpak-provisioned\n");
-            svc.push_str("\n[Service]\n");
-            svc.push_str("Type=oneshot\n");
-            svc.push_str("RemainAfterExit=yes\n");
-            svc.push_str("Restart=on-failure\n");
-            svc.push_str("RestartSec=30s\n\n");
-
-            if !unreconstructable.is_empty() {
-                svc.push_str(
-                    "# WARNING: The following remote(s) could not be fully reconstructed\n",
-                );
-                svc.push_str("# because no URL was captured. You must configure them manually.\n");
-                svc.push_str("# See: flatpak remote-modify --help\n");
-                for name in &unreconstructable {
-                    // A string-built file the join guard does not cover.
-                    svc.push_str(&super::comment::escape_comment_text(&format!(
-                        "# Remote '{name}': URL unknown"
-                    )));
-                    svc.push('\n');
-                }
-                svc.push('\n');
-            }
-
-            // Every value on an `Exec*=` line is a proved `BareWord`: the
-            // unit runs as root at boot, and a line break in a value would
-            // add a directive. A refused remote or app gets a FIXME, which
-            // this string-built file escapes at the site.
-            let mut fixmes = Vec::new();
-            let mut pre = Vec::new();
-            for (name, url) in &remotes {
-                match (BareWord::parse_name(name), BareWord::parse_url(url)) {
-                    (Ok(name), Ok(url)) => pre.push(format!(
-                        "ExecStartPre=/usr/bin/flatpak remote-add --if-not-exists {name} {url}\n"
-                    )),
-                    (Err(e), _) => fixmes.push(format!(
-                        "# FIXME: flatpak remote {name} not added: the name is refused ({e})"
-                    )),
-                    (_, Err(e)) => fixmes.push(format!(
-                        "# FIXME: flatpak remote {name} not added: the URL {url} is refused ({e})"
-                    )),
-                }
-            }
-            let mut installs = Vec::new();
-            for app in &included_flatpaks {
-                match flatpak_install_words(app) {
-                    Ok((remote, app_id, branch)) => installs.push(format!(
-                        "ExecStart=/usr/bin/flatpak install -y --noninteractive {remote} {app_id}//{branch}\n"
-                    )),
-                    Err(why) => fixmes.push(format!(
-                        "# FIXME: flatpak app {} from remote {} not installed: {why}",
-                        app.app_id, app.remote
-                    )),
-                }
-            }
-            for fixme in &fixmes {
-                svc.push_str(&super::comment::escape_comment_text(fixme));
-                svc.push('\n');
-            }
-            if !fixmes.is_empty() {
-                svc.push('\n');
-            }
-            for line in pre.iter().chain(&installs) {
-                svc.push_str(line);
-            }
-            svc.push_str("ExecStartPost=/usr/bin/mkdir -p /var/lib/inspectah\n");
-            svc.push_str("ExecStartPost=/usr/bin/touch /var/lib/inspectah/.flatpak-provisioned\n");
-            svc.push_str("\n[Install]\n");
-            svc.push_str("WantedBy=multi-user.target\n");
-            svc.push_str("\n[Unit]\n");
-            svc.push_str("StartLimitBurst=3\n");
-            svc.push_str("StartLimitIntervalSec=300s\n");
-
-            let _ = std::fs::write(flatpak_dir.join("flatpak-provision.service"), &svc);
+            let data = serde_json::to_string_pretty(&manifest)
+                .map_err(|e| RenderError::Failed(format!("flatpak manifest: {e}")))?;
+            write_staged(&flatpak_dir.join("flatpak-install.json"), &data)?;
         }
     }
 
@@ -724,7 +1488,7 @@ pub fn write_env_files(snap: &InspectionSnapshot, output_dir: &Path) -> Result<(
         if validate_path(rel).is_err() {
             continue;
         }
-        safe_write_file(&env_dir.join(rel), &entry.content);
+        write_staged(&env_dir.join(rel), &entry.content)?;
     }
 
     Ok(())
@@ -743,7 +1507,7 @@ mod tests {
     use inspectah_core::types::scheduled::{
         GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
     };
-    use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+    use inspectah_core::types::units::{SystemdDropIn, UnitSection};
     use tempfile::TempDir;
 
     fn snapshot_with_config(path: &str, content: &str) -> InspectionSnapshot {
@@ -905,7 +1669,7 @@ mod tests {
         // Service drop-ins are written to drop-ins/ only — NOT config/.
         // The services renderer owns these paths.
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "httpd.service".to_string(),
                 path: "etc/systemd/system/httpd.service.d/override.conf".to_string(),
@@ -972,13 +1736,6 @@ mod tests {
                     ..Default::default()
                 },
             ],
-            systemd_timers: vec![SystemdTimer {
-                name: "../../../../../victim/local".into(),
-                source: "local".into(),
-                timer_content: "PWNED".into(),
-                service_content: "PWNED".into(),
-                ..Default::default()
-            }],
             ..Default::default()
         });
         snap.containers = Some(ContainerSection {
@@ -1046,31 +1803,60 @@ mod tests {
         );
     }
 
+    /// A timer's description writes nothing, local or vendor: a local
+    /// timer's files are config entries, written on their own rows (§ 8),
+    /// and a vendor timer's are the package's. Control: the local files as
+    /// included config entries are written.
     #[test]
-    fn test_config_tree_local_systemd_timers() {
+    fn a_local_timer_description_writes_no_file() {
+        let timer = SystemdTimer {
+            name: "myjob".to_string(),
+            source: "local".to_string(),
+            path: "etc/systemd/system/myjob.timer".to_string(),
+            on_calendar: "daily".to_string(),
+            exec_start: "/usr/local/bin/myjob".to_string(),
+            ..Default::default()
+        };
+        let vendor = SystemdTimer {
+            name: "fstrim".to_string(),
+            source: "vendor".to_string(),
+            path: "usr/lib/systemd/system/fstrim.timer".to_string(),
+            on_calendar: "weekly".to_string(),
+            exec_start: "/usr/sbin/fstrim -a".to_string(),
+            ..Default::default()
+        };
         let mut snap = InspectionSnapshot::new();
         snap.scheduled_tasks = Some(ScheduledTaskSection {
-            systemd_timers: vec![SystemdTimer {
-                name: "myjob".to_string(),
-                source: "local".to_string(),
-                timer_content: "[Timer]\nOnCalendar=daily".to_string(),
-                service_content: "[Service]\nExecStart=/usr/local/bin/myjob".to_string(),
-                ..Default::default()
-            }],
+            systemd_timers: vec![timer, vendor],
             ..Default::default()
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
-        assert!(
-            dir.path()
-                .join("config/etc/systemd/system/myjob.timer")
-                .exists()
-        );
-        assert!(
-            dir.path()
-                .join("config/etc/systemd/system/myjob.service")
-                .exists()
-        );
+        assert!(!dir.path().join("config/etc/systemd/system").exists());
+        assert!(!dir.path().join("config/usr/lib/systemd/system").exists());
+
+        snap.config = Some(ConfigSection {
+            files: ["myjob.timer", "myjob.service"]
+                .into_iter()
+                .map(|file| ConfigFileEntry {
+                    path: format!("/etc/systemd/system/{file}"),
+                    content: "[Unit]\n".to_string(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                })
+                .collect(),
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+        for file in ["myjob.timer", "myjob.service"] {
+            assert!(
+                dir.path()
+                    .join("config/etc/systemd/system")
+                    .join(file)
+                    .is_file(),
+                "{file}"
+            );
+        }
     }
 
     #[test]
@@ -1273,7 +2059,7 @@ mod tests {
         // Service-owned drop-in paths must NOT be materialized under config/
         // — the services renderer owns these paths.
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "sshd.service".to_string(),
                 path: "etc/systemd/system/sshd.service.d/override.conf".to_string(),

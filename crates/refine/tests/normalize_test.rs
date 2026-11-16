@@ -1,7 +1,7 @@
 use inspectah_core::types::FindingKind;
 #[test]
 fn omitted_include_defaults_to_true() {
-    let json = r#"{"schema_version": 27, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added"}]}}"#;
+    let json = r#"{"schema_version": 28, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added"}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         snap.rpm.as_ref().unwrap().packages_added[0]
@@ -13,7 +13,7 @@ fn omitted_include_defaults_to_true() {
 
 #[test]
 fn explicit_false_preserved() {
-    let json = r#"{"schema_version": 27, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": false}}]}}"#;
+    let json = r#"{"schema_version": 28, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": false}}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         !snap.rpm.as_ref().unwrap().packages_added[0]
@@ -25,7 +25,7 @@ fn explicit_false_preserved() {
 
 #[test]
 fn explicit_true_preserved() {
-    let json = r#"{"schema_version": 27, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": true}}]}}"#;
+    let json = r#"{"schema_version": 28, "rpm": {"packages_added": [{"name": "httpd", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": true}}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         snap.rpm.as_ref().unwrap().packages_added[0]
@@ -36,7 +36,7 @@ fn explicit_true_preserved() {
 
 #[test]
 fn omitted_config_include_defaults_to_true() {
-    let json = r#"{"schema_version": 27, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other"}]}}"#;
+    let json = r#"{"schema_version": 28, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other"}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         snap.config.as_ref().unwrap().files[0]
@@ -48,7 +48,7 @@ fn omitted_config_include_defaults_to_true() {
 
 #[test]
 fn explicit_config_false_preserved() {
-    let json = r#"{"schema_version": 27, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other", "disposition": {"kind": "actionable", "include": false}}]}}"#;
+    let json = r#"{"schema_version": 28, "config": {"files": [{"path": "/etc/httpd/conf/httpd.conf", "kind": "rpm_owned_modified", "category": "other", "disposition": {"kind": "actionable", "include": false}}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         !snap.config.as_ref().unwrap().files[0]
@@ -60,7 +60,7 @@ fn explicit_config_false_preserved() {
 
 #[test]
 fn base_image_only_include_false_preserved() {
-    let json = r#"{"schema_version": 27, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only", "disposition": {"kind": "actionable", "include": false}}]}}"#;
+    let json = r#"{"schema_version": 28, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only", "disposition": {"kind": "actionable", "include": false}}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         !snap.rpm.as_ref().unwrap().base_image_only[0]
@@ -71,7 +71,7 @@ fn base_image_only_include_false_preserved() {
 
 #[test]
 fn base_image_only_omitted_include_defaults_true() {
-    let json = r#"{"schema_version": 27, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only"}]}}"#;
+    let json = r#"{"schema_version": 28, "rpm": {"packages_added": [], "base_image_only": [{"name": "kernel", "arch": "x86_64", "state": "base_image_only"}]}}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(
         snap.rpm.as_ref().unwrap().base_image_only[0]
@@ -83,7 +83,7 @@ fn base_image_only_omitted_include_defaults_true() {
 
 #[test]
 fn mixed_present_and_absent_includes() {
-    let json = r#"{"schema_version": 27, "rpm": {"packages_added": [
+    let json = r#"{"schema_version": 28, "rpm": {"packages_added": [
         {"name": "httpd", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": false}},
         {"name": "vim", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": true}},
         {"name": "curl", "arch": "x86_64", "state": "added"}
@@ -106,7 +106,7 @@ fn mixed_present_and_absent_includes() {
 
 #[test]
 fn empty_snapshot_loads() {
-    let json = r#"{"schema_version": 27}"#;
+    let json = r#"{"schema_version": 28}"#;
     let snap = inspectah_refine::normalize::load_for_refine(json).unwrap();
     assert!(snap.rpm.is_none());
     assert!(snap.config.is_none());
@@ -128,7 +128,7 @@ fn reject_future_schema() {
 
 #[test]
 fn snapshot_with_all_sections_roundtrip() {
-    let json = r#"{"schema_version": 27, "rpm": {"packages_added": [
+    let json = r#"{"schema_version": 28, "rpm": {"packages_added": [
         {"name": "httpd", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": true}},
         {"name": "vim", "arch": "x86_64", "state": "added", "disposition": {"kind": "actionable", "include": true}}
     ], "base_image_only": [
@@ -440,4 +440,138 @@ fn test_user_added_with_baseline_is_site_leaf_filtered() {
         !rpm.packages_added[1].disposition.is_included(),
         "apr: Site non-leaf, excluded by leaf filter"
     );
+}
+
+// ── Image-mode-incompatible units ─────────────────────────────────────
+
+/// The normalizer still locks out the three package-manager units, their
+/// drop-ins and their enabled inventory entries, and leaves any other unit
+/// alone, the runtime updater `packagekit-offline-update.service` included:
+/// it is excluded by default at collect, not locked here (§ 10.4).
+#[test]
+fn incompatible_units_are_locked_out_and_others_left_alone() {
+    use inspectah_core::types::units::{
+        PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitName, UnitSection, UnitState,
+        UnitStateChange,
+    };
+    use inspectah_refine::normalize::normalize_incompatible_services;
+
+    const INCOMPATIBLE: [&str; 3] = [
+        "dnf-makecache.service",
+        "dnf-makecache.timer",
+        "packagekit.service",
+    ];
+    const CONTROLS: [&str; 2] = ["httpd.service", "packagekit-offline-update.service"];
+
+    let name = |unit: &str| UnitName::try_from(unit.to_string()).unwrap();
+    let units: Vec<&str> = INCOMPATIBLE.iter().copied().chain(CONTROLS).collect();
+    let mut snap = InspectionSnapshot::new();
+    snap.units = Some(UnitSection {
+        state_changes: units
+            .iter()
+            .map(|u| {
+                UnitStateChange::new(
+                    test_carried_unit(name(u), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap()
+            })
+            .collect(),
+        inventory: units
+            .iter()
+            .map(|u| UnitInventoryEntry {
+                unit: name(u),
+                state: UnitState::Enabled,
+                preset: Some(PresetDefault::Disable),
+            })
+            .collect(),
+        drop_ins: units
+            .iter()
+            .map(|u| SystemdDropIn {
+                unit: (*u).into(),
+                path: format!("/etc/systemd/system/{u}.d/override.conf"),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            })
+            .collect(),
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
+    });
+
+    normalize_incompatible_services(&mut snap);
+    let section = snap.units.unwrap();
+
+    for unit in INCOMPATIBLE {
+        let sc = section
+            .state_changes
+            .iter()
+            .find(|s| s.unit().name().as_str() == unit)
+            .unwrap_or_else(|| panic!("{unit} must keep its state row"));
+        assert!(
+            sc.locked && !sc.disposition.is_included(),
+            "{unit}'s state row must be locked and excluded, got {sc:?}"
+        );
+        assert_eq!(
+            sc.attention_reason.as_deref(),
+            Some("service-image-mode-incompatible")
+        );
+        let di = section
+            .drop_ins
+            .iter()
+            .find(|d| d.unit == unit)
+            .unwrap_or_else(|| panic!("{unit} must keep its drop-in"));
+        assert!(
+            di.locked && !di.disposition.is_included(),
+            "{unit}'s drop-in must be locked and excluded, got {di:?}"
+        );
+        assert!(
+            !section.inventory.iter().any(|e| e.unit.as_str() == unit),
+            "{unit}'s enabled inventory entry must be removed"
+        );
+    }
+
+    // Positive controls: an ordinary unit and the runtime updater are
+    // untouched everywhere.
+    for unit in CONTROLS {
+        let control = section
+            .state_changes
+            .iter()
+            .find(|s| s.unit().name().as_str() == unit)
+            .expect("the control unit keeps its state row");
+        assert!(
+            !control.locked && control.disposition.is_included(),
+            "{unit}"
+        );
+        assert_eq!(control.attention_reason, None, "{unit}");
+        let control_di = section
+            .drop_ins
+            .iter()
+            .find(|d| d.unit == unit)
+            .expect("the control unit keeps its drop-in");
+        assert!(
+            !control_di.locked && control_di.disposition.is_included(),
+            "{unit}"
+        );
+        assert!(
+            section.inventory.iter().any(|e| e.unit.as_str() == unit),
+            "{unit} keeps its inventory entry"
+        );
+    }
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

@@ -59,6 +59,7 @@ function makeDivergentItem(path: string, include = true): AggregateItem {
   return {
     item_id: { kind: "Config", key: { path } },
     include,
+    locked: false,
     triage: { bucket: "divergent", prevalence: { count: 1, total: 3 } },
     prevalence: { count: 1, total: 3 },
     source_repo: "",
@@ -98,7 +99,7 @@ function makeAggregateViewWithDivergent(
         },
       },
       {
-        id: "services",
+        id: "units",
         display_name: "Services",
         is_decision_section: true,
         items: extraServiceItems,
@@ -184,8 +185,9 @@ describe("AggregateApp divergent review tracking", () => {
   it("does not add non-divergent items to confirmed set", async () => {
     // Put a non-divergent service item in a flat section (no zones)
     const serviceItem: AggregateItem = {
-      item_id: { kind: "Service", key: { unit: "httpd.service" } },
+      item_id: { kind: "Unit", key: { unit: "httpd.service" } },
       include: true,
+      locked: false,
       triage: { bucket: "universal", prevalence: { count: 3, total: 3 } },
       prevalence: { count: 3, total: 3 },
       source_repo: "",

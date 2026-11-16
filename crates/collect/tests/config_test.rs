@@ -1070,3 +1070,60 @@ fn an_rpm_owned_link_re_pointed_to_dev_null_is_a_modified_config() {
         }
     }
 }
+
+/// § 7.7: a mask has one representation, a state. A zero-length regular
+/// file with a unit suffix directly under `/etc/systemd/system` is a mask,
+/// so the config walk leaves it out as it leaves out a mask link. The
+/// controls stay config entries: a non-empty unit file, a zero-length file
+/// with no unit suffix, and a zero-length drop-in one level down.
+#[test]
+fn a_zero_length_unit_file_under_etc_systemd_system_is_no_config_entry() {
+    const DIR: &str = "/etc/systemd/system";
+    let exec = MockExecutor::new()
+        .with_dir("/etc", vec!["systemd"])
+        .with_dir("/etc/systemd", vec!["system"])
+        .with_dir(
+            DIR,
+            vec![
+                "masked.service",
+                "masked.mount",
+                "masked.device",
+                "local.service",
+                "notes.txt",
+                "app.service.d",
+            ],
+        )
+        .with_file("/etc/systemd/system/masked.service", "")
+        .with_file("/etc/systemd/system/masked.mount", "")
+        .with_file("/etc/systemd/system/masked.device", "")
+        .with_file("/etc/systemd/system/local.service", "[Unit]\n")
+        .with_file("/etc/systemd/system/notes.txt", "")
+        .with_dir("/etc/systemd/system/app.service.d", vec!["empty.conf"])
+        .with_file("/etc/systemd/system/app.service.d/empty.conf", "");
+    let rpm_state = RpmState::default();
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("the config inspector succeeds");
+    let SectionData::Config(section) = output.section else {
+        panic!("expected the config section");
+    };
+    let mut paths: Vec<&str> = section.files.iter().map(|f| f.path.as_str()).collect();
+    paths.sort_unstable();
+
+    // Presence first: the controls.
+    assert_eq!(
+        paths,
+        vec![
+            "/etc/systemd/system/app.service.d/empty.conf",
+            "/etc/systemd/system/local.service",
+            "/etc/systemd/system/notes.txt",
+        ]
+    );
+}

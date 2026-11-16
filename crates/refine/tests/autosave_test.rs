@@ -104,3 +104,49 @@ fn stale_detection_different_hash() {
     let current_hash = compute_tarball_hash(&tarball).unwrap();
     assert_ne!(loaded.tarball_hash, current_hash); // stale!
 }
+
+/// A saved session holding a decision on the removed `SystemdTimer` kind
+/// is refused when it is loaded, naming the kind, and the file is left as
+/// it was. The same session with the op under the `GeneratedTimer` kind
+/// loads (the positive control).
+#[test]
+fn a_saved_systemd_timer_decision_is_refused_on_load() {
+    use inspectah_refine::types::{ItemId, RefinementOp, TimelineEntry};
+    let dir = tempfile::tempdir().unwrap();
+    let tarball = dir.path().join("test.tar.gz");
+    std::fs::write(&tarball, b"fake tarball").unwrap();
+    let state = SessionState {
+        schema_version: 3,
+        tarball_path: tarball.clone(),
+        tarball_hash: ContentHash::from_content(b"fake tarball"),
+        timeline: vec![TimelineEntry::Op(RefinementOp::SetInclude {
+            item_id: ItemId::GeneratedTimer {
+                name: "backup".into(),
+            },
+            include: false,
+        })],
+        cursor: 1,
+        saved_at: "2026-11-14T00:00:00Z".into(),
+    };
+    save_session(&state, &tarball).unwrap();
+    let loaded = load_session(&tarball)
+        .expect("the control loads")
+        .expect("a saved session");
+    assert_eq!(loaded.timeline.len(), 1);
+
+    let path = session_file_path(&tarball);
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("\"GeneratedTimer\""), "{saved}");
+    let old = saved.replace("\"GeneratedTimer\"", "\"SystemdTimer\"");
+    std::fs::write(&path, &old).unwrap();
+    let err = load_session(&tarball).expect_err("a SystemdTimer decision must be refused");
+    assert!(
+        err.to_string().contains("unknown variant `SystemdTimer`"),
+        "the refusal names the kind: {err}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        old,
+        "the file is kept"
+    );
+}

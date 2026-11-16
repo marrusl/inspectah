@@ -46,7 +46,7 @@ test.describe("Export warnings", () => {
           config_files: [],
           repo_groups: [],
           version_changes: [],
-          service_states: [],
+          unit_states: [],
           users_groups_decisions: [],
         }),
       }),

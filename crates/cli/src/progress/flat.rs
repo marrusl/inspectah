@@ -955,7 +955,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false);
 
         // Services finishes first.
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 27);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 27);
         // Network finishes second.
         feed_simple_complete(&r, InspectorId::Network);
         // RPM finishes last.
@@ -966,8 +966,8 @@ mod tests {
 
         // Arrival order: Services → Network → RPM.
         assert!(
-            lines[0].contains("[01/11]") && lines[0].contains("Services"),
-            "first should be Services [01/11]: {}",
+            lines[0].contains("[01/11]") && lines[0].contains("Units"),
+            "first should be Units [01/11]: {}",
             lines[0]
         );
         assert!(
@@ -1008,7 +1008,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false);
 
         // Services finishes first (display position 2), gets counter 1.
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 27);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 27);
         // Selinux finishes second (display position 10), gets counter 2.
         feed_simple_complete(&r, InspectorId::Selinux);
         // RPM finishes third (display position 1), gets counter 3.
@@ -1019,8 +1019,8 @@ mod tests {
 
         // Services is [01/11] despite being position 2 in display order.
         assert!(
-            lines[0].contains("[01/11]") && lines[0].contains("Services"),
-            "Services should be [01/11]: {}",
+            lines[0].contains("[01/11]") && lines[0].contains("Units"),
+            "Units should be [01/11]: {}",
             lines[0]
         );
         // Selinux is [02/11] despite being position 10.
@@ -1058,7 +1058,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false);
 
         // Inspectors arrive out of display order.
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::Network);
         feed_rpm(&r, 613, 6);
@@ -1137,7 +1137,7 @@ mod tests {
             outcome: InspectorOutcome::Complete,
         });
 
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);
@@ -1194,7 +1194,7 @@ mod tests {
         let (r, buf) = test_renderer(false, true);
 
         feed_rpm(&r, 613, 6);
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);
@@ -1239,7 +1239,7 @@ mod tests {
 
         // 5 complete.
         feed_rpm(&r, 613, 6);
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);

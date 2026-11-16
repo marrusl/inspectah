@@ -111,13 +111,14 @@ function makeViewWithReferenceSection(): AggregateViewResponse {
         items: [],
       },
       {
-        id: "services",
+        id: "units",
         display_name: "Services",
         is_decision_section: false,
         items: [
           {
-            item_id: { kind: "Service", key: { unit: "httpd.service" } },
+            item_id: { kind: "Unit", key: { unit: "httpd.service" } },
             include: true,
+            locked: false,
             triage: {
               bucket: "universal" as const,
               prevalence: { count: 3, total: 3 },

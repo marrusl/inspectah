@@ -16,7 +16,7 @@ use inspectah_core::types::progress::{MetricKind, ProbeId, StepId};
 /// `--preserve all` is used; see [`active_display_order`].
 pub const DISPLAY_ORDER: &[(InspectorId, &str)] = &[
     (InspectorId::Rpm, "RPM packages"),
-    (InspectorId::Services, "Services"),
+    (InspectorId::Units, "Units"),
     (InspectorId::Storage, "Storage"),
     (InspectorId::KernelBoot, "Kernel & boot"),
     (InspectorId::Network, "Network"),
@@ -215,6 +215,12 @@ mod tests {
     #[test]
     fn display_position_subscription() {
         assert_eq!(display_position(InspectorId::Subscription), 12);
+    }
+
+    /// The units inspector collects every unit kind, not only services.
+    #[test]
+    fn display_name_units() {
+        assert_eq!(display_name(InspectorId::Units), "Units");
     }
 
     #[test]

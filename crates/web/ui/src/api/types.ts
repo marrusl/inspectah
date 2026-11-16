@@ -83,7 +83,7 @@ export type ConfigCategory =
  * Rust: ConfigShadow — #[serde(rename_all = "snake_case")]
  * Which other section's decision carries this file's content.
  */
-export type ConfigShadow = "services";
+export type ConfigShadow = "units";
 
 export interface ConfigFileEntry {
   path: string;
@@ -235,6 +235,11 @@ export interface RefinedConfig {
   /** @deprecated Legacy attention tags; use triage instead. */
   attention?: AttentionTag[];
   triage: TriageTag;
+  /**
+   * Present when the export does not write the file this row offers
+   * (spec § 11.1). Only `/api/view` sets it.
+   */
+  withheld?: WithheldView;
 }
 
 export interface BaselineSummary {
@@ -363,6 +368,18 @@ export interface ContextItem {
   subtitle: string | null;
   detail: string | null;
   searchable_text: string;
+  /**
+   * On a scheduled timer row only: the unit the timer is (`<name>.timer`).
+   * The row has no include flag; the timer's state is its unit row's.
+   */
+  unit?: string;
+  /** With `unit`: whether `unit_states` holds a row for that unit. */
+  unit_row?: boolean;
+  /**
+   * On a generated timer row only: the generated-timer name, which the
+   * view's `generated_timers` and `declined_generated` are keyed by.
+   */
+  generated_timer?: string;
 }
 
 export interface ContextSubsection {
@@ -450,22 +467,190 @@ export interface HealthResponse {
   session_is_sensitive: boolean;
 }
 
-// --- Service decision types (inspectah-web/src/handlers.rs) ---
+// --- Unit decision types (crates/web/src/web_types.rs) ---
 
-/** A classified service state change, projected for the view response. */
+/** Where a unit's file is on the source host (Rust: `FragmentView`). */
+export type UnitFragment = "vendor" | "local" | "shadowed" | "absent";
+
+/**
+ * Why the export writes no command for a unit row (Rust: `DeclinedView`).
+ * `text` is the Containerfile line after its marker and is shown as given;
+ * `renders` selects only how the row looks.
+ */
+export interface DeclinedView {
+  renders: "omitted" | "fixme" | "advisory";
+  /** The `OmissionReason` variant name. Not display copy. */
+  reason: string;
+  text: string;
+}
+
+/**
+ * The row a generated unit's request came from (Rust: `GeneratedRowView`,
+ * tagged on `row`): a scheduled generated-timer row by its name, or the
+ * flatpak applications, which share one provisioning service.
+ */
+export type GeneratedRowView =
+  | { row: "scheduled"; name: string }
+  | { row: "flatpak" };
+
+/** A generated-timer row's decision (Rust: `GeneratedTimerDto`). */
+export interface GeneratedTimerDto {
+  /** The `generated_timer_units` name, the `ItemId::GeneratedTimer` key. */
+  name: string;
+  include: boolean;
+  locked: boolean;
+  /**
+   * The excluded cron job this unit is generated from. While set, the
+   * server refuses including the row.
+   */
+  cron_job_excluded?: string;
+}
+
+/** A generated unit's request the export declined, and its row. */
+export interface DeclinedGeneratedView {
+  row: GeneratedRowView;
+  /** The unit the request would have enabled. */
+  unit: string;
+  declined: DeclinedView;
+}
+
+/**
+ * Why the export does not write a file a row offered (Rust:
+ * `WithheldView`, tagged on `outcome`). `text` is shown as given.
+ */
+export type WithheldView =
+  | { outcome: "withheld"; why: string; text: string }
+  | { outcome: "refused"; rule: string; text: string };
+
+/**
+ * An administrator's mount, automount or swap unit (Rust:
+ * `MountFindingView`). No `include`: the row has no toggle.
+ */
+export interface MountFindingDto {
+  unit: string;
+  /** `mount`, `automount` or `swap`, lowercase as served. */
+  kind: string;
+  state: string | null;
+  mount_point: string | null;
+  fragment: UnitFragment;
+  /** The config row that holds the unit file and its toggle. */
+  unit_file_path: string | null;
+  /** The Containerfile's advisory lines, shown as given, one per line. */
+  advisories: string[];
+}
+
+/** What the links on the source host say about an `Also=` member. */
+export type MemberLinks = "installed" | "unlinked" | "inert" | "other";
+
+/** One `Also=` member of a unit row (Rust: `AlsoView`). */
+export interface AlsoView {
+  unit: string;
+  links: MemberLinks;
+}
+
+/** A link's relation (Rust: `LinkRelation`); `also` is a name in `Also=`. */
+export type LinkRelation = "wants" | "requires" | "upholds" | "alias" | "also";
+
+/** Why an `[Install]` section cannot be relied on (Rust: `InstallUnknown`). */
+export type InstallUnknown =
+  | "specifier"
+  | "foreign_name"
+  | "upheld_by"
+  | "unreadable";
+
+/**
+ * Why a link is not carried (Rust: `ManualLinkCause`, externally tagged).
+ * Every cause is a bare string except `undetermined`, which is an object
+ * carrying its reason: `{"undetermined": {"reason": "upheld_by"}}`.
+ */
+export type ManualLinkCause =
+  | "static_unit"
+  | "not_in_install"
+  | "partial_install"
+  | "host_device"
+  | "host_install_only"
+  | "vendor_install_only"
+  | { undetermined: { reason: InstallUnknown } };
+
+/**
+ * A link inspectah reports and does not carry (Rust: `ManualLinkView`).
+ * No `include`: the row has no toggle.
+ */
+export interface ManualLinkView {
+  relation: LinkRelation;
+  /** The unit whose dependency directory holds the link, or the alias. */
+  parent: string;
+  unit: string;
+  cause: ManualLinkCause;
+  /** The Containerfile's lines, shown as given, one per line. */
+  advisories: string[];
+  /**
+   * The unit's install files the export does not stage. While present,
+   * `advisories` holds the unit's `# Omitted:` line.
+   */
+  not_applied?: string[];
+}
+
+/**
+ * A unit whose `[Install]` cannot be relied on (Rust:
+ * `UndeterminedInstallView`). No `include`: the row has no toggle.
+ */
+export interface UndeterminedInstallView {
+  unit: string;
+  reason: InstallUnknown;
+  /** The unit's install files under `/etc/systemd/system`. */
+  install_files: string[];
+  /** The Containerfile's block, shown as given, one per line. */
+  advisories: string[];
+  /** As on `ManualLinkView`. */
+  not_applied?: string[];
+}
+
+/**
+ * The default target the export sets (Rust: `DefaultTargetView`), decided
+ * by `SetInclude` on `ItemId::DefaultTarget`.
+ */
+export interface DefaultTargetView {
+  target: string;
+  include: boolean;
+  locked: boolean;
+  /** Present when the export writes no `set-default`. */
+  declined: DeclinedView | null;
+}
+
+/** A classified unit state change, projected for the view response. */
 export interface ServiceDecisionDto {
   unit: string;
+  /** The type suffix, lowercase as served (`service`, `socket`, ...). */
+  kind: string;
+  /** The template, when the unit is an instance. */
+  instance_of?: string;
+  fragment: UnitFragment;
+  /** The `/etc` unit file, for a local or shadowed fragment. */
+  unit_file_path?: string;
+  /** Present when the export writes no command for the row. */
+  declined?: DeclinedView;
   triage: TriageTag;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
   attention_reason?: string | null;
   owning_package?: string | null;
   default_state?: string | null;
   current_state: string;
-  /** Present when a full-shadow drop-in overrides this service unit. */
-  shadow_type?: string | null;
-  /** Rationale text for the shadow override (displayed below the toggle). */
-  shadow_rationale?: string | null;
+  /** Every unit `Also=` reaches from this one. Absent when none. */
+  also?: AlsoView[];
+  /** The unit's install drop-ins under `/etc/systemd/system`. Absent when none. */
+  install_drop_ins?: string[];
+  /**
+   * The paths under `/etc` a template instance's enable needs in the
+   * export. Always present; empty for a unit that is not an instance.
+   */
+  required_config: string[];
+  /**
+   * The paths under `/var` that hold a template instance's data, which the
+   * image does not carry. Always present; empty when none.
+   */
+  data_paths: string[];
 }
 
 /** A classified service drop-in override, projected for the view response. */
@@ -474,12 +659,16 @@ export interface DropInDecisionDto {
   path: string;
   triage: TriageTag;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
   attention_reason?: string | null;
   /** Shadow type (e.g. "full_shadow", "drop_in"). */
   shadow_type?: string | null;
   /** Rationale text for the shadow override. */
   shadow_rationale?: string | null;
+  /** The parent unit's kind, lowercase as served. */
+  kind?: string;
+  /** Present when the export does not write the file this row offers. */
+  withheld?: WithheldView;
 }
 
 // --- Sysctl panel types (crates/web/src/web_types.rs) ---
@@ -638,7 +827,7 @@ export interface TunedDecisionDto {
   custom_profiles: string[];
   triage: TriageTag;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
 }
 
 // --- Container decision types (inspectah-web/src/handlers.rs) ---
@@ -650,7 +839,7 @@ export interface QuadletDecisionDto {
   image: string;
   triage: TriageTag;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
   content?: string | null;
 }
 
@@ -661,7 +850,7 @@ export interface FlatpakDecisionDto {
   branch: string;
   triage: TriageTag;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
   lifecycle: string;
 }
 
@@ -697,14 +886,32 @@ export interface PackageProvenance {
   group_name: string;
 }
 
-/** View endpoint response: RefinedView + repo_groups. */
+/**
+ * View endpoint response: RefinedView's wire fields, listed by the server
+ * with a `withheld` on each config row, and the decision lists beside them.
+ */
 export interface ViewResponse extends RefinedView {
   repo_groups: RepoGroupInfo[];
   version_changes: VersionChangeEntry[];
-  service_states: ServiceDecisionDto[];
-  service_dropins: DropInDecisionDto[];
+  unit_states: ServiceDecisionDto[];
+  unit_dropins: DropInDecisionDto[];
+  /** The administrator's mount, automount and swap units. Always present. */
+  mount_findings: MountFindingDto[];
+  /** The links inspectah reports and does not carry. Always present. */
+  manual_links: ManualLinkView[];
+  /** The units whose `[Install]` cannot be relied on. Always present. */
+  undetermined_installs: UndeterminedInstallView[];
+  /** The default target and its toggle. Absent when the host records none. */
+  default_target?: DefaultTargetView;
   quadlets: QuadletDecisionDto[];
   flatpaks: FlatpakDecisionDto[];
+  /**
+   * Each request for a unit inspectah generates that the export does not
+   * write, with the row it is shown on. Always present.
+   */
+  declined_generated: DeclinedGeneratedView[];
+  /** Each generated-timer row's decision, by its name. Always present. */
+  generated_timers: GeneratedTimerDto[];
   /** The read-only sysctl panel. Always present. */
   sysctl: SysctlViewDto;
   tuned: TunedDecisionDto[];
@@ -811,9 +1018,14 @@ export interface ItemIdVersionLock {
   key: { name_arch: string };
 }
 
-export interface ItemIdService {
-  kind: "Service";
+export interface ItemIdUnit {
+  kind: "Unit";
   key: { unit: string };
+}
+
+/** The recorded default target. It names no target, so it has no `key`. */
+export interface ItemIdDefaultTarget {
+  kind: "DefaultTarget";
 }
 
 export interface ItemIdDropIn {
@@ -859,11 +1071,6 @@ export interface ItemIdTunedSelection {
 export interface ItemIdCronJob {
   kind: "CronJob";
   key: { path: string };
-}
-
-export interface ItemIdSystemdTimer {
-  kind: "SystemdTimer";
-  key: { name: string };
 }
 
 export interface ItemIdAtJob {
@@ -974,6 +1181,11 @@ export interface UnmanagedFileItem {
   include: boolean;
   /** Provenance signals from Plan 2's backend. */
   provenance: ProvenanceSignals;
+  /**
+   * Why the export does not write this included file, as a config row's
+   * `withheld` says it. `text` is shown as given.
+   */
+  withheld?: WithheldView;
 }
 
 /** Directory group for unmanaged files. */
@@ -1070,8 +1282,9 @@ export type ItemId =
   | ItemIdRepo
   | ItemIdModuleStream
   | ItemIdVersionLock
-  | ItemIdService
+  | ItemIdUnit
   | ItemIdDropIn
+  | ItemIdDefaultTarget
   | ItemIdQuadlet
   | ItemIdCompose
   | ItemIdFlatpak
@@ -1080,7 +1293,6 @@ export type ItemId =
   | ItemIdKernelModule
   | ItemIdTunedSelection
   | ItemIdCronJob
-  | ItemIdSystemdTimer
   | ItemIdAtJob
   | ItemIdGeneratedTimer
   | ItemIdSelinuxPort
@@ -1138,7 +1350,7 @@ export interface AggregateItemPrevalence {
 export interface AggregateItem {
   item_id: ItemId;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
   attention_reason?: string | null;
   triage: AggregateTriageDto;
   /** @deprecated Use triage.prevalence instead. */

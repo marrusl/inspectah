@@ -9,11 +9,11 @@ description: Snapshot JSON schema is version-gated by exact match (MIN_SCHEMA ==
 `schema_version` field. The loading contract is an exact match:
 
 ```rust
-pub const SCHEMA_VERSION: u32 = 27;
+pub const SCHEMA_VERSION: u32 = 28;
 
 // ...
 
-const MIN_SCHEMA: u32 = 27;
+const MIN_SCHEMA: u32 = 28;
 
 if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSION {
     return Err(SnapshotError::UnsupportedVersion(snap.schema_version));
@@ -22,17 +22,17 @@ if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSIO
 
 `MIN_SCHEMA` and `SCHEMA_VERSION` are independent constants, not tied
 together by the type system -- they just currently hold the same value
-(both 27). Only `schema_version == 27` loads; any other value is
+(both 28). Only `schema_version == 28` loads; any other value is
 rejected. Snapshots on an older schema must be re-scanned -- there is no
 migration path, and with the window closed to an exact match there is no
 longer even a one-release grace period for a prior version.
 
 **Raise `MIN_SCHEMA` with `SCHEMA_VERSION`, and decide it explicitly.**
-Bumping `SCHEMA_VERSION` alone widens the window: 27 with `MIN_SCHEMA`
-still 26 accepts both. Ask what the prior version *is* before leaving it
+Bumping `SCHEMA_VERSION` alone widens the window: 28 with `MIN_SCHEMA`
+still 27 accepts both. Ask what the prior version *is* before leaving it
 accepted, and derive the answer rather than reusing the last one.
 
-Four bumps, two different arguments, all landing on "reject":
+Five bumps, two different arguments, all landing on "reject":
 
 - 23 -> 24 added a cross-inspector annotation written once, at collect
   time, so a schema-23 snapshot is by definition one collected before
@@ -66,6 +66,17 @@ Four bumps, two different arguments, all landing on "reject":
   payload, `testdata/fixtures/snapshot/schema-26-sysctl-overrides.json`,
   so the next bump has a template for keeping the closed version's
   payload out of the test bodies.
+- 27 -> 28 renamed the `services` section to `units`. A schema-27
+  payload parses (serde drops the unknown `services` key), so the
+  rename alone would leave an empty section, not an error. It is
+  **unreadable**, since its section sits under a key nothing reads, and
+  **semantically stale**: it was collected when the section held
+  services only, so every socket and timer state the host had is absent
+  from it with nothing to say so. Its refusal tests read
+  `testdata/fixtures/snapshot/schema-27-services-section.json`, and
+  each first loads the same section moved under `units` at the current
+  version, so the test proves the version gate refuses it and not a
+  broken payload.
 
 The second argument does not follow from the first. A renamed field
 would force the bump even if the data were recoverable, and stale

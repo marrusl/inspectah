@@ -8,7 +8,7 @@ use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 use super::language_packages::sanitize_for_comment;
 use super::repo_enabling::keys_included;
 use super::safety::sanitize_shell_value;
-use super::service_intent::is_package_installable;
+use super::unit_plan::is_package_installable;
 
 /// How one `packages_added` entry reaches the image.
 ///

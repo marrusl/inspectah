@@ -12,7 +12,7 @@ image-mode migration. The structure has 32 top-level fields, listed in the
 tables below. A snapshot loads only in the inspectah release that wrote it:
 see [Loading and schema version](#loading-and-schema-version).
 
-**Schema version:** 27
+**Schema version:** 28
 {: .label .label-blue }
 
 **Source:** `crates/core/src/snapshot.rs`
@@ -40,7 +40,7 @@ see [Loading and schema version](#loading-and-schema-version).
 
 | Field | Type | Description |
 |:------|:-----|:------------|
-| `schema_version` | `u32` | Schema version number, currently **27**. Checked on load: any other value is rejected. |
+| `schema_version` | `u32` | Schema version number, currently **28**. Checked on load: any other value is rejected. |
 | `meta` | `Map<String, Value>` | Free-form metadata written by `scan`: `hostname` (omitted when `/etc/hostname` is empty), `timestamp` (RFC 3339), and `inspectah_version`. |
 | `os_release` | `OsRelease?` | Parsed `/etc/os-release` fields (name, version, version ID, ID, ID-like, pretty name, variant ID). |
 | `system_type` | `SystemType` | Detected system kind, serialized as `package-mode`, `rpm-ostree`, or `bootc`. Default: `unknown`. |
@@ -54,7 +54,7 @@ All are `Option` types: absent when the inspector did not run or was not applica
 |:------|:-----|:----------|:------------|
 | `rpm` | `RpmSection?` | `RpmInspector` | Installed packages, version changes, repo files, GPG keys, module streams, leaf/auto classification, dependency tree. |
 | `config` | `ConfigSection?` | `ConfigInspector` | RPM-owned modified files (`rpm -Va`), unowned `/etc` files, orphaned configs, including PAM files, audit rules, and custom tuned profiles. Ostree systems use `/usr/etc` overlay diffing instead. |
-| `services` | `ServiceSection?` | `ServicesInspector` | Systemd unit files, enabled/disabled state, preset deviations, drop-in overrides, full unit shadows. |
+| `units` | `UnitSection?` | `UnitsInspector` | Systemd unit state for every unit kind. `state_changes`: enabled, disabled and masked units whose state differs from what the image would have, each with the unit file it loads and its owning package, and where they apply the units its `Also=` reaches (`also`), its `[Install]` drop-ins (`install_drop_ins`, `vendor_drop_ins`) and, for an enabled template instance, the configuration under `/etc` it reads (`required_config`) and the data under `/var` it keeps (`data_paths`), or, when what it reads could not be read, why (`needs_unknown`: the setting, file and line, or the file that could not be read, never the value). `inventory`: every unit with an install state or a mask, once each, with its preset. `drop_ins`: drop-in overrides and full unit shadows. `mount_findings`: the administrator's mount, automount and swap units. `manual_links` and `undetermined_installs`: links and `[Install]` sections inspectah reports and does not carry. `default_target`: the default target, when the host sets one. |
 | `network` | `NetworkSection?` | `NetworkInspector` | NetworkManager connections, firewall zones/direct rules, static routes, `/etc/hosts` additions, proxy settings, DNS provenance. |
 | `storage` | `StorageSection?` | `StorageInspector` | fstab entries, active mount points, LVM volumes, `/var` directories with their backing, credential references in mount options. |
 | `scheduled_tasks` | `ScheduledTaskSection?` | `ScheduledTasksInspector` | Cron jobs (system + user), systemd timers, at jobs, generated timer unit conversions. |
@@ -122,16 +122,16 @@ Snapshots serialize to JSON via `serde`. Key behaviors:
 
 ## Loading and schema version
 
-`SCHEMA_VERSION` and `MIN_SCHEMA` in `crates/core/src/snapshot.rs` are both 27. The loading contract is an exact match, not a rolling window: a snapshot whose `schema_version` is anything other than 27 does not load, whether it is older or newer. There is no migration. A schema bump renames or retypes fields, and some of the data a new field holds is observed on the host at scan time, so it cannot be derived from an older snapshot afterward. Schema 27 replaces the per-key sysctl overrides with the sysctl files and running values, read in systemd-sysctl's order. A schema 26 snapshot still parses, but it was collected before that order was followed: an override in it may name a file the host never applied, and nothing in it tells which.
+`SCHEMA_VERSION` and `MIN_SCHEMA` in `crates/core/src/snapshot.rs` are both 28. The loading contract is an exact match, not a rolling window: a snapshot whose `schema_version` is anything other than 28 does not load, whether it is older or newer. There is no migration. A schema bump renames or retypes fields, and some of the data a new field holds is observed on the host at scan time, so it cannot be derived from an older snapshot afterward. Schema 28 renames the `services` section to `units`. A schema 27 snapshot still parses, but its unit section held services only: every socket and timer state the host had is missing from it, and nothing in it says so.
 
 In practice:
 
 - A tarball from a different inspectah release does not load in `refine` or `aggregate` when the two releases use different schema versions, which is the usual case between releases. Re-scan the host with the release you are running.
-- `refine` stops with an error. For a tarball whose snapshot is schema 26, the output is:
+- `refine` stops with an error. For a tarball whose snapshot is schema 27, the output is:
 
   ```text
   Loading snapshot...
-  error: snapshot load error: unsupported schema version: 26 (accepted: 27)
+  error: snapshot load error: unsupported schema version: 27 (accepted: 28)
   ```
 
 - `aggregate` prints a warning for each tarball it cannot load and skips it, then refuses to merge fewer than two snapshots.

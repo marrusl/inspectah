@@ -1,4 +1,5 @@
 use inspectah_core::traits::executor::Executor;
+use inspectah_core::types::units::UNIT_TYPE_SUFFIXES;
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
@@ -153,6 +154,10 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     "/etc/logrotate.d/kvm_stat",
     "/etc/systemd/system/*.wants/*",
     "/etc/systemd/system/*.requires/*",
+    // An `.upholds` link is a unit-state finding, never configuration: the
+    // walk would follow it and stage the linked unit's content at the
+    // link's path (§ 7.7 of the units spec).
+    "/etc/systemd/system/*.upholds/*",
     "/etc/systemd/user/*.wants/*",
     "/etc/systemd/user/*.requires/*",
     // NOTE: Drop-in overrides (*.service.d/*.conf, *.timer.d/*.conf,
@@ -206,8 +211,8 @@ pub fn is_excluded_unowned(exec: &dyn Executor, path: &str) -> bool {
         }
     }
 
-    // Systemd unit symlinks directly under /etc/systemd/system/: state
-    // systemd itself wrote, which the services inspector already records.
+    // Systemd unit links and masks directly under /etc/systemd/system/:
+    // state the units inspector records.
     if is_systemd_unit_symlink(exec, path) {
         return true;
     }
@@ -215,10 +220,11 @@ pub fn is_excluded_unowned(exec: &dyn Executor, path: &str) -> bool {
     false
 }
 
-/// Returns `true` if the path is a systemd-written unit symlink: a
-/// **symlink** whose name sits directly under `/etc/systemd/system/`.
+/// Returns `true` if the path is unit state rather than a unit file: a
+/// **symlink**, or a zero-length regular file with a unit type suffix,
+/// whose name sits directly under `/etc/systemd/system/`.
 ///
-/// **The whole test is the file type. The link target is not read, and
+/// **For a link, the whole test is the file type. The link target is not read, and
 /// this function does not distinguish the two kinds of link that live
 /// here.** Both are systemd's own state and the services inspector
 /// records both independently: alias and enablement links from
@@ -228,13 +234,19 @@ pub fn is_excluded_unowned(exec: &dyn Executor, path: &str) -> bool {
 /// into a file. Naming only aliases here would repeat the defect this
 /// replaced, where the name promised more than the code checked.
 ///
-/// A **regular** file in the same directory is the opposite case: an
-/// admin-written unit, either a full shadow of a vendor unit or a wholly
+/// A **zero-length regular file** with a unit type suffix there is a mask
+/// too: systemd reads it as one, and the units inspector records it as a
+/// `Masked` state change. A mask has one representation, so it is no
+/// config entry either (§ 7.7 of the units spec).
+///
+/// A **non-empty regular** file in the same directory is the opposite case:
+/// an admin-written unit, either a full shadow of a vendor unit or a wholly
 /// new one, and migration-relevant by definition. It must reach
 /// `config.files`.
 ///
 /// Examples:
 ///   `/etc/systemd/system/display-manager.service` → true when it is a symlink
+///   `/etc/systemd/system/kdump.service` → true when it is a zero-length file (mask)
 ///   `/etc/systemd/system/sshd.service` → false when it is a regular file (full shadow)
 ///   `/etc/systemd/system/sshd.service.d/override.conf` → false (drop-in)
 ///   `/etc/systemd/system/multi-user.target.wants/sshd.service` → false (handled by glob)
@@ -249,7 +261,18 @@ fn is_systemd_unit_symlink(exec: &dyn Executor, path: &str) -> bool {
     if rest.is_empty() || rest.contains('/') {
         return false;
     }
-    exec.read_link(Path::new(path)).is_ok()
+    if exec.read_link(Path::new(path)).is_ok() {
+        return true;
+    }
+    let has_unit_suffix = rest
+        .rsplit_once('.')
+        .is_some_and(|(_, suffix)| UNIT_TYPE_SUFFIXES.contains(&suffix));
+    // Any read error leaves the file to the config walk, which records why
+    // it could not capture the content.
+    has_unit_suffix
+        && exec
+            .read_file(Path::new(path))
+            .is_ok_and(|content| content.is_empty())
 }
 
 /// Matches a path against a glob pattern.

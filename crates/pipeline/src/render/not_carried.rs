@@ -37,10 +37,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
+use inspectah_core::types::units::UnitState;
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::repoless::{PackageRoute, route_for};
-use super::service_intent::pulled_in_by_included;
+use super::unit_plan::pulled_in_by_included;
 use crate::export_warning::{ExportWarning, sanitize_bounded};
 
 /// `source_repo` recorded for a package installed at system install time,
@@ -166,7 +167,7 @@ pub struct NotCarriedPackage {
     pub arch: String,
     /// Repository the package was installed from.
     pub source_repo: String,
-    /// Units in `services.enabled_units` this package owns.
+    /// Units enabled in `units.inventory` that this package owns.
     pub enabled_units: Vec<String>,
     /// Another arch of this name is in the same list.
     arch_qualified: bool,
@@ -183,7 +184,7 @@ impl NotCarriedPackage {
         }
     }
 
-    /// Whether this package owns a unit in `services.enabled_units`: the
+    /// Whether this package owns a unit enabled in `units.inventory`: the
     /// one test every surface uses to put a package first and to name it
     /// in [`not_carried_notice`].
     pub fn owns_enabled_unit(&self) -> bool {
@@ -197,7 +198,7 @@ const VENDOR_UNIT_DIR: &str = "/usr/lib/systemd/system";
 /// Every surface: the excluded [`AutoCarriage::Unneeded`] packages, in
 /// display order.
 ///
-/// Packages owning a unit in `services.enabled_units` come first, then
+/// Packages owning a unit enabled in `units.inventory` come first, then
 /// the rest; each part is sorted by name, then arch. Empty under the
 /// [`classify_auto_carriage`] fallback.
 ///
@@ -258,19 +259,24 @@ pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage>
 /// Map each owning package name to the enabled units it owns, sorted.
 fn enabled_units_by_owner(snap: &InspectionSnapshot) -> HashMap<&str, BTreeSet<&str>> {
     let mut owners: HashMap<&str, BTreeSet<&str>> = HashMap::new();
-    let Some(services) = snap.services.as_ref() else {
+    let Some(services) = snap.units.as_ref() else {
         return owners;
     };
-    let enabled: HashSet<&str> = services.enabled_units.iter().map(String::as_str).collect();
+    let enabled: HashSet<&str> = services
+        .inventory
+        .iter()
+        .filter(|e| e.state == UnitState::Enabled)
+        .map(|e| e.unit.as_str())
+        .collect();
 
     for change in &services.state_changes {
-        if let Some(owner) = change.owning_package.as_deref()
-            && enabled.contains(change.unit.as_str())
+        if let Some(owner) = change.unit().owning_package()
+            && enabled.contains(change.unit().name().as_str())
         {
             owners
                 .entry(owner)
                 .or_default()
-                .insert(change.unit.as_str());
+                .insert(change.unit().name().as_str());
         }
     }
 
@@ -364,10 +370,26 @@ pub fn not_carried_notice_for(list: &[NotCarriedPackage]) -> Option<ExportWarnin
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::types::aggregate::AggregateSnapshotMeta;
     use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, RpmSection};
-    use inspectah_core::types::services::{ServiceSection, ServiceStateChange, ServiceUnitState};
+    use inspectah_core::types::units::{
+        PresetDefault, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
+    };
 
     fn pkg(name: &str, arch: &str, include: bool) -> PackageEntry {
         PackageEntry {
@@ -613,19 +635,13 @@ mod tests {
         format!("/usr/lib/systemd/system/{unit}")
     }
 
-    fn enabled_change(unit: &str, owner: &str) -> ServiceStateChange {
-        ServiceStateChange {
-            unit: unit.into(),
-            current_state: ServiceUnitState::Enabled,
-            default_state: None,
-            disposition: FindingKind::included(),
-            locked: false,
-            owning_package: Some(owner.into()),
-            aggregate: None,
-            attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
-        }
+    fn enabled_change(unit: &str, owner: &str) -> UnitStateChange {
+        UnitStateChange::new(
+            test_carried_unit(unit.to_owned().try_into().unwrap(), Some(owner.into())),
+            UnitState::Enabled,
+            None,
+        )
+        .unwrap()
     }
 
     /// The classified host with its services: `firewalld.service` is
@@ -634,21 +650,58 @@ mod tests {
     /// unit is one the not-carried packages must not be credited with.
     fn host() -> InspectionSnapshot {
         let mut snap = snapshot();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             state_changes: vec![
                 enabled_change("firewall-helper.service", "python3-firewall"),
                 enabled_change("httpd.service", "httpd"),
             ],
-            enabled_units: vec![
-                "cups.service".into(),
-                "firewall-helper.service".into(),
-                "firewalld.service".into(),
-                "httpd.service".into(),
-                "libs-local.service".into(),
+            inventory: vec![
+                UnitInventoryEntry {
+                    unit: "cups.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "firewall-helper.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "firewalld.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: Some(PresetDefault::Enable),
+                },
+                UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "libs-local.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
             ],
-            disabled_units: vec![],
             drop_ins: vec![],
-            preset_matched_units: vec!["firewalld.service".into()],
+            mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
+            default_target: None,
         });
         let rpm = snap.rpm.as_mut().expect("rpm section");
         rpm.file_ownership = vec![
@@ -784,6 +837,41 @@ mod tests {
                 !attributed.contains(&other.to_string()),
                 "{other} is owned by a package not on the list"
             );
+        }
+    }
+
+    /// The inventory holds every unit kind, so an enabled vendor socket
+    /// credits its not-carried owner like a service does; the same socket
+    /// disabled credits nothing.
+    #[test]
+    fn an_enabled_socket_names_its_not_carried_owner() {
+        for (state, named) in [(UnitState::Enabled, true), (UnitState::Disabled, false)] {
+            let mut snap = scanned_host();
+            snap.units
+                .as_mut()
+                .expect("units section")
+                .inventory
+                .push(UnitInventoryEntry {
+                    unit: "cups-lpd.socket"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state,
+                    preset: Some(PresetDefault::Disable),
+                });
+            let list = not_carried_packages(&snap);
+            let cups_libs = list
+                .iter()
+                .find(|p| p.name == "cups-libs")
+                .expect("cups-libs is not carried");
+            let notice = not_carried_notice(&snap).expect("other owners give a notice");
+            if named {
+                assert_eq!(cups_libs.enabled_units, ["cups-lpd.socket"], "{state:?}");
+                assert!(notice.text().contains("cups-libs"), "{}", notice.text());
+            } else {
+                assert!(cups_libs.enabled_units.is_empty(), "{state:?}");
+                assert!(!notice.text().contains("cups-libs"), "{}", notice.text());
+            }
         }
     }
 

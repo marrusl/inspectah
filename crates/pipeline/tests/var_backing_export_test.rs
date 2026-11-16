@@ -15,8 +15,8 @@ use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::rpm::{
     FileOwnershipEntry, PackageEntry, PackageState, RepoFile, RpmSection,
 };
-use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_core::types::storage::{StorageSection, VarDirBacking, VarDirectory};
+use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_pipeline::render::var_dirs::{
     EffectiveBacking, UnresolvedReason, VarDirOutcome, effective_var_backing,
@@ -662,7 +662,7 @@ fn only_a_file_directly_in_a_system_unit_directory_survives_an_exclusion() {
 // --- the collector-shaped full shadow ----------------------------------
 
 /// The admin shadow of `crond.service`, byte for byte as the scan
-/// returned it in `services.drop_ins[].content`.
+/// returned it in `units.drop_ins[].content`.
 const CROND_SHADOW_CONTENT: &str = "[Unit]\n\
      Description=Command Scheduler (site override)\n\
      After=auditd.service nss-user-lookup.target systemd-user-sessions.service \
@@ -696,13 +696,13 @@ const FULL_SHADOW_RATIONALE: &str = "Full shadow: this unit file in /etc/systemd
 ///
 /// - `storage.var_directories` carries `/var/lib/crondstate` with
 ///   `state_directory` naming `crond.service`.
-/// - `services.drop_ins` carries the shadow at
+/// - `units.drop_ins` carries the shadow at
 ///   `/etc/systemd/system/crond.service` with
 ///   `shadow_type: full_shadow`.
 /// - `config.files` carries the same path as an **inventory** row whose
-///   `shadowed_by` is `Services`: the walk keeps an admin-written
+///   `shadowed_by` is `Units`: the walk keeps an admin-written
 ///   regular unit file, and the cross-inspector pass hands the one
-///   include decision to `services.drop_ins`.
+///   include decision to `units.drop_ins`.
 /// - `rpm.file_ownership` gives `cronie` exactly one path matching the
 ///   filename, `/usr/lib/systemd/system/crond.service`, and `cronie` is
 ///   an included `packages_added` entry. That file declares no
@@ -731,7 +731,7 @@ fn crond_full_shadow_snapshot(shadow_included: bool) -> InspectionSnapshot {
         )],
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "crond.service".into(),
             path: "/etc/systemd/system/crond.service".into(),
@@ -753,7 +753,7 @@ fn crond_full_shadow_snapshot(shadow_included: bool) -> InspectionSnapshot {
         false,
     );
     shadow_row.disposition = FindingKind::inventory();
-    shadow_row.shadowed_by = Some(ConfigShadow::Services);
+    shadow_row.shadowed_by = Some(ConfigShadow::Units);
     snap.config = Some(ConfigSection {
         files: vec![shadow_row],
     });

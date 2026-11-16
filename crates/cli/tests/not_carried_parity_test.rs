@@ -57,8 +57,8 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
-use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
+use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use inspectah_core::traits::executor::ExecResult;
@@ -69,6 +69,7 @@ use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
+use inspectah_core::types::units::UnitState;
 use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::export_warning::{ExportWarning, ExportWarningKind};
@@ -269,10 +270,7 @@ fn host_mock() -> MockExecutor {
         .with_dir("/etc/httpd/conf", vec!["httpd.conf"])
         .with_file(MODIFIED_CONFIG, "Listen 8080\n")
         // -- services --------------------------------------------------
-        .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
-            ok(SYSTEMCTL),
-        )
+        .with_command("systemctl list-unit-files --no-pager", ok(SYSTEMCTL))
         .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
         .with_file("/usr/lib/systemd/system-preset/90-default.preset", PRESET)
         .with_command(
@@ -288,6 +286,22 @@ fn host_mock() -> MockExecutor {
             ok(&find_var_lib),
         )
         .with_command("rpm --query --all --qf [%{FILENAMES}\\n]", ok(&rpm_owned));
+    // Each listed unit's vendor file, and the link `systemctl enable` made
+    // for it, since the listing calls all three `enabled`.
+    let wants = "/etc/systemd/system/multi-user.target.wants";
+    for unit in ["firewalld.service", "httpd.service", "rhcd.service"] {
+        mock = mock
+            .with_file(
+                &format!("/usr/lib/systemd/system/{unit}"),
+                "[Unit]\n\n[Install]\nWantedBy=multi-user.target\n",
+            )
+            .with_dir_entry("/etc/systemd/system", "multi-user.target.wants")
+            .with_dir_entry(wants, unit)
+            .with_link(
+                &format!("{wants}/{unit}"),
+                &format!("/usr/lib/systemd/system/{unit}"),
+            );
+    }
     for (id, requires) in RECURSIVE_REQUIRES {
         mock = mock.with_command(
             &format!(
@@ -317,7 +331,7 @@ fn host_mock() -> MockExecutor {
 fn collected(exec: &MockExecutor) -> InspectionSnapshot {
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
-        Box::new(ServicesInspector::new()),
+        Box::new(UnitsInspector::new()),
         Box::new(StorageInspector::new()),
         Box::new(ConfigInspector::new()),
     ];
@@ -1185,11 +1199,11 @@ fn the_scan_prints_a_notice_for_not_carried_unit_owners() {
 fn the_scan_prints_nothing_without_not_carried_unit_owners() {
     let mut snapshot = collected(&host_mock());
     snapshot
-        .services
+        .units
         .as_mut()
         .expect("the services section")
-        .enabled_units
-        .clear();
+        .inventory
+        .retain(|e| e.state != UnitState::Enabled);
     let dir = tempfile::tempdir().expect("tempdir");
     let snapshot = scan_export(snapshot, dir.path());
     assert!(

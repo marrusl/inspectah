@@ -39,7 +39,7 @@ const MOCK_HEALTH: HealthResponse = {
 };
 
 const MOCK_SECTIONS: ReferenceSection[] = [
-  { id: "services", display_name: "Services", items: [] },
+  { id: "units", display_name: "Services", items: [] },
 ];
 
 /** Minimal groups for sidebar rendering in overlay mode. */
@@ -61,7 +61,7 @@ const MOCK_GROUPS: SectionGroupMeta[] = [
   {
     slug: "services-scheduling",
     label: "Services & Scheduling",
-    sections: [{ id: "services", label: "Services", is_triage: true }],
+    sections: [{ id: "units", label: "Services", is_triage: true }],
     has_actionable_sections: true,
   },
 ];

@@ -1,8 +1,13 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useId, useMemo } from "react";
 import { Label } from "@patternfly/react-core";
 import type {
   ServiceDecisionDto,
   DropInDecisionDto,
+  MountFindingDto,
+  ManualLinkView,
+  ManualLinkCause,
+  UndeterminedInstallView,
+  DefaultTargetView,
   ViewResponse,
   RefinementOp,
   TriageTag,
@@ -19,6 +24,19 @@ import {
 export interface ServiceSectionProps {
   services: ServiceDecisionDto[];
   dropins: DropInDecisionDto[];
+  /**
+   * The administrator's mount, automount and swap units. Rows with no
+   * toggle: they are not decisions.
+   */
+  mountFindings: MountFindingDto[];
+  /** The links inspectah reports and does not carry. Rows with no toggle. */
+  manualLinks: ManualLinkView[];
+  /** The units whose `[Install]` cannot be relied on. Rows with no toggle. */
+  undeterminedInstalls: UndeterminedInstallView[];
+  /** The default target and its toggle, when the host records one. */
+  defaultTarget?: DefaultTargetView;
+  /** Opens the config row at a path (a finding's unit file). */
+  onNavigateToConfig?: (path: string) => void;
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
   /**
@@ -36,6 +54,26 @@ function serviceKey(unit: string): string {
 /** Guard key for a drop-in: the whole of its op's item_id key. */
 function dropinKey(path: string): string {
   return JSON.stringify(["dropin", path]);
+}
+
+/**
+ * A link row's identity: its relation, parent and unit, JSON-encoded. A
+ * unit name can hold `-` (`a.service-b.service`), so joining the three
+ * with a separator could give two links one key or test id.
+ */
+function linkIdentity(link: ManualLinkView): string {
+  return JSON.stringify([link.relation, link.parent, link.unit]);
+}
+
+/** Guard key for the default target, whose op has no item_id key. */
+const DEFAULT_TARGET_KEY = JSON.stringify(["default_target"]);
+
+/**
+ * The name of a link's cause. `undetermined` is served as an object that
+ * carries its reason; every other cause is a bare string.
+ */
+function causeName(cause: ManualLinkCause): string {
+  return typeof cause === "string" ? cause : "undetermined";
 }
 
 /** Group drop-ins by their parent unit name. */
@@ -63,6 +101,41 @@ const LEVEL_BORDER: Record<string, string> = {
   universal: "none",
 };
 
+/**
+ * The ids an element's `aria-describedby` names, space-separated, or
+ * undefined when none renders, so no id dangles.
+ */
+function describedBy(...ids: (string | false | null | undefined)[]): string | undefined {
+  const present = ids.filter((id): id is string => !!id);
+  return present.length > 0 ? present.join(" ") : undefined;
+}
+
+/**
+ * A reason the server wrote, under its row. The text is shown as given:
+ * never composed, rephrased or parsed here.
+ */
+function RowNote({
+  id,
+  testId,
+  className,
+  text,
+}: {
+  id: string;
+  testId: string;
+  className?: string;
+  text: string;
+}) {
+  return (
+    <div
+      id={id}
+      data-testid={testId}
+      className={`inspectah-decision-row__helper-text inspectah-unit-note${className ? ` ${className}` : ""}`}
+    >
+      {text}
+    </div>
+  );
+}
+
 function badgeTextForTriage(triage: TriageTag): string | null {
   const level = triageBucketToAttention(triage);
   if (level === "routine") return null;
@@ -75,6 +148,8 @@ interface DropInRowProps {
   parentExcluded: boolean;
   /** The parent service row is locked, which locks its drop-ins too. */
   parentLocked: boolean;
+  /** The drop-in is one of the parent unit's install drop-ins. */
+  isInstallDropIn?: boolean;
   isPending: boolean;
   onToggle: (path: string, currentInclude: boolean) => void;
 }
@@ -83,29 +158,53 @@ function DropInRow({
   dropin: di,
   parentExcluded,
   parentLocked,
+  isInstallDropIn = false,
   isPending,
   onToggle,
 }: DropInRowProps) {
   const diBucket = extractTriageBucket(di.triage);
-  const diBorder = LEVEL_BORDER[diBucket] ?? "none";
   const diBadge = badgeTextForTriage(di.triage);
   const diLevel = triageBucketToAttention(di.triage);
   const diLocked = di.locked === true || parentLocked;
   const disabled = parentExcluded || isPending || diLocked;
+  const isShadow = di.shadow_type === "full_shadow";
+  // The checkbox points at the rationale only when the rationale renders.
+  const hasRationale = isShadow && !!di.shadow_rationale;
+  // The ids `aria-describedby` names. A path can hold a space, and that
+  // attribute is a list split on whitespace, so the ids are generated and
+  // never built from the path; the test ids keep the path.
+  const noteId = useId();
+  const lockedReasonId = `${noteId}-locked-reason`;
+  const rationaleId = `${noteId}-shadow-rationale`;
+  const withheldId = `${noteId}-withheld`;
+
+  // Border-left priority: triage border wins if present, else shadow warning border
+  let diBorder = LEVEL_BORDER[diBucket] ?? "none";
+  let backgroundColor: string | undefined;
+  if (isShadow) {
+    if (diBorder !== "none") {
+      // Triage border wins left edge, shadow gets background
+      backgroundColor = "var(--pf-t--global--color--status--warning--default)";
+    } else {
+      // No triage border, shadow gets left border
+      diBorder = "4px solid var(--pf-t--global--color--status--warning--default)";
+    }
+  }
 
   return (
     <div
       role="row"
       aria-label={di.path}
-      aria-describedby={
-        diLocked ? `locked-reason-dropin-${di.path}` : undefined
-      }
+      aria-describedby={diLocked ? lockedReasonId : undefined}
       tabIndex={diLocked ? 0 : -1}
       data-testid={`dropin-item-${di.path}`}
       data-locked={diLocked ? "true" : undefined}
       className={`inspectah-decision-row inspectah-service-dropin${diLocked ? " inspectah-decision-row--locked" : ""}`}
       style={{
         borderLeft: diBorder,
+        backgroundColor: backgroundColor
+          ? `color-mix(in srgb, ${backgroundColor} 10%, transparent)`
+          : undefined,
         paddingLeft: "calc(var(--pf-t--global--spacer--md) + 16px)",
         opacity: parentExcluded ? 0.55 : 1,
         transition: "opacity 200ms ease, background-color 150ms ease",
@@ -135,6 +234,10 @@ function DropInRow({
                 : `Toggle ${di.path}`
             }
             aria-disabled={parentExcluded}
+            aria-describedby={describedBy(
+              hasRationale && rationaleId,
+              di.withheld && withheldId,
+            )}
             style={{ minWidth: 20, minHeight: 20 }}
           />
         </div>
@@ -150,11 +253,38 @@ function DropInRow({
             </Label>
           </div>
         )}
+        {!parentExcluded && !diLocked && diBadge && (
+          <div role="gridcell" className="inspectah-decision-row__badge">
+            <Label color={attentionLabelColor(diLevel)}>{diBadge}</Label>
+          </div>
+        )}
+        {isInstallDropIn && (
+          <div
+            role="gridcell"
+            className="inspectah-decision-row__badge"
+            data-testid="install-dropin-badge"
+          >
+            <Label color="blue" isCompact>
+              [Install]
+            </Label>
+          </div>
+        )}
+        {isShadow && (
+          <div
+            role="gridcell"
+            className="inspectah-decision-row__badge"
+            data-testid={`shadow-badge-dropin-${di.path}`}
+          >
+            <Label color="orange" isCompact>
+              Shadow override
+            </Label>
+          </div>
+        )}
         {diLocked && (
           <div
             role="gridcell"
             className="inspectah-decision-row__badge"
-            id={`locked-reason-dropin-${di.path}`}
+            id={lockedReasonId}
             data-testid={`locked-badge-dropin-${di.path}`}
           >
             <Label color="grey" isCompact>
@@ -162,12 +292,357 @@ function DropInRow({
             </Label>
           </div>
         )}
-        {!parentExcluded && !diLocked && diBadge && (
+      </div>
+      {/* Full-shadow rationale below the drop-in toggle row */}
+      {hasRationale && (
+        <div
+          id={rationaleId}
+          className="inspectah-decision-row__helper-text"
+          data-testid={`shadow-rationale-dropin-${di.path}`}
+          style={{
+            paddingLeft: "calc(var(--pf-t--global--spacer--md) + 28px)",
+            paddingBottom: "var(--pf-t--global--spacer--xs)",
+            fontSize: "var(--pf-t--global--font--size--xs)",
+            color: "var(--pf-t--global--text--color--subtle)",
+            fontStyle: "italic",
+          }}
+        >
+          {di.shadow_rationale}
+        </div>
+      )}
+      {di.withheld && (
+        <RowNote
+          id={withheldId}
+          testId={`withheld-dropin-${di.path}`}
+          className="inspectah-unit-note--withheld"
+          text={di.withheld.text}
+        />
+      )}
+    </div>
+  );
+}
+
+interface MountFindingRowProps {
+  finding: MountFindingDto;
+  onNavigateToConfig?: (path: string) => void;
+}
+
+/**
+ * An administrator's mount, automount or swap unit: what the host had and
+ * the export's advisory lines, as given. No toggle and no keyboard action:
+ * the export decides nothing here. The unit file is decided on its config
+ * row, which `unit_file_path` names.
+ */
+function MountFindingRow({ finding: f, onNavigateToConfig }: MountFindingRowProps) {
+  const advisoriesId = `mount-finding-advisories-${f.unit}`;
+  const path = f.unit_file_path;
+  return (
+    <div
+      role="row"
+      aria-label={f.unit}
+      aria-describedby={describedBy(f.advisories.length > 0 && advisoriesId)}
+      tabIndex={-1}
+      data-testid={`mount-finding-${f.unit}`}
+      className="inspectah-decision-row inspectah-mount-finding"
+    >
+      <div className="inspectah-decision-row__main">
+        <div role="gridcell" className="inspectah-decision-row__name">
+          <span>{f.unit}</span>
+          <span
+            className="inspectah-unit-kind"
+            data-testid={`mount-finding-kind-${f.unit}`}
+          >
+            {f.kind}
+          </span>
+          {f.state !== null && (
+            <span
+              className="inspectah-unit-state"
+              data-testid={`mount-finding-state-${f.unit}`}
+            >
+              {f.state}
+            </span>
+          )}
+          {f.mount_point !== null && (
+            <code
+              className="inspectah-mount-finding__where"
+              data-testid={`mount-finding-where-${f.unit}`}
+            >
+              {f.mount_point}
+            </code>
+          )}
+        </div>
+        {path !== null && (
           <div role="gridcell" className="inspectah-decision-row__badge">
-            <Label color={attentionLabelColor(diLevel)}>{diBadge}</Label>
+            {onNavigateToConfig ? (
+              <a
+                href={`#configs:${path}`}
+                data-testid={`mount-finding-file-${f.unit}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  onNavigateToConfig(path);
+                }}
+              >
+                {path}
+              </a>
+            ) : (
+              <code data-testid={`mount-finding-file-${f.unit}`}>{path}</code>
+            )}
           </div>
         )}
       </div>
+      {f.advisories.length > 0 && (
+        <div id={advisoriesId} className="inspectah-mount-finding__advisories">
+          {f.advisories.map((line, i) => (
+            <div key={i} data-testid="mount-finding-advisory">
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Paths the export does not stage, which keep a row's advisory out of the
+ * Containerfile. The row's `# Omitted:` line says why.
+ */
+function NotAppliedPaths({
+  id,
+  testId,
+  paths,
+}: {
+  id: string;
+  testId: string;
+  paths: string[];
+}) {
+  return (
+    <div id={id} data-testid={testId} className="inspectah-unit-paths">
+      <span className="inspectah-unit-paths__label">Not in the export:</span>
+      {paths.map((p) => (
+        <code key={p} data-testid="not-applied-path">
+          {p}
+        </code>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Paths a template instance names, under a label: the configuration its
+ * enable needs, or the data the image does not carry.
+ */
+function InstancePaths({
+  id,
+  label,
+  pathTestId,
+  paths,
+}: {
+  id: string;
+  label: string;
+  pathTestId: string;
+  paths: string[];
+}) {
+  return (
+    <div id={id} data-testid={id} className="inspectah-unit-paths">
+      <span className="inspectah-unit-paths__label">{label}</span>
+      {/* The spaces are not drawn in the flex row; they keep the paths
+          apart in the text a screen reader reads from aria-describedby. */}
+      {/* The path is a safe key: the collector and the fleet merge both
+          dedup these lists. */}
+      {paths.map((p) => (
+        <span key={p}>
+          {" "}
+          <code data-testid={pathTestId}>{p}</code>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** The server's advisory lines for a row, as given, one per line. */
+function AdvisoryLines({
+  id,
+  testId,
+  lines,
+}: {
+  id: string;
+  testId: string;
+  lines: string[];
+}) {
+  return (
+    <div id={id} className="inspectah-mount-finding__advisories">
+      {lines.map((line, i) => (
+        <div key={i} data-testid={testId}>
+          {line}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A link inspectah reports and does not carry, an `Also=` name included:
+ * its relation, its parent and the export's lines, as given. No toggle
+ * and no keyboard action: the export decides nothing here.
+ */
+function ManualLinkRow({ link }: { link: ManualLinkView }) {
+  const baseId = useId();
+  const advisoriesId = `${baseId}-advisories`;
+  const notAppliedId = `${baseId}-not-applied`;
+  const notApplied = link.not_applied ?? [];
+  return (
+    <div
+      role="row"
+      aria-label={link.unit}
+      aria-describedby={describedBy(
+        link.advisories.length > 0 && advisoriesId,
+        notApplied.length > 0 && notAppliedId,
+      )}
+      tabIndex={-1}
+      data-testid={`manual-link-${linkIdentity(link)}`}
+      data-cause={causeName(link.cause)}
+      className="inspectah-decision-row inspectah-manual-link"
+    >
+      <div className="inspectah-decision-row__main">
+        <div role="gridcell" className="inspectah-decision-row__name">
+          <span>{link.unit}</span>
+          <span className="inspectah-unit-kind" data-testid="manual-link-relation">
+            {link.relation}
+          </span>
+          <code className="inspectah-manual-link__parent" data-testid="manual-link-parent">
+            {link.parent}
+          </code>
+        </div>
+      </div>
+      {link.advisories.length > 0 && (
+        <AdvisoryLines
+          id={advisoriesId}
+          testId="manual-link-advisory"
+          lines={link.advisories}
+        />
+      )}
+      {notApplied.length > 0 && (
+        <NotAppliedPaths
+          id={notAppliedId}
+          testId="manual-link-not-applied"
+          paths={notApplied}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A unit whose `[Install]` cannot be relied on: its reason, its install
+ * files and the export's block, as given. No toggle and no keyboard
+ * action.
+ */
+function UndeterminedInstallRow({ record: r }: { record: UndeterminedInstallView }) {
+  const baseId = useId();
+  const advisoriesId = `${baseId}-advisories`;
+  const notAppliedId = `${baseId}-not-applied`;
+  const notApplied = r.not_applied ?? [];
+  return (
+    <div
+      role="row"
+      aria-label={r.unit}
+      aria-describedby={describedBy(
+        r.advisories.length > 0 && advisoriesId,
+        notApplied.length > 0 && notAppliedId,
+      )}
+      tabIndex={-1}
+      data-testid={`undetermined-install-${r.unit}`}
+      data-reason={r.reason}
+      className="inspectah-decision-row inspectah-undetermined-install"
+    >
+      <div className="inspectah-decision-row__main">
+        <div role="gridcell" className="inspectah-decision-row__name">
+          <span>{r.unit}</span>
+          <span className="inspectah-unit-kind" data-testid="undetermined-install-reason">
+            {r.reason.replace(/_/g, " ")}
+          </span>
+          {r.install_files.map((f) => (
+            <code key={f} className="inspectah-unit-paths__path" data-testid="install-file">
+              {f}
+            </code>
+          ))}
+        </div>
+      </div>
+      {r.advisories.length > 0 && (
+        <AdvisoryLines
+          id={advisoriesId}
+          testId="undetermined-install-advisory"
+          lines={r.advisories}
+        />
+      )}
+      {notApplied.length > 0 && (
+        <NotAppliedPaths
+          id={notAppliedId}
+          testId="undetermined-install-not-applied"
+          paths={notApplied}
+        />
+      )}
+    </div>
+  );
+}
+
+interface DefaultTargetRowProps {
+  target: DefaultTargetView;
+  isPending: boolean;
+  onToggle: (currentInclude: boolean) => void;
+}
+
+/**
+ * The default target the export sets with `systemctl set-default`, and
+ * its toggle. `declined` is the export's reason when it writes no line.
+ */
+function DefaultTargetRow({ target: t, isPending, onToggle }: DefaultTargetRowProps) {
+  const declinedId = "declined-default-target";
+  return (
+    <div
+      role="row"
+      aria-label={t.target}
+      tabIndex={0}
+      data-testid="default-target"
+      data-locked={t.locked ? "true" : undefined}
+      className={`inspectah-decision-row${t.locked ? " inspectah-decision-row--locked" : ""}`}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (t.locked || isPending) return;
+        if (e.key === " " || e.key === "x") {
+          e.preventDefault();
+          onToggle(t.include);
+        }
+      }}
+    >
+      <div className="inspectah-decision-row__main">
+        <div role="gridcell" className="inspectah-decision-row__toggle">
+          <input
+            type="checkbox"
+            role="checkbox"
+            id="switch-default-target"
+            checked={t.include}
+            onChange={() => onToggle(t.include)}
+            disabled={isPending || t.locked}
+            aria-label={t.locked ? `${t.target} (locked)` : `Toggle ${t.target}`}
+            aria-describedby={describedBy(t.declined && declinedId)}
+            style={{ minWidth: 20, minHeight: 20 }}
+          />
+        </div>
+        <div role="gridcell" className="inspectah-decision-row__name">
+          <span data-testid="default-target-name">{t.target}</span>
+          <span className="inspectah-unit-kind">default target</span>
+        </div>
+      </div>
+      {t.declined && (
+        <RowNote
+          id={declinedId}
+          testId={declinedId}
+          className={`inspectah-unit-declined inspectah-unit-declined--${t.declined.renders}`}
+          text={t.declined.text}
+        />
+      )}
     </div>
   );
 }
@@ -175,6 +650,11 @@ function DropInRow({
 export function ServiceSection({
   services,
   dropins,
+  mountFindings,
+  manualLinks,
+  undeterminedInstalls,
+  defaultTarget,
+  onNavigateToConfig,
   onViewUpdate,
   onMutationError,
   pendingGuard,
@@ -208,7 +688,7 @@ export function ServiceSection({
       sendInclude(serviceKey(unit), {
         op: "SetInclude",
         target: {
-          item_id: { kind: "Service", key: { unit } },
+          item_id: { kind: "Unit", key: { unit } },
           include: !currentInclude,
         },
       });
@@ -229,7 +709,27 @@ export function ServiceSection({
     [sendInclude],
   );
 
-  if (services.length === 0 && dropins.length === 0) {
+  const handleToggleDefaultTarget = useCallback(
+    (currentInclude: boolean) => {
+      sendInclude(DEFAULT_TARGET_KEY, {
+        op: "SetInclude",
+        target: {
+          item_id: { kind: "DefaultTarget" },
+          include: !currentInclude,
+        },
+      });
+    },
+    [sendInclude],
+  );
+
+  if (
+    services.length === 0 &&
+    dropins.length === 0 &&
+    mountFindings.length === 0 &&
+    manualLinks.length === 0 &&
+    undeterminedInstalls.length === 0 &&
+    !defaultTarget
+  ) {
     return (
       <div className="inspectah-service-section" data-testid="service-section">
         <p style={{ padding: "var(--pf-t--global--spacer--md)", opacity: 0.6 }}>
@@ -246,6 +746,14 @@ export function ServiceSection({
       aria-label="Services"
       data-testid="service-section"
     >
+      {defaultTarget && (
+        <DefaultTargetRow
+          target={defaultTarget}
+          isPending={pendingKeys.has(DEFAULT_TARGET_KEY)}
+          onToggle={handleToggleDefaultTarget}
+        />
+      )}
+
       {services.map((svc, idx) => {
         const unitDropins = dropinsByUnit.get(svc.unit) ?? [];
         const bucket = extractTriageBucket(svc.triage);
@@ -253,20 +761,23 @@ export function ServiceSection({
         const level = triageBucketToAttention(svc.triage);
         const isPending = pendingKeys.has(serviceKey(svc.unit));
         const svcLocked = svc.locked === true;
-        const isShadow = svc.shadow_type === "full_shadow";
-
-        // Border-left priority: triage border wins if present, else shadow warning border
-        let borderLeft = LEVEL_BORDER[bucket] ?? "none";
-        let backgroundColor: string | undefined;
-        if (isShadow) {
-          if (borderLeft !== "none") {
-            // Triage border wins left edge, shadow gets background
-            backgroundColor = "var(--pf-t--global--color--status--warning--default)";
-          } else {
-            // No triage border, shadow gets left border
-            borderLeft = "4px solid var(--pf-t--global--color--status--warning--default)";
-          }
-        }
+        const borderLeft = LEVEL_BORDER[bucket] ?? "none";
+        // A locked row shows its reason in the badge; an unlocked one, such
+        // as a runtime updater excluded by default, under the row.
+        const attentionId = `attention-service-${svc.unit}`;
+        // A scanned protected unit's attention_reason and its declined text
+        // are the same served sentence: show it once, as the decline.
+        const attention =
+          svcLocked || svc.attention_reason === svc.declined?.text
+            ? null
+            : (svc.attention_reason ?? null);
+        const declinedId = `declined-service-${svc.unit}`;
+        // What an instance needs (§ 11.1): its template, the configuration
+        // its enable needs and the data the image does not carry. Any
+        // advisory about them is already in attention_reason.
+        const instanceOfId = `instance-of-${svc.unit}`;
+        const requiredConfigId = `required-config-${svc.unit}`;
+        const dataPathsId = `data-paths-${svc.unit}`;
 
         return (
           <div key={svc.unit} data-testid={`service-group-${svc.unit}`}>
@@ -275,16 +786,11 @@ export function ServiceSection({
               role="row"
               aria-rowindex={idx + 1}
               aria-label={svc.unit}
-              tabIndex={idx === 0 ? 0 : -1}
+              tabIndex={idx === 0 && !defaultTarget ? 0 : -1}
               data-testid={`service-item-${svc.unit}`}
               data-locked={svcLocked ? "true" : undefined}
               className={`inspectah-decision-row${svcLocked ? " inspectah-decision-row--locked" : ""}`}
-              style={{
-                borderLeft,
-                backgroundColor: backgroundColor
-                  ? `color-mix(in srgb, ${backgroundColor} 10%, transparent)`
-                  : undefined,
-              }}
+              style={{ borderLeft }}
               onKeyDown={(e) => {
                 if (e.target !== e.currentTarget) return;
                 if (svcLocked) return;
@@ -308,20 +814,25 @@ export function ServiceSection({
                         ? `${svc.unit} (locked: ${svc.attention_reason ?? "cannot toggle"})`
                         : `Toggle ${svc.unit}`
                     }
-                    aria-describedby={
-                      svcLocked && isShadow
-                        ? `shadow-rationale-${svc.unit} locked-reason-service-${svc.unit}`
-                        : svcLocked
-                          ? `locked-reason-service-${svc.unit}`
-                          : isShadow
-                            ? `shadow-rationale-${svc.unit}`
-                            : undefined
-                    }
+                    aria-describedby={describedBy(
+                      svcLocked && `locked-reason-service-${svc.unit}`,
+                      attention && attentionId,
+                      svc.declined && declinedId,
+                      svc.instance_of && instanceOfId,
+                      svc.required_config.length > 0 && requiredConfigId,
+                      svc.data_paths.length > 0 && dataPathsId,
+                    )}
                     style={{ minWidth: 20, minHeight: 20 }}
                   />
                 </div>
                 <div role="gridcell" className="inspectah-decision-row__name">
                   <span>{svc.unit}</span>
+                  <span
+                    className="inspectah-unit-kind"
+                    data-testid={`service-kind-${svc.unit}`}
+                  >
+                    {svc.kind}
+                  </span>
                   {svc.owning_package && (
                     <span
                       style={{
@@ -354,17 +865,6 @@ export function ServiceSection({
                     <Label color={attentionLabelColor(level)}>{badge}</Label>
                   </div>
                 )}
-                {isShadow && (
-                  <div
-                    role="gridcell"
-                    className="inspectah-decision-row__badge"
-                    data-testid={`shadow-badge-service-${svc.unit}`}
-                  >
-                    <Label color="orange" isCompact>
-                      Shadow override
-                    </Label>
-                  </div>
-                )}
                 {svcLocked && (
                   <div
                     role="gridcell"
@@ -378,22 +878,55 @@ export function ServiceSection({
                   </div>
                 )}
               </div>
-              {/* Full-shadow rationale below the service toggle row */}
-              {isShadow && svc.shadow_rationale && (
-                <div
-                  id={`shadow-rationale-${svc.unit}`}
-                  className="inspectah-decision-row__helper-text"
-                  data-testid={`shadow-rationale-${svc.unit}`}
-                  style={{
-                    paddingLeft: "calc(var(--pf-t--global--spacer--md) + 28px)",
-                    paddingBottom: "var(--pf-t--global--spacer--xs)",
-                    fontSize: "var(--pf-t--global--font--size--xs)",
-                    color: "var(--pf-t--global--text--color--subtle)",
-                    fontStyle: "italic",
-                  }}
-                >
-                  {svc.shadow_rationale}
+              {attention && (
+                <RowNote id={attentionId} testId={attentionId} text={attention} />
+              )}
+              {svc.declined && (
+                <RowNote
+                  id={declinedId}
+                  testId={declinedId}
+                  className={`inspectah-unit-declined inspectah-unit-declined--${svc.declined.renders}`}
+                  text={svc.declined.text}
+                />
+              )}
+              {svc.also && svc.also.length > 0 && (
+                <div className="inspectah-unit-paths inspectah-unit-also">
+                  <span className="inspectah-unit-paths__label">Also=</span>
+                  {svc.also.map((m) => (
+                    <span key={m.unit} data-testid="also-member">
+                      <code data-testid="also-member-unit">{m.unit}</code>{" "}
+                      <span className="inspectah-unit-state" data-testid="also-member-links">
+                        {m.links}
+                      </span>
+                    </span>
+                  ))}
                 </div>
+              )}
+              {svc.instance_of && (
+                <div
+                  id={instanceOfId}
+                  data-testid={instanceOfId}
+                  className="inspectah-unit-paths"
+                >
+                  <span className="inspectah-unit-paths__label">Instance of</span>{" "}
+                  <code>{svc.instance_of}</code>
+                </div>
+              )}
+              {svc.required_config.length > 0 && (
+                <InstancePaths
+                  id={requiredConfigId}
+                  label="Needs configuration:"
+                  pathTestId="required-config-path"
+                  paths={svc.required_config}
+                />
+              )}
+              {svc.data_paths.length > 0 && (
+                <InstancePaths
+                  id={dataPathsId}
+                  label="Keeps data in:"
+                  pathTestId="data-path"
+                  paths={svc.data_paths}
+                />
               )}
             </div>
 
@@ -404,6 +937,7 @@ export function ServiceSection({
                 dropin={di}
                 parentExcluded={!svc.include}
                 parentLocked={svcLocked}
+                isInstallDropIn={svc.install_drop_ins?.includes(di.path) ?? false}
                 isPending={pendingKeys.has(dropinKey(di.path))}
                 onToggle={handleToggleDropin}
               />
@@ -412,18 +946,38 @@ export function ServiceSection({
         );
       })}
 
-      {/* Drop-ins whose unit produced no state change: a unit sitting at
-          its preset state never reaches `state_changes`, so without this
-          group the drop-in row — which owns the decision for a config
-          path it shadows — would render nowhere. */}
+      {mountFindings.map((f) => (
+        <MountFindingRow
+          key={f.unit}
+          finding={f}
+          onNavigateToConfig={onNavigateToConfig}
+        />
+      ))}
+
+      {manualLinks.map((link) => (
+        <ManualLinkRow key={linkIdentity(link)} link={link} />
+      ))}
+
+      {undeterminedInstalls.map((r) => (
+        // Not the bare unit name: service and mount rows beside it use it.
+        <UndeterminedInstallRow
+          key={JSON.stringify(["undetermined", r.unit])}
+          record={r}
+        />
+      ))}
+
+      {/* Drop-ins whose unit has no state row: a unit at its preset, or one
+          with an undetermined or install-difference record, never reaches
+          `state_changes`, so without this group the drop-in row — which
+          owns the decision for a config path it shadows — would render
+          nowhere. */}
       {orphanDropins.length > 0 && (
         <div data-testid="dropin-orphans">
           <h3 className="inspectah-service-section__orphan-heading">
             Other drop-in overrides
           </h3>
           <p className="inspectah-service-section__orphan-note">
-            These units are at their preset state, so the drop-in is the whole
-            decision.
+            These overrides have no unit-state decision row.
           </p>
           {[...groupDropinsByUnit(orphanDropins).entries()].map(
             ([unit, unitDropins]) => (

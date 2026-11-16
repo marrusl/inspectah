@@ -438,7 +438,7 @@ fn mark_viewed_accepts_all_valid_sections() {
     let sections = [
         "packages",
         "configs",
-        "services",
+        "units",
         "containers",
         "users_groups",
         "network",
@@ -1981,7 +1981,7 @@ fn excluding_the_serving_repo_annotates_the_package_in_the_projection() {
 
 // ── A shadowed config file is not a second decision ──────────────────
 //
-// A config file that is also a `services.drop_ins` entry reaches the
+// A config file that is also a `units.drop_ins` entry reaches the
 // image only through its Service Drop-ins row. The file's own row is
 // inventory, so both directions of a toggle on it are refused and
 // neither extends the timeline.
@@ -1989,11 +1989,11 @@ fn excluding_the_serving_repo_annotates_the_package_in_the_projection() {
 const SHADOWED_DROP_IN: &str = "/etc/systemd/system/httpd.service.d/limits.conf";
 
 fn shadowed_drop_in_snapshot() -> InspectionSnapshot {
-    use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+    use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 
     let mut snap = InspectionSnapshot::new();
     snap.baseline = Some(empty_baseline());
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "httpd.service".into(),
             path: SHADOWED_DROP_IN.into(),
@@ -2013,7 +2013,7 @@ fn shadowed_drop_in_snapshot() -> InspectionSnapshot {
             // refusal's predicate is `is_inventory()` alone, but a
             // fixture that cannot occur is a worse guard than one that
             // can.
-            shadowed_by: Some(inspectah_core::types::config::ConfigShadow::Services),
+            shadowed_by: Some(inspectah_core::types::config::ConfigShadow::Units),
             ..Default::default()
         }],
     });
@@ -2041,5 +2041,1243 @@ fn toggling_a_shadowed_config_file_is_refused_in_both_directions() {
             before,
             "a refused op must not extend the timeline"
         );
+    }
+}
+
+// ── A full shadow is its own row, not a state change ─────────────────
+//
+// An enabled, preset-matched service whose unit file the administrator
+// replaced has no state divergence. The shadow reaches the export through
+// its drop-in row alone; nothing invents a state change for the unit. The
+// fixture also holds one real state change, `httpd.service` enabled against
+// a `disable` preset, as the positive control.
+
+const SHADOWED_UNIT: &str = "sshd.service";
+const FULL_SHADOW_PATH: &str = "/etc/systemd/system/sshd.service";
+const CHANGED_UNIT: &str = "httpd.service";
+
+fn full_shadow_snapshot() -> InspectionSnapshot {
+    use inspectah_core::types::ShadowType;
+    use inspectah_core::types::units::{
+        PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitName, UnitSection, UnitState,
+        UnitStateChange,
+    };
+
+    let name = |unit: &str| UnitName::try_from(unit.to_string()).unwrap();
+
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
+    snap.units = Some(UnitSection {
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit(name(CHANGED_UNIT), Some("httpd".into())),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
+        inventory: vec![
+            UnitInventoryEntry {
+                unit: name(CHANGED_UNIT),
+                state: UnitState::Enabled,
+                preset: Some(PresetDefault::Disable),
+            },
+            UnitInventoryEntry {
+                unit: name(SHADOWED_UNIT),
+                state: UnitState::Enabled,
+                preset: Some(PresetDefault::Enable),
+            },
+        ],
+        drop_ins: vec![SystemdDropIn {
+            unit: SHADOWED_UNIT.into(),
+            path: FULL_SHADOW_PATH.into(),
+            content:
+                "[Unit]\nDescription=sshd, replaced\n\n[Service]\nExecStart=/usr/sbin/sshd -D\n"
+                    .into(),
+            disposition: FindingKind::included(),
+            shadow_type: Some(ShadowType::FullShadow),
+            shadow_rationale: Some("replaces the vendor unit".into()),
+            ..Default::default()
+        }],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
+    });
+    snap
+}
+
+/// Whether the export's staged tree holds the full shadow's file.
+fn full_shadow_is_staged(session: &RefineSession) -> bool {
+    let out = tempfile::tempdir().unwrap();
+    inspectah_pipeline::render::configtree::write_config_tree(
+        &session.snapshot_projected(),
+        out.path(),
+    )
+    .unwrap();
+    out.path()
+        .join("drop-ins")
+        .join(FULL_SHADOW_PATH.trim_start_matches('/'))
+        .is_file()
+}
+
+#[test]
+fn a_full_shadow_gets_no_synthetic_state_change_and_toggles_alone() {
+    use inspectah_core::types::ShadowType;
+
+    let mut session = RefineSession::new(full_shadow_snapshot());
+
+    // Presence first: the shadow is a drop-in row carrying its shadow type,
+    // and the shadow count is read from the drop-in rows.
+    let decisions = session.decisions();
+    let shadows: Vec<_> = decisions
+        .unit_dropins
+        .iter()
+        .filter(|d| d.entry.shadow_type == Some(ShadowType::FullShadow))
+        .collect();
+    assert_eq!(shadows.len(), 1, "the full shadow must be one drop-in row");
+    assert_eq!(shadows[0].entry.unit, SHADOWED_UNIT);
+    assert_eq!(shadows[0].entry.path, FULL_SHADOW_PATH);
+    assert_eq!(
+        serde_json::to_value(&shadows[0].entry.shadow_type).unwrap(),
+        "full_shadow"
+    );
+
+    // Then absence: the state rows are filled (the real change is there)
+    // and hold no row for the shadowed unit, in the session and in the
+    // projected snapshot.
+    let session_rows: Vec<&str> = decisions
+        .unit_states
+        .iter()
+        .map(|s| s.unit.as_str())
+        .collect();
+    assert_eq!(
+        session_rows,
+        [CHANGED_UNIT],
+        "the session's state rows hold the real change and nothing invented"
+    );
+    let projected = session.snapshot_projected().units.unwrap();
+    let projected_rows: Vec<&str> = projected
+        .state_changes
+        .iter()
+        .map(|s| s.unit().name().as_str())
+        .collect();
+    assert_eq!(
+        projected_rows,
+        [CHANGED_UNIT],
+        "the projected state changes hold the real change and nothing invented"
+    );
+
+    // The drop-in toggles alone: staged, then gone, then back.
+    assert!(full_shadow_is_staged(&session), "the shadow starts staged");
+    let toggle = |include| RefinementOp::SetInclude {
+        item_id: ItemId::DropIn {
+            path: FULL_SHADOW_PATH.into(),
+        },
+        include,
+    };
+    session.apply(toggle(false)).unwrap();
+    assert!(
+        !full_shadow_is_staged(&session),
+        "SetInclude(false) on the drop-in removes the staged file"
+    );
+    session.apply(toggle(true)).unwrap();
+    assert!(
+        full_shadow_is_staged(&session),
+        "SetInclude(true) on the drop-in restores the staged file"
+    );
+}
+
+/// The `RUN systemctl ...` instruction lines of a Containerfile, each joined
+/// with its backslash continuation lines into one string.
+fn systemctl_instructions(containerfile: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current: Option<String> = None;
+    for line in containerfile.lines() {
+        if let Some(instr) = current.as_mut() {
+            instr.push(' ');
+            instr.push_str(line.trim().trim_end_matches('\\').trim());
+            if !line.trim_end().ends_with('\\') {
+                out.push(current.take().unwrap());
+            }
+        } else if line.starts_with("RUN systemctl ") {
+            let instr = line.trim_end_matches('\\').trim().to_string();
+            if line.trim_end().ends_with('\\') {
+                current = Some(instr);
+            } else {
+                out.push(instr);
+            }
+        }
+    }
+    out.extend(current);
+    out
+}
+
+/// A unit at its preset whose only change is a full shadow gets its shadow
+/// file copied and no `systemctl` line; a real state change in the same
+/// render keeps its line.
+#[test]
+fn a_full_shadow_at_its_preset_is_copied_with_no_systemctl_line() {
+    let session = RefineSession::new(full_shadow_snapshot());
+    let containerfile = &session.view().containerfile_preview;
+    let systemctl = systemctl_instructions(containerfile);
+
+    // Positive control: the real state change renders its enable line.
+    assert!(
+        systemctl
+            .iter()
+            .any(|i| i.starts_with("RUN systemctl enable") && i.contains(CHANGED_UNIT)),
+        "the real state change must render `systemctl enable {CHANGED_UNIT}`, got:\n{containerfile}"
+    );
+
+    // The shadow file is still copied.
+    assert!(
+        containerfile.contains("COPY drop-ins/etc/systemd/system/ /etc/systemd/system/"),
+        "the full shadow must still be copied, got:\n{containerfile}"
+    );
+
+    // And no systemctl line names the shadowed unit.
+    assert!(
+        !systemctl.iter().any(|i| i.contains(SHADOWED_UNIT)),
+        "no systemctl line may name {SHADOWED_UNIT}, got: {systemctl:?}"
+    );
+}
+
+/// The reversed condition of the test above, for the same unit and through
+/// the same route: given a real state change (enabled where its preset says
+/// disable), the shadowed unit keeps its `systemctl enable` line beside the
+/// copied shadow. At its preset, as `full_shadow_snapshot()` has it, the
+/// same unit gets none.
+///
+/// The row is recorded `Shadowed`, as the collector records a unit with a
+/// full copy under `/etc`: the unit plan carries its enable only while the
+/// export stages that copy (§ 10.2 rule 5).
+#[test]
+fn a_full_shadow_with_a_real_state_change_keeps_its_systemctl_line() {
+    use inspectah_core::types::units::{
+        CarriedUnit, PresetDefault, UnitFragment, UnitName, UnitState, UnitStateChange, UnitSubject,
+    };
+
+    let mut snap = full_shadow_snapshot();
+    let units = snap.units.as_mut().unwrap();
+    let name = UnitName::try_from(SHADOWED_UNIT.to_string()).unwrap();
+    let shadowed = UnitFragment::Shadowed {
+        file: name.clone(),
+        owning_package: Some("openssh-server".into()),
+    };
+    units.state_changes.push(
+        UnitStateChange::new(
+            CarriedUnit::try_from(UnitSubject::new(name, shadowed).expect("file is the unit"))
+                .expect("a shadowed service is carried"),
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )
+        .unwrap(),
+    );
+    units
+        .inventory
+        .iter_mut()
+        .find(|e| e.unit.as_str() == SHADOWED_UNIT)
+        .expect("the fixture inventories the shadowed unit")
+        .preset = Some(PresetDefault::Disable);
+
+    let diverging = RefineSession::new(snap);
+    let containerfile = &diverging.view().containerfile_preview;
+    let systemctl = systemctl_instructions(containerfile);
+    assert!(
+        systemctl
+            .iter()
+            .any(|i| i.starts_with("RUN systemctl enable") && i.contains(SHADOWED_UNIT)),
+        "a diverging shadowed unit must render `systemctl enable {SHADOWED_UNIT}`, got:\n{containerfile}"
+    );
+    assert!(
+        containerfile.contains("COPY drop-ins/etc/systemd/system/ /etc/systemd/system/"),
+        "the full shadow must still be copied, got:\n{containerfile}"
+    );
+
+    let at_preset = RefineSession::new(full_shadow_snapshot());
+    let systemctl = systemctl_instructions(&at_preset.view().containerfile_preview);
+    assert!(
+        !systemctl.iter().any(|i| i.contains(SHADOWED_UNIT)),
+        "at its preset, no systemctl line may name {SHADOWED_UNIT}, got: {systemctl:?}"
+    );
+}
+
+/// The retired synthesis gave a `systemctl` line to an enabled or disabled
+/// unit with a full shadow and no known preset (`preset: None`) too, not
+/// only to one at its preset. That line is gone as well: the shadow is
+/// copied and no `systemctl` line names the unit, in either state.
+#[test]
+fn a_full_shadow_with_no_known_preset_gets_no_systemctl_line() {
+    use inspectah_core::types::units::UnitState;
+
+    for state in [UnitState::Enabled, UnitState::Disabled] {
+        let mut snap = full_shadow_snapshot();
+        let entry = snap
+            .units
+            .as_mut()
+            .unwrap()
+            .inventory
+            .iter_mut()
+            .find(|e| e.unit.as_str() == SHADOWED_UNIT)
+            .expect("the fixture inventories the shadowed unit");
+        entry.state = state;
+        entry.preset = None;
+
+        let session = RefineSession::new(snap);
+        let containerfile = &session.view().containerfile_preview;
+        let systemctl = systemctl_instructions(containerfile);
+
+        // Positive control: the real state change renders its enable line.
+        assert!(
+            systemctl
+                .iter()
+                .any(|i| i.starts_with("RUN systemctl enable") && i.contains(CHANGED_UNIT)),
+            "{state}: the real state change must render, got:\n{containerfile}"
+        );
+        assert!(
+            containerfile.contains("COPY drop-ins/etc/systemd/system/ /etc/systemd/system/"),
+            "{state}: the full shadow must still be copied, got:\n{containerfile}"
+        );
+        assert!(
+            !systemctl.iter().any(|i| i.contains(SHADOWED_UNIT)),
+            "{state}: no systemctl line may name {SHADOWED_UNIT}, got: {systemctl:?}"
+        );
+    }
+}
+
+// ── The units view fields and operation ──────────────────────────────
+
+/// The decision view names its unit rows `unit_states` and `unit_dropins`;
+/// the old `service_*` keys are gone.
+#[test]
+fn the_decision_view_serializes_unit_keys_and_no_service_keys() {
+    let session = RefineSession::new(full_shadow_snapshot());
+    let view = serde_json::to_value(session.decisions()).unwrap();
+
+    // Presence first: the new keys carry the fixture's rows.
+    let states = view["unit_states"]
+        .as_array()
+        .expect("the view must carry `unit_states` as an array");
+    assert_eq!(states.len(), 1, "one state row, got {states:?}");
+    assert_eq!(states[0]["unit"], CHANGED_UNIT);
+    let dropins = view["unit_dropins"]
+        .as_array()
+        .expect("the view must carry `unit_dropins` as an array");
+    assert_eq!(dropins.len(), 1, "one drop-in row, got {dropins:?}");
+    assert_eq!(dropins[0]["entry"]["path"], FULL_SHADOW_PATH);
+    assert_eq!(dropins[0]["entry"]["shadow_type"], "full_shadow");
+
+    // Then absence: neither old key is serialized.
+    for old in ["service_states", "service_dropins"] {
+        assert!(
+            view.get(old).is_none(),
+            "the view must not carry the old key `{old}`"
+        );
+    }
+}
+
+const CASCADE_UNIT: &str = "httpd.service";
+const CASCADE_DROP_IN: &str = "/etc/systemd/system/httpd.service.d/override.conf";
+const CASCADE_FULL_SHADOW: &str = "/etc/systemd/system/httpd.service";
+const OTHER_UNIT: &str = "chronyd.service";
+const OTHER_DROP_IN: &str = "/etc/systemd/system/chronyd.service.d/override.conf";
+const DROP_IN_ONLY_UNIT: &str = "sshd.service";
+const DROP_IN_ONLY_PATH: &str = "/etc/systemd/system/sshd.service.d/override.conf";
+
+/// One unit with a state change, an ordinary drop-in and a full shadow;
+/// a second unit with a state change and a drop-in, as the control; and a
+/// unit with a drop-in and no state change.
+fn cascade_snapshot() -> InspectionSnapshot {
+    use inspectah_core::types::ShadowType;
+    use inspectah_core::types::units::{
+        PresetDefault, SystemdDropIn, UnitName, UnitSection, UnitState, UnitStateChange,
+    };
+
+    let change = |unit: &str| {
+        UnitStateChange::new(
+            test_carried_unit(UnitName::try_from(unit.to_string()).unwrap(), None),
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )
+        .unwrap()
+    };
+    let drop_in = |unit: &str, path: &str| SystemdDropIn {
+        unit: unit.into(),
+        path: path.into(),
+        content: "[Service]\nNice=5\n".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
+    snap.units = Some(UnitSection {
+        state_changes: vec![change(CASCADE_UNIT), change(OTHER_UNIT)],
+        inventory: vec![],
+        drop_ins: vec![
+            drop_in(CASCADE_UNIT, CASCADE_DROP_IN),
+            SystemdDropIn {
+                shadow_type: Some(ShadowType::FullShadow),
+                shadow_rationale: Some("replaces the vendor unit".into()),
+                ..drop_in(CASCADE_UNIT, CASCADE_FULL_SHADOW)
+            },
+            drop_in(OTHER_UNIT, OTHER_DROP_IN),
+            drop_in(DROP_IN_ONLY_UNIT, DROP_IN_ONLY_PATH),
+        ],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
+    });
+    snap
+}
+
+/// A `SetInclude` on a unit row, in the wire form the web client sends.
+fn unit_op(unit: &str, include: bool) -> RefinementOp {
+    serde_json::from_value(serde_json::json!({
+        "op": "SetInclude",
+        "target": {
+            "item_id": {"kind": "Unit", "key": {"unit": unit}},
+            "include": include,
+        },
+    }))
+    .expect("a `Unit` SetInclude op must deserialize")
+}
+
+/// Each row's key and whether it is included.
+type Inclusion = Vec<(String, bool)>;
+
+/// Whether the projected snapshot includes each state row and each drop-in.
+fn unit_inclusion(session: &RefineSession) -> (Inclusion, Inclusion) {
+    let units = session.snapshot_projected().units.unwrap();
+    let states = units
+        .state_changes
+        .iter()
+        .map(|s| {
+            (
+                s.unit().name().as_str().to_string(),
+                s.disposition.is_included(),
+            )
+        })
+        .collect();
+    let dropins = units
+        .drop_ins
+        .iter()
+        .map(|d| (d.path.clone(), d.disposition.is_included()))
+        .collect();
+    (states, dropins)
+}
+
+/// Toggling a unit row cascades to every drop-in of that unit, the full
+/// shadow included, and to nothing else.
+#[test]
+fn toggling_a_unit_cascades_to_every_drop_in_of_that_unit() {
+    let mut session = RefineSession::new(cascade_snapshot());
+
+    let all_in = (
+        vec![
+            (CASCADE_UNIT.to_string(), true),
+            (OTHER_UNIT.to_string(), true),
+        ],
+        vec![
+            (CASCADE_DROP_IN.to_string(), true),
+            (CASCADE_FULL_SHADOW.to_string(), true),
+            (OTHER_DROP_IN.to_string(), true),
+            (DROP_IN_ONLY_PATH.to_string(), true),
+        ],
+    );
+    assert_eq!(
+        unit_inclusion(&session),
+        all_in,
+        "everything starts included"
+    );
+
+    session.apply(unit_op(CASCADE_UNIT, false)).unwrap();
+    assert_eq!(
+        unit_inclusion(&session),
+        (
+            vec![
+                (CASCADE_UNIT.to_string(), false),
+                (OTHER_UNIT.to_string(), true)
+            ],
+            vec![
+                (CASCADE_DROP_IN.to_string(), false),
+                (CASCADE_FULL_SHADOW.to_string(), false),
+                (OTHER_DROP_IN.to_string(), true),
+                (DROP_IN_ONLY_PATH.to_string(), true),
+            ],
+        ),
+        "excluding {CASCADE_UNIT} excludes its row and both its drop-ins, the full shadow \
+         included, and leaves the other units alone"
+    );
+
+    session.apply(unit_op(CASCADE_UNIT, true)).unwrap();
+    assert_eq!(
+        unit_inclusion(&session),
+        all_in,
+        "including {CASCADE_UNIT} again restores its row and both its drop-ins"
+    );
+}
+
+/// The membership check stays: a unit with a drop-in and no state change
+/// has no unit row, so an op naming it is refused with the unit's name.
+#[test]
+fn a_unit_op_for_a_unit_with_no_state_row_is_refused() {
+    let mut session = RefineSession::new(cascade_snapshot());
+
+    // Positive control: a unit with a state row is accepted.
+    session.apply(unit_op(CASCADE_UNIT, false)).unwrap();
+    let before = session.timeline_len();
+
+    let result = session.apply(unit_op(DROP_IN_ONLY_UNIT, false));
+    match result {
+        Err(RefineError::UnknownTarget(target)) => assert_eq!(target, DROP_IN_ONLY_UNIT),
+        other => panic!("expected UnknownTarget({DROP_IN_ONLY_UNIT}), got {other:?}"),
+    }
+    assert_eq!(
+        session.timeline_len(),
+        before,
+        "a refused op must not extend the timeline"
+    );
+    let (_, dropins) = unit_inclusion(&session);
+    assert!(
+        dropins.contains(&(DROP_IN_ONLY_PATH.to_string(), true)),
+        "a refused op must not cascade, got {dropins:?}"
+    );
+}
+
+/// A viewed id in the unit section uses the section id `units`; the old
+/// `services` id is refused, and the refusal names it.
+#[test]
+fn mark_viewed_takes_the_units_section_and_refuses_services() {
+    let mut session = RefineSession::new(test_snapshot());
+
+    // Accepted first.
+    session
+        .mark_viewed("units:sshd.service")
+        .expect("`units` must be a valid viewed section");
+    assert!(session.is_viewed("units:sshd.service"));
+
+    // Then refused, by name.
+    match session.mark_viewed("services:sshd.service") {
+        Err(RefineError::BadRequest(msg)) => assert!(
+            msg.contains("'services'"),
+            "the refusal must name the refused section, got: {msg}"
+        ),
+        other => panic!("`services` must be refused as a BadRequest, got {other:?}"),
+    }
+    assert!(!session.is_viewed("services:sshd.service"));
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
+}
+
+// ---------------------------------------------------------------------------
+// § 11.1: unit rows carry the plan's reasons, offered files the stager's.
+// Hand-built snapshots stand for imported ones: their rows hold no
+// `attention_reason` unless a test sets one.
+// ---------------------------------------------------------------------------
+
+mod unit_rows {
+    use inspectah_core::snapshot::InspectionSnapshot;
+    use inspectah_core::types::FindingKind;
+    use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+    use inspectah_core::types::units::{
+        AdvisoryUnit, CarriedUnit, MountUnitFinding, SystemdDropIn, UnitFragment, UnitName,
+        UnitSection, UnitState, UnitStateChange, UnitSubject,
+    };
+    use inspectah_refine::projection::{
+        DeclinedRenders, DeclinedView, FragmentView, UnitStateView, WithheldView,
+    };
+    use inspectah_refine::session::RefineSession;
+    use inspectah_refine::types::{ItemId, RefinementOp};
+
+    fn name(unit: &str) -> UnitName {
+        unit.to_owned().try_into().expect("a unit name")
+    }
+
+    /// A state change for `unit` recorded from `fragment`, included, with
+    /// no `attention_reason`.
+    fn change(unit: &str, fragment: UnitFragment, state: UnitState) -> UnitStateChange {
+        let subject = UnitSubject::new(name(unit), fragment).expect("a subject");
+        let carried = CarriedUnit::try_from(subject).expect("a carried unit");
+        UnitStateChange::new(carried, state, None).expect("a state change")
+    }
+
+    fn vendor(file: &str, owner: Option<&str>) -> UnitFragment {
+        UnitFragment::Vendor {
+            file: name(file),
+            owning_package: owner.map(str::to_owned),
+        }
+    }
+
+    fn config(path: &str, content: &str) -> ConfigFileEntry {
+        ConfigFileEntry {
+            path: path.into(),
+            content: content.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }
+    }
+
+    fn snapshot(
+        changes: Vec<UnitStateChange>,
+        files: Vec<ConfigFileEntry>,
+        drop_ins: Vec<SystemdDropIn>,
+    ) -> InspectionSnapshot {
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection { files });
+        snap.units = Some(UnitSection {
+            state_changes: changes,
+            drop_ins,
+            ..Default::default()
+        });
+        snap
+    }
+
+    fn row<'a>(session: &'a RefineSession, unit: &str) -> &'a UnitStateView {
+        session
+            .decisions()
+            .unit_states
+            .iter()
+            .find(|r| r.unit.as_str() == unit)
+            .unwrap_or_else(|| panic!("no unit row for {unit}"))
+    }
+
+    fn fixme(text: &str) -> Option<DeclinedView> {
+        Some(DeclinedView {
+            renders: DeclinedRenders::Fixme,
+            reason: "TargetNeedsUnit".into(),
+            text: text.into(),
+        })
+    }
+
+    /// § 10.3's text for a protected unit, and for a masked `tmp.mount`.
+    fn needed(unit: &str, participle: &str) -> String {
+        format!(
+            "{unit} is {participle} on the source host. Not carried: the image needs this unit."
+        )
+    }
+    const TMP_MOUNT_TEXT: &str = "tmp.mount is masked on the source host, where /tmp is then a \
+         directory on the root filesystem. Not carried: the bootc base image mounts /tmp from \
+         this unit, and without it /tmp is read-only.";
+
+    /// T12, last sentence: each refusal is a structured `declined` on its
+    /// row, for rows whose `attention_reason` is null, with the
+    /// Containerfile's text. The preview carries the same line. Control:
+    /// an `enable` of a protected unit is carried and its row has none.
+    #[test]
+    fn t12_each_refusal_is_a_structured_decline_on_an_imported_row() {
+        let session = RefineSession::new(snapshot(
+            vec![
+                change(
+                    "bootc-fetch-apply-updates.timer",
+                    vendor("bootc-fetch-apply-updates.timer", None),
+                    UnitState::Disabled,
+                ),
+                change(
+                    "ostree-remount.service",
+                    vendor("ostree-remount.service", None),
+                    UnitState::Masked,
+                ),
+                change(
+                    "tmp.mount",
+                    vendor("tmp.mount", Some("systemd")),
+                    UnitState::Masked,
+                ),
+                change(
+                    "systemd-remount-fs.service",
+                    vendor("systemd-remount-fs.service", None),
+                    UnitState::Enabled,
+                ),
+            ],
+            vec![],
+            vec![],
+        ));
+        let preview = &session.view().containerfile_preview;
+        for (unit, text) in [
+            (
+                "bootc-fetch-apply-updates.timer",
+                needed("bootc-fetch-apply-updates.timer", "disabled"),
+            ),
+            (
+                "ostree-remount.service",
+                needed("ostree-remount.service", "masked"),
+            ),
+            ("tmp.mount", TMP_MOUNT_TEXT.to_owned()),
+        ] {
+            let r = row(&session, unit);
+            assert_eq!(r.attention_reason, None, "{unit}");
+            assert_eq!(r.declined, fixme(&text), "{unit}");
+            assert!(
+                preview.contains(&format!("# FIXME: {text}")),
+                "{unit}:\n{preview}"
+            );
+        }
+        let control = row(&session, "systemd-remount-fs.service");
+        assert_eq!(control.declined, None);
+        assert!(control.include);
+    }
+
+    /// T12's imported zero-length files: a protected unit's mask as a
+    /// config entry (its path with an interior `.`) and as a drop-in whose
+    /// `unit` names another unit (its path with a doubled separator) is
+    /// withheld, and the row that offered it says so; a path with `..` is
+    /// refused, and its row says so. Control: a config entry with content
+    /// at another unit's path is written, and is not listed.
+    #[test]
+    fn t12_a_withheld_or_refused_offer_is_shown_on_its_row() {
+        const ZERO_LENGTH: &str = "a zero-length file at a unit path is a mask; the export \
+             carries a mask only as a systemctl mask command";
+        let session = RefineSession::new(snapshot(
+            vec![],
+            vec![
+                config("/etc/systemd/system/./ostree-remount.service", ""),
+                config("/etc/systemd/system/../escape.service", "[Unit]\n"),
+                config("/etc/systemd/system/written.service", "[Unit]\n"),
+            ],
+            vec![
+                SystemdDropIn {
+                    unit: "other.service".into(),
+                    path: "/etc/systemd//system/ostree-finalize-staged.service".into(),
+                    content: String::new(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+                SystemdDropIn {
+                    unit: "sshd.service".into(),
+                    path: "/etc/systemd/system/sshd.service.d/../x.conf".into(),
+                    content: "[Service]\n".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+            ],
+        ));
+        let decisions = session.decisions();
+        let withheld = |why: &str, text: &str| WithheldView::Withheld {
+            why: why.into(),
+            text: text.into(),
+        };
+        let traversal = WithheldView::Refused {
+            rule: "Traversal".into(),
+            text: "path traversal detected".into(),
+        };
+        let configs: Vec<(&str, &WithheldView)> = decisions
+            .config_withheld
+            .iter()
+            .map(|c| (c.path.as_str(), &c.withheld))
+            .collect();
+        assert_eq!(
+            configs,
+            [
+                (
+                    "/etc/systemd/system/./ostree-remount.service",
+                    &withheld("ZeroLengthUnitFile", ZERO_LENGTH)
+                ),
+                ("/etc/systemd/system/../escape.service", &traversal),
+            ]
+        );
+        let drop_ins: Vec<(&str, Option<&str>, Option<&WithheldView>)> = decisions
+            .unit_dropins
+            .iter()
+            .map(|d| {
+                (
+                    d.entry.path.as_str(),
+                    d.kind.as_deref(),
+                    d.withheld.as_ref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            drop_ins,
+            [
+                (
+                    "/etc/systemd//system/ostree-finalize-staged.service",
+                    Some("service"),
+                    Some(&withheld("ZeroLengthUnitFile", ZERO_LENGTH))
+                ),
+                (
+                    "/etc/systemd/system/sshd.service.d/../x.conf",
+                    Some("service"),
+                    Some(&traversal)
+                ),
+            ]
+        );
+        assert!(
+            session
+                .view()
+                .containerfile_preview
+                .contains("ostree-remount.service"),
+            "the preview names the withheld file"
+        );
+    }
+
+    /// A row can carry the collector's § 10.3 sentence while the plan
+    /// declines it for another rule: the view reports the plan's reason
+    /// and leaves `attention_reason` as the row holds it.
+    #[test]
+    fn declined_is_the_plans_reason_whatever_attention_reason_says() {
+        const SENTENCE: &str = "kdump.service is masked on the source host. Not carried: the \
+             image needs this unit.";
+        let mut masked = change(
+            "kdump.service",
+            vendor("kdump.service", None),
+            UnitState::Masked,
+        );
+        masked.attention_reason = Some(SENTENCE.into());
+        let session = RefineSession::new(snapshot(
+            vec![masked],
+            vec![config("/etc/systemd/system/kdump.service", "[Service]\n")],
+            vec![],
+        ));
+        let r = row(&session, "kdump.service");
+        assert_eq!(r.attention_reason.as_deref(), Some(SENTENCE));
+        assert_eq!(
+            r.declined,
+            Some(DeclinedView {
+                renders: DeclinedRenders::Omitted,
+                reason: "MaskPathOccupied".into(),
+                text: "kdump.service (the export also carries a unit file at \
+                       /etc/systemd/system/kdump.service; exclude one of the two)"
+                    .into(),
+            })
+        );
+    }
+
+    /// § 10.4: a runtime updater is an ordinary row, excluded with its
+    /// reason, and has no `declined`: the plan did not decline it. Control
+    /// on the same snapshot: a protected unit's disable is declined.
+    #[test]
+    fn a_runtime_updater_row_is_excluded_and_not_declined() {
+        let mut updater = change(
+            "dnf-automatic.timer",
+            vendor("dnf-automatic.timer", None),
+            UnitState::Enabled,
+        );
+        inspectah_core::baseline::apply_runtime_updater_default(&mut updater);
+        let session = RefineSession::new(snapshot(
+            vec![
+                updater,
+                change(
+                    "bootc-fetch-apply-updates.timer",
+                    vendor("bootc-fetch-apply-updates.timer", None),
+                    UnitState::Disabled,
+                ),
+            ],
+            vec![],
+            vec![],
+        ));
+        let r = row(&session, "dnf-automatic.timer");
+        assert!(!r.include);
+        assert_eq!(
+            r.attention_reason.as_deref(),
+            Some(inspectah_core::baseline::RUNTIME_UPDATER_REASON)
+        );
+        assert_eq!(r.declined, None);
+        assert!(
+            row(&session, "bootc-fetch-apply-updates.timer")
+                .declined
+                .is_some()
+        );
+    }
+
+    /// T15's pair of config entries, a file and a file under it, are both
+    /// withheld as a conflict, and each config row says so. Excluding one
+    /// through `RefineSession` stages the other, and neither is listed.
+    #[test]
+    fn a_withheld_conflict_is_shown_on_each_config_row() {
+        const UNIT: &str = "/etc/systemd/system/worker.service";
+        const CHILD: &str = "/etc/systemd/system/worker.service/extra.conf";
+        let mut session = RefineSession::new(snapshot(
+            vec![],
+            vec![config(CHILD, "[Service]\n"), config(UNIT, "[Unit]\n")],
+            vec![],
+        ));
+        let listed: Vec<(String, WithheldView)> = session
+            .decisions()
+            .config_withheld
+            .iter()
+            .map(|c| (c.path.clone(), c.withheld.clone()))
+            .collect();
+        let conflict = |other: &str| WithheldView::Withheld {
+            why: "Conflict".into(),
+            text: format!(
+                "{other} is also staged, and one of the two paths is a directory of the other; \
+                 exclude one of the two"
+            ),
+        };
+        assert_eq!(
+            listed,
+            [
+                (CHILD.to_owned(), conflict(UNIT)),
+                (UNIT.to_owned(), conflict(CHILD))
+            ]
+        );
+
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Config { path: CHILD.into() },
+                include: false,
+            })
+            .expect("the config row toggles");
+        assert!(session.decisions().config_withheld.is_empty());
+        assert!(
+            session
+                .view()
+                .containerfile_preview
+                .contains("COPY config/etc/ /etc/"),
+            "{}",
+            session.view().containerfile_preview
+        );
+    }
+
+    /// The derived fields: `kind`, `instance_of` from the name (the rows
+    /// built by hand), and `fragment` with `unit_file_path` for each
+    /// fragment.
+    #[test]
+    fn a_unit_row_derives_kind_instance_and_fragment() {
+        let session = RefineSession::new(snapshot(
+            vec![
+                change(
+                    "getty@tty2.service",
+                    vendor("getty@.service", Some("systemd")),
+                    UnitState::Enabled,
+                ),
+                change(
+                    "sshd.socket",
+                    vendor("sshd.socket", Some("openssh-server")),
+                    UnitState::Enabled,
+                ),
+                change(
+                    "local.service",
+                    UnitFragment::Local {
+                        file: name("local.service"),
+                    },
+                    UnitState::Enabled,
+                ),
+                change(
+                    "shadow.service",
+                    UnitFragment::Shadowed {
+                        file: name("shadow.service"),
+                        owning_package: Some("pkg".into()),
+                    },
+                    UnitState::Enabled,
+                ),
+                change("ghost.service", UnitFragment::Absent, UnitState::Masked),
+                change(
+                    "var-lib-pkg.mount",
+                    vendor("var-lib-pkg.mount", Some("pkgmount")),
+                    UnitState::Enabled,
+                ),
+            ],
+            vec![],
+            vec![],
+        ));
+        // Unit, kind, instance_of, fragment, unit_file_path, owning_package.
+        type Derived<'a> = (
+            &'a str,
+            &'a str,
+            Option<&'a str>,
+            FragmentView,
+            Option<&'a str>,
+            Option<&'a str>,
+        );
+        let derived: Vec<Derived<'_>> = session
+            .decisions()
+            .unit_states
+            .iter()
+            .map(|r| {
+                (
+                    r.unit.as_str(),
+                    r.kind.as_str(),
+                    r.instance_of.as_ref().map(UnitName::as_str),
+                    r.fragment,
+                    r.unit_file_path.as_deref(),
+                    r.owning_package.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            derived,
+            [
+                (
+                    "getty@tty2.service",
+                    "service",
+                    Some("getty@.service"),
+                    FragmentView::Vendor,
+                    None,
+                    Some("systemd")
+                ),
+                (
+                    "sshd.socket",
+                    "socket",
+                    None,
+                    FragmentView::Vendor,
+                    None,
+                    Some("openssh-server")
+                ),
+                (
+                    "local.service",
+                    "service",
+                    None,
+                    FragmentView::Local,
+                    Some("/etc/systemd/system/local.service"),
+                    None
+                ),
+                (
+                    "shadow.service",
+                    "service",
+                    None,
+                    FragmentView::Shadowed,
+                    Some("/etc/systemd/system/shadow.service"),
+                    Some("pkg")
+                ),
+                (
+                    "ghost.service",
+                    "service",
+                    None,
+                    FragmentView::Absent,
+                    None,
+                    None
+                ),
+                (
+                    "var-lib-pkg.mount",
+                    "mount",
+                    None,
+                    FragmentView::Vendor,
+                    None,
+                    Some("pkgmount")
+                ),
+            ]
+        );
+    }
+
+    /// § 11.1: a unit row carries `also[]`, each member's name and links,
+    /// and `install_drop_ins[]`, from its state change. A row with neither
+    /// has two empty lists.
+    #[test]
+    fn a_unit_row_carries_its_also_members_and_install_drop_ins() {
+        use inspectah_core::types::units::{AlsoMember, MemberLinks};
+        use inspectah_refine::projection::AlsoView;
+        const DROP_IN: &str = "/etc/systemd/system/m.service.d/10-install.conf";
+        let mut owner = change(
+            "m.service",
+            vendor("m.service", Some("m")),
+            UnitState::Enabled,
+        );
+        owner.also = vec![AlsoMember {
+            unit: name("m.socket"),
+            links: MemberLinks::Unlinked,
+            vendor_drop_ins: vec!["10-vendor.conf".into()],
+        }];
+        owner.install_drop_ins = vec![DROP_IN.into()];
+        let plain = change(
+            "plain.service",
+            vendor("plain.service", Some("plain")),
+            UnitState::Enabled,
+        );
+        let session = RefineSession::new(snapshot(vec![owner, plain], vec![], vec![]));
+        let owner_row = row(&session, "m.service");
+        assert_eq!(
+            owner_row.also,
+            [AlsoView {
+                unit: name("m.socket"),
+                links: MemberLinks::Unlinked,
+            }]
+        );
+        assert_eq!(owner_row.install_drop_ins, [DROP_IN]);
+        let plain_row = row(&session, "plain.service");
+        assert!(plain_row.also.is_empty() && plain_row.install_drop_ins.is_empty());
+    }
+
+    /// § 11.1: a unit row carries `required_config[]` and `data_paths[]`
+    /// from its state change. A row with neither has two empty lists.
+    #[test]
+    fn a_unit_row_carries_its_required_config_and_data_paths() {
+        let mut wg = change(
+            "wg-quick@wg0.service",
+            vendor("wg-quick@.service", Some("wireguard-tools")),
+            UnitState::Enabled,
+        );
+        wg.required_config = vec!["/etc/wireguard/wg0.conf".into()];
+        let mut dirsrv = change(
+            "dirsrv@example.service",
+            vendor("dirsrv@.service", Some("389-ds-base")),
+            UnitState::Enabled,
+        );
+        dirsrv.required_config = vec!["/etc/dirsrv/slapd-example".into()];
+        dirsrv.data_paths = vec!["/var/lib/dirsrv/slapd-example".into()];
+        let plain = change(
+            "plain.service",
+            vendor("plain.service", Some("plain")),
+            UnitState::Enabled,
+        );
+        let session = RefineSession::new(snapshot(vec![wg, dirsrv, plain], vec![], vec![]));
+        let wg_row = row(&session, "wg-quick@wg0.service");
+        assert_eq!(wg_row.required_config, ["/etc/wireguard/wg0.conf"]);
+        assert!(wg_row.data_paths.is_empty());
+        let dirsrv_row = row(&session, "dirsrv@example.service");
+        assert_eq!(dirsrv_row.required_config, ["/etc/dirsrv/slapd-example"]);
+        assert_eq!(dirsrv_row.data_paths, ["/var/lib/dirsrv/slapd-example"]);
+        let plain_row = row(&session, "plain.service");
+        assert!(plain_row.required_config.is_empty() && plain_row.data_paths.is_empty());
+    }
+
+    /// A mount finding row: no `include` key at all, its fields, the config
+    /// row that holds its file, and § 10.6's lines, which the preview
+    /// carries too. A finding with no recorded state has `state: null`.
+    #[test]
+    fn a_mount_finding_row_has_its_fields_and_no_include() {
+        let finding = |unit: &str, state: Option<UnitState>, mount_point: &str| {
+            let subject = UnitSubject::new(name(unit), UnitFragment::Local { file: name(unit) })
+                .expect("a subject");
+            MountUnitFinding {
+                unit: AdvisoryUnit::try_from(subject).expect("an advisory unit"),
+                state_change: state.map(|s| (s, None)),
+                mount_point: Some(mount_point.into()),
+                nofail: Some(true),
+                aggregate: None,
+            }
+        };
+        let mut snap = snapshot(
+            vec![],
+            vec![config(
+                "/etc/systemd/system/srv.mount",
+                "[Mount]\nWhere=/srv\n",
+            )],
+            vec![],
+        );
+        let units = snap.units.as_mut().expect("a units section");
+        units.mount_findings = vec![
+            finding("srv.mount", Some(UnitState::Enabled), "/srv"),
+            finding("data.mount", None, "/data"),
+        ];
+        let session = RefineSession::new(snap);
+        let rows = &session.decisions().mount_findings;
+        let json = serde_json::to_value(rows).expect("the rows serialize");
+        assert_eq!(
+            json[0],
+            serde_json::json!({
+                "unit": "srv.mount",
+                "kind": "mount",
+                "state": "enabled",
+                "mount_point": "/srv",
+                "fragment": "local",
+                "unit_file_path": "/etc/systemd/system/srv.mount",
+                "advisories": [
+                    "# Advisory: srv.mount is enabled on the source host. inspectah does not \
+                     enable, disable or mask a mount, automount or swap unit the administrator \
+                     wrote.",
+                    "#   Its unit file is copied into the image. No enable line is written, but \
+                     the unit still starts if another unit requires it or names its mount point \
+                     in RequiresMountsFor=, and it replaces a unit of the same name that the \
+                     image ships.",
+                    "#   /srv is a symlink into /var in the RHEL bootc base image. The unit must \
+                     be renamed for the resolved path (for /srv: var-srv.mount with \
+                     Where=/var/srv)."
+                ]
+            })
+        );
+        assert_eq!(json[1]["state"], serde_json::Value::Null);
+        assert_eq!(
+            json[1]["unit_file_path"],
+            serde_json::Value::Null,
+            "no config row"
+        );
+        for row in json.as_array().expect("an array") {
+            assert!(row.get("include").is_none(), "{row}");
+        }
+        let preview = &session.view().containerfile_preview;
+        for line in &rows[0].advisories {
+            assert!(preview.contains(line.as_str()), "{line}\n{preview}");
+        }
+    }
+
+    /// § 11.1 `default_target`: the recorded target, its toggle and lock,
+    /// and the plan's `declined` through `default_target_line`. Included
+    /// with no `declined`; after `SetInclude(DefaultTarget, false)`,
+    /// `include: false`; a local target whose config row is excluded,
+    /// `declined` with `UnitFileNotStaged`; no record, absent.
+    #[test]
+    fn the_default_target_is_projected_with_its_toggle_and_decline() {
+        use inspectah_core::types::units::{DefaultTarget, TargetUnit};
+        use inspectah_refine::projection::DefaultTargetView;
+        const LOCAL: &str = "/etc/systemd/system/custom.target";
+        let with_target = |unit: &str, fragment: UnitFragment, files| {
+            let mut snap = snapshot(vec![], files, vec![]);
+            let target =
+                TargetUnit::try_from(UnitSubject::new(name(unit), fragment).expect("a subject"))
+                    .expect("a target");
+            snap.units.as_mut().expect("units").default_target = Some(DefaultTarget {
+                target,
+                disposition: FindingKind::included(),
+                locked: false,
+                aggregate: None,
+            });
+            snap
+        };
+        let toggle = |include: bool| RefinementOp::SetInclude {
+            item_id: ItemId::DefaultTarget,
+            include,
+        };
+
+        let mut session = RefineSession::new(with_target(
+            "graphical.target",
+            vendor("graphical.target", None),
+            vec![],
+        ));
+        let view = |session: &RefineSession| session.decisions().default_target.clone();
+        assert_eq!(
+            view(&session),
+            Some(DefaultTargetView {
+                target: name("graphical.target"),
+                include: true,
+                locked: false,
+                declined: None,
+            })
+        );
+        session.apply(toggle(false)).expect("the toggle applies");
+        assert_eq!(
+            view(&session).map(|v| (v.include, v.declined)),
+            Some((false, None))
+        );
+
+        let mut local = RefineSession::new(with_target(
+            "custom.target",
+            UnitFragment::Local {
+                file: name("custom.target"),
+            },
+            vec![config(LOCAL, "[Unit]\nDescription=Custom\n")],
+        ));
+        assert_eq!(view(&local).and_then(|v| v.declined), None, "file staged");
+        local
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Config { path: LOCAL.into() },
+                include: false,
+            })
+            .expect("the config row is excluded");
+        assert_eq!(
+            view(&local).and_then(|v| v.declined),
+            Some(DeclinedView {
+                renders: DeclinedRenders::Omitted,
+                reason: "UnitFileNotStaged".into(),
+                text: "custom.target (its unit file is not in the export)".into(),
+            })
+        );
+
+        let none = RefineSession::new(snapshot(vec![], vec![], vec![]));
+        assert_eq!(view(&none), None);
     }
 }

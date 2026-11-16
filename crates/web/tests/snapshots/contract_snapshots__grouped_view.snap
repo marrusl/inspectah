@@ -5,10 +5,14 @@ expression: json
 {
   "baseline_summary": null,
   "config_files": [],
-  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n# \"Web Server\" degraded (member excluded): members rendered individually\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n# TODO: 'mod_ssl.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n# \"Web Server\" degraded (member excluded): members rendered individually\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source. Verify how to reinstall it in the image.\n# TODO: 'mod_ssl.x86_64' has no recorded repository source. Verify how to reinstall it in the image.\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "declined_generated": [],
   "flatpaks": [],
+  "generated_timers": [],
   "generation": 0,
   "has_unmanaged_scan": false,
+  "manual_links": [],
+  "mount_findings": [],
   "not_carried_notice": null,
   "not_carried_packages": [],
   "package_groups": [
@@ -128,8 +132,6 @@ expression: json
       "tier": "none"
     }
   ],
-  "service_dropins": [],
-  "service_states": [],
   "session_is_sensitive": false,
   "stats": {
     "baseline_available": false,
@@ -159,6 +161,9 @@ expression: json
     "state": "unavailable"
   },
   "tuned": [],
+  "undetermined_installs": [],
+  "unit_dropins": [],
+  "unit_states": [],
   "users_groups_decisions": [],
   "version_changes": []
 }

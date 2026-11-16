@@ -2,10 +2,30 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
+use inspectah_core::types::units::{OrdinaryKind, UnitKind, UnitState};
 
 use super::baseline_fmt;
 use super::containerfile::base_image_from_snapshot;
 use super::selinux;
+
+/// § 10.1 and § 10.2 "Never the machine-id": a carried unit state holds
+/// through first boot while the image keeps the base image's empty
+/// `/etc/machine-id` (measured, run R3), and what can undo it: a first-boot
+/// preset pass, which on RHEL 9 kept a rendered `enable` and undid a
+/// `disable`, and on RHEL 10 undid both, and never touched a mask
+/// (measured, 2026-11-14).
+const UNIT_STATE_FIRST_BOOT: &str = "The unit states in the Containerfile's Systemd Unit State \
+     section survive first boot with the base image's empty `/etc/machine-id`. A later layer or \
+     installer script that removes that file or writes `uninitialized` to it makes first boot \
+     apply the presets, which can undo the rendered `enable` and `disable` lines (measured: \
+     RHEL 9 kept an `enable` and undid a `disable`, RHEL 10 undid both). A rendered `mask` is \
+     kept. A later `systemctl preset-all` returns enabled and disabled units to their presets \
+     and leaves masks in place.";
+
+/// § 10.1: what a carried `disable` does and does not do (measured).
+const UNIT_STATE_DISABLE: &str = "A `disable` removes the administrator's links and nothing \
+     more: a unit that a package's `.wants` link or another unit's `Wants=` pulls in reads \
+     `disabled` afterwards and is still wanted.";
 
 /// Render the README markdown from a snapshot.
 pub fn render_readme(snap: &InspectionSnapshot) -> String {
@@ -86,16 +106,17 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
         })
         .unwrap_or(0);
 
-    let svc_enabled = snap
-        .services
-        .as_ref()
-        .map(|s| s.enabled_units.len())
-        .unwrap_or(0);
-    let svc_disabled = snap
-        .services
-        .as_ref()
-        .map(|s| s.disabled_units.len())
-        .unwrap_or(0);
+    let service_count = |state: UnitState| {
+        snap.units.as_ref().map_or(0, |s| {
+            s.inventory
+                .iter()
+                .filter(|e| e.unit.kind() == UnitKind::Ordinary(OrdinaryKind::Service))
+                .filter(|e| e.state == state)
+                .count()
+        })
+    };
+    let svc_enabled = service_count(UnitState::Enabled);
+    let svc_disabled = service_count(UnitState::Disabled);
 
     let warning_count = snap.warnings.len();
     let redaction_count = snap.redactions.len();
@@ -309,6 +330,20 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
              not combine the way you expect, and the mismatch may not fail visibly."
                 .into(),
         );
+        lines.push(String::new());
+    }
+
+    // Unit state: § 10.1's two measured facts about what a carried
+    // `systemctl` line means on the target, stated whenever the plan
+    // carries at least one command. A section holding only declined
+    // commands carries none.
+    let plan = super::unit_plan::plan_units(snap, &super::configtree::staged_writes(snap));
+    if !plan.planned.is_empty() {
+        lines.push("## Unit state".into());
+        lines.push(String::new());
+        lines.push(UNIT_STATE_FIRST_BOOT.into());
+        lines.push(String::new());
+        lines.push(UNIT_STATE_DISABLE.into());
         lines.push(String::new());
     }
 
@@ -582,6 +617,52 @@ mod tests {
         assert!(
             !md.contains("Subscription certs"),
             "must not show expiry when none available"
+        );
+    }
+
+    /// Service counts read the inventory by kind and state. A masked
+    /// service and an enabled socket are in the inventory and are not
+    /// counted as enabled or disabled services.
+    #[test]
+    fn test_readme_service_counts_by_kind_and_state() {
+        use inspectah_core::types::units::{
+            PresetDefault, UnitInventoryEntry, UnitSection, UnitState,
+        };
+        let entry = |unit: &str, state, preset| UnitInventoryEntry {
+            unit: unit.to_owned().try_into().expect("valid unit name"),
+            state,
+            preset,
+        };
+        let mut snap = InspectionSnapshot::new();
+        snap.units = Some(UnitSection {
+            inventory: vec![
+                entry(
+                    "sshd.service",
+                    UnitState::Enabled,
+                    Some(PresetDefault::Enable),
+                ),
+                entry("httpd.service", UnitState::Enabled, None),
+                entry("cups.service", UnitState::Disabled, None),
+            ],
+            ..Default::default()
+        });
+        let md = render_readme(&snap);
+        assert!(
+            md.contains("| Services (2 enabled, 1 disabled) | 3 |"),
+            "{md}"
+        );
+
+        let units = snap.units.as_mut().expect("units set above");
+        units
+            .inventory
+            .push(entry("gdm.service", UnitState::Masked, None));
+        units
+            .inventory
+            .push(entry("cockpit.socket", UnitState::Enabled, None));
+        let md = render_readme(&snap);
+        assert!(
+            md.contains("| Services (2 enabled, 1 disabled) | 3 |"),
+            "{md}"
         );
     }
 }

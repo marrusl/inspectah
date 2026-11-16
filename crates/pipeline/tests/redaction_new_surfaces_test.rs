@@ -8,8 +8,8 @@ use inspectah_core::types::FindingKind as SnapshotFindingKind;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 use inspectah_core::types::kernelboot::KernelBootSection;
 use inspectah_core::types::redaction::{FindingKind, RedactionState};
-use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_core::types::storage::{CredentialRef, FstabEntry, StorageSection};
+use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 
 // ---------------------------------------------------------------------------
@@ -19,7 +19,7 @@ use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 #[test]
 fn test_dropin_env_secret_redacted() {
     let mut snapshot = InspectionSnapshot::new();
-    snapshot.services = Some(ServiceSection {
+    snapshot.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "myapp.service".into(),
             path: "/etc/systemd/system/myapp.service.d/override.conf".into(),
@@ -34,7 +34,7 @@ fn test_dropin_env_secret_redacted() {
     redact(&mut snapshot, &RedactOptions::default());
 
     // Secret value must be redacted inline
-    let services = snapshot.services.as_ref().unwrap();
+    let services = snapshot.units.as_ref().unwrap();
     assert!(
         !services.drop_ins[0].content.contains("secret123"),
         "secret value must be redacted from drop-in content"
@@ -290,7 +290,7 @@ fn test_secrets_review_reports_all_findings() {
     let mut snapshot = InspectionSnapshot::new();
 
     // Services: drop-in with password
-    snapshot.services = Some(ServiceSection {
+    snapshot.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "db.service".into(),
             path: "/etc/systemd/system/db.service.d/env.conf".into(),
@@ -343,7 +343,7 @@ fn test_secrets_review_reports_all_findings() {
     );
 
     // Verify inline redaction happened
-    let services = snapshot.services.as_ref().unwrap();
+    let services = snapshot.units.as_ref().unwrap();
     assert!(
         !services.drop_ins[0].content.contains("pass1"),
         "services secret must be redacted"
@@ -364,7 +364,7 @@ fn test_secrets_review_reports_all_findings() {
 fn test_clean_surfaces_no_false_positives() {
     let mut snapshot = InspectionSnapshot::new();
 
-    snapshot.services = Some(ServiceSection {
+    snapshot.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "httpd.service".into(),
             path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
@@ -413,4 +413,63 @@ fn test_clean_surfaces_no_false_positives() {
         Some(RedactionState::FullyRedacted { .. }) => {}
         other => panic!("expected FullyRedacted for clean snapshot, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Mount unit findings: the mount source is scrubbed where it is stored
+// ---------------------------------------------------------------------------
+
+/// A local mount unit as the scan records it: the unit file is a config
+/// entry, and the mount finding holds the mount point and `nofail` but no
+/// copy of `What=`. Redaction scrubs the token in the config entry, so the
+/// serialized snapshot no longer holds it, and leaves the finding as it
+/// was: the mount point is a path, classified as an identifier.
+#[test]
+fn test_mount_unit_source_scrubbed_in_its_config_entry_only() {
+    use inspectah_core::types::units::{MountUnitFinding, UnitFragment, UnitName, UnitSubject};
+
+    const TOKEN: &str = "mount-source-91c2";
+    let path = "/etc/systemd/system/srv-data.mount";
+    let name = UnitName::try_from("srv-data.mount".to_owned()).unwrap();
+    let finding = MountUnitFinding {
+        unit: UnitSubject::new(name.clone(), UnitFragment::Local { file: name })
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        state_change: None,
+        mount_point: Some("/srv/data".into()),
+        nofail: Some(true),
+        aggregate: None,
+    };
+    let mut snapshot = InspectionSnapshot::new();
+    snapshot.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: path.into(),
+            content: format!(
+                "[Mount]\nWhat=https://files.example/volume?token={TOKEN}\nWhere=/srv/data\n"
+            ),
+            disposition: SnapshotFindingKind::included(),
+            ..Default::default()
+        }],
+    });
+    snapshot.units = Some(UnitSection {
+        mount_findings: vec![finding.clone()],
+        ..Default::default()
+    });
+    // Presence first: the token is in the snapshot before the pass.
+    assert!(serde_json::to_string(&snapshot).unwrap().contains(TOKEN));
+
+    redact(&mut snapshot, &RedactOptions::default());
+
+    let written = serde_json::to_string(&snapshot).unwrap();
+    assert!(!written.contains(TOKEN), "{written}");
+    assert!(
+        snapshot.redactions.iter().any(|f| f.path == path),
+        "the finding names the unit file: {:?}",
+        snapshot.redactions
+    );
+    assert_eq!(
+        snapshot.units.as_ref().unwrap().mount_findings,
+        vec![finding]
+    );
 }

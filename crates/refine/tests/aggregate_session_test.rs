@@ -7,7 +7,7 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerSection, QuadletUnit,
 };
-use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 use std::collections::BTreeMap;
@@ -142,7 +142,7 @@ fn zone_for_partial_path_is_divergent() {
 #[test]
 fn dropin_zone_classified_on_aggregate_init() {
     let mut snap = make_aggregate_snapshot(5);
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "httpd.service".into(),
             path: "/etc/systemd/system/httpd.service.d/override.conf".into(),

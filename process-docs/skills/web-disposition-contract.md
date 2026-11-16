@@ -60,12 +60,133 @@ it returns `Some` only for `FindingKind::Actionable`, `None` for
 `Advisory` and `Inventory`, so a row backed by either of the
 non-actionable variants renders with no control to offer.
 
+## 1b. Scheduled Tasks rows: identity, and the generated-timer exception
+
+**Generated timer rows are an exception to the `decision` contract.** A
+timer or `@reboot` service converted from cron is decided on its
+Scheduled Tasks row (`ItemId::GeneratedTimer { name }`), but its row
+carries no `decision`. Reference sections come from
+`/api/snapshot/sections`, which the UI fetches once; the row's state
+changes with every operation, including one on another row (excluding
+its cron job excludes it). So the state is in `/api/view`, which is
+recomputed per operation:
+
+- `generated_timers[]`: `name`, `include`, `locked`, and
+  `cron_job_excluded` (the excluded cron job it is generated from).
+  `include` is true while any record of the name is included, since the
+  export carries the name while one is: two cron files can generate one
+  name.
+- `declined_generated[]`: a generated request the export declines, with
+  `row: { row: "scheduled", name }`.
+
+**Join both through the row's `generated_timer` field, the generated
+name.** Never derive the name by parsing the row's id. The id is an
+identity, not a key into the view: an earlier version joined on a
+`generated:` prefix, and a collected timer whose own name began with that
+prefix took the generated row's decline note.
+
+The row offers a toggle unless it is excluded and `cron_job_excluded` is
+set: the server refuses that include, so the row shows why instead.
+While any record is still included, excluding stays available even when
+one source cron job is excluded.
+
+**Scheduled row ids are kind and source.** `adapter::generic_row_id`
+builds them from `GenericRefItem.scheduled` (`ScheduledSource`, set by
+the reference projection):
+
+| Row | Id |
+|---|---|
+| Cron job | `cron:<path>` |
+| Collected timer | `timer:<path>`, or `timer:<name>` when the snapshot records no path |
+| Instance timer described from its template's file | `timer-instance:` and the JSON-encoded `[path, name]` |
+| At job | `at:<file>` |
+| Generated timer | `generated:<index>:<name>`, `<index>` its place in `generated_timer_units` |
+
+The kind ends at the first `:` and contains none, so rows of two kinds
+never share an id, and within a kind the source is unique. Names are not:
+a shadowed timer's `/etc` and vendor files, a collected timer and a
+generated one, and two lines of one cron file all share names. A shared
+id is a shared React key, DOM id and GlobalSearch key, so search and
+reveal land on the wrong row. Rows of other reference sections keep the
+projection's ids.
+
+Paths are not unique either. An instance timer found by its link is
+described from its template's file and records that file as its `path`,
+the evidence its row shows, so `worker@.timer`, `worker@a.timer` and
+`worker@b.timer` all record `etc/systemd/system/worker@.timer`. A timer
+whose path's file is not `<name>.timer` (or `<name>`) is therefore
+`timer-instance:` and `[path, name]` as JSON, never the two joined with a
+separator, since a path and a unit name can both hold `:`. A timer that
+describes its own file keeps `timer:<path>`. The JSON form holds quotes,
+so a test that looks a row up by DOM id compares strings, as reveal does,
+never through a CSS attribute selector.
+
+**Reveal matches test ids exactly.** After a navigation, App finds the
+target row by comparing each `data-testid` as a string
+(`elementByTestId` in `App.tsx`). Do not build a CSS selector from an
+item id: ids are host data, and a unit name can hold a literal backslash
+(`backup\x2djob.timer`), which a selector reads as an escape, so the link
+opens the section and focuses nothing.
+
+## 1c. Units: link rows, records and the default target
+
+`/api/view` passes the projection's unit views through untouched
+(`ManualLinkView`, `UndeterminedInstallView`, `DefaultTargetView`), so the
+TypeScript types mirror serde exactly. Four wire forms are easy to get
+wrong:
+
+- **`ManualLinkView.cause` is externally tagged.** Six causes are bare
+  strings (`"static_unit"`); `undetermined` is an object,
+  `{"undetermined":{"reason":"upheld_by"}}`. Branch on `typeof`, never on
+  string equality alone (`causeName` in `ServiceSection.tsx`).
+- **`ItemId::DefaultTarget` has no `key`.** It is `{"kind":"DefaultTarget"}`,
+  the one item id without one, since a snapshot records at most one
+  default target. Code that reads `item_id.key` from an arbitrary item
+  breaks on it.
+- **Absent versus `null`.** `default_target` is absent, not `null`, when
+  the host records none. `DefaultTargetView.declined` is `null`, not
+  absent, when the target is carried. A unit row's `also` and
+  `install_drop_ins` are absent when empty.
+- **A unit row's `instance_of`, `required_config` and `data_paths`.**
+  `instance_of` (the template) is absent on a unit that is not an
+  instance. `required_config` and `data_paths` are always present, as
+  plain lists, empty for a plain unit, so the TypeScript type has them as
+  required `string[]` and every hand-made unit row, in a Vitest factory or
+  an e2e fixture, carries both. Unit rows reach `/api/view` through
+  `ServiceDecisionDto` in `crates/web/src/adapter.rs`, which copies fields
+  one by one from the projection's `UnitStateView`, so a new projection
+  field reaches the browser only once the DTO names it. The units list
+  shows the three under the row (`instance-of-<unit>`,
+  `required-config-<unit>`, `data-paths-<unit>`) and ties them to the
+  row's toggle. A carried instance's § 10.8 data sentence needs no field
+  of its own: it is already in `attention_reason`, and the row does not
+  repeat it.
+- **Link rows and undetermined records have no toggle.** They carry no
+  `include`; their state follows the unit's install files, and
+  `not_applied` lists the files the export leaves out, absent while the
+  advisory applies.
+
+**Row identity in the Services grid.** A unit name can hold `-`, even
+`.service-` (`a.service-b.service` is a valid name), so a link row's React
+key and `data-testid` are the JSON-encoded `[relation, parent, unit]`
+(`linkIdentity`), never the three joined with a separator, which can give
+two links one id and make reveal focus the wrong row. An undetermined
+record's key is `["undetermined", unit]`: its bare unit name is the key a
+unit row or mount finding beside it may already use. The default target's
+pending-guard key is `["default_target"]`.
+
+The services bulk toggle does not send `DefaultTarget`: the target has its
+own toggle. The fleet view shows none of these rows.
+
 ## 2. The hand-built decision DTOs — still `include: bool`
 
 `ServiceDecisionDto`, `DropInDecisionDto`, `QuadletDecisionDto`,
 `FlatpakDecisionDto`, `TunedDecisionDto`,
 `LanguagePackageEnvDto`, and `UnmanagedFileItemDto` collapse the
-disposition with `.is_included()`.
+disposition with `.is_included()`. `UnmanagedFileItemDto` also carries
+`withheld`, as a config row does, found by the row's recorded `path` and
+present only on an included row: a file under `/etc/systemd/system/` is
+withheld there (`UnmanagedUnitPath`).
 
 That is currently sound: as of v0.9.0-beta.2 the only producers of
 non-actionable dispositions are the config inspector (modernization,
@@ -159,7 +280,7 @@ advisories were mis-bucketed, and said nothing.
 `advisory` bucket, on the grounds that it is the other display-only
 disposition. It is not purely a network-findings caveat: a config file
 whose path is also a Service Drop-ins entry is given
-`shadowed_by: Some(ConfigShadow::Services)` and
+`shadowed_by: Some(ConfigShadow::Units)` and
 `disposition: FindingKind::Inventory` (`ConfigFileEntry`,
 `crates/core/src/types/config.rs`), and because it is still a member of
 `config.files`, it is counted into the Config section's `advisory`

@@ -35,6 +35,7 @@ import type {
   ViewResponse,
 } from "../../api/types";
 import * as client from "../../api/client";
+import { emptyView } from "../../test-utils/emptyView";
 import * as crypt from "../../utils/crypt";
 
 vi.mock("../../api/client", () => ({
@@ -94,30 +95,11 @@ const PACKAGE = {
   },
 } as RefinedPackage;
 
-const VIEW = {
+const VIEW: ViewResponse = emptyView({
   packages: [PACKAGE],
-  config_files: [],
   repo_groups: [VENDOR],
   package_groups: [GROUP],
-  generation: 1,
-  stats: {
-    sections: [],
-    needs_review_count: 0,
-    ops_applied: 0,
-    can_undo: false,
-    can_redo: false,
-    baseline_available: false,
-  },
-  version_changes: [],
-  service_states: [],
-  service_dropins: [],
-  quadlets: [],
-  flatpaks: [],
-  sysctl: { state: "unavailable", reason: "not collected" },
-  tuned: [],
-  users_groups_decisions: [],
-  session_is_sensitive: false,
-} as unknown as ViewResponse;
+});
 
 const QUADLET: QuadletDecisionDto = {
   path: "/etc/containers/systemd/myapp.container",
@@ -129,6 +111,7 @@ const QUADLET: QuadletDecisionDto = {
     annotations: [],
   },
   include: true,
+  locked: false,
 };
 
 const FLATPAK: FlatpakDecisionDto = {
@@ -141,6 +124,7 @@ const FLATPAK: FlatpakDecisionDto = {
     annotations: [],
   },
   include: true,
+  locked: false,
   lifecycle: "first_boot",
 };
 
@@ -153,17 +137,23 @@ const TUNED: TunedDecisionDto = {
     annotations: [],
   } as TunedDecisionDto["triage"],
   include: true,
+  locked: false,
 };
 
 const SERVICE: ServiceDecisionDto = {
   unit: "httpd.service",
+  kind: "service",
+  fragment: "vendor",
   triage: {
     triage: { mode: "single_host", site: null },
     primary_reason: "service_non_default_state",
     annotations: [],
   } as ServiceDecisionDto["triage"],
   include: true,
+  locked: false,
   current_state: "enabled",
+  required_config: [],
+  data_paths: [],
 };
 
 const DROPIN: DropInDecisionDto = {
@@ -171,6 +161,7 @@ const DROPIN: DropInDecisionDto = {
   path: "/etc/systemd/system/httpd.service.d/override.conf",
   triage: SERVICE.triage,
   include: true,
+  locked: false,
 };
 
 const USER: UserDecision = {
@@ -198,8 +189,47 @@ function renderSection(
     <MainContent
       activeSection={activeSection}
       loading={false}
-      viewData={{ ...VIEW, ...view } as ViewResponse}
+      viewData={{ ...VIEW, ...view }}
       sections={null}
+      onViewUpdate={vi.fn()}
+      onMutationError={onMutationError}
+      sectionSearchOpen={false}
+      onSectionSearchClose={vi.fn()}
+    />,
+  );
+}
+
+/**
+ * Scheduled Tasks with one generated timer row, whose toggle MainContent
+ * guards by the generated name.
+ */
+function renderScheduled(onMutationError: (err: Error) => void) {
+  render(
+    <MainContent
+      activeSection="scheduled_tasks"
+      loading={false}
+      viewData={{
+        ...VIEW,
+        generated_timers: [
+          { name: "cron-backup", include: true, locked: false },
+        ],
+      }}
+      sections={[
+        {
+          id: "scheduled_tasks",
+          display_name: "Scheduled Tasks",
+          items: [
+            {
+              id: "generated:0:cron-backup",
+              title: "cron-backup",
+              subtitle: "0 2 * * *",
+              detail: null,
+              searchable_text: "cron-backup generated-timer",
+              generated_timer: "cron-backup",
+            },
+          ],
+        },
+      ]}
       onViewUpdate={vi.fn()}
       onMutationError={onMutationError}
       sectionSearchOpen={false}
@@ -296,8 +326,8 @@ const CASES: GuardCase[] = [
     request: "applyOp",
     renderWith: (onMutationError) =>
       renderSection(
-        "services",
-        { service_states: [SERVICE], service_dropins: [DROPIN] },
+        "units",
+        { unit_states: [SERVICE], unit_dropins: [DROPIN] },
         onMutationError,
       ),
     control: () =>
@@ -309,13 +339,19 @@ const CASES: GuardCase[] = [
     request: "applyOp",
     renderWith: (onMutationError) =>
       renderSection(
-        "services",
-        { service_states: [SERVICE], service_dropins: [DROPIN] },
+        "units",
+        { unit_states: [SERVICE], unit_dropins: [DROPIN] },
         onMutationError,
       ),
     control: () =>
       screen.getByRole("checkbox", { name: `Toggle ${DROPIN.path}` }),
     trigger: pressSpace(`dropin-item-${DROPIN.path}`),
+  },
+  {
+    name: "generated timer toggle",
+    request: "applyOp",
+    renderWith: renderScheduled,
+    control: () => screen.getByRole("checkbox", { name: "Toggle cron-backup" }),
   },
   {
     name: "user include checkbox",
@@ -527,8 +563,8 @@ const LIFETIME_CASES: LifetimeCase[] = [
   },
   {
     name: "service toggle",
-    section: "services",
-    view: { service_states: [SERVICE], service_dropins: [DROPIN] },
+    section: "units",
+    view: { unit_states: [SERVICE], unit_dropins: [DROPIN] },
     hold: () => heldClientRequest("applyOp"),
     control: () =>
       screen.getByRole("checkbox", { name: "Toggle httpd.service" }),
@@ -536,8 +572,8 @@ const LIFETIME_CASES: LifetimeCase[] = [
   },
   {
     name: "service drop-in toggle",
-    section: "services",
-    view: { service_states: [SERVICE], service_dropins: [DROPIN] },
+    section: "units",
+    view: { unit_states: [SERVICE], unit_dropins: [DROPIN] },
     hold: () => heldClientRequest("applyOp"),
     control: () =>
       screen.getByRole("checkbox", { name: `Toggle ${DROPIN.path}` }),
@@ -583,7 +619,7 @@ describe.each(LIFETIME_CASES)(
       const props: MainContentProps = {
         activeSection: c.section,
         loading: false,
-        viewData: { ...VIEW, ...c.view } as ViewResponse,
+        viewData: { ...VIEW, ...c.view },
         sections: null,
         onViewUpdate: vi.fn(),
         onMutationError: vi.fn(),
@@ -733,7 +769,7 @@ describe.each([
     const props: MainContentProps = {
       activeSection: "users_groups",
       loading: false,
-      viewData: { ...VIEW, users_groups_decisions: [USER] } as ViewResponse,
+      viewData: { ...VIEW, users_groups_decisions: [USER] },
       sections: null,
       onViewUpdate: vi.fn(),
       onMutationError,

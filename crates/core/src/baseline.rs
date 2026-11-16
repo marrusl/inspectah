@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::types::os::OsRelease;
+use crate::types::units::{UnitAction, UnitState};
 
 /// Strategy used to resolve the base image reference.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -123,7 +124,9 @@ pub struct IncompatibleServiceEntry {
 
 /// Systemd services incompatible with immutable /usr.
 ///
-/// These are package-manager services that assume a mutable /usr.
+/// These are package-manager services that assume a mutable /usr. A
+/// runtime package updater is not here: [`RUNTIME_UPDATERS`] is its one
+/// owner, so it can be included (§ 10.4 of the units spec).
 pub const INCOMPATIBLE_SERVICES: &[IncompatibleServiceEntry] = &[
     IncompatibleServiceEntry {
         unit: "dnf-makecache.service",
@@ -137,11 +140,125 @@ pub const INCOMPATIBLE_SERVICES: &[IncompatibleServiceEntry] = &[
         unit: "packagekit.service",
         reason: "package-manager service incompatible with immutable /usr",
     },
-    IncompatibleServiceEntry {
-        unit: "packagekit-offline-update.service",
-        reason: "package-manager service incompatible with immutable /usr",
+];
+
+/// Units that change, or prepare to change, installed packages on a
+/// running host (§ 10.4 of the units spec). The target's `/usr` is
+/// read-only and its update path is a new image, so each is collected and
+/// excluded by default, and the operator can include one in refine. A `*`
+/// matches any run of characters; any other entry is a whole name.
+pub const RUNTIME_UPDATERS: &[&str] =
+    &["dnf-automatic*.timer", "packagekit-offline-update.service"];
+
+/// The attention reason [`apply_runtime_updater_default`] gives a runtime
+/// updater's row.
+pub const RUNTIME_UPDATER_REASON: &str = "This unit updates packages in place, which the \
+     target does not support: an image-based host is updated by a new image. \
+     bootc-fetch-apply-updates.timer is the equivalent there. Excluded by default; include it \
+     to carry it anyway.";
+
+/// Whether `unit` is on [`RUNTIME_UPDATERS`].
+pub fn is_runtime_updater(unit: &str) -> bool {
+    RUNTIME_UPDATERS
+        .iter()
+        .any(|entry| match entry.split_once('*') {
+            Some((prefix, suffix)) => {
+                unit.len() >= prefix.len() + suffix.len()
+                    && unit.starts_with(prefix)
+                    && unit.ends_with(suffix)
+            }
+            None => unit == *entry,
+        })
+}
+
+/// § 10.4's default for a runtime updater's row: excluded, with
+/// [`RUNTIME_UPDATER_REASON`], and not locked, so the operator can include
+/// it. Any other row is left as it is. Called on a fresh scan by the
+/// collector and on a fresh aggregate row by the fleet merge; never by
+/// refine's loader, so an operator's include survives export and reload.
+pub fn apply_runtime_updater_default(change: &mut crate::types::units::UnitStateChange) {
+    if is_runtime_updater(change.unit().name().as_str()) {
+        change.disposition = crate::types::FindingKind::excluded();
+        change.attention_reason = Some(RUNTIME_UPDATER_REASON.to_owned());
+    }
+}
+
+/// A unit a stock install leaves away from its preset with no administrator
+/// involved, and the state it is left in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StockStateEntry {
+    pub unit: &'static str,
+    pub state: UnitState,
+}
+
+/// Units a stock install leaves away from their preset, each in the state
+/// it is left in (§ 7.4 of the units spec). A unit on the list, in the
+/// listed state, gets an inventory entry and no state change, so the scan
+/// does not carry a `disable` nobody chose.
+pub const STOCK_STATE: &[StockStateEntry] = &[
+    // Disabled against an `enable` preset on a stock RHEL 9 host (measured).
+    StockStateEntry {
+        unit: "remote-cryptsetup.target",
+        state: UnitState::Disabled,
     },
 ];
+
+/// Units the target needs to boot or update, so inspectah never carries a
+/// `disable` or `mask` of one (§ 10.3 of the units spec). A trailing `*`
+/// matches any rest of the name; any other entry is a whole name.
+pub const TARGET_NEEDED_UNITS: &[&str] = &["bootc-*", "ostree-*", "systemd-remount-fs.service"];
+
+/// The unit the bootc base images mount `/tmp` from, through a
+/// `local-fs.target.wants` link they ship. A mask of it is never carried
+/// (§ 10.3); its `enable` and `disable` are.
+pub const TMP_MOUNT: &str = "tmp.mount";
+
+/// Why § 10.3 refuses a command, as the FIXME and the row's attention
+/// reason say it after the unit's state on the source host.
+pub const TARGET_NEEDS_UNIT: &str = "the image needs this unit";
+
+/// § 10.3's FIXME text for a masked [`TMP_MOUNT`], after its name.
+const TMP_MOUNT_MASKED: &str = "is masked on the source host, where /tmp is then a directory on \
+     the root filesystem. Not carried: the bootc base image mounts /tmp from this unit, and \
+     without it /tmp is read-only.";
+
+/// Whether `unit` is on [`TARGET_NEEDED_UNITS`].
+pub fn is_target_needed_unit(unit: &str) -> bool {
+    TARGET_NEEDED_UNITS
+        .iter()
+        .any(|entry| match entry.strip_suffix('*') {
+            Some(prefix) => unit.starts_with(prefix),
+            None => unit == *entry,
+        })
+}
+
+/// Whether the image cannot take `action` on `unit` (§ 10.3, rule 3 of
+/// § 10.2): a `disable` or `mask` of a unit on [`TARGET_NEEDED_UNITS`], or
+/// a `mask` of [`TMP_MOUNT`]. An `enable` is always carried.
+pub fn target_needs_unit(unit: &str, action: UnitAction) -> bool {
+    match action {
+        UnitAction::Enable => false,
+        UnitAction::Disable => is_target_needed_unit(unit),
+        UnitAction::Mask => is_target_needed_unit(unit) || unit == TMP_MOUNT,
+    }
+}
+
+/// The text of § 10.3's FIXME for `action` on `unit`, without the
+/// `# FIXME: ` prefix: the one source for the Containerfile line and the
+/// collector's attention reason. Meaningful where [`target_needs_unit`]
+/// holds.
+pub fn target_needs_unit_text(unit: &str, action: UnitAction) -> String {
+    let state = match action {
+        UnitAction::Enable => UnitState::Enabled,
+        UnitAction::Disable => UnitState::Disabled,
+        UnitAction::Mask => UnitState::Masked,
+    };
+    if action == UnitAction::Mask && unit == TMP_MOUNT {
+        format!("{unit} {TMP_MOUNT_MASKED}")
+    } else {
+        format!("{unit} is {state} on the source host. Not carried: {TARGET_NEEDS_UNIT}.")
+    }
+}
 
 /// Minimum RHEL bootc versions: (major, min_version).
 ///
@@ -605,17 +722,105 @@ mod tests {
 
     #[test]
     fn incompatible_services_constant() {
-        assert_eq!(INCOMPATIBLE_SERVICES.len(), 4);
+        assert_eq!(INCOMPATIBLE_SERVICES.len(), 3);
 
         let unit_names: Vec<&str> = INCOMPATIBLE_SERVICES.iter().map(|e| e.unit).collect();
         assert!(unit_names.contains(&"dnf-makecache.service"));
         assert!(unit_names.contains(&"dnf-makecache.timer"));
         assert!(unit_names.contains(&"packagekit.service"));
-        assert!(unit_names.contains(&"packagekit-offline-update.service"));
 
         for entry in INCOMPATIBLE_SERVICES {
             assert!(entry.reason.contains("package-manager"));
             assert!(entry.reason.contains("immutable /usr"));
+        }
+    }
+
+    /// § 10.4: the updater list is the glob and the one service, exactly.
+    #[test]
+    fn runtime_updaters_constant() {
+        assert_eq!(
+            RUNTIME_UPDATERS,
+            ["dnf-automatic*.timer", "packagekit-offline-update.service"]
+        );
+        assert!(RUNTIME_UPDATER_REASON.contains("bootc-fetch-apply-updates.timer"));
+    }
+
+    /// The two lists share no unit: a unit on both would be locked by the
+    /// refine loader and could never be included (§ 10.4). Each entry of
+    /// either is checked against the other's matcher.
+    #[test]
+    fn runtime_updaters_and_incompatible_services_share_no_unit() {
+        for entry in INCOMPATIBLE_SERVICES {
+            assert!(!is_runtime_updater(entry.unit), "{}", entry.unit);
+        }
+        for entry in RUNTIME_UPDATERS {
+            assert!(
+                INCOMPATIBLE_SERVICES
+                    .iter()
+                    .all(|i| i.unit != *entry && !is_runtime_updater(i.unit)),
+                "{entry}"
+            );
+        }
+        assert!(
+            !INCOMPATIBLE_SERVICES
+                .iter()
+                .any(|e| e.unit == "packagekit-offline-update.service")
+        );
+    }
+
+    /// The glob matches the timer and its variants, and nothing that only
+    /// shares a prefix or a suffix.
+    #[test]
+    fn runtime_updater_names_match_the_glob_or_the_whole_name() {
+        for (unit, updater) in [
+            ("dnf-automatic.timer", true),
+            ("dnf-automatic-install.timer", true),
+            ("dnf-automatic-download.timer", true),
+            ("dnf-automatic-notifyonly.timer", true),
+            ("packagekit-offline-update.service", true),
+            ("dnf-automatic.service", false),
+            ("dnf-automatic-install.service", false),
+            ("dnf-makecache.timer", false),
+            ("packagekit.service", false),
+            ("packagekit-offline-update.timer", false),
+            ("my-dnf-automatic.timer", false),
+        ] {
+            assert_eq!(is_runtime_updater(unit), updater, "{unit}");
+        }
+    }
+
+    /// `apply_runtime_updater_default` excludes an updater's row with the
+    /// reason, unlocked, whatever its state; any other row is untouched.
+    #[test]
+    fn the_updater_default_excludes_with_the_reason_and_no_lock() {
+        use crate::types::units::{CarriedUnit, UnitFragment, UnitStateChange, UnitSubject};
+        let change = |unit: &str, state| {
+            let name: crate::types::units::UnitName = unit.to_owned().try_into().unwrap();
+            let subject = UnitSubject::new(
+                name.clone(),
+                UnitFragment::Vendor {
+                    file: name,
+                    owning_package: Some("pkg".into()),
+                },
+            )
+            .unwrap();
+            UnitStateChange::new(CarriedUnit::try_from(subject).unwrap(), state, None).unwrap()
+        };
+        for state in [UnitState::Enabled, UnitState::Disabled, UnitState::Masked] {
+            let mut updater = change("dnf-automatic-notifyonly.timer", state);
+            apply_runtime_updater_default(&mut updater);
+            assert!(!updater.disposition.is_included(), "{state}");
+            assert!(!updater.locked, "{state}");
+            assert_eq!(
+                updater.attention_reason.as_deref(),
+                Some(RUNTIME_UPDATER_REASON),
+                "{state}"
+            );
+
+            let mut other = change("httpd.service", state);
+            let before = other.clone();
+            apply_runtime_updater_default(&mut other);
+            assert_eq!(other, before, "{state}");
         }
     }
 
@@ -1239,6 +1444,59 @@ mod tests {
         match result.unwrap_err() {
             ResolutionError::MalformedUblueMetadata { .. } => {}
             other => panic!("expected MalformedUblueMetadata, got {:?}", other),
+        }
+    }
+
+    /// § 10.3's two lists, exactly as the spec gives them.
+    #[test]
+    fn the_target_needed_lists_are_the_spec_lists() {
+        assert_eq!(
+            TARGET_NEEDED_UNITS,
+            ["bootc-*", "ostree-*", "systemd-remount-fs.service"]
+        );
+        assert_eq!(TMP_MOUNT, "tmp.mount");
+    }
+
+    /// A trailing `*` is a prefix; any other entry is a whole name. Each
+    /// refusal has a near miss beside it.
+    #[test]
+    fn target_needed_names_match_by_prefix_or_whole_name() {
+        for (unit, needed) in [
+            ("bootc-fetch-apply-updates.timer", true),
+            ("bootc-status-updated.path", true),
+            ("ostree-remount.service", true),
+            ("ostree-finalize-staged.path", true),
+            ("systemd-remount-fs.service", true),
+            ("xbootc-fetch.service", false),
+            ("bootc.service", false),
+            ("ostreeremount.service", false),
+            ("systemd-remount-fs.socket", false),
+            ("tmp.mount", false),
+        ] {
+            assert_eq!(is_target_needed_unit(unit), needed, "{unit}");
+        }
+    }
+
+    /// Which commands § 10.3 refuses: `disable` and `mask` of a protected
+    /// unit, a `mask` of `tmp.mount`, never an `enable`.
+    #[test]
+    fn target_needs_unit_refuses_by_name_and_verb() {
+        use UnitAction::{Disable, Enable, Mask};
+        for (unit, action, refused) in [
+            ("bootc-fetch-apply-updates.timer", Enable, false),
+            ("bootc-fetch-apply-updates.timer", Disable, true),
+            ("bootc-fetch-apply-updates.timer", Mask, true),
+            ("tmp.mount", Enable, false),
+            ("tmp.mount", Disable, false),
+            ("tmp.mount", Mask, true),
+            ("dev-hugepages.mount", Mask, false),
+            ("kdump.service", Disable, false),
+        ] {
+            assert_eq!(
+                target_needs_unit(unit, action),
+                refused,
+                "{unit} {action:?}"
+            );
         }
     }
 }

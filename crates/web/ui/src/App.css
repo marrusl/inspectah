@@ -721,6 +721,91 @@ body,
   color: var(--pf-t--global--text--color--subtle);
 }
 
+/* Unit kind beside a unit's name, lowercase as the server sends it. */
+.inspectah-unit-kind {
+  margin-left: var(--pf-t--global--spacer--xs);
+  padding: 0 var(--pf-t--global--spacer--xs);
+  border: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: var(--pf-t--global--border--radius--small);
+  font-size: var(--pf-t--global--font--size--xs);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.inspectah-unit-state {
+  margin-left: var(--pf-t--global--spacer--sm);
+  font-size: var(--pf-t--global--font--size--xs);
+  font-style: italic;
+  opacity: 0.55;
+}
+
+/* A reason the server wrote, under its row. `renders` only picks the
+   accent: the text is the server's. */
+.inspectah-unit-note {
+  padding: 0 var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--xs)
+    calc(var(--pf-t--global--spacer--md) + 28px);
+  font-size: var(--pf-t--global--font--size--xs);
+  color: var(--pf-t--global--text--color--subtle);
+  overflow-wrap: anywhere;
+}
+
+.inspectah-unit-declined,
+.inspectah-unit-note--withheld {
+  border-left: 3px solid var(--pf-t--global--border--color--default);
+  margin-left: calc(var(--pf-t--global--spacer--md) + 20px);
+  padding-left: var(--pf-t--global--spacer--sm);
+}
+
+.inspectah-unit-declined--fixme,
+.inspectah-unit-note--withheld {
+  border-left-color: var(--pf-t--global--color--status--warning--default);
+}
+
+.inspectah-unit-declined--advisory {
+  border-left-color: var(--pf-t--global--color--status--info--default);
+}
+
+.inspectah-mount-finding__where {
+  margin-left: var(--pf-t--global--spacer--sm);
+  font-size: var(--pf-t--global--font--size--xs);
+}
+
+/* The Containerfile's advisory lines, one per line, as written. */
+.inspectah-mount-finding__advisories {
+  padding: 0 var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--xs)
+    calc(var(--pf-t--global--spacer--md) + 28px);
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: var(--pf-t--global--font--size--xs);
+  color: var(--pf-t--global--text--color--subtle);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inspectah-manual-link__parent {
+  margin-left: var(--pf-t--global--spacer--sm);
+  font-size: var(--pf-t--global--font--size--xs);
+}
+
+/* Paths under a row: a unit's Also= members, or the install files the
+   export does not stage. */
+.inspectah-unit-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);
+  padding: 0 var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--xs)
+    calc(var(--pf-t--global--spacer--md) + 28px);
+  font-size: var(--pf-t--global--font--size--xs);
+  overflow-wrap: anywhere;
+}
+
+.inspectah-unit-paths__label {
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.inspectah-unit-paths__path {
+  margin-left: var(--pf-t--global--spacer--sm);
+  font-size: var(--pf-t--global--font--size--xs);
+}
+
 /* ─── Context row (reference sections — single-machine) ──────────────── */
 
 .inspectah-context-row {
@@ -749,6 +834,12 @@ body,
 
 .inspectah-context-row__subtitle {
   color: var(--pf-t--global--text--color--subtle);
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+/* A scheduled timer row's unit: a link to its unit row, or the name alone. */
+.inspectah-context-row__unit {
+  flex: none;
   font-size: var(--pf-t--global--font--size--body--sm);
 }
 
@@ -1390,10 +1481,16 @@ body,
 
 .inspectah-unmanaged-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--pf-t--global--spacer--sm);
   padding: 2px 0;
   font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+/* A withheld file's reason takes its own line under the row. */
+.inspectah-unmanaged-row .inspectah-unit-note {
+  flex-basis: 100%;
 }
 
 .inspectah-unmanaged-row:focus-visible {

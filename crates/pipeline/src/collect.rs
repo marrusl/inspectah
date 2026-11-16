@@ -255,13 +255,17 @@ pub fn collect(
 /// silently not run on hosts that take them, which no test or gate here
 /// would catch.
 pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
-    shadow_service_owned_paths(snapshot);
+    shadow_unit_owned_paths(snapshot);
 }
 
-/// A config file whose path appears in `services.drop_ins[].path` is
-/// materialized by the services renderer, under that entry's own
-/// decision, and the config tree subtracts the path unconditionally
-/// (`render::configtree::service_owned_paths`). Two live toggles over
+/// A config file whose path appears in `units.drop_ins[].path` is
+/// materialized by the units section, under that entry's own decision.
+/// That list holds every path the units section owns under
+/// `/etc/systemd/system`: drop-ins of every kind, including those under a
+/// name that does not parse, and full shadows (§ 7.7 of the units spec).
+/// A mask has no file, and a storage unit's file is a config entry, so
+/// neither is in it. The config tree subtracts each listed path
+/// unconditionally (`render::configtree::service_owned_paths`). Two live toggles over
 /// one carriage decision let an included config entry ship nothing and
 /// an excluded one ship anyway; marking the config entry inventory
 /// leaves exactly one decision and makes that subtraction correct by
@@ -271,8 +275,8 @@ pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
 /// degraded flag: the services inspector returns `Err` when its
 /// collection fails, so a path can appear here only when the entry that
 /// owns it was really collected.
-fn shadow_service_owned_paths(snapshot: &mut InspectionSnapshot) {
-    let Some(services) = snapshot.services.as_ref() else {
+fn shadow_unit_owned_paths(snapshot: &mut InspectionSnapshot) {
+    let Some(services) = snapshot.units.as_ref() else {
         return;
     };
     let owned: std::collections::HashSet<&str> = services
@@ -284,7 +288,7 @@ fn shadow_service_owned_paths(snapshot: &mut InspectionSnapshot) {
     if owned.is_empty() {
         return;
     }
-    shadow_matching_config_entries(snapshot.config.as_mut(), &owned, ConfigShadow::Services);
+    shadow_matching_config_entries(snapshot.config.as_mut(), &owned, ConfigShadow::Units);
 }
 
 /// Mark every config entry whose path is in `owner_paths` as inventory
@@ -496,7 +500,7 @@ fn route_section(snapshot: &mut InspectionSnapshot, section: SectionData) {
     match section {
         SectionData::Rpm(s) => snapshot.rpm = Some(s),
         SectionData::Config(s) => snapshot.config = Some(s),
-        SectionData::Services(s) => snapshot.services = Some(s),
+        SectionData::Units(s) => snapshot.units = Some(s),
         SectionData::Network(s) => snapshot.network = Some(s),
         SectionData::Storage(s) => snapshot.storage = Some(s),
         SectionData::ScheduledTasks(s) => snapshot.scheduled_tasks = Some(s),
@@ -695,7 +699,7 @@ mod tests {
         assert!(pipeline.state.snapshot.rpm.is_some());
         // Other sections remain None (no inspectors for them)
         assert!(pipeline.state.snapshot.config.is_none());
-        assert!(pipeline.state.snapshot.services.is_none());
+        assert!(pipeline.state.snapshot.units.is_none());
         assert!(pipeline.state.snapshot.network.is_none());
         assert!(pipeline.state.snapshot.storage.is_none());
     }
@@ -949,7 +953,7 @@ mod tests {
     struct HintingInspector;
     impl Inspector for HintingInspector {
         fn id(&self) -> InspectorId {
-            InspectorId::Services
+            InspectorId::Units
         }
         fn applicable_to(&self) -> &[SourceSystemKind] {
             &[SourceSystemKind::PackageBased]
@@ -960,7 +964,7 @@ mod tests {
             _progress: &dyn ProgressSink,
         ) -> Result<InspectorOutput, InspectorError> {
             Ok(InspectorOutput {
-                section: SectionData::Services(Default::default()),
+                section: SectionData::Units(Default::default()),
                 warnings: vec![],
                 redaction_hints: vec![RedactionHint {
                     path: "/etc/systemd/system/app.service.d/env.conf".into(),
@@ -1071,7 +1075,7 @@ mod tests {
         assert!(!is_wave2(InspectorId::Subscription));
 
         // All others are wave 2
-        assert!(is_wave2(InspectorId::Services));
+        assert!(is_wave2(InspectorId::Units));
         assert!(is_wave2(InspectorId::Storage));
         assert!(is_wave2(InspectorId::KernelBoot));
         assert!(is_wave2(InspectorId::Network));
@@ -1825,7 +1829,7 @@ mod tests {
 
     #[test]
     fn test_collect_skips_wave2_when_cancelled_between_waves() {
-        use inspectah_collect::inspectors::services::ServicesInspector;
+        use inspectah_collect::inspectors::units::UnitsInspector;
 
         let exec = build_test_mock();
         let source = SourceSystem::PackageBased {
@@ -1836,7 +1840,7 @@ mod tests {
 
         let inspectors: Vec<Box<dyn Inspector>> = vec![
             Box::new(CancellingRpmInspector::new(cancelled.clone())),
-            Box::new(ServicesInspector::new()),
+            Box::new(UnitsInspector::new()),
         ];
         let pipeline = collect(&source, &exec, &inspectors, None, &progress, &cancelled);
 
@@ -1848,7 +1852,7 @@ mod tests {
 
         // Services is wave 2 — should have been skipped due to cancellation
         assert!(
-            pipeline.state.snapshot.services.is_none(),
+            pipeline.state.snapshot.units.is_none(),
             "Services is wave 2 — must be skipped when cancelled between waves"
         );
 
@@ -1859,14 +1863,14 @@ mod tests {
         assert!(
             !events
                 .iter()
-                .any(|e| matches!(e, ProgressEvent::InspectorStarted(InspectorId::Services))),
+                .any(|e| matches!(e, ProgressEvent::InspectorStarted(InspectorId::Units))),
             "Services should not have been started when cancelled between waves"
         );
     }
 
     #[test]
     fn test_collect_no_cancellation_runs_normally() {
-        use inspectah_collect::inspectors::services::ServicesInspector;
+        use inspectah_collect::inspectors::units::UnitsInspector;
 
         let exec = build_test_mock();
         let source = SourceSystem::PackageBased {
@@ -1877,7 +1881,7 @@ mod tests {
 
         let inspectors: Vec<Box<dyn Inspector>> = vec![
             Box::new(RpmInspector::new()),
-            Box::new(ServicesInspector::new()),
+            Box::new(UnitsInspector::new()),
         ];
         let pipeline = collect(&source, &exec, &inspectors, None, &progress, &cancelled);
 
@@ -1908,7 +1912,7 @@ mod finalize_tests {
     use inspectah_core::types::AdvisoryType;
     use inspectah_core::types::config::ConfigFileEntry;
     use inspectah_core::types::finding::ShadowType;
-    use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+    use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 
     fn only_entry(snap: &InspectionSnapshot) -> &ConfigFileEntry {
         &snap.config.as_ref().expect("config section").files[0]
@@ -1919,7 +1923,7 @@ mod finalize_tests {
     /// A service-owned config path with the given disposition.
     fn service_owned_snapshot(disposition: FindingKind) -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "httpd.service".into(),
                 path: DROP_IN.into(),
@@ -1942,7 +1946,7 @@ mod finalize_tests {
         let mut snap = service_owned_snapshot(FindingKind::included());
         finalize_cross_inspector(&mut snap);
         let entry = only_entry(&snap);
-        assert_eq!(entry.shadowed_by, Some(ConfigShadow::Services));
+        assert_eq!(entry.shadowed_by, Some(ConfigShadow::Units));
         assert!(entry.disposition.is_inventory());
     }
 
@@ -1969,14 +1973,14 @@ mod finalize_tests {
         );
     }
 
-    /// `services.drop_ins` holds full unit shadows as well as
+    /// `units.drop_ins` holds full unit shadows as well as
     /// `*.service.d/*.conf`, which is why the variant is named for the
     /// owning set rather than for the field.
     #[test]
     fn a_full_unit_shadow_is_service_owned_too() {
         const FULL_SHADOW: &str = "/etc/systemd/system/custom.service";
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "custom.service".into(),
                 path: FULL_SHADOW.into(),
@@ -1995,7 +1999,42 @@ mod finalize_tests {
 
         finalize_cross_inspector(&mut snap);
 
-        assert_eq!(only_entry(&snap).shadowed_by, Some(ConfigShadow::Services));
+        assert_eq!(only_entry(&snap).shadowed_by, Some(ConfigShadow::Units));
+    }
+
+    /// The pass follows the drop-in list, not a unit kind: a drop-in of a
+    /// socket, of a `.device`, and under a name that does not parse each
+    /// shadows the config entry at its path.
+    #[test]
+    fn a_drop_in_of_any_kind_shadows_its_config_entry() {
+        for unit in ["cockpit.socket", "dev-sda.device", "foo.servic"] {
+            let path = format!("/etc/systemd/system/{unit}.d/override.conf");
+            let mut snap = InspectionSnapshot::new();
+            snap.units = Some(UnitSection {
+                drop_ins: vec![SystemdDropIn {
+                    unit: unit.into(),
+                    path: path.clone(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            snap.config = Some(ConfigSection {
+                files: vec![ConfigFileEntry {
+                    path,
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+            });
+
+            finalize_cross_inspector(&mut snap);
+
+            assert_eq!(
+                only_entry(&snap).shadowed_by,
+                Some(ConfigShadow::Units),
+                "{unit}"
+            );
+            assert!(only_entry(&snap).disposition.is_inventory(), "{unit}");
+        }
     }
 
     /// An empty `path` is not a match for every config entry that also
@@ -2004,7 +2043,7 @@ mod finalize_tests {
     #[test]
     fn an_empty_drop_in_path_shadows_nothing() {
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn::default()],
             ..Default::default()
         });

@@ -12,6 +12,7 @@ use inspectah_pipeline::build::extract::{
     is_single_normal_component,
 };
 use inspectah_pipeline::export_warning::{ExportWarning, sanitize_bounded};
+use inspectah_pipeline::render::configtree::unmanaged_withheld;
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
@@ -20,7 +21,7 @@ use inspectah_pipeline::render::repoless::{PackageRoute, route_for};
 
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
-use crate::classify::{classify_configs, classify_packages, synthesize_orphan_shadows};
+use crate::classify::{classify_configs, classify_packages};
 use crate::group_state::{self, GroupEvalContext, derive_group_state};
 use crate::normalize::{
     normalize_config_defaults, normalize_inspectah_repo_files, normalize_language_env_defaults,
@@ -307,18 +308,23 @@ fn is_item_locked(snapshot: &InspectionSnapshot, item_id: &ItemId) -> bool {
             .and_then(|c| c.files.iter().find(|e| e.path == *path))
             .map(|e| e.locked)
             .unwrap_or(false),
-        ItemId::Service { unit } => snapshot
-            .services
+        ItemId::Unit { unit } => snapshot
+            .units
             .as_ref()
-            .and_then(|s| s.state_changes.iter().find(|sc| sc.unit == *unit))
+            .and_then(|s| s.state_changes.iter().find(|sc| sc.unit().name() == unit))
             .map(|sc| sc.locked)
             .unwrap_or(false),
         ItemId::DropIn { path } => snapshot
-            .services
+            .units
             .as_ref()
             .and_then(|s| s.drop_ins.iter().find(|d| d.path == *path))
             .map(|d| d.locked)
             .unwrap_or(false),
+        ItemId::DefaultTarget => snapshot
+            .units
+            .as_ref()
+            .and_then(|s| s.default_target.as_ref())
+            .is_some_and(|t| t.locked),
         ItemId::Quadlet { path } => snapshot
             .containers
             .as_ref()
@@ -349,8 +355,41 @@ fn is_item_locked(snapshot: &InspectionSnapshot, item_id: &ItemId) -> bool {
             })
             .map(|e| e.locked)
             .unwrap_or(false),
+        ItemId::CronJob { path } => snapshot
+            .scheduled_tasks
+            .as_ref()
+            .and_then(|st| st.cron_jobs.iter().find(|c| c.path == *path))
+            .map(|c| c.locked)
+            .unwrap_or(false),
+        ItemId::GeneratedTimer { name } => snapshot.scheduled_tasks.as_ref().is_some_and(|st| {
+            st.generated_timer_units
+                .iter()
+                .any(|u| u.name == *name && u.locked)
+        }),
         // Item kinds without locked field or not yet handled: not lockable
         _ => false,
+    }
+}
+
+/// § 8: a generated unit is carried only with the cron job it was
+/// generated from. Every generated unit whose cron-job row is excluded is
+/// excluded too, whatever its own row says, so the cron-job row and the
+/// generated-timer row can never disagree in an export. Applied to every
+/// projected snapshot, after the operations.
+fn exclude_units_of_excluded_cron_jobs(snapshot: &mut InspectionSnapshot) {
+    let Some(sched) = snapshot.scheduled_tasks.as_mut() else {
+        return;
+    };
+    let excluded: Vec<&str> = sched
+        .cron_jobs
+        .iter()
+        .filter(|c| !c.disposition.is_included())
+        .map(|c| c.path.as_str())
+        .collect();
+    for unit in &mut sched.generated_timer_units {
+        if excluded.iter().any(|path| unit.generated_from(path)) {
+            unit.disposition = FindingKind::excluded();
+        }
     }
 }
 
@@ -390,7 +429,7 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
             }
         }
     }
-    if let Some(ref mut services) = snapshot.services {
+    if let Some(ref mut services) = snapshot.units {
         for sc in &mut services.state_changes {
             if sc.locked {
                 sc.disposition = FindingKind::excluded();
@@ -456,11 +495,6 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
                 cj.disposition = FindingKind::excluded();
             }
         }
-        for st in &mut sched.systemd_timers {
-            if st.locked {
-                st.disposition = FindingKind::excluded();
-            }
-        }
         for aj in &mut sched.at_jobs {
             if aj.locked {
                 aj.disposition = FindingKind::excluded();
@@ -514,12 +548,6 @@ impl RefineSession {
         normalize_inspectah_repo_files(&mut snapshot);
         normalize_language_env_defaults(&mut snapshot);
 
-        // Synthesize orphan full-shadow service entries so they are real
-        // toggle targets throughout the session lifecycle.
-        if let Some(services) = snapshot.services.as_mut() {
-            synthesize_orphan_shadows(services);
-        }
-
         // Detect aggregate mode from snapshot metadata.
         let refine_mode = if let Some(ref aggregate_meta) = snapshot.aggregate_meta {
             let zones_active = aggregate_meta.host_count >= 3;
@@ -568,7 +596,7 @@ impl RefineSession {
             }
 
             // Zone classification for drop-ins (services section).
-            if let Some(ref svc) = snapshot.services {
+            if let Some(ref svc) = snapshot.units {
                 let mut dropin_sum: HashMap<&str, (i32, i32)> = HashMap::new();
                 for entry in &svc.drop_ins {
                     if let Some(ref prevalence) = entry.aggregate {
@@ -1735,8 +1763,7 @@ impl RefineSession {
             }
 
             // Drop-in variants
-            if let (Some(orig_svc), Some(proj_svc)) = (&self.original.services, &projected.services)
-            {
+            if let (Some(orig_svc), Some(proj_svc)) = (&self.original.units, &projected.units) {
                 for orig_entry in &orig_svc.drop_ins {
                     if let Some(proj_entry) = proj_svc.drop_ins.iter().find(|e| {
                         e.path == orig_entry.path
@@ -1885,7 +1912,7 @@ impl RefineSession {
     const VALID_SECTIONS: &'static [&'static str] = &[
         "packages",
         "configs",
-        "services",
+        "units",
         "containers",
         "users_groups",
         "network",
@@ -2012,6 +2039,68 @@ impl RefineSession {
 
     // --- Private helpers ---
 
+    /// `SetInclude` on a generated-timer row (§ 8): the name must be a
+    /// generated unit's, and an inclusion is refused while a cron job the
+    /// unit was generated from is excluded, since that row excludes it.
+    fn validate_generated_timer(&self, name: &str, include: bool) -> Result<(), RefineError> {
+        let found = self
+            .original
+            .scheduled_tasks
+            .as_ref()
+            .is_some_and(|st| st.generated_timer_units.iter().any(|u| u.name == name));
+        if !found {
+            return Err(RefineError::UnknownTarget(name.to_owned()));
+        }
+        if !include {
+            return Ok(());
+        }
+        let projected = self.project_snapshot();
+        let Some(sched) = projected.scheduled_tasks.as_ref() else {
+            return Ok(());
+        };
+        let excluded_source = sched
+            .generated_timer_units
+            .iter()
+            .filter(|u| u.name == name)
+            .find_map(|u| {
+                sched
+                    .cron_jobs
+                    .iter()
+                    .find(|c| !c.disposition.is_included() && u.generated_from(&c.path))
+            });
+        match excluded_source {
+            Some(cron) => Err(RefineError::BadRequest(format!(
+                "cannot include generated timer '{name}': the cron job '{}' it is generated \
+                 from is excluded; include the cron job",
+                cron.path
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// `SetInclude` on a cron-job row (§ 8): the path must be a cron job's,
+    /// and the cron job must generate a unit, which is what its operation
+    /// carries or drops. One that generates none is refused by name.
+    fn validate_cron_job(&self, path: &str) -> Result<(), RefineError> {
+        let Some(sched) = self.original.scheduled_tasks.as_ref() else {
+            return Err(RefineError::UnknownTarget(path.to_owned()));
+        };
+        if !sched.cron_jobs.iter().any(|c| c.path == path) {
+            return Err(RefineError::UnknownTarget(path.to_owned()));
+        }
+        if !sched
+            .generated_timer_units
+            .iter()
+            .any(|u| u.generated_from(path))
+        {
+            return Err(RefineError::NoopTarget(format!(
+                "cron job '{path}' generates no unit, so the export carries nothing from it \
+                 to include or exclude"
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_target(&self, op: &RefinementOp) -> Result<(), RefineError> {
         match op {
             RefinementOp::SetInclude { item_id, include } => {
@@ -2073,21 +2162,35 @@ impl RefineSession {
                             )));
                         }
                     }
-                    ItemId::Service { unit } => {
+                    ItemId::Unit { unit } => {
                         let found = self
                             .original
-                            .services
+                            .units
                             .as_ref()
-                            .map(|s| s.state_changes.iter().any(|sc| sc.unit == *unit))
+                            .map(|s| s.state_changes.iter().any(|sc| sc.unit().name() == unit))
                             .unwrap_or(false);
                         if !found {
-                            return Err(RefineError::UnknownTarget(unit.clone()));
+                            return Err(RefineError::UnknownTarget(unit.as_str().to_owned()));
+                        }
+                    }
+                    // The snapshot records at most one default target, so
+                    // the item names none: the check is that there is one.
+                    ItemId::DefaultTarget => {
+                        let found = self
+                            .original
+                            .units
+                            .as_ref()
+                            .is_some_and(|s| s.default_target.is_some());
+                        if !found {
+                            return Err(RefineError::UnknownTarget(
+                                "default target (the snapshot records none)".into(),
+                            ));
                         }
                     }
                     ItemId::DropIn { path } => {
                         let found = self
                             .original
-                            .services
+                            .units
                             .as_ref()
                             .map(|s| s.drop_ins.iter().any(|d| d.path == *path))
                             .unwrap_or(false);
@@ -2104,7 +2207,7 @@ impl RefineSession {
                         // absence from `state_changes`. The services inspector
                         // records a row only for a unit whose enable state
                         // diverges from its preset; a unit at its preset state
-                        // lands in `preset_matched_units` and has no row at
+                        // is a preset-matched `inventory` entry and has no row at
                         // all. Absence means "the operator took no decision
                         // here", not "excluded" -- reading it as exclusion made
                         // the common case (a drop-in over a preset-state unit)
@@ -2115,12 +2218,12 @@ impl RefineSession {
                         // the host had it.
                         if *include {
                             let projected = self.project_snapshot();
-                            if let Some(ref svc_section) = projected.services
+                            if let Some(ref svc_section) = projected.units
                                 && let Some(dropin) =
                                     svc_section.drop_ins.iter().find(|d| d.path == *path)
                             {
                                 let parent_excluded = svc_section.state_changes.iter().any(|s| {
-                                    s.unit == dropin.unit
+                                    s.unit().name().as_str() == dropin.unit
                                         && matches!(
                                             s.disposition,
                                             FindingKind::Actionable { include: false }
@@ -2187,12 +2290,30 @@ impl RefineSession {
                             item_id
                         )));
                     }
+                    ItemId::GeneratedTimer { name } => {
+                        self.validate_generated_timer(name, *include)?
+                    }
+                    ItemId::CronJob { path } => self.validate_cron_job(path)?,
+                    ItemId::AtJob { file } => {
+                        let found = self
+                            .original
+                            .scheduled_tasks
+                            .as_ref()
+                            .is_some_and(|st| st.at_jobs.iter().any(|a| a.file == *file));
+                        if !found {
+                            return Err(RefineError::UnknownTarget(file.clone()));
+                        }
+                        // § 8: an at job is never carried, so an operation on
+                        // it could change nothing. Refused rather than
+                        // accepted and dropped.
+                        return Err(RefineError::BadRequest(format!(
+                            "at job '{file}' is not carried into the image: the Containerfile \
+                             lists it in a FIXME to convert by hand, so it has nothing to \
+                             include or exclude"
+                        )));
+                    }
                     // Phase 2-3 item kinds: not yet handled, accept without validation
                     ItemId::Compose { .. }
-                    | ItemId::CronJob { .. }
-                    | ItemId::SystemdTimer { .. }
-                    | ItemId::AtJob { .. }
-                    | ItemId::GeneratedTimer { .. }
                     | ItemId::SelinuxPort { .. }
                     | ItemId::Fstab { .. }
                     | ItemId::NonRpm { .. }
@@ -2251,7 +2372,7 @@ impl RefineSession {
                     ItemId::DropIn { path } => {
                         let found = self
                             .original
-                            .services
+                            .units
                             .as_ref()
                             .map(|s| s.drop_ins.iter().any(|e| e.path == *path))
                             .unwrap_or(false);
@@ -2397,7 +2518,7 @@ impl RefineSession {
                 .unwrap_or(false),
             ItemId::DropIn { path } => self
                 .original
-                .services
+                .units
                 .as_ref()
                 .map(|s| {
                     s.drop_ins.iter().any(|e| {
@@ -2804,24 +2925,37 @@ impl RefineSession {
                                     }
                                 }
                             }
-                            ItemId::Service { unit } => {
-                                if let Some(ref mut services) = snap.services {
-                                    if let Some(svc) =
-                                        services.state_changes.iter_mut().find(|s| s.unit == *unit)
+                            ItemId::Unit { unit } => {
+                                if let Some(ref mut services) = snap.units {
+                                    if let Some(svc) = services
+                                        .state_changes
+                                        .iter_mut()
+                                        .find(|s| s.unit().name() == unit)
                                     {
                                         svc.disposition = FindingKind::from_bool(*include);
                                     }
-                                    // Symmetric cascade: toggling a service cascades
+                                    // Symmetric cascade: toggling a unit cascades
                                     // to all drop-ins for that unit.
-                                    for dropin in
-                                        services.drop_ins.iter_mut().filter(|d| d.unit == *unit)
+                                    for dropin in services
+                                        .drop_ins
+                                        .iter_mut()
+                                        .filter(|d| d.unit == unit.as_str())
                                     {
                                         dropin.disposition = FindingKind::from_bool(*include);
                                     }
                                 }
                             }
+                            ItemId::DefaultTarget => {
+                                if let Some(target) = snap
+                                    .units
+                                    .as_mut()
+                                    .and_then(|units| units.default_target.as_mut())
+                                {
+                                    target.disposition = FindingKind::from_bool(*include);
+                                }
+                            }
                             ItemId::DropIn { path } => {
-                                if let Some(ref mut services) = snap.services
+                                if let Some(ref mut services) = snap.units
                                     && let Some(dropin) =
                                         services.drop_ins.iter_mut().find(|d| d.path == *path)
                                 {
@@ -2879,6 +3013,36 @@ impl RefineSession {
                                             }
                                             pkg.disposition = FindingKind::from_bool(*include);
                                         }
+                                    }
+                                }
+                            }
+                            // § 8: the cron job's units go and come back with
+                            // it. A locked unit stays excluded.
+                            ItemId::CronJob { path } => {
+                                if let Some(ref mut sched) = snap.scheduled_tasks {
+                                    if let Some(cron) =
+                                        sched.cron_jobs.iter_mut().find(|c| c.path == *path)
+                                    {
+                                        cron.disposition = FindingKind::from_bool(*include);
+                                    }
+                                    for unit in sched
+                                        .generated_timer_units
+                                        .iter_mut()
+                                        .filter(|u| u.generated_from(path))
+                                        .filter(|u| !(*include && u.locked))
+                                    {
+                                        unit.disposition = FindingKind::from_bool(*include);
+                                    }
+                                }
+                            }
+                            ItemId::GeneratedTimer { name } => {
+                                if let Some(ref mut sched) = snap.scheduled_tasks {
+                                    for unit in sched
+                                        .generated_timer_units
+                                        .iter_mut()
+                                        .filter(|u| u.name == *name)
+                                    {
+                                        unit.disposition = FindingKind::from_bool(*include);
                                     }
                                 }
                             }
@@ -3089,6 +3253,7 @@ impl RefineSession {
         // of op-stack state. Ensures renderers and exporters never see a
         // locked item with include=true.
         clamp_locked_items(&mut snap);
+        exclude_units_of_excluded_cron_jobs(&mut snap);
 
         // § 3.3: a repo-enabling package whose serving repo definition
         // this export no longer carries is demoted to the repo-less
@@ -3655,7 +3820,7 @@ fn write_aggregate_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(),
     }
 
     // Drop-in alternatives
-    if let Some(ref svc) = snap.services {
+    if let Some(ref svc) = snap.units {
         for dropin in &svc.drop_ins {
             if dropin.variant_selection == VariantSelection::Alternative {
                 let hash = format!("{:x}", Sha256::digest(dropin.content.as_bytes()));
@@ -3746,7 +3911,7 @@ fn extract_payload_dirs_with_budget(
         .map(|s| {
             s.items
                 .iter()
-                .filter(|f| f.disposition.is_included())
+                .filter(|f| f.disposition.is_included() && unmanaged_withheld(&f.path).is_none())
                 .map(|f| f.path.trim_start_matches('/').to_string())
                 .collect()
         })
@@ -3824,7 +3989,9 @@ fn extract_payload_dirs_with_budget(
                     sanitize_path_for_log(&path_str)
                 ))
             })?;
-            if !included_unmanaged.contains(file_rel) {
+            // The render's decision, asked of the entry's own path too, so
+            // no spelling of a withheld path is extracted.
+            if !included_unmanaged.contains(file_rel) || unmanaged_withheld(file_rel).is_some() {
                 continue;
             }
             // An unmanaged file legitimately can be a symlink; a hardlink
@@ -4566,10 +4733,29 @@ fn sanitize_path_for_log(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use crate::types::UserPasswordOp;
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
     use inspectah_core::types::users::UserGroupSection;
+
+    fn unit_name(unit: &str) -> inspectah_core::types::units::UnitName {
+        inspectah_core::types::units::UnitName::try_from(unit.to_string())
+            .expect("test unit names are valid")
+    }
 
     /// Build a minimal snapshot suitable for RefineSession tests.
     fn test_snapshot() -> InspectionSnapshot {
@@ -5186,8 +5372,8 @@ mod tests {
 
     // --- Service refinement tests ---
 
-    use inspectah_core::types::services::{
-        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+    use inspectah_core::types::units::{
+        PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
     };
 
     /// Build a snapshot with services and drop-ins for SetInclude tests.
@@ -5195,35 +5381,45 @@ mod tests {
         InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection::default()),
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: vec![
-                    ServiceStateChange {
-                        unit: "httpd.service".into(),
-                        current_state: ServiceUnitState::Enabled,
-                        default_state: Some(PresetDefault::Disable),
-                        disposition: FindingKind::included(),
-                        locked: false,
-                        owning_package: Some("httpd".into()),
-                        aggregate: None,
-                        attention_reason: None,
-                        shadow_type: None,
-                        shadow_rationale: None,
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "httpd.service".to_owned().try_into().unwrap(),
+                            Some("httpd".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "sshd.service".to_owned().try_into().unwrap(),
+                            Some("openssh-server".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Enable),
+                    )
+                    .unwrap(),
+                ],
+                inventory: vec![
+                    UnitInventoryEntry {
+                        unit: "httpd.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
                     },
-                    ServiceStateChange {
-                        unit: "sshd.service".into(),
-                        current_state: ServiceUnitState::Enabled,
-                        default_state: Some(PresetDefault::Enable),
-                        disposition: FindingKind::included(),
-                        locked: false,
-                        owning_package: Some("openssh-server".into()),
-                        aggregate: None,
-                        attention_reason: None,
-                        shadow_type: None,
-                        shadow_rationale: None,
+                    UnitInventoryEntry {
+                        unit: "sshd.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
                     },
                 ],
-                enabled_units: vec!["httpd.service".into(), "sshd.service".into()],
-                disabled_units: vec![],
                 drop_ins: vec![
                     SystemdDropIn {
                         unit: "httpd.service".into(),
@@ -5242,7 +5438,10 @@ mod tests {
                         ..Default::default()
                     },
                 ],
-                preset_matched_units: vec![],
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         }
@@ -5255,21 +5454,21 @@ mod tests {
 
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: false,
             })
             .unwrap();
 
         let projected = session.snapshot_projected();
-        let svc = projected.services.as_ref().unwrap();
+        let svc = projected.units.as_ref().unwrap();
 
         // Service itself must be excluded.
         let httpd = svc
             .state_changes
             .iter()
-            .find(|s| s.unit == "httpd.service")
+            .find(|s| s.unit().name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             !httpd.disposition.is_included(),
@@ -5289,7 +5488,7 @@ mod tests {
         let sshd = svc
             .state_changes
             .iter()
-            .find(|s| s.unit == "sshd.service")
+            .find(|s| s.unit().name().as_str() == "sshd.service")
             .unwrap();
         assert!(
             sshd.disposition.is_included(),
@@ -5305,8 +5504,8 @@ mod tests {
         // Exclude first.
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: false,
             })
@@ -5315,20 +5514,20 @@ mod tests {
         // Re-include.
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: true,
             })
             .unwrap();
 
         let projected = session.snapshot_projected();
-        let svc = projected.services.as_ref().unwrap();
+        let svc = projected.units.as_ref().unwrap();
 
         let httpd = svc
             .state_changes
             .iter()
-            .find(|s| s.unit == "httpd.service")
+            .find(|s| s.unit().name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             httpd.disposition.is_included(),
@@ -5359,13 +5558,13 @@ mod tests {
             .unwrap();
 
         let projected = session.snapshot_projected();
-        let svc = projected.services.as_ref().unwrap();
+        let svc = projected.units.as_ref().unwrap();
 
         // Parent service stays included.
         let httpd = svc
             .state_changes
             .iter()
-            .find(|s| s.unit == "httpd.service")
+            .find(|s| s.unit().name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             httpd.disposition.is_included(),
@@ -5402,8 +5601,8 @@ mod tests {
         // Exclude the parent service (cascades to drop-ins).
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: false,
             })
@@ -5434,8 +5633,8 @@ mod tests {
         let mut session = RefineSession::new(snap);
 
         let result = session.apply(RefinementOp::SetInclude {
-            item_id: ItemId::Service {
-                unit: "nonexistent.service".into(),
+            item_id: ItemId::Unit {
+                unit: unit_name("nonexistent.service"),
             },
             include: false,
         });
@@ -5711,12 +5910,12 @@ mod tests {
     fn export_includes_promoted_roots() {
         use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
         use inspectah_core::types::kernelboot::KernelBootSection;
-        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+        use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 
         let mut snap = test_snapshot();
 
         // Service drop-in → drop-ins/ root
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "httpd.service".into(),
                 path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
@@ -5850,30 +6049,38 @@ mod tests {
 
     #[test]
     fn session_exposes_decisions_and_reference() {
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        use inspectah_core::types::units::{
+            PresetDefault, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
         };
 
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection::default()),
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: Some("httpd".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
+            units: Some(UnitSection {
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "httpd.service".to_owned().try_into().unwrap(),
+                            Some("httpd".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
+                inventory: vec![UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
                 }],
-                enabled_units: vec!["httpd.service".into()],
-                disabled_units: vec![],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -5881,8 +6088,8 @@ mod tests {
 
         // decisions() should return without panic and contain the service
         let dec = session.decisions();
-        assert_eq!(dec.service_states.len(), 1);
-        assert_eq!(dec.service_states[0].entry.unit, "httpd.service");
+        assert_eq!(dec.unit_states.len(), 1);
+        assert_eq!(dec.unit_states[0].unit.as_str(), "httpd.service");
 
         // reference() should return without panic
         let _ref_proj = session.reference();
@@ -5892,8 +6099,8 @@ mod tests {
     fn decisions_invalidated_on_mutation() {
         use inspectah_core::types::rpm::VersionChange;
         use inspectah_core::types::rpm::VersionChangeDirection;
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        use inspectah_core::types::units::{
+            PresetDefault, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
         };
 
         let snap = InspectionSnapshot {
@@ -5932,23 +6139,33 @@ mod tests {
                 ],
                 ..Default::default()
             }),
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::excluded(),
-                    locked: false,
-                    owning_package: Some("httpd".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
+            units: Some(UnitSection {
+                state_changes: vec![{
+                    let mut change = UnitStateChange::new(
+                        test_carried_unit(
+                            "httpd.service".to_owned().try_into().unwrap(),
+                            Some("httpd".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap();
+                    change.disposition = FindingKind::excluded();
+                    change
                 }],
-                enabled_units: vec!["httpd.service".into()],
-                disabled_units: vec![],
+                inventory: vec![UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                }],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -5960,17 +6177,17 @@ mod tests {
         // httpd.service starts with include=false
         assert!(
             dec_before
-                .service_states
+                .unit_states
                 .iter()
-                .any(|s| s.entry.unit == "httpd.service" && !s.entry.disposition.is_included()),
+                .any(|s| s.unit.as_str() == "httpd.service" && !s.include),
             "httpd.service should start excluded"
         );
 
         // Mutate: flip httpd.service include false -> true
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: true,
             })
@@ -5980,9 +6197,9 @@ mod tests {
         let dec_after = session.decisions();
         assert!(
             dec_after
-                .service_states
+                .unit_states
                 .iter()
-                .any(|s| s.entry.unit == "httpd.service" && s.entry.disposition.is_included()),
+                .any(|s| s.unit.as_str() == "httpd.service" && s.include),
             "httpd.service should now be included"
         );
 
@@ -6014,7 +6231,7 @@ mod tests {
     fn set_include_on_locked_item_is_rejected() {
         let mut snap = test_snapshot_with_services();
         // Lock httpd.service to simulate a semantic exclusion
-        let services = snap.services.as_mut().unwrap();
+        let services = snap.units.as_mut().unwrap();
         services.state_changes[0].disposition = FindingKind::excluded();
         services.state_changes[0].locked = true;
 
@@ -6022,8 +6239,8 @@ mod tests {
 
         // Attempting to re-include a locked service must be a silent no-op
         let result = session.apply(RefinementOp::SetInclude {
-            item_id: ItemId::Service {
-                unit: "httpd.service".into(),
+            item_id: ItemId::Unit {
+                unit: unit_name("httpd.service"),
             },
             include: true,
         });
@@ -6031,11 +6248,11 @@ mod tests {
 
         // The service must remain excluded
         let projected = session.snapshot_projected();
-        let svc = projected.services.as_ref().unwrap();
+        let svc = projected.units.as_ref().unwrap();
         let httpd = svc
             .state_changes
             .iter()
-            .find(|s| s.unit == "httpd.service")
+            .find(|s| s.unit().name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             !httpd.disposition.is_included(),
@@ -6052,7 +6269,7 @@ mod tests {
     #[test]
     fn recompute_view_skips_locked_set_include_ops() {
         let mut snap = test_snapshot_with_services();
-        let services = snap.services.as_mut().unwrap();
+        let services = snap.units.as_mut().unwrap();
         // Start unlocked and excluded
         services.state_changes[0].disposition = FindingKind::excluded();
         services.state_changes[0].locked = false;
@@ -6062,8 +6279,8 @@ mod tests {
         // Apply a valid include op while unlocked
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: true,
             })
@@ -6074,12 +6291,12 @@ mod tests {
         let projected = session.snapshot_projected();
         assert!(
             projected
-                .services
+                .units
                 .as_ref()
                 .unwrap()
                 .state_changes
                 .iter()
-                .find(|s| s.unit == "httpd.service")
+                .find(|s| s.unit().name().as_str() == "httpd.service")
                 .unwrap()
                 .disposition
                 .is_included(),
@@ -6091,8 +6308,8 @@ mod tests {
         // We do this by directly locking the original snapshot's item and
         // forcing a recompute. This models resume_from() with a snapshot
         // where the normalize layer now locks this item.
-        session.original.services.as_mut().unwrap().state_changes[0].locked = true;
-        session.original.services.as_mut().unwrap().state_changes[0].disposition =
+        session.original.units.as_mut().unwrap().state_changes[0].locked = true;
+        session.original.units.as_mut().unwrap().state_changes[0].disposition =
             FindingKind::excluded();
         session.cached_view = None;
         session.cached_decisions = None;
@@ -6101,12 +6318,12 @@ mod tests {
         // The stale SetInclude(true) op must be skipped during replay
         let projected = session.snapshot_projected();
         let httpd = projected
-            .services
+            .units
             .as_ref()
             .unwrap()
             .state_changes
             .iter()
-            .find(|s| s.unit == "httpd.service")
+            .find(|s| s.unit().name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             !httpd.disposition.is_included(),
@@ -6119,7 +6336,7 @@ mod tests {
         // Verify clamp_locked_items forces include=false on locked items
         // even if the working snapshot somehow has include=true.
         let mut snap = test_snapshot_with_services();
-        let services = snap.services.as_mut().unwrap();
+        let services = snap.units.as_mut().unwrap();
         // Simulate a locked item that somehow has include=true
         services.state_changes[0].disposition = FindingKind::included();
         services.state_changes[0].locked = true;
@@ -6127,12 +6344,12 @@ mod tests {
         clamp_locked_items(&mut snap);
 
         let httpd = snap
-            .services
+            .units
             .as_ref()
             .unwrap()
             .state_changes
             .iter()
-            .find(|s| s.unit == "httpd.service")
+            .find(|s| s.unit().name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             !httpd.disposition.is_included(),
@@ -6141,12 +6358,12 @@ mod tests {
 
         // Verify unlocked items are not affected
         let sshd = snap
-            .services
+            .units
             .as_ref()
             .unwrap()
             .state_changes
             .iter()
-            .find(|s| s.unit == "sshd.service")
+            .find(|s| s.unit().name().as_str() == "sshd.service")
             .unwrap();
         assert!(
             sshd.disposition.is_included(),
@@ -6347,7 +6564,7 @@ mod tests {
         // platform plumbing and set include=false, locked=true. Then
         // SetInclude(true) must be a silent no-op.
         use inspectah_core::types::config::ConfigSection;
-        use inspectah_core::types::services::ServiceSection;
+        use inspectah_core::types::units::UnitSection;
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
@@ -6362,12 +6579,14 @@ mod tests {
                 }],
                 ..Default::default()
             }),
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: vec![],
-                enabled_units: vec![],
-                disabled_units: vec![],
+                inventory: vec![],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             config: Some(ConfigSection { files: vec![] }),
             ..Default::default()
@@ -7357,8 +7576,8 @@ mod tests {
     fn view_hides_platform_plumbing_packages() {
         use inspectah_core::types::config::ConfigSection;
         use inspectah_core::types::rpm::FileOwnershipEntry;
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        use inspectah_core::types::units::{
+            PresetDefault, UnitSection, UnitState, UnitStateChange,
         };
 
         let mut snap = test_snapshot();
@@ -7402,19 +7621,18 @@ mod tests {
         }];
 
         // Provide services + config evidence so anaconda classifier runs
-        snap.services = Some(ServiceSection {
-            state_changes: vec![ServiceStateChange {
-                unit: "sshd.service".into(),
-                current_state: ServiceUnitState::Enabled,
-                default_state: Some(PresetDefault::Enable),
-                disposition: FindingKind::included(),
-                locked: false,
-                owning_package: Some("openssh-server".into()),
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
-            }],
+        snap.units = Some(UnitSection {
+            state_changes: vec![
+                UnitStateChange::new(
+                    test_carried_unit(
+                        "sshd.service".to_owned().try_into().unwrap(),
+                        Some("openssh-server".into()),
+                    ),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+            ],
             ..Default::default()
         });
         snap.config = Some(ConfigSection { files: vec![] });
@@ -7453,8 +7671,8 @@ mod tests {
     fn view_plumbing_filter_updates_package_count() {
         use inspectah_core::types::config::ConfigSection;
         use inspectah_core::types::rpm::FileOwnershipEntry;
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        use inspectah_core::types::units::{
+            PresetDefault, UnitSection, UnitState, UnitStateChange,
         };
 
         let mut snap = test_snapshot();
@@ -7487,19 +7705,18 @@ mod tests {
             paths: vec!["/etc/dummy".into()],
         }];
 
-        snap.services = Some(ServiceSection {
-            state_changes: vec![ServiceStateChange {
-                unit: "sshd.service".into(),
-                current_state: ServiceUnitState::Enabled,
-                default_state: Some(PresetDefault::Enable),
-                disposition: FindingKind::included(),
-                locked: false,
-                owning_package: Some("openssh-server".into()),
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
-            }],
+        snap.units = Some(UnitSection {
+            state_changes: vec![
+                UnitStateChange::new(
+                    test_carried_unit(
+                        "sshd.service".to_owned().try_into().unwrap(),
+                        Some("openssh-server".into()),
+                    ),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+            ],
             ..Default::default()
         });
         snap.config = Some(ConfigSection { files: vec![] });
@@ -7524,8 +7741,8 @@ mod tests {
     fn user_can_exclude_anaconda_tier4_package() {
         use inspectah_core::types::config::ConfigSection;
         use inspectah_core::types::rpm::FileOwnershipEntry;
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+        use inspectah_core::types::units::{
+            PresetDefault, UnitSection, UnitState, UnitStateChange,
         };
 
         let mut snap = InspectionSnapshot {
@@ -7546,19 +7763,18 @@ mod tests {
             }),
             ..Default::default()
         };
-        snap.services = Some(ServiceSection {
-            state_changes: vec![ServiceStateChange {
-                unit: "sshd.service".into(),
-                current_state: ServiceUnitState::Enabled,
-                default_state: Some(PresetDefault::Enable),
-                disposition: FindingKind::included(),
-                locked: false,
-                owning_package: Some("openssh-server".into()),
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
-            }],
+        snap.units = Some(UnitSection {
+            state_changes: vec![
+                UnitStateChange::new(
+                    test_carried_unit(
+                        "sshd.service".to_owned().try_into().unwrap(),
+                        Some("openssh-server".into()),
+                    ),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+            ],
             ..Default::default()
         });
         snap.config = Some(ConfigSection { files: vec![] });

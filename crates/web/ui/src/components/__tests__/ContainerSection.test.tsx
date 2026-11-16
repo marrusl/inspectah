@@ -3,11 +3,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 // Rendered with a real pending guard, as its owner supplies one in the app.
 import { ContainerSectionWithGuard as ContainerSection } from "../../test-utils/withPendingGuard";
-import type {
-  QuadletDecisionDto,
-  FlatpakDecisionDto,
-  ViewResponse,
-} from "../../api/types";
+import type { QuadletDecisionDto, FlatpakDecisionDto } from "../../api/types";
+import { emptyView } from "../../test-utils/emptyView";
 
 // Mock the applyOp client
 vi.mock("../../api/client", () => ({
@@ -30,6 +27,7 @@ function makeQuadlet(
       annotations: [],
     },
     include: true,
+    locked: false,
     ...overrides,
   };
 }
@@ -47,6 +45,7 @@ function makeFlatpak(
       annotations: [],
     },
     include: true,
+    locked: false,
     lifecycle: "first_boot",
     ...overrides,
   };
@@ -105,7 +104,7 @@ describe("ContainerSection", () => {
   });
 
   it("toggle sends correct SetInclude with Quadlet ItemId", async () => {
-    const updatedView = {} as ViewResponse;
+    const updatedView = emptyView();
     mockApplyOp.mockResolvedValueOnce(updatedView);
 
     render(
@@ -135,7 +134,7 @@ describe("ContainerSection", () => {
   });
 
   it("toggle sends correct SetInclude with Flatpak ItemId", async () => {
-    const updatedView = {} as ViewResponse;
+    const updatedView = emptyView();
     mockApplyOp.mockResolvedValueOnce(updatedView);
 
     render(

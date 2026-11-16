@@ -62,7 +62,7 @@ const MOCK_GROUPS: SectionGroupMeta[] = [
     slug: "services-scheduling",
     label: "Services & Scheduling",
     sections: [
-      { id: "services", label: "Services", is_triage: true },
+      { id: "units", label: "Services", is_triage: true },
       { id: "scheduled_tasks", label: "Scheduled Tasks", is_triage: false },
       { id: "containers", label: "Containers", is_triage: true },
     ],
@@ -117,21 +117,31 @@ const MOCK_VIEW_DATA: ViewResponse = {
   generation: 1,
   repo_groups: [],
   version_changes: [],
-  service_states: [
+  unit_states: [
     {
       unit: "sshd.service",
+      kind: "service",
+      fragment: "vendor",
       triage: {
         triage: { mode: "single_host", baseline: null },
         primary_reason: "service_baseline_match",
         annotations: [],
       },
       include: true,
+      locked: false,
       current_state: "enabled",
+      required_config: [],
+      data_paths: [],
     },
   ],
-  service_dropins: [],
+  unit_dropins: [],
+  mount_findings: [],
+  manual_links: [],
+  undetermined_installs: [],
   quadlets: [],
   flatpaks: [],
+  declined_generated: [],
+  generated_timers: [],
   sysctl: { state: "unavailable", reason: "not collected" },
   tuned: [],
   users_groups_decisions: [],
@@ -273,6 +283,7 @@ describe("Sidebar", () => {
         annotations: [],
       },
       include: true,
+      locked: false,
     };
     const { rerender } = render(
       <Sidebar
@@ -342,6 +353,166 @@ describe("Sidebar", () => {
     // Containers count: 0 quadlets + 0 flatpaks = 0
     const zeroBadges = screen.getAllByText("0");
     expect(zeroBadges.length).toBeGreaterThan(0);
+  });
+
+  describe("units section count", () => {
+    const TRIAGE = {
+      triage: { mode: "single_host" as const, baseline: null },
+      primary_reason: "service_baseline_match" as const,
+      annotations: [],
+    };
+
+    function renderUnits(viewData: ViewResponse) {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={viewData}
+          groups={MOCK_GROUPS}
+        />,
+      );
+      return screen.getByRole("link", { name: /^Services / });
+    }
+
+    it("announces an empty units section as cleared", () => {
+      // Control: the same query finds the announcement when nothing is left.
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [],
+        unit_dropins: [],
+      });
+      expect(within(entry).getByLabelText("0 decisions")).toBeInTheDocument();
+      expect(
+        screen.getByText("Services: 0 decisions remaining"),
+      ).toBeInTheDocument();
+    });
+
+    it("counts the default target, the only decision in a target-only view", () => {
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [],
+        unit_dropins: [],
+        default_target: {
+          target: "graphical.target",
+          include: true,
+          locked: false,
+          declined: null,
+        },
+      });
+      expect(within(entry).getByLabelText("1 decisions")).toBeInTheDocument();
+      expect(
+        screen.queryByText("Services: 0 decisions remaining"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("counts no target in the same view without one", () => {
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [],
+        unit_dropins: [],
+      });
+      expect(within(entry).getByLabelText("0 decisions")).toBeInTheDocument();
+    });
+
+    it("counts a full-shadow drop-in when the unit has no state row", () => {
+      // A unit at its preset whose only change is a full shadow has no
+      // state row: its one decision is the drop-in toggle.
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [],
+        unit_dropins: [
+          {
+            unit: "sshd.service",
+            path: "/etc/systemd/system/sshd.service",
+            triage: TRIAGE,
+            include: true,
+            locked: false,
+            shadow_type: "full_shadow",
+            shadow_rationale: null,
+          },
+        ],
+      });
+      expect(within(entry).getByLabelText("1 decisions")).toBeInTheDocument();
+      expect(
+        screen.queryByText("Services: 0 decisions remaining"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("counts a state row and its drop-in as two decisions", () => {
+      // Each renders its own toggle, and Include all sends an op for each.
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [
+          {
+            unit: "httpd.service",
+            kind: "service",
+            fragment: "vendor",
+            triage: TRIAGE,
+            include: true,
+            locked: false,
+            current_state: "enabled",
+            required_config: [],
+            data_paths: [],
+          },
+        ],
+        unit_dropins: [
+          {
+            unit: "httpd.service",
+            path: "/etc/systemd/system/httpd.service.d/override.conf",
+            triage: TRIAGE,
+            include: true,
+            locked: false,
+            shadow_type: "drop_in",
+          },
+        ],
+      });
+      expect(within(entry).getByLabelText("2 decisions")).toBeInTheDocument();
+      expect(
+        screen.queryByText("Services: 0 decisions remaining"),
+      ).not.toBeInTheDocument();
+    });
+
+    it.each(["unit_states", "unit_dropins"])(
+      "fails on a view without %s instead of counting it as empty",
+      (field) => {
+        // The tests above show the same view counted when the field is
+        // present. A required field the server stops sending must not read
+        // as an empty section.
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        const view = { ...MOCK_VIEW_DATA } as Record<string, unknown>;
+        delete view[field];
+        expect(() => renderUnits(view as unknown as ViewResponse)).toThrow(
+          TypeError,
+        );
+      },
+    );
+
+    it("does not count a mount finding, which has no toggle", () => {
+      // The count beside it above shows a row with a toggle is counted.
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [],
+        unit_dropins: [],
+        mount_findings: [
+          {
+            unit: "srv.mount",
+            kind: "mount",
+            state: "enabled",
+            mount_point: "/srv",
+            fragment: "local",
+            unit_file_path: "/etc/systemd/system/srv.mount",
+            advisories: ["# Advisory: srv.mount is enabled on the source host."],
+          },
+        ],
+      });
+      expect(within(entry).getByLabelText("0 decisions")).toBeInTheDocument();
+      expect(
+        screen.getByText("Services: 0 decisions remaining"),
+      ).toBeInTheDocument();
+    });
   });
 
   it("shows skeleton placeholders when groups are loading", () => {
@@ -431,7 +602,7 @@ describe("Sidebar", () => {
     );
 
     await userEvent.click(screen.getByText("Services"));
-    expect(onSelect).toHaveBeenCalledWith("services");
+    expect(onSelect).toHaveBeenCalledWith("units");
   });
 
   it("passes API section id (config, not configs) on click", async () => {
@@ -905,9 +1076,11 @@ describe("Sidebar", () => {
 
       const emptyViewData: ViewResponse = {
         ...MOCK_VIEW_DATA,
-        service_states: [],
+        unit_states: [],
         quadlets: [],
         flatpaks: [],
+        declined_generated: [],
+        generated_timers: [],
       };
 
       render(
@@ -1049,7 +1222,7 @@ describe("Sidebar", () => {
 
       // Per-section kebabs on triage sections within multi-section groups
       expect(screen.getByTestId("kebab-config")).toBeInTheDocument();
-      expect(screen.getByTestId("kebab-services")).toBeInTheDocument();
+      expect(screen.getByTestId("kebab-units")).toBeInTheDocument();
 
       // Non-triage sections should NOT have kebab
       expect(screen.queryByTestId("kebab-kernel_boot")).not.toBeInTheDocument();
@@ -1281,6 +1454,66 @@ describe("Sidebar", () => {
       expect(announceEl.getAttribute("aria-live")).toBe("assertive");
     });
 
+    it("names the default target as outside the units bulk toggle", async () => {
+      const withTarget: ViewResponse = {
+        ...MOCK_VIEW_DATA,
+        default_target: {
+          target: "graphical.target",
+          include: true,
+          locked: false,
+          declined: null,
+        },
+      };
+      render(
+        <Sidebar
+          activeSection="units"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={withTarget}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      await userEvent.click(screen.getByTestId("kebab-units"));
+      await userEvent.click(
+        screen.getByRole("menuitem", { name: "Exclude all except the default target" }),
+      );
+
+      expect(onBatchToggle).toHaveBeenCalledWith("units", false);
+      const announceEl = await screen.findByTestId("batch-toggle-announce");
+      await vi.waitFor(() =>
+        expect(announceEl).toHaveTextContent(
+          "All items except the default target excluded from Services",
+        ),
+      );
+      expect(announceEl.textContent).not.toMatch(/^All items excluded/);
+    });
+
+    it("keeps the plain units bulk labels when the view has no default target", async () => {
+      render(
+        <Sidebar
+          activeSection="units"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      await userEvent.click(screen.getByTestId("kebab-units"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Exclude all" }));
+      const announceEl = await screen.findByTestId("batch-toggle-announce");
+      await vi.waitFor(() =>
+        expect(announceEl).toHaveTextContent("All items excluded from Services"),
+      );
+    });
+
     it("does not include packages in safety gate for Include all", async () => {
       render(
         <Sidebar
@@ -1368,7 +1601,7 @@ describe("Sidebar", () => {
     it("fires Ctrl+Shift+X from per-section NavItem within a multi-section group", () => {
       render(
         <Sidebar
-          activeSection="services"
+          activeSection="units"
           onSelect={vi.fn()}
           stats={MOCK_STATS}
           sections={MOCK_SECTIONS}
@@ -1386,7 +1619,7 @@ describe("Sidebar", () => {
 
       fireEvent.keyDown(servicesLink!, { key: "x", ctrlKey: true, shiftKey: true });
 
-      expect(onBatchToggle).toHaveBeenCalledWith("services", false);
+      expect(onBatchToggle).toHaveBeenCalledWith("units", false);
     });
 
     it("does NOT fire Ctrl+Shift+A from group heading button (no actionable wrapper)", () => {

@@ -6,7 +6,7 @@ use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::PackageEntry;
-use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
+use inspectah_core::types::units::{SystemdDropIn, UnitName, UnitStateChange};
 use inspectah_core::types::users::UserContainerfileStrategy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -76,13 +76,16 @@ pub enum ItemId {
         path: String,
     },
 
-    // Services section
-    Service {
-        unit: String,
+    // Units section
+    Unit {
+        unit: UnitName,
     },
     DropIn {
         path: String,
     },
+    /// The recorded default target (§ 7.6). It names no target of its
+    /// own: the snapshot holds at most one.
+    DefaultTarget,
 
     // Containers section
     Quadlet {
@@ -114,9 +117,9 @@ pub enum ItemId {
     CronJob {
         path: String,
     },
-    SystemdTimer {
-        name: String,
-    },
+    // A collected systemd timer has no item here: its row describes it, its
+    // state is a `Unit` row, a local file a `Config` row, and an `/etc` copy
+    // of a vendor timer a `DropIn` row (§ 8, § 7.7, § 11.1).
     AtJob {
         file: String,
     },
@@ -446,7 +449,7 @@ pub struct RefinedConfig {
 /// A classified service state change with triage assignment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedServiceState {
-    pub entry: ServiceStateChange,
+    pub entry: UnitStateChange,
     pub triage: TriageTag,
 }
 
@@ -594,8 +597,8 @@ pub struct RefinedView {
     pub containerfile_preview: String,
     pub stats: RefineStats,
     /// Per-`RepoId` effective-member counts (§ 3.2). Not part of the wire
-    /// contract: `ViewResponse` flattens `RefinedView` directly into
-    /// `/api/view`, and this is an internal computation the session reads
+    /// contract: the web `ViewResponse` lists `RefinedView`'s other fields
+    /// itself and drops this one, an internal computation the session reads
     /// through `repo_effective`, not a field the client sees -- the client
     /// sees `RepoGroupInfo`'s three counts instead.
     #[serde(skip)]
@@ -904,10 +907,10 @@ mod item_id_tests {
     }
 
     #[test]
-    fn set_include_with_service_serde_roundtrip() {
+    fn set_include_with_unit_serde_roundtrip() {
         let op = RefinementOp::SetInclude {
-            item_id: ItemId::Service {
-                unit: "sshd.service".into(),
+            item_id: ItemId::Unit {
+                unit: UnitName::try_from("sshd.service".to_string()).unwrap(),
             },
             include: true,
         };

@@ -3,7 +3,7 @@ source: crates/cli/src/progress/pretty.rs
 expression: "e2e_full_output(&r, &buf, &scan)"
 ---
   ⚠ RPM packages                 613 packages, 6 repos (rpm verify timed out)
-  ✓ Services                     42 units
+  ✓ Units                        42 units
   ✓ Storage                      done
   ✓ Kernel & boot                done
   ✗ Network                      failed: timeout connecting to NetworkManager

@@ -1,15 +1,27 @@
 ---
 name: cross-inspector-shadow-passes
-description: Where a file lands in two inventories with two dispositions, one of them must be marked Inventory at collect time -- in its own pass, below finalize_cross_inspector, never inside a sibling pass's early returns. Also: absence from services.state_changes is not an exclusion.
+description: Where a file lands in two inventories with two dispositions, one of them must be marked Inventory at collect time -- in its own pass, below finalize_cross_inspector, never inside a sibling pass's early returns. Masks are states and an administrator's storage unit file is a config entry, so neither is in units.drop_ins. Also: absence from units.state_changes is not an exclusion.
 ---
 
 # Cross-Inspector Shadow Passes
 
 Several collectors write into overlapping path space. The `/etc` walk
-records a file into `config.files`, and the services inspector records
-the same `*.service.d/*.conf` or full unit shadow into
-`services.drop_ins`. The double-listing is deliberate: each section needs
-the data.
+records a file into `config.files`, and the units inspector records the
+same drop-in (`<unit>.d/*.conf`, for a unit of any kind) or full unit
+shadow into `units.drop_ins`. The double-listing is deliberate: each
+section needs the data.
+
+Two kinds of file under `/etc/systemd/system` are not in
+`units.drop_ins`, so no pass shadows their config entries:
+
+- **A mask is a state, not a file.** A `/dev/null` link or a zero-length
+  unit file is recorded as a `Masked` state change and nothing else, and
+  carried only as `systemctl mask`. Earlier releases also recorded a
+  masked unit as an empty full shadow.
+- **An administrator's storage unit file belongs to config.** A mount,
+  automount or swap unit the administrator wrote is a mount finding
+  (advisory only, never a `systemctl` line), and its unit file stays an
+  ordinary config entry, carried on that row's own decision.
 
 The kernel/boot inspector also reads `/etc/sysctl.d/` files into
 `kernel_boot.sysctl`, but that section only explains: it owns no
@@ -21,8 +33,9 @@ What is not safe is **two live dispositions over one carriage
 decision.** The renderer picks one writer per output path, so the other
 disposition becomes a control that lies:
 
-- `render/configtree.rs` subtracts service-owned paths from the config
-  tree **unconditionally**, while the drop-ins writer skips excluded
+- `render/configtree.rs` subtracts unit-owned paths from the config
+  tree **unconditionally** (today `owned_elsewhere`, read by
+  `staged_writes`), while the drop-ins writer skips excluded
   entries. Config included plus drop-in excluded wrote the file to
   neither tree with the config checkbox still checked; config excluded
   plus drop-in included shipped it anyway. Measured end to end on a RHEL
@@ -49,11 +62,11 @@ unconditionally and holds no logic of its own:
 
 ```rust
 pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
-    shadow_service_owned_paths(snapshot);
+    shadow_unit_owned_paths(snapshot);
 }
 ```
 
-One pass remains, `shadow_service_owned_paths`; a sysctl pass sat beside
+One pass remains, `shadow_unit_owned_paths`; a sysctl pass sat beside
 it until sysctl files became ordinary config entries. Each pass owns its
 own missing-section `return`s. The rule for adding a second pass still
 stands: give it its own function and call it from the dispatcher, never
@@ -72,7 +85,7 @@ mirror); they went with the sysctl pass.
 
 ## Name the variant for the set, not the field
 
-`ConfigShadow::Services`, not `ServiceDropIn`: `services.drop_ins`
+`ConfigShadow::Units`, not `ServiceDropIn`: `units.drop_ins`
 carries full unit shadows under `/etc/systemd/system/` as well as
 `*.service.d/*.conf`, and a name describing the field would promise less
 than the variant owns. This is the same defect as the earlier
@@ -96,9 +109,10 @@ buggy code, because carriage already followed the owner's disposition —
 what was broken was that a second control was also accepted.
 
 Use collector-produced input: `MockExecutor` plus the real inspectors
-through `collect()`, as `crates/cli/tests/scan_service_shadow_test.rs`
-does. No JSON fixture in the repository had a
-non-empty `services.drop_ins` before that test, which is why this
+through `collect()`, as `crates/cli/tests/units_scan_test.rs` does,
+over the `UnitHost` builder in `crates/cli/tests/support/unit_hosts.rs`.
+No JSON fixture in the repository had a
+non-empty `units.drop_ins` before that test, which is why this
 survived a 26-task review cycle and two whole-branch reviews, and a
 hand-built fixture is free to encode a layout the collectors cannot
 produce.
@@ -118,15 +132,15 @@ Two things are easy to get wrong here:
   so it never enters `customizations_from_config`. Render the owner
   label from `shadowed_by` directly.
 - **The owner row may not render at all.** A drop-in reaches
-  `services.drop_ins` whenever the file exists, but its unit reaches
-  `services.state_changes` only when the unit's enable state diverges
+  `units.drop_ins` whenever the file exists, but its unit reaches
+  `units.state_changes` only when the unit's enable state diverges
   from its preset. A unit at its preset state therefore has a drop-in
   and no parent service row, and the web `ServiceSection` nested
   drop-ins under their parent, so the owning row rendered nowhere. That
   is the common case, not an edge one. Before pointing an operator at an
   owner, check the owner is on screen.
 
-The join key needs no new field: `service_dropins[].path` is the same
+The join key needs no new field: `unit_dropins[].path` is the same
 string `shadow_matching_config_entries` matched on. `shadowed_by` is
 `skip_serializing_if = "Option::is_none"`, so a TypeScript mirror
 declares it optional and never `null`.
@@ -166,16 +180,16 @@ Three things make the narrowed guard the right one, all measured on RHEL
   with inspectah emitting nothing for that unit. There was no hazard to
   protect against.
 - **The export cannot tell "no row" from "excluded row" anyway.**
-  `render_service_intent` filters `state_changes` by `is_included()`, so
-  both produce the same Containerfile.
+  `plan_units` filters `state_changes` by `is_included()`, so both
+  produce the same Containerfile.
 - **What the guard really protects is the cascade.** `SetInclude` on a
-  `Service` sets every drop-in for that unit to the same disposition, so
+  `Unit` sets every drop-in for that unit to the same disposition, so
   re-including one drop-in alone would undo the operator's parent
   decision for a single file. That is a decision-model conflict, not an
   export defect, and it is the only state worth refusing.
 
 The cascade is also the answer to a question that looks open from the
-source: the web owner badge reads `service_dropins[].include`, so it
+source: the web owner badge reads `unit_dropins[].include`, so it
 cannot report "Owner included" under an excluded parent — the cascade
 has already set it false. Measured through `/api/view`.
 
@@ -184,10 +198,11 @@ has already set it false. Measured through `/api/view`.
 Only the service case above has been measured. A read of the source
 suggests the same or related failures for quadlets
 (`containers.quadlet_units` plus the unconditional `QUADLET_PREFIX`
-skip), repo files and GPG keys (an **OR** rule rather than a
-subtraction: either inclusion stages the file), and local systemd timers
-(`configtree.rs` writes them without checking `t.disposition`). None of
-these has a host measurement. **Do not fix one from a source trace** —
+skip), and repo files and GPG keys (an **OR** rule rather than a
+subtraction: either inclusion stages the file). None of these has a host
+measurement. Local systemd timers are no longer on this list: the stager
+has no local-timer writer, so a local timer's file is staged only by its
+config row, or its drop-in row for a full shadow. **Do not fix one from a source trace**:
 this subsystem has produced a chain of confident, wrong conclusions
 reasoned from unverified premises. Measure first.
 
@@ -195,7 +210,7 @@ reasoned from unverified premises. Measure first.
 
 - `crates/pipeline/src/collect.rs` -- `finalize_cross_inspector` and the passes
 - `crates/core/src/types/config.rs` -- `ConfigShadow`, `ConfigFileEntry::shadowed_by`
-- `crates/pipeline/src/render/configtree.rs` -- `service_owned_paths`, `container_owned_paths`
-- `crates/cli/tests/scan_service_shadow_test.rs` -- the four-state regression test, and both legs of the drop-in guard
-- `crates/refine/src/session.rs` -- the `ItemId::DropIn` arm of `SetInclude` validation, and the `ItemId::Service` cascade
+- `crates/pipeline/src/render/configtree.rs` -- `owned_elsewhere` and `staged_writes`
+- `crates/cli/tests/units_scan_test.rs` -- the four-state regression test, and both legs of the drop-in guard
+- `crates/refine/src/session.rs` -- the `ItemId::DropIn` arm of `SetInclude` validation, and the `ItemId::Unit` cascade
 - `real-host-validation-runs.md` -- why measurement beats fixtures here

@@ -1,17 +1,17 @@
 {% from "report/section.html" import section %}
 
-{% call section("services", "Service State Changes", count=svc_count, state=svc_state, extra_badge=svc_extra_badge) %}
+{% call section("units", "Unit State Changes", count=svc_count, state=svc_state, extra_badge=svc_extra_badge) %}
 
 {% if svc_count >= 10 %}
 <div class="report-filter">
-  <label for="filter-services">Filter Services</label>
-  <input type="text" id="filter-services" data-section="services">
+  <label for="filter-units">Filter Units</label>
+  <input type="text" id="filter-units" data-section="units">
   <span class="filter-count">Showing {{ svc_count }} of {{ svc_count }}</span>
 </div>
 {% endif %}
 
 {% if svc_count > 0 %}
-<table class="report-table" data-filterable="services">
+<table class="report-table" data-filterable="units">
   <thead>
     <tr>
       <th>Unit</th>

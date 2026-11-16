@@ -96,13 +96,15 @@ comments and its unsafe-name FIXME raw until 2026-11-09.
 
 **Escape shared wording at the emit site, not where it is worded.** A
 comment built from a describe-style function that other surfaces also
-call, such as `OmissionReason::describe` (the `# Omitted:` line and
-refine's Omitted Services subtitle), is escaped on the finished
-Containerfile line, never inside the function: refine shows the raw
-value on its own surface, and a Containerfile escape baked into the
-shared text would show there as a literal `\n`. The join escapes that
-line already; the site also calls `escape_comment_text()` on the whole
-line because `ServiceRenderPlan.lines` is public. Do not use
+call, such as `declined_line` and `OmissionReason::describe` (the
+`# Omitted:` line, refine's `declined` text on a unit row, and the
+Omitted Services subtitle), is escaped on the finished Containerfile
+line, never inside the function: refine shows the raw value on its own
+surface, and a Containerfile escape baked into the shared text would
+show there as a literal `\n`. The join escapes that line already;
+`unit_state_lines` also calls `escape_comment_text()` on each declined
+line, each excluded-updater line and each mount advisory line, because
+it returns a public line vector. Do not use
 `sanitize_for_comment()` there, whose quote doubling would turn the fixed
 `package 'nginx'` wording into `package ''nginx''`. The owner in that
 line shipped raw until 2026-11-10.
@@ -161,11 +163,28 @@ way, and the next one should be.
 | Mode, account name, group name | `ExportToken` | `inspectah_pipeline::render::safety` |
 | Account or group name on a `useradd`, `groupadd` or `chpasswd` line | `AccountName` (`ExportToken` plus no leading `-`, `.`, `..` or all-digit name) | `inspectah_pipeline::render::safety` |
 | Password hash in `chpasswd -e` input | `CryptHash` | `inspectah_pipeline::render::safety` |
+| Unit name on a `systemctl` line | `UnitName` | `inspectah_core::types::units` |
 
 Each is an ASCII allowlist plus a newtype with no other constructor, and
 the emitting function takes the type rather than a `&str`. The guarantee
 belongs to the type, so a new emission site cannot forget the check; a
 site check closes one site, the type closes the class.
+
+**Unit operands are quoted after `--`, with no refusal at the site.**
+`systemctl_lines` in `render/unit_plan.rs` writes one
+`RUN systemctl <verb> -- \` per verb, each operand on its own
+continuation line as `single_quote(name)`. The operand is a `UnitName`,
+proved when the collector parsed it, so the site has nothing left to
+refuse: `single_quote` is total on the type's character set, which holds
+no quote and no line break, and `--` makes a name that starts with `-`
+(`-.slice`) an operand. No `systemctl` line is written outside the plan:
+converted cron timers and `@reboot` services, and
+`flatpak-provision.service`, are plan requests whose enables
+`systemctl_lines` writes in their own sections, and `tuned.service` is a
+unit row like any other. A generated unit's name still comes from the
+snapshot as text, so `generated_unit_name` in `unit_plan.rs` proves it a
+`UnitName` the stager would stage, and the Scheduled Tasks section writes
+a FIXME for one it refuses.
 
 **A value with two emission surfaces is proved once for both, or the fix
 is half a fix.** `ExportPath` guards the tmpfiles.d `d` entry as well as

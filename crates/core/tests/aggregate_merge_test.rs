@@ -4,6 +4,8 @@ use inspectah_core::aggregate::merge::{
     merge_nonrpm_sections, merge_rpm_sections, merge_scheduled_sections, merge_selinux_sections,
     merge_service_sections, merge_storage_sections, merge_usersgroups_sections,
 };
+use inspectah_core::aggregate::merge_snapshots;
+use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
@@ -11,6 +13,7 @@ use inspectah_core::types::containers::{ComposeFile, ContainerSection, FlatpakAp
 use inspectah_core::types::kernelboot::{AlternativeEntry, KernelBootSection, KernelModule};
 use inspectah_core::types::network::{FirewallZone, NMConnection, NetworkSection, ProxyEntry};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::{
     EnabledModuleStream, PackageEntry, RepoFile, RpmSection, VersionChange, VersionLockEntry,
 };
@@ -21,10 +24,10 @@ use inspectah_core::types::selinux::{
     FcontextFileType, FcontextRule, FcontextSource, SelinuxContext, SelinuxPortLabel,
     SelinuxSection,
 };
-use inspectah_core::types::services::{
-    ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
-};
 use inspectah_core::types::storage::{FstabEntry, MountPoint, StorageSection};
+use inspectah_core::types::units::{
+    PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
+};
 use inspectah_core::types::users::UserGroupSection;
 
 // ---------------------------------------------------------------------------
@@ -888,14 +891,18 @@ fn test_fstab_entry_identity_is_mount_point() {
     assert_eq!(f.identity_key().as_ref(), "/data");
 }
 
+/// A timer is a description with no include flag: the merge's include
+/// step leaves it as it was.
 #[test]
-fn test_systemd_timer_set_include() {
-    let mut t = SystemdTimer::default();
-    // default_true: Default trait gives false, but serde default gives true
+fn test_systemd_timer_set_include_changes_nothing() {
+    let before = SystemdTimer {
+        name: "backup.timer".into(),
+        on_calendar: "daily".into(),
+        ..Default::default()
+    };
+    let mut t = before.clone();
     t.set_include(false);
-    assert!(!t.disposition.is_included());
-    t.set_include(true);
-    assert!(t.disposition.is_included());
+    assert_eq!(t, before);
 }
 
 #[test]
@@ -1209,31 +1216,40 @@ fn test_merge_service_sections_all_none() {
 
 #[test]
 fn test_merge_service_sections_dedup_units() {
-    let make_sc = |unit: &str| ServiceStateChange {
-        unit: unit.into(),
-        current_state: ServiceUnitState::Enabled,
-        default_state: None,
-        disposition: FindingKind::excluded(),
-        locked: false,
-        owning_package: None,
-        aggregate: None,
-        attention_reason: None,
-        shadow_type: None,
-        shadow_rationale: None,
+    let make_sc = |unit: &str| {
+        let mut change = UnitStateChange::new(
+            test_carried_unit(unit.to_owned().try_into().unwrap(), None),
+            UnitState::Enabled,
+            None,
+        )
+        .unwrap();
+        change.disposition = FindingKind::excluded();
+        change
     };
-    let s1 = ServiceSection {
+    let s1 = UnitSection {
         state_changes: vec![make_sc("httpd.service")],
-        enabled_units: vec!["sshd.service".into(), "httpd.service".into()],
-        disabled_units: vec!["firewalld.service".into()],
+        inventory: vec![
+            inv("sshd.service", UnitState::Enabled, None),
+            inv("httpd.service", UnitState::Enabled, None),
+            inv("firewalld.service", UnitState::Disabled, None),
+        ],
         drop_ins: vec![],
-        preset_matched_units: vec!["chronyd.service".into()],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
     };
-    let s2 = ServiceSection {
+    let s2 = UnitSection {
         state_changes: vec![make_sc("httpd.service")],
-        enabled_units: vec!["httpd.service".into(), "crond.service".into()],
-        disabled_units: vec![],
+        inventory: vec![
+            inv("httpd.service", UnitState::Enabled, None),
+            inv("crond.service", UnitState::Enabled, None),
+        ],
         drop_ins: vec![],
-        preset_matched_units: vec!["chronyd.service".into(), "sshd.service".into()],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
     let result = merge_service_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
@@ -1242,16 +1258,196 @@ fn test_merge_service_sections_dedup_units() {
     assert_eq!(result.state_changes.len(), 1);
     assert_eq!(result.state_changes[0].aggregate.as_ref().unwrap().count, 2);
 
-    // String lists deduped and sorted
+    // Inventory: one entry per unit, sorted by name
     assert_eq!(
-        result.enabled_units,
-        vec!["crond.service", "httpd.service", "sshd.service"]
+        inventory_summary(&result),
+        vec![
+            ("crond.service", UnitState::Enabled, None),
+            ("firewalld.service", UnitState::Disabled, None),
+            ("httpd.service", UnitState::Enabled, None),
+            ("sshd.service", UnitState::Enabled, None),
+        ]
     );
-    assert_eq!(result.disabled_units, vec!["firewalld.service"]);
+}
+
+fn inv(unit: &str, state: UnitState, preset: Option<PresetDefault>) -> UnitInventoryEntry {
+    UnitInventoryEntry {
+        unit: unit.to_owned().try_into().unwrap(),
+        state,
+        preset,
+    }
+}
+
+fn inventory_section(inventory: Vec<UnitInventoryEntry>) -> Option<UnitSection> {
+    Some(UnitSection {
+        inventory,
+        ..Default::default()
+    })
+}
+
+fn inventory_summary(section: &UnitSection) -> Vec<(&str, UnitState, Option<PresetDefault>)> {
+    section
+        .inventory
+        .iter()
+        .map(|e| (e.unit.as_str(), e.state, e.preset))
+        .collect()
+}
+
+/// The inventory keeps the state most hosts have, and a unit that only
+/// one host has is kept.
+#[test]
+fn test_merge_inventory_keeps_most_prevalent_state() {
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
+    let sections = vec![
+        inventory_section(vec![
+            inv(
+                "sshd.service",
+                UnitState::Enabled,
+                Some(PresetDefault::Enable),
+            ),
+            inv("cups.service", UnitState::Disabled, None),
+        ]),
+        inventory_section(vec![inv(
+            "sshd.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Enable),
+        )]),
+        inventory_section(vec![inv(
+            "sshd.service",
+            UnitState::Disabled,
+            Some(PresetDefault::Enable),
+        )]),
+    ];
+    let result = merge_service_sections(sections, 3, &hostnames).unwrap();
+
     assert_eq!(
-        result.preset_matched_units,
-        vec!["chronyd.service", "sshd.service"]
+        inventory_summary(&result),
+        vec![
+            ("cups.service", UnitState::Disabled, None),
+            (
+                "sshd.service",
+                UnitState::Enabled,
+                Some(PresetDefault::Enable)
+            ),
+        ]
     );
+}
+
+/// A tie between states goes to the first host in hostname order, as
+/// the other most-prevalent merges break ties, and the preset comes from
+/// the first host that has the winning state.
+#[test]
+fn test_merge_inventory_tie_goes_to_first_host() {
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into(), "h4".into()];
+    let sections = vec![
+        inventory_section(vec![inv("a.service", UnitState::Disabled, None)]),
+        inventory_section(vec![inv(
+            "a.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )]),
+        inventory_section(vec![inv(
+            "a.service",
+            UnitState::Disabled,
+            Some(PresetDefault::Enable),
+        )]),
+        inventory_section(vec![inv("a.service", UnitState::Enabled, None)]),
+    ];
+    let result = merge_service_sections(sections, 4, &hostnames).unwrap();
+
+    assert_eq!(
+        inventory_summary(&result),
+        vec![("a.service", UnitState::Disabled, None)]
+    );
+}
+
+/// The preset comes from the first host with the winning state, not from
+/// the first host overall: h1's state loses, so its missing preset is not
+/// used, and of the two hosts with the winning state h2 comes first. The
+/// winning state is not the first entry's, so keeping the first entry
+/// would fail here.
+#[test]
+fn test_merge_inventory_preset_from_first_host_with_winning_state() {
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
+    let sections = vec![
+        inventory_section(vec![inv("a.service", UnitState::Disabled, None)]),
+        inventory_section(vec![inv(
+            "a.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )]),
+        inventory_section(vec![inv(
+            "a.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Enable),
+        )]),
+    ];
+    let result = merge_service_sections(sections, 3, &hostnames).unwrap();
+
+    assert_eq!(
+        inventory_summary(&result),
+        vec![(
+            "a.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Disable)
+        )]
+    );
+}
+
+/// A host snapshot whose only unit is `a.service` in `state`.
+fn inventory_host(
+    hostname: &str,
+    state: UnitState,
+    preset: Option<PresetDefault>,
+) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.meta.insert(
+        "hostname".to_string(),
+        serde_json::Value::String(hostname.into()),
+    );
+    snap.os_release = Some(OsRelease {
+        version_id: "9.4".into(),
+        ..Default::default()
+    });
+    snap.rpm = Some(RpmSection::default());
+    snap.units = inventory_section(vec![inv("a.service", state, preset)]);
+    snap
+}
+
+/// Through `merge_snapshots()`, a tie goes to the first host by hostname
+/// whatever order the snapshots are given in: `alpha` wins whether it is
+/// passed first or second. Giving `alpha` the other state flips the
+/// result, so the winner is the host, not a fixed state.
+#[test]
+fn test_merge_inventory_tie_follows_hostname_not_argument_order() {
+    let pairs = [
+        (
+            (UnitState::Disabled, Some(PresetDefault::Enable)),
+            (UnitState::Enabled, Some(PresetDefault::Disable)),
+        ),
+        (
+            (UnitState::Enabled, Some(PresetDefault::Disable)),
+            (UnitState::Disabled, Some(PresetDefault::Enable)),
+        ),
+    ];
+    for ((alpha_state, alpha_preset), (bravo_state, bravo_preset)) in pairs {
+        for alpha_first in [false, true] {
+            let alpha = inventory_host("alpha", alpha_state, alpha_preset);
+            let bravo = inventory_host("bravo", bravo_state, bravo_preset);
+            let snapshots = if alpha_first {
+                vec![alpha, bravo]
+            } else {
+                vec![bravo, alpha]
+            };
+            let (merged, _) = merge_snapshots(snapshots, None, None).unwrap();
+            let units = merged.units.expect("the merge keeps the units section");
+            assert_eq!(
+                inventory_summary(&units),
+                vec![("a.service", alpha_state, alpha_preset)],
+                "alpha passed first: {alpha_first}"
+            );
+        }
+    }
 }
 
 // ===========================================================================
@@ -3096,4 +3292,710 @@ fn test_aggregate_degraded_state_json_contract() {
         json["leaf_total_hosts"], 2,
         "total hosts must reflect aggregate size"
     );
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
+}
+
+/// § 12 "The exception", T18 (b): `merge_items` includes every row on
+/// every host, so a runtime updater each host excluded would come out
+/// included. The merge applies the updater default after it: the merged
+/// `dnf-automatic.timer` row is excluded with the reason and not locked.
+/// Control: an ordinary unit excluded on both hosts merges included, as
+/// every merged row does today.
+#[test]
+fn a_runtime_updater_excluded_on_every_host_merges_excluded() {
+    use inspectah_core::baseline::{RUNTIME_UPDATER_REASON, apply_runtime_updater_default};
+    let make_sc = |unit: &str| {
+        let mut change = UnitStateChange::new(
+            test_carried_unit(unit.to_owned().try_into().unwrap(), None),
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )
+        .unwrap();
+        apply_runtime_updater_default(&mut change);
+        change.disposition = FindingKind::excluded();
+        change
+    };
+    let section = || UnitSection {
+        state_changes: vec![make_sc("dnf-automatic.timer"), make_sc("httpd.service")],
+        inventory: vec![],
+        drop_ins: vec![],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result =
+        merge_service_sections(vec![Some(section()), Some(section())], 2, &hostnames).unwrap();
+    let row = |unit: &str| {
+        result
+            .state_changes
+            .iter()
+            .find(|c| c.unit().name().as_str() == unit)
+            .unwrap_or_else(|| panic!("no merged row for {unit}"))
+    };
+    let updater = row("dnf-automatic.timer");
+    assert!(!updater.disposition.is_included(), "{updater:?}");
+    assert!(!updater.locked, "{updater:?}");
+    assert_eq!(
+        updater.attention_reason.as_deref(),
+        Some(RUNTIME_UPDATER_REASON)
+    );
+    assert_eq!(updater.aggregate.as_ref().map(|a| a.count), Some(2));
+    assert!(row("httpd.service").disposition.is_included());
+}
+
+/// An administrator's mount finding for `unit`, written in `/etc`.
+fn admin_mount_finding(
+    unit: &str,
+    state: Option<UnitState>,
+    mount_point: &str,
+    nofail: bool,
+) -> inspectah_core::types::units::MountUnitFinding {
+    use inspectah_core::types::units::{AdvisoryUnit, MountUnitFinding, UnitFragment, UnitSubject};
+    let name: inspectah_core::types::units::UnitName = unit.to_owned().try_into().unwrap();
+    let fragment = UnitFragment::Local { file: name.clone() };
+    MountUnitFinding {
+        unit: AdvisoryUnit::try_from(UnitSubject::new(name, fragment).expect("a subject"))
+            .expect("an administrator's storage unit"),
+        state_change: state.map(|s| (s, None)),
+        mount_point: Some(mount_point.into()),
+        nofail: Some(nofail),
+        aggregate: None,
+    }
+}
+
+/// § 12: `mount_findings` merge by unit name, one row per name, its
+/// `aggregate` naming every host that recorded it. Hosts that disagree
+/// about a field keep one host's whole finding, as a state change does:
+/// the value the most hosts recorded, a tie going to the first host by
+/// hostname. A finding on some hosts only is still a row (it has no
+/// include flag to narrow), with its count.
+#[test]
+fn mount_findings_merge_to_one_row_per_unit_name() {
+    use UnitState::{Enabled, Masked};
+    let section = |findings| UnitSection {
+        mount_findings: findings,
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
+    let result = merge_service_sections(
+        vec![
+            Some(section(vec![
+                admin_mount_finding("srv.mount", Some(Enabled), "/srv", false),
+                admin_mount_finding("data.mount", Some(Enabled), "/data", true),
+                admin_mount_finding("opt.mount", Some(Masked), "/opt", true),
+            ])),
+            Some(section(vec![
+                admin_mount_finding("srv.mount", Some(Enabled), "/srv", true),
+                admin_mount_finding("opt.mount", None, "/opt/x", false),
+            ])),
+            Some(section(vec![admin_mount_finding(
+                "srv.mount",
+                Some(Enabled),
+                "/srv",
+                true,
+            )])),
+        ],
+        3,
+        &hostnames,
+    )
+    .unwrap();
+    // Unit name, mount point, nofail, count and hosts of each merged row.
+    type Row<'a> = (&'a str, Option<&'a str>, Option<bool>, i32, Vec<String>);
+    let rows: Vec<Row<'_>> = result
+        .mount_findings
+        .iter()
+        .map(|f| {
+            let aggregate = f.aggregate.as_ref().expect("an aggregate row");
+            (
+                f.unit.name().as_unit_name().as_str(),
+                f.mount_point.as_deref(),
+                f.nofail,
+                aggregate.count,
+                aggregate.hosts.clone(),
+            )
+        })
+        .collect();
+    let hosts = |names: &[&str]| names.iter().map(|h| (*h).to_owned()).collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            ("data.mount", Some("/data"), Some(true), 1, hosts(&["h1"])),
+            // A tie between h1 and h2: h1's finding, both hosts counted.
+            (
+                "opt.mount",
+                Some("/opt"),
+                Some(true),
+                2,
+                hosts(&["h1", "h2"])
+            ),
+            // h2 and h3 agree: their finding, every host counted.
+            (
+                "srv.mount",
+                Some("/srv"),
+                Some(true),
+                3,
+                hosts(&["h1", "h2", "h3"])
+            ),
+        ]
+    );
+    let opt = &result.mount_findings[1];
+    assert_eq!(opt.state_change, Some((Masked, None)), "h1's whole finding");
+    assert!(
+        result
+            .mount_findings
+            .iter()
+            .all(|f| f.aggregate.as_ref().is_some_and(|a| a.total == 3))
+    );
+}
+
+// ---------------------------------------------------------------------------
+// § 12: the phase 4 fields of a state change, and the link findings
+// ---------------------------------------------------------------------------
+
+/// A unit name for a test.
+fn unit_name(unit: &str) -> inspectah_core::types::units::UnitName {
+    unit.to_owned().try_into().expect("a test unit name")
+}
+
+/// An `Also=` member recorded with `links` and the vendor drop-ins named.
+fn member(
+    unit: &str,
+    links: inspectah_core::types::units::MemberLinks,
+    vendor_drop_ins: &[&str],
+) -> inspectah_core::types::units::AlsoMember {
+    inspectah_core::types::units::AlsoMember {
+        unit: unit_name(unit),
+        links,
+        vendor_drop_ins: vendor_drop_ins.iter().map(|n| (*n).to_owned()).collect(),
+    }
+}
+
+/// `bundle.service` enabled, recorded with `also`, `install_drop_ins` and
+/// `vendor_drop_ins`.
+fn bundle_change(
+    also: Vec<inspectah_core::types::units::AlsoMember>,
+    install_drop_ins: &[&str],
+    vendor_drop_ins: &[&str],
+) -> UnitStateChange {
+    let mut change = UnitStateChange::new(
+        test_carried_unit(unit_name("bundle.service"), Some("bundle".into())),
+        UnitState::Enabled,
+        Some(PresetDefault::Disable),
+    )
+    .expect("a vendor unit can be enabled");
+    change.also = also;
+    change.install_drop_ins = install_drop_ins.iter().map(|p| (*p).to_owned()).collect();
+    change.vendor_drop_ins = vendor_drop_ins.iter().map(|n| (*n).to_owned()).collect();
+    change
+}
+
+/// A section holding `state_changes` alone.
+fn changes_section(state_changes: Vec<UnitStateChange>) -> Option<UnitSection> {
+    Some(UnitSection {
+        state_changes,
+        ..Default::default()
+    })
+}
+
+/// Host names `h1`, `h2`, ... for `n` hosts, in hostname order.
+fn host_names(n: usize) -> Vec<String> {
+    (1..=n).map(|i| format!("h{i}")).collect()
+}
+
+/// § 12: the list fields of a state change are the union across every
+/// host that has the unit. Within `also`, a member two hosts record with
+/// different `links` becomes `Other`, a member both record alike keeps its
+/// value, a member one host records is kept as recorded, and a member's
+/// `vendor_drop_ins` is the union of the names. Members keep the order the
+/// first host recorded, then each later host's new ones. The lists are the
+/// same whichever host's row the merge keeps.
+#[test]
+fn a_state_change_merges_the_union_of_its_phase_4_lists() {
+    use inspectah_core::types::units::MemberLinks::{Inert, Installed, Other, Unlinked};
+    let h1 = bundle_change(
+        vec![
+            member("a.service", Installed, &["10-a.conf"]),
+            member("b.service", Inert, &[]),
+        ],
+        &["/etc/systemd/system/bundle.service.d/10-x.conf"],
+        &["10-x.conf"],
+    );
+    let h2 = bundle_change(
+        vec![
+            member("c.service", Installed, &[]),
+            member("a.service", Unlinked, &["20-a.conf"]),
+            member("b.service", Inert, &[]),
+        ],
+        &["/etc/systemd/system/bundle.service.d/20-y.conf"],
+        &["20-y.conf", "10-x.conf"],
+    );
+    let result = merge_service_sections(
+        vec![changes_section(vec![h1]), changes_section(vec![h2])],
+        2,
+        &host_names(2),
+    )
+    .expect("a merged section");
+    assert_eq!(result.state_changes.len(), 1, "one row per unit name");
+    let merged = &result.state_changes[0];
+    assert_eq!(
+        merged.also,
+        vec![
+            member("a.service", Other, &["10-a.conf", "20-a.conf"]),
+            member("b.service", Inert, &[]),
+            member("c.service", Installed, &[]),
+        ]
+    );
+    assert_eq!(
+        merged.install_drop_ins,
+        [
+            "/etc/systemd/system/bundle.service.d/10-x.conf",
+            "/etc/systemd/system/bundle.service.d/20-y.conf",
+        ]
+    );
+    assert_eq!(merged.vendor_drop_ins, ["10-x.conf", "20-y.conf"]);
+    assert_eq!(merged.aggregate.as_ref().map(|a| a.count), Some(2));
+
+    // Control: one host alone keeps its lists as recorded.
+    let alone = merge_service_sections(
+        vec![changes_section(vec![bundle_change(
+            vec![member("a.service", Unlinked, &["20-a.conf"])],
+            &[],
+            &[],
+        )])],
+        1,
+        &host_names(1),
+    )
+    .expect("a merged section");
+    assert_eq!(
+        alone.state_changes[0].also,
+        vec![member("a.service", Unlinked, &["20-a.conf"])]
+    );
+}
+
+/// `dirsrv@example.service` enabled, recorded with the configuration and
+/// data paths given.
+fn instance_change(required_config: &[&str], data_paths: &[&str]) -> UnitStateChange {
+    let name = unit_name("dirsrv@example.service");
+    let mut change = UnitStateChange::new(
+        test_carried_unit(name, Some("389-ds-base".into())),
+        UnitState::Enabled,
+        Some(PresetDefault::Disable),
+    )
+    .expect("an instance can be enabled");
+    change.required_config = required_config.iter().map(|p| (*p).to_owned()).collect();
+    change.data_paths = data_paths.iter().map(|p| (*p).to_owned()).collect();
+    change
+}
+
+/// T44: two hosts' `needs_unknown` merge, in either host order.
+/// § 12: an instance whose needs one host could not read keeps that
+/// host's `needs_unknown` on the merged row, whichever host's row the
+/// merge keeps, so the plan omits the fleet's enable. Control: with no
+/// host recording one, the merged row has none.
+#[test]
+fn an_instance_merges_the_needs_unknown_of_any_host() {
+    use inspectah_core::types::units::InstanceNeedsUnknown;
+    let known = instance_change(&["/etc/dirsrv/slapd-example"], &[]);
+    let mut unknown = instance_change(&[], &[]);
+    let cause = InstanceNeedsUnknown::Unreadable {
+        path: "/etc/systemd/system/service.d".to_owned(),
+    };
+    unknown.needs_unknown = Some(cause.clone());
+    for sections in [
+        vec![
+            changes_section(vec![known.clone()]),
+            changes_section(vec![unknown.clone()]),
+        ],
+        vec![
+            changes_section(vec![unknown.clone()]),
+            changes_section(vec![known.clone()]),
+        ],
+    ] {
+        let result = merge_service_sections(sections, 2, &host_names(2)).expect("a merged section");
+        assert_eq!(result.state_changes.len(), 1, "one row per unit name");
+        assert_eq!(result.state_changes[0].needs_unknown, Some(cause.clone()));
+    }
+    let control = merge_service_sections(
+        vec![
+            changes_section(vec![known.clone()]),
+            changes_section(vec![known]),
+        ],
+        2,
+        &host_names(2),
+    )
+    .expect("a merged section");
+    assert_eq!(control.state_changes[0].needs_unknown, None);
+}
+
+/// § 12: an instance's `required_config` and `data_paths` are each the
+/// union across every host that has it, sorted, whichever host's row the
+/// merge keeps. Control: one host alone keeps its lists.
+#[test]
+fn an_instance_merges_the_union_of_what_it_needs() {
+    let h1 = instance_change(
+        &["/etc/dirsrv/slapd-example"],
+        &["/var/lib/dirsrv/slapd-example"],
+    );
+    let h2 = instance_change(
+        &["/etc/sysconfig/dirsrv-example", "/etc/dirsrv/slapd-example"],
+        &[],
+    );
+    for sections in [
+        vec![
+            changes_section(vec![h1.clone()]),
+            changes_section(vec![h2.clone()]),
+        ],
+        vec![
+            changes_section(vec![h2.clone()]),
+            changes_section(vec![h1.clone()]),
+        ],
+    ] {
+        let result = merge_service_sections(sections, 2, &host_names(2)).expect("a merged section");
+        assert_eq!(result.state_changes.len(), 1, "one row per unit name");
+        let merged = &result.state_changes[0];
+        assert_eq!(
+            merged.required_config,
+            ["/etc/dirsrv/slapd-example", "/etc/sysconfig/dirsrv-example"]
+        );
+        assert_eq!(merged.data_paths, ["/var/lib/dirsrv/slapd-example"]);
+    }
+
+    let alone = merge_service_sections(vec![changes_section(vec![h2])], 1, &host_names(1))
+        .expect("a merged section");
+    assert_eq!(
+        alone.state_changes[0].required_config,
+        ["/etc/dirsrv/slapd-example", "/etc/sysconfig/dirsrv-example"]
+    );
+    assert!(alone.state_changes[0].data_paths.is_empty());
+}
+
+/// A link finding for a test.
+fn manual_link(
+    relation: inspectah_core::types::units::LinkRelation,
+    parent: &str,
+    unit: &str,
+    cause: inspectah_core::types::units::ManualLinkCause,
+    install_files: &[&str],
+) -> inspectah_core::types::units::ManualLink {
+    inspectah_core::types::units::ManualLink {
+        relation,
+        parent: unit_name(parent),
+        unit: unit_name(unit),
+        cause,
+        install_files: install_files.iter().map(|p| (*p).to_owned()).collect(),
+        aggregate: None,
+    }
+}
+
+/// A section holding `manual_links` alone.
+fn links_section(
+    manual_links: Vec<inspectah_core::types::units::ManualLink>,
+) -> Option<UnitSection> {
+    Some(UnitSection {
+        manual_links,
+        ..Default::default()
+    })
+}
+
+/// The count and hosts of a merged finding's prevalence.
+fn prevalence(
+    aggregate: &Option<inspectah_core::types::aggregate::AggregatePrevalence>,
+) -> (i32, i32, Vec<String>) {
+    let aggregate = aggregate.as_ref().expect("an aggregate row");
+    (aggregate.count, aggregate.total, aggregate.hosts.clone())
+}
+
+/// § 12: `manual_links` merge by relation, parent and unit. Two hosts with
+/// the same `VendorInstallOnly` link and different `install_files` give one
+/// row with the union of the files and the prevalence of both. Two hosts
+/// with opposing install-difference causes for one triple give the first
+/// host's cause in hostname order, with the prevalence of both. A link
+/// that differs in relation, parent or unit is a row of its own.
+#[test]
+fn manual_links_merge_by_relation_parent_and_unit() {
+    use inspectah_core::types::units::LinkRelation::{Also, Requires, Wants};
+    use inspectah_core::types::units::ManualLinkCause::{
+        HostInstallOnly, StaticUnit, VendorInstallOnly,
+    };
+    const X_DROP_IN: &str = "/etc/systemd/system/x.service.d/10-a.conf";
+    const X_OTHER_DROP_IN: &str = "/etc/systemd/system/x.service.d/20-b.conf";
+    let result = merge_service_sections(
+        vec![
+            links_section(vec![
+                manual_link(
+                    Wants,
+                    "multi-user.target",
+                    "x.service",
+                    VendorInstallOnly,
+                    &[X_DROP_IN],
+                ),
+                manual_link(
+                    Also,
+                    "y.service",
+                    "z.service",
+                    HostInstallOnly,
+                    &["/etc/systemd/system/y.service"],
+                ),
+                manual_link(Requires, "multi-user.target", "x.service", StaticUnit, &[]),
+            ]),
+            links_section(vec![
+                manual_link(
+                    Wants,
+                    "multi-user.target",
+                    "x.service",
+                    VendorInstallOnly,
+                    &[X_OTHER_DROP_IN, X_DROP_IN],
+                ),
+                manual_link(
+                    Also,
+                    "y.service",
+                    "z.service",
+                    VendorInstallOnly,
+                    &["/etc/systemd/system/y.service.d/10-c.conf"],
+                ),
+            ]),
+        ],
+        2,
+        &host_names(2),
+    )
+    .expect("a merged section");
+    let both = (2, 2, host_names(2));
+    let rows: Vec<_> = result
+        .manual_links
+        .iter()
+        .map(|link| {
+            (
+                link.relation,
+                link.parent.as_str(),
+                link.unit.as_str(),
+                link.cause,
+                link.install_files.clone(),
+                prevalence(&link.aggregate),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                Wants,
+                "multi-user.target",
+                "x.service",
+                VendorInstallOnly,
+                vec![X_DROP_IN.to_owned(), X_OTHER_DROP_IN.to_owned()],
+                both.clone(),
+            ),
+            (
+                Also,
+                "y.service",
+                "z.service",
+                HostInstallOnly,
+                vec![
+                    "/etc/systemd/system/y.service".to_owned(),
+                    "/etc/systemd/system/y.service.d/10-c.conf".to_owned(),
+                ],
+                both,
+            ),
+            (
+                Requires,
+                "multi-user.target",
+                "x.service",
+                StaticUnit,
+                vec![],
+                (1, 2, vec!["h1".to_owned()]),
+            ),
+        ]
+    );
+
+    // The first host in hostname order decides the cause, so the other
+    // order gives the other cause.
+    let swapped = merge_service_sections(
+        vec![
+            links_section(vec![manual_link(
+                Also,
+                "y.service",
+                "z.service",
+                VendorInstallOnly,
+                &[],
+            )]),
+            links_section(vec![manual_link(
+                Also,
+                "y.service",
+                "z.service",
+                HostInstallOnly,
+                &[],
+            )]),
+        ],
+        2,
+        &host_names(2),
+    )
+    .expect("a merged section");
+    assert_eq!(swapped.manual_links.len(), 1);
+    assert_eq!(swapped.manual_links[0].cause, VendorInstallOnly);
+}
+
+/// § 12: `undetermined_installs` merge by unit, with `install_files` the
+/// union and the reason of the first host in hostname order; the
+/// prevalence counts every host that recorded one. A record for another
+/// unit is a row of its own.
+#[test]
+fn undetermined_installs_merge_by_unit() {
+    use inspectah_core::types::units::InstallUnknown::{ForeignName, Specifier, UpheldBy};
+    use inspectah_core::types::units::UndeterminedInstall;
+    let record = |unit: &str, reason, files: &[&str]| UndeterminedInstall {
+        unit: unit_name(unit),
+        reason,
+        install_files: files.iter().map(|p| (*p).to_owned()).collect(),
+        aggregate: None,
+    };
+    let section = |records| {
+        Some(UnitSection {
+            undetermined_installs: records,
+            ..Default::default()
+        })
+    };
+    const A: &str = "/etc/systemd/system/u.service.d/10-a.conf";
+    const B: &str = "/etc/systemd/system/u.service.d/20-b.conf";
+    let result = merge_service_sections(
+        vec![
+            section(vec![record("u.service", Specifier, &[A])]),
+            section(vec![
+                record("u.service", ForeignName, &[B, A]),
+                record("v.service", UpheldBy, &[]),
+            ]),
+        ],
+        2,
+        &host_names(2),
+    )
+    .expect("a merged section");
+    let rows: Vec<_> = result
+        .undetermined_installs
+        .iter()
+        .map(|r| {
+            (
+                r.unit.as_str(),
+                r.reason,
+                r.install_files.clone(),
+                prevalence(&r.aggregate),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                "u.service",
+                Specifier,
+                vec![A.to_owned(), B.to_owned()],
+                (2, 2, host_names(2)),
+            ),
+            ("v.service", UpheldBy, vec![], (1, 2, vec!["h2".to_owned()])),
+        ]
+    );
+}
+
+/// The default target `name`, recorded included, from a vendor file.
+fn default_target(name: &str) -> inspectah_core::types::units::DefaultTarget {
+    use inspectah_core::types::units::{TargetUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: unit_name(name),
+        owning_package: Some("systemd".into()),
+    };
+    inspectah_core::types::units::DefaultTarget {
+        target: TargetUnit::try_from(
+            UnitSubject::new(unit_name(name), fragment).expect("file is the unit"),
+        )
+        .expect("a target"),
+        disposition: FindingKind::included(),
+        locked: false,
+        aggregate: None,
+    }
+}
+
+/// A section holding a default target alone, or none.
+fn target_section(name: Option<&str>) -> Option<UnitSection> {
+    Some(UnitSection {
+        default_target: name.map(default_target),
+        ..Default::default()
+    })
+}
+
+/// § 12: `default_target` takes the most prevalent target, and is excluded
+/// when the hosts do not all agree, the rule `narrow_non_universal`
+/// applies. Three hosts, two agreeing: their target, prevalence two of
+/// three, excluded. Every host agreeing: included. A tie goes to the first
+/// host in hostname order. A host with no default target disagrees too. No
+/// host with one: none.
+#[test]
+fn the_default_target_merges_to_the_most_prevalent_one() {
+    let merged = |names: &[Option<&str>]| {
+        merge_service_sections(
+            names.iter().map(|n| target_section(*n)).collect(),
+            names.len(),
+            &host_names(names.len()),
+        )
+        .expect("a merged section")
+        .default_target
+    };
+    let summary = |target: Option<inspectah_core::types::units::DefaultTarget>| {
+        target.map(|t| {
+            (
+                t.target.name().as_unit_name().as_str().to_owned(),
+                t.disposition.is_included(),
+                prevalence(&t.aggregate),
+            )
+        })
+    };
+    let hosts = |names: &[&str]| names.iter().map(|h| (*h).to_owned()).collect::<Vec<_>>();
+
+    assert_eq!(
+        summary(merged(&[
+            Some("multi-user.target"),
+            Some("graphical.target"),
+            Some("graphical.target"),
+        ])),
+        Some((
+            "graphical.target".to_owned(),
+            false,
+            (2, 3, hosts(&["h2", "h3"]))
+        ))
+    );
+    assert_eq!(
+        summary(merged(&[
+            Some("graphical.target"),
+            Some("graphical.target")
+        ])),
+        Some(("graphical.target".to_owned(), true, (2, 2, host_names(2))))
+    );
+    assert_eq!(
+        summary(merged(&[
+            Some("multi-user.target"),
+            Some("graphical.target")
+        ])),
+        Some((
+            "multi-user.target".to_owned(),
+            false,
+            (1, 2, hosts(&["h1"]))
+        ))
+    );
+    assert_eq!(
+        summary(merged(&[Some("graphical.target"), None])),
+        Some(("graphical.target".to_owned(), false, (1, 2, hosts(&["h1"]))))
+    );
+    assert_eq!(summary(merged(&[None, None])), None);
 }

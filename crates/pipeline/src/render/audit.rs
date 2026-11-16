@@ -110,7 +110,7 @@ fn collect_group_advisories(snap: &InspectionSnapshot, group: SectionGroup) -> V
         }
         SectionGroup::Services => {
             // Service drop-ins with FullShadow
-            if let Some(services) = &snap.services {
+            if let Some(services) = &snap.units {
                 for drop_in in &services.drop_ins {
                     if drop_in.shadow_type == Some(ShadowType::FullShadow)
                         && let Some(ref rationale) = drop_in.shadow_rationale
@@ -187,7 +187,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
             }
         }
 
-        if let Some(services) = &snap.services {
+        if let Some(services) = &snap.units {
             for d in &services.drop_ins {
                 if d.variant_selection == VariantSelection::Selected
                     || d.variant_selection == VariantSelection::Alternative
@@ -976,33 +976,36 @@ fn render_fcontext_rules(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
 
 /// Render Services sections (services, scheduled_tasks).
 fn render_services_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
-    // Service State Changes
-    if let Some(services) = &snap.services
+    // Unit State Changes
+    if let Some(services) = &snap.units
         && !services.state_changes.is_empty()
     {
-        lines.push("### Service State Changes".into());
+        lines.push("### Unit State Changes".into());
         lines.push(String::new());
         lines.push("| Unit | Current | Default | Action |".into());
         lines.push("|------|---------|---------|--------|".into());
         for sc in &services.state_changes {
-            let state_str = match sc.current_state {
-                inspectah_core::types::services::ServiceUnitState::Enabled => "enabled",
-                inspectah_core::types::services::ServiceUnitState::Disabled => "disabled",
-                inspectah_core::types::services::ServiceUnitState::Masked => "masked",
+            let state_str = match sc.current_state() {
+                inspectah_core::types::units::UnitState::Enabled => "enabled",
+                inspectah_core::types::units::UnitState::Disabled => "disabled",
+                inspectah_core::types::units::UnitState::Masked => "masked",
             };
             let default_str = match sc.default_state {
-                Some(inspectah_core::types::services::PresetDefault::Enable) => "enable",
-                Some(inspectah_core::types::services::PresetDefault::Disable) => "disable",
+                Some(inspectah_core::types::units::PresetDefault::Enable) => "enable",
+                Some(inspectah_core::types::units::PresetDefault::Disable) => "disable",
                 None => "unknown",
             };
             let action_str = match sc.implied_action() {
-                inspectah_core::types::services::ServiceAction::Enable => "enable",
-                inspectah_core::types::services::ServiceAction::Disable => "disable",
-                inspectah_core::types::services::ServiceAction::Mask => "mask",
+                inspectah_core::types::units::UnitAction::Enable => "enable",
+                inspectah_core::types::units::UnitAction::Disable => "disable",
+                inspectah_core::types::units::UnitAction::Mask => "mask",
             };
             lines.push(format!(
                 "| {} | {} | {} | {} |",
-                sc.unit, state_str, default_str, action_str
+                sc.unit().name().as_str(),
+                state_str,
+                default_str,
+                action_str
             ));
         }
         lines.push(String::new());
@@ -1605,7 +1608,7 @@ mod tests {
         use inspectah_core::types::completeness::{Completeness, InspectorId};
         let mut snap = InspectionSnapshot::new();
         snap.completeness = Completeness::Incomplete {
-            failed_sections: vec![InspectorId::Config, InspectorId::Services],
+            failed_sections: vec![InspectorId::Config, InspectorId::Units],
             degraded_sections: vec![],
             reason: "timeout during inspection".into(),
         };
@@ -1615,7 +1618,7 @@ mod tests {
             "must contain Incomplete Sections heading"
         );
         assert!(md.contains("config"), "must list config section");
-        assert!(md.contains("services"), "must list services section");
+        assert!(md.contains("- `units`"), "must list units section");
         assert!(
             md.contains("timeout during inspection"),
             "must include the reason"
@@ -1680,7 +1683,7 @@ mod tests {
                 section_host_counts: BTreeMap::from([
                     ("config".into(), 3usize),
                     ("rpm".into(), 3),
-                    ("services".into(), 2),
+                    ("units".into(), 2),
                 ]),
             }),
             ..Default::default()
@@ -1702,14 +1705,14 @@ mod tests {
         assert!(report.contains("### Section Coverage"));
         assert!(report.contains("| config | 3 |"));
         assert!(report.contains("| rpm | 3 |"));
-        assert!(report.contains("| services | 2 |"));
+        assert!(report.contains("| units | 2 |"));
     }
 
     #[test]
     fn test_audit_aggregate_variant_conflicts() {
         use inspectah_core::types::aggregate::{AggregateSnapshotMeta, VariantSelection};
         use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+        use inspectah_core::types::units::{SystemdDropIn, UnitSection};
         use std::collections::BTreeMap;
 
         let mut snap = InspectionSnapshot {
@@ -1741,7 +1744,7 @@ mod tests {
         });
 
         // Add service drop-in with variant conflict
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 path: "/etc/systemd/system/foo.service.d/override.conf".into(),
                 variant_selection: VariantSelection::Alternative,
@@ -2024,8 +2027,8 @@ mod tests {
     fn test_grouped_audit_report_with_advisories() {
         use inspectah_core::types::finding::AdvisoryType;
         use inspectah_core::types::rpm::InstalledGroup;
-        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
         use inspectah_core::types::storage::{StorageSection, UnbackedVarAdvisory};
+        use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 
         let mut snap = InspectionSnapshot::new();
 
@@ -2058,7 +2061,7 @@ mod tests {
         });
 
         // Services section with FullShadow drop-in
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
                 disposition: FindingKind::included(),
@@ -2123,7 +2126,7 @@ mod tests {
     /// as collected; the not-carried list stays empty until they are set.
     fn not_carried_host() -> InspectionSnapshot {
         use inspectah_core::types::rpm::FileOwnershipEntry;
-        use inspectah_core::types::services::ServiceSection;
+        use inspectah_core::types::units::{UnitInventoryEntry, UnitSection, UnitState};
         let auto = |name: &str, arch: &str, repo: &str| PackageEntry {
             name: name.into(),
             arch: arch.into(),
@@ -2171,11 +2174,32 @@ mod tests {
             ],
             ..Default::default()
         });
-        snap.services = Some(ServiceSection {
-            enabled_units: vec![
-                "firewalld.service".into(),
-                "crond.service".into(),
-                "crond-backup.timer".into(),
+        snap.units = Some(UnitSection {
+            inventory: vec![
+                UnitInventoryEntry {
+                    unit: "firewalld.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "crond.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "crond-backup.timer"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
             ],
             ..Default::default()
         });

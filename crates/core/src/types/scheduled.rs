@@ -1,5 +1,6 @@
 use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
+use super::units::UnitName;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -17,6 +18,10 @@ pub struct CronJob {
     pub aggregate: Option<AggregatePrevalence>,
 }
 
+/// A systemd timer found on the host, as a description: when it fires and
+/// what it runs. It controls nothing. A local timer's file is a config
+/// entry with its own row, and the timer's state is a unit row in the
+/// units section.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SystemdTimer {
     #[serde(default)]
@@ -31,16 +36,36 @@ pub struct SystemdTimer {
     pub source: String,
     #[serde(default)]
     pub path: String,
+    /// The unit the timer starts, as the inspector resolved it from this
+    /// file and its drop-ins (§ 8).
     #[serde(default)]
-    pub timer_content: String,
-    #[serde(default)]
-    pub service_content: String,
-    #[serde(default)]
-    pub disposition: FindingKind,
-    #[serde(default, skip_serializing_if = "crate::is_false")]
-    pub locked: bool,
+    pub trigger: TimerTrigger,
+    /// The drop-ins under `/etc/systemd/system` whose leaving out can
+    /// change `trigger` (§ 8): the one that holds the accepted `Unit=`, and
+    /// any at or before it that hides a drop-in of its file name. A drop-in
+    /// after the accepted value, or one whose `Unit=` lines are all
+    /// ignored, is not listed unless it hides another. For an `Unresolved`
+    /// trigger, every `/etc` drop-in up to and including the one holding
+    /// that value. The timer's own file is never listed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trigger_drop_ins: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aggregate: Option<AggregatePrevalence>,
+}
+
+/// The unit a timer starts (§ 8): its `Unit=`, or the same-named
+/// `.service` when it sets none.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimerTrigger {
+    /// The unit the timer starts.
+    Unit(UnitName),
+    /// `Unit=` holds a value the inspector cannot make into a unit name.
+    /// Also what a description that records no trigger reads as, so a
+    /// snapshot that lacks the field is never read as having no trigger to
+    /// check.
+    #[default]
+    Unresolved,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -80,6 +105,16 @@ pub struct GeneratedTimerUnit {
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub aggregate: Option<AggregatePrevalence>,
+}
+
+impl GeneratedTimerUnit {
+    /// Whether this unit was generated from the cron job recorded at
+    /// `cron_path`. Both paths are recorded without their leading `/` by
+    /// the scheduled inspector; an imported snapshot may spell either with
+    /// one, so the comparison ignores it.
+    pub fn generated_from(&self, cron_path: &str) -> bool {
+        self.source_path.trim_start_matches('/') == cron_path.trim_start_matches('/')
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

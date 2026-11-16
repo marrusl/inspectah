@@ -30,7 +30,7 @@ demotes `epel-release` behind a false "not carried" FIXME, the audit says
 
 Routed through it today: `render/repo_enabling.rs` `keys_included` (which
 `section_survives`, `repo_enabling_export`, the audit Carried column,
-`service_intent` and `repoless::disabled_repo_install` all use), and
+`unit_plan` and `repoless::disabled_repo_install` all use), and
 refine's `RepoIndex::build`, which resolves each section's key path to the
 captured key paths so `gpg_keys_by_section`, the carry rule and the
 session's exclude/include cascade work on real key paths. The aggregate

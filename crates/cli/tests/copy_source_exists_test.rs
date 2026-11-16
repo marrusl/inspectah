@@ -31,7 +31,7 @@ use inspectah_collect::inspectors::containers::ContainersInspector;
 use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
-use inspectah_collect::inspectors::services::ServicesInspector;
+use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::Inspector;
@@ -422,10 +422,7 @@ fn populated_host_mock(cache_dir: &Path) -> MockExecutor {
             ok("flathub\thttps://dl.flathub.org/repo/\n"),
         )
         // -- services --------------------------------------------------
-        .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
-            ok(SYSTEMCTL),
-        )
+        .with_command("systemctl list-unit-files --no-pager", ok(SYSTEMCTL))
         .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
         .with_file("/usr/lib/systemd/system-preset/90-default.preset", PRESET)
         .with_command("test -d /etc/systemd/system/httpd.service.d", ok(""))
@@ -444,7 +441,7 @@ fn scan_like(exec: &MockExecutor) -> InspectionSnapshot {
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
         Box::new(ConfigInspector::new()),
-        Box::new(ServicesInspector::new()),
+        Box::new(UnitsInspector::new()),
         Box::new(ContainersInspector),
         Box::new(NonRpmInspector::new()),
     ];
@@ -558,7 +555,7 @@ fn the_fixture_populates_the_optional_export_directories() {
     );
 
     let drop_ins: Vec<&str> = snapshot
-        .services
+        .units
         .as_ref()
         .expect("the services section")
         .drop_ins
@@ -720,4 +717,52 @@ fn the_refine_web_export_satisfies_every_copy_it_emits() {
             .exists(),
         "the included cached RPM is extracted, or the reverse guard is vacuous over it"
     );
+}
+
+// ── A generated unit the stager withholds ────────────────────────────
+
+/// The populated host with a config entry under the flatpak provisioning
+/// service's path as a directory, as an imported or hand-edited snapshot
+/// can hold. The stager withholds both files, so no `COPY` may name the
+/// service, on either export path. Without the entry the service is
+/// copied (the fixture test above asserts `COPY flatpak/`).
+#[test]
+fn a_withheld_flatpak_service_is_no_copy_source_on_either_path() {
+    use inspectah_core::types::FindingKind;
+    use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry};
+
+    let cache = tempfile::tempdir().expect("tempdir");
+    let mut snapshot = scan_like(&populated_host_mock(cache.path()));
+    snapshot
+        .config
+        .as_mut()
+        .expect("the config section")
+        .files
+        .push(ConfigFileEntry {
+            path: "/etc/systemd/system/flatpak-provision.service/extra.conf".into(),
+            category: ConfigCategory::Other,
+            content: "[Service]\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    scan_export(&snapshot, dir.path());
+    assert_every_copy_source_exists("CLI scan export, service withheld", dir.path());
+    assert_every_staged_file_is_copied("CLI scan export, service withheld", dir.path());
+
+    // The repo-less packages start excluded in refine, so the export
+    // extracts nothing from a scan tarball and needs none.
+    let session = RefineSession::new(snapshot);
+    let tarball = dir.path().join("export.tar.gz");
+    session
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball)
+        .expect("the export writes");
+    let unpacked = dir.path().join("unpacked");
+    std::fs::create_dir_all(&unpacked).expect("mkdir");
+    let root = unpack(&tarball, &unpacked);
+    assert_every_copy_source_exists("refine web export, service withheld", &root);
+    assert_every_staged_file_is_copied("refine web export, service withheld", &root);
 }

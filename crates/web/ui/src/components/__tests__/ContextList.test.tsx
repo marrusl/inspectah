@@ -5,7 +5,7 @@ import type { ReferenceSection } from "../../api/types";
 
 describe("ContextList", () => {
   const mockSection: ReferenceSection = {
-    id: "services",
+    id: "units",
     display_name: "Services",
     items: [
       {
@@ -50,7 +50,7 @@ describe("ContextList", () => {
 
   it("renders EmptyState when section has no items", () => {
     const emptySection: ReferenceSection = {
-      id: "services",
+      id: "units",
       display_name: "Services",
       items: [],
     };
@@ -85,7 +85,7 @@ describe("ContextList", () => {
 
   it("renders subsections after main items", () => {
     const section: ReferenceSection = {
-      id: "services",
+      id: "units",
       display_name: "Services",
       items: [
         {
@@ -123,7 +123,7 @@ describe("ContextList", () => {
 
   it("does not show empty state when only subsections exist", () => {
     const section: ReferenceSection = {
-      id: "services",
+      id: "units",
       display_name: "Services",
       items: [],
       subsections: [

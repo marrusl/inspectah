@@ -100,7 +100,7 @@ describe("useKeyboard", () => {
     renderHook(() => useKeyboard(opts));
 
     fireEvent.keyDown(document, { key: "4" });
-    expect(opts.onSectionChange).toHaveBeenCalledWith("services");
+    expect(opts.onSectionChange).toHaveBeenCalledWith("units");
   });
 
   it("maps key 5 to containers", () => {
@@ -253,7 +253,7 @@ describe("useKeyboard", () => {
         slug: "services-scheduling",
         label: "Services & Scheduling",
         sections: [
-          { id: "services", label: "Services", is_triage: true },
+          { id: "units", label: "Services", is_triage: true },
           { id: "scheduled_tasks", label: "Scheduled Tasks", is_triage: false },
           { id: "containers", label: "Containers", is_triage: true },
         ],
@@ -321,7 +321,7 @@ describe("useKeyboard", () => {
       renderHook(() => useKeyboard(opts));
 
       fireEvent.keyDown(document, { key: "3" });
-      expect(opts.onSectionChange).toHaveBeenCalledWith("services");
+      expect(opts.onSectionChange).toHaveBeenCalledWith("units");
     });
 
     it("key 4 navigates to singleton group (users_groups)", () => {

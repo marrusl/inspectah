@@ -17,6 +17,9 @@ import type {
   RefinementOp,
   ReferenceSection,
   NotCarriedRow,
+  ContextItem,
+  DeclinedGeneratedView,
+  DeclinedView,
 } from "../api/types";
 import { isIncluded, isToggleable } from "../api/disposition";
 import { applyOp, ungroupGroup } from "../api/client";
@@ -47,7 +50,7 @@ const SECTION_LABELS: Record<string, string> = {
   packages: "Packages",
   config: "Configuration Files",
   configs: "Config Files",
-  services: "Services",
+  units: "Services",
   containers: "Containers",
   compose: "Compose",
   network: "Network",
@@ -60,6 +63,20 @@ const SECTION_LABELS: Record<string, string> = {
   language_packages: "Language Packages",
   unmanaged_files: "Unmanaged Files",
 };
+
+/**
+ * The declined generated unit a Scheduled Tasks row shows: the one whose
+ * request came from the generated timer this row describes.
+ */
+function scheduledDeclined(
+  declined: DeclinedGeneratedView[],
+  item: ContextItem,
+): DeclinedView | undefined {
+  if (item.generated_timer === undefined) return undefined;
+  return declined.find(
+    (d) => d.row.row === "scheduled" && d.row.name === item.generated_timer,
+  )?.declined;
+}
 
 export interface MainContentProps {
   activeSection: string;
@@ -78,10 +95,11 @@ export interface MainContentProps {
    */
   resetCounter?: number;
   /**
-   * Set to a new object after each successful Undo or Redo, naming the
-   * users whose record that step changed. Their kept failures were about
-   * the record the step replaced, so they are cleared; other users keep
-   * theirs.
+   * Set to a new object after every successful Undo or Redo, naming the
+   * users whose record that step changed, possibly none. Their kept
+   * failures were about the record the step replaced, so they are
+   * cleared; other users keep theirs. Every generated-timer failure ends
+   * on any step.
    */
   historyChange?: HistoryChange;
   /** When set, auto-expands any collapsed summary containing this item ID. */
@@ -244,7 +262,7 @@ export function MainContent({
   const shadowOwners = useMemo(
     () =>
       viewData
-        ? buildShadowOwners(viewData.config_files, viewData.service_dropins)
+        ? buildShadowOwners(viewData.config_files, viewData.unit_dropins)
         : new Map(),
     [viewData],
   );
@@ -313,6 +331,7 @@ export function MainContent({
   const tunedGuard = usePendingGuard();
   const usersGuard = usePendingGuard();
   const serviceGuard = usePendingGuard();
+  const scheduledGuard = usePendingGuard();
   // Failed Users requests, by username. Held here for the same reason as
   // the guards: the card that shows the failure unmounts on a section
   // switch, and a request that fails while the operator is away must
@@ -338,6 +357,35 @@ export function MainContent({
       new Set((viewData.users_groups_decisions ?? []).map((u) => u.name)),
     );
   }, [viewData, retainUserFailures]);
+  // Failed generated-timer toggles, by generated name, kept here with
+  // `scheduledGuard` so a failure that settles after a section switch is
+  // still on the row when the operator returns. A reset ends every one, a
+  // name that leaves the view ends its own, and an Undo or Redo ends all
+  // of them, since either can replace the row's state.
+  const generatedFailures = useItemFailures<string>();
+  const {
+    begin: beginGeneratedAttempt,
+    clearAll: clearGeneratedFailures,
+    retain: retainGeneratedFailures,
+    end: endGeneratedFailures,
+  } = generatedFailures;
+  useEffect(() => {
+    clearGeneratedFailures();
+  }, [resetCounter, clearGeneratedFailures]);
+  useEffect(() => {
+    if (historyChange) {
+      endGeneratedFailures(
+        (viewData?.generated_timers ?? []).map((g) => g.name),
+      );
+    }
+    // Keyed on the history step alone: a new view must not end them.
+  }, [historyChange, endGeneratedFailures]);
+  useEffect(() => {
+    if (!viewData) return;
+    retainGeneratedFailures(
+      new Set(viewData.generated_timers.map((g) => g.name)),
+    );
+  }, [viewData, retainGeneratedFailures]);
   const runPackage = packageGuard.runGuarded;
   const runRepo = repoGuard.runGuarded;
   const runGroup = groupGuard.runGuarded;
@@ -707,15 +755,21 @@ export function MainContent({
   }
 
   // Services decision section — promoted from context to decision.
-  if (activeSection === "services") {
-    const services = viewData?.service_states ?? [];
-    const shadowCount = services.filter(
-      (s) => s.shadow_type === "full_shadow",
+  if (activeSection === "units") {
+    const services = viewData ? viewData.unit_states : [];
+    const dropins = viewData ? viewData.unit_dropins : [];
+    // No fallback for a view that lacks the field: the type requires it,
+    // and an empty default would hide a server that stopped sending it.
+    const mountFindings = viewData ? viewData.mount_findings : [];
+    const manualLinks = viewData ? viewData.manual_links : [];
+    const undeterminedInstalls = viewData ? viewData.undetermined_installs : [];
+    const shadowCount = dropins.filter(
+      (d) => d.shadow_type === "full_shadow",
     ).length;
     const headerText =
       shadowCount > 0
-        ? `${SECTION_LABELS.services} (${shadowCount} shadow override${shadowCount === 1 ? "" : "s"})`
-        : SECTION_LABELS.services;
+        ? `${SECTION_LABELS.units} (${shadowCount} shadow override${shadowCount === 1 ? "" : "s"})`
+        : SECTION_LABELS.units;
 
     return (
       <>
@@ -724,7 +778,14 @@ export function MainContent({
         </Content>
         <ServiceSection
           services={services}
-          dropins={viewData?.service_dropins ?? []}
+          dropins={dropins}
+          mountFindings={mountFindings}
+          manualLinks={manualLinks}
+          undeterminedInstalls={undeterminedInstalls}
+          defaultTarget={viewData?.default_target}
+          onNavigateToConfig={(configPath) =>
+            onNavigateToItem?.("config", `configs:${configPath}`)
+          }
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
           pendingGuard={serviceGuard}
@@ -766,6 +827,10 @@ export function MainContent({
         <ContainerSection
           quadlets={viewData?.quadlets ?? []}
           flatpaks={viewData?.flatpaks ?? []}
+          flatpakDeclined={
+            viewData?.declined_generated.find((d) => d.row.row === "flatpak")
+              ?.declined
+          }
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
           pendingGuard={containerGuard}
@@ -905,7 +970,68 @@ export function MainContent({
             {section.ifcfg_note}
           </Alert>
         )}
-        <ContextList key={lookupId} section={section} />
+        <ContextList
+          key={lookupId}
+          section={section}
+          onNavigateToUnit={
+            onNavigateToItem &&
+            ((unit) => onNavigateToItem("units", unit))
+          }
+          declinedFor={
+            lookupId === "scheduled_tasks"
+              ? (item) =>
+                  scheduledDeclined(viewData?.declined_generated ?? [], item)
+              : undefined
+          }
+          controlFor={
+            lookupId === "scheduled_tasks"
+              ? (item) => {
+                  const name = item.generated_timer;
+                  const row = viewData?.generated_timers.find(
+                    (g) => g.name === name,
+                  );
+                  if (name === undefined || !row) return undefined;
+                  const key = JSON.stringify(["generated-timer", name]);
+                  return {
+                    include: row.include,
+                    disabled:
+                      row.locked || scheduledGuard.pendingKeys.has(key),
+                    // Including is refused while a source cron job is
+                    // excluded. Excluding is not: while any record of the
+                    // name is still included, the toggle stays.
+                    blockedReason:
+                      !row.include && row.cron_job_excluded
+                        ? `Excluded with its cron job ${row.cron_job_excluded}; include the cron job to carry this unit.`
+                        : undefined,
+                    failure: generatedFailures.failures.get(name),
+                    onToggle: () => {
+                      const include = !row.include;
+                      const op: RefinementOp = {
+                        op: "SetInclude",
+                        target: {
+                          item_id: { kind: "GeneratedTimer", key: { name } },
+                          include,
+                        },
+                      };
+                      scheduledGuard.runGuarded(key, () => {
+                        const recordFailure = beginGeneratedAttempt(name);
+                        return applyOp(op)
+                          .then((updated) => onViewUpdate(updated))
+                          .catch((err) => {
+                            const error =
+                              err instanceof Error ? err : new Error(String(err));
+                            recordFailure(
+                              `Could not ${include ? "include" : "exclude"} ${name}: ${error.message}`,
+                            );
+                            onMutationError(error);
+                          });
+                      });
+                    },
+                  };
+                }
+              : undefined
+          }
+        />
       </>
     );
   }

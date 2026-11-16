@@ -3,7 +3,7 @@ source: crates/cli/src/progress/pretty.rs
 expression: "e2e_full_output(&r, &buf, &scan)"
 ---
   ✓ RPM packages                 200 packages, 3 repos
-  ✓ Services                     15 units
+  ✓ Units                        15 units
   ✓ Storage                      done
   ✓ Kernel & boot                done
   ✓ Network                      done

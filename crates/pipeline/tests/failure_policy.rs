@@ -31,8 +31,10 @@ use inspectah_core::types::completeness::{
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::redaction::RedactionState;
-use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::system::SourceSystem;
+use inspectah_core::types::units::{
+    SystemdDropIn, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
+};
 use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 use inspectah_pipeline::render::{audit, containerfile, secrets};
@@ -70,27 +72,39 @@ fn minimal_mock() -> MockExecutor {
 /// Build a snapshot with services Degraded — partial data present.
 /// Includes a state_change entry to verify degraded data still renders.
 fn snapshot_with_degraded_services() -> InspectionSnapshot {
-    use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
+    use inspectah_core::types::units::{PresetDefault, UnitState};
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: "httpd.service".into(),
-            current_state: ServiceUnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::included(),
-            locked: false,
-            owning_package: None,
-            aggregate: None,
-            attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
-        }],
-        enabled_units: vec!["httpd.service".into()],
-        disabled_units: vec!["cups.service".into()],
+    snap.units = Some(UnitSection {
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
+        inventory: vec![
+            UnitInventoryEntry {
+                unit: "httpd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            },
+            UnitInventoryEntry {
+                unit: "cups.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Disabled,
+                preset: None,
+            },
+        ],
         ..Default::default()
     });
     snap.completeness = Completeness::Partial {
-        degraded_sections: vec![InspectorId::Services],
+        degraded_sections: vec![InspectorId::Units],
         reason: "services inspector returned partial data".into(),
     };
     snap
@@ -101,7 +115,7 @@ fn snapshot_with_failed_services() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     // services is None — failed inspector produced no data
     snap.completeness = Completeness::Incomplete {
-        failed_sections: vec![InspectorId::Services],
+        failed_sections: vec![InspectorId::Units],
         degraded_sections: vec![],
         reason: "services inspector failed: permission denied".into(),
     };
@@ -112,8 +126,15 @@ fn snapshot_with_failed_services() -> InspectionSnapshot {
 /// a secret value, to test that redaction still scans degraded content.
 fn snapshot_with_degraded_services_and_secret() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
-        enabled_units: vec!["myapp.service".into()],
+    snap.units = Some(UnitSection {
+        inventory: vec![UnitInventoryEntry {
+            unit: "myapp.service"
+                .to_owned()
+                .try_into()
+                .expect("valid unit name"),
+            state: UnitState::Enabled,
+            preset: None,
+        }],
         drop_ins: vec![SystemdDropIn {
             unit: "myapp.service".into(),
             path: "etc/systemd/system/myapp.service.d/override.conf".into(),
@@ -125,7 +146,7 @@ fn snapshot_with_degraded_services_and_secret() -> InspectionSnapshot {
         ..Default::default()
     });
     snap.completeness = Completeness::Partial {
-        degraded_sections: vec![InspectorId::Services],
+        degraded_sections: vec![InspectorId::Units],
         reason: "services inspector returned partial data".into(),
     };
     snap
@@ -168,7 +189,7 @@ struct DegradedServicesInspector;
 
 impl Inspector for DegradedServicesInspector {
     fn id(&self) -> InspectorId {
-        InspectorId::Services
+        InspectorId::Units
     }
 
     fn applicable_to(&self) -> &[SourceSystemKind] {
@@ -182,8 +203,15 @@ impl Inspector for DegradedServicesInspector {
     ) -> Result<InspectorOutput, InspectorError> {
         Err(InspectorError::Degraded {
             partial: Box::new(InspectorOutput {
-                section: SectionData::Services(ServiceSection {
-                    enabled_units: vec!["httpd.service".into()],
+                section: SectionData::Units(UnitSection {
+                    inventory: vec![UnitInventoryEntry {
+                        unit: "httpd.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
+                    }],
                     ..Default::default()
                 }),
                 warnings: vec![],
@@ -199,7 +227,7 @@ struct FailedServicesInspector;
 
 impl Inspector for FailedServicesInspector {
     fn id(&self) -> InspectorId {
-        InspectorId::Services
+        InspectorId::Units
     }
 
     fn applicable_to(&self) -> &[SourceSystemKind] {
@@ -254,12 +282,57 @@ fn degraded_section_contributes_to_containerfile_with_fixme() {
         "degraded services content must appear in Containerfile"
     );
 
-    // FIXME annotation present for the degraded section
-    assert!(
-        output.contains("# FIXME: services data may be incomplete"),
-        "degraded section must have FIXME comment in Containerfile"
+    // The notice directly precedes the unit state section, so its reader
+    // sees it, and it is worded for units.
+    let lines: Vec<&str> = output.lines().collect();
+    let state = lines
+        .iter()
+        .position(|l| *l == "# === Systemd Unit State ===")
+        .unwrap_or_else(|| panic!("no unit state section:\n{output}"));
+    assert_eq!(
+        lines.get(state.wrapping_sub(1)),
+        Some(&UNITS_DEGRADED),
+        "{output}"
     );
+    assert!(!output.contains("services data"), "{output}");
+
+    // With a drop-in staged, the drop-ins section's reader sees it too.
+    let mut with_drop_in = snap.clone();
+    with_drop_in
+        .units
+        .as_mut()
+        .expect("a units section")
+        .drop_ins
+        .push(inspectah_core::types::units::SystemdDropIn {
+            unit: "httpd.service".into(),
+            path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
+            content: "[Service]\nLimitNOFILE=65535\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+    let output = containerfile::render_containerfile(&with_drop_in, None, None);
+    let lines: Vec<&str> = output.lines().collect();
+    for header in ["# === Service Drop-ins ===", "# === Systemd Unit State ==="] {
+        let at = lines
+            .iter()
+            .position(|l| *l == header)
+            .unwrap_or_else(|| panic!("no {header}:\n{output}"));
+        assert_eq!(
+            lines.get(at.wrapping_sub(1)),
+            Some(&UNITS_DEGRADED),
+            "{header}:\n{output}"
+        );
+    }
+
+    // Control: the same snapshot, not degraded, has no notice.
+    let mut complete = with_drop_in;
+    complete.completeness = Completeness::Complete;
+    let output = containerfile::render_containerfile(&complete, None, None);
+    assert!(!output.contains(UNITS_DEGRADED), "{output}");
 }
+
+/// The units-degraded notice, as the Containerfile writes it.
+const UNITS_DEGRADED: &str = "# FIXME: units data may be incomplete (inspector returned degraded)";
 
 /// 2. Failed section excluded from Containerfile — no services content.
 #[test]
@@ -277,8 +350,8 @@ fn failed_section_excluded_from_containerfile() {
         "failed services must not produce systemctl disable in Containerfile"
     );
     assert!(
-        !output.contains("Service Enablement"),
-        "failed services must not produce Service Enablement heading"
+        !output.contains("Systemd Unit State"),
+        "failed services must not produce the Systemd Unit State heading"
     );
 
     // The top-level incompleteness warning IS expected
@@ -306,8 +379,8 @@ fn failed_section_appears_in_audit_with_explanation() {
         "audit report must distinguish failed sections with a Failed subheading"
     );
     assert!(
-        md.contains("services"),
-        "audit report must list the failed services section"
+        md.contains("- `units`"),
+        "audit report must list the failed units section"
     );
 
     // Must include the reason
@@ -373,8 +446,8 @@ fn all_success_produces_complete() {
 
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(SuccessInspector {
-            id: InspectorId::Services,
-            section: SectionData::Services(Default::default()),
+            id: InspectorId::Units,
+            section: SectionData::Units(Default::default()),
         }),
         Box::new(SuccessInspector {
             id: InspectorId::Storage,
@@ -430,7 +503,7 @@ fn one_degraded_produces_partial() {
             degraded_sections, ..
         } => {
             assert!(
-                degraded_sections.contains(&InspectorId::Services),
+                degraded_sections.contains(&InspectorId::Units),
                 "Services must be in degraded_sections"
             );
         }
@@ -439,7 +512,7 @@ fn one_degraded_produces_partial() {
 
     // Degraded partial data must be routed
     assert!(
-        pipeline.state.snapshot.services.is_some(),
+        pipeline.state.snapshot.units.is_some(),
         "degraded services partial data must be routed to snapshot"
     );
 }
@@ -472,7 +545,7 @@ fn one_failed_produces_incomplete() {
             failed_sections, ..
         } => {
             assert!(
-                failed_sections.contains(&InspectorId::Services),
+                failed_sections.contains(&InspectorId::Units),
                 "Services must be in failed_sections"
             );
         }
@@ -481,7 +554,7 @@ fn one_failed_produces_incomplete() {
 
     // Failed inspector produces no data
     assert!(
-        pipeline.state.snapshot.services.is_none(),
+        pipeline.state.snapshot.units.is_none(),
         "failed services must not have data in snapshot"
     );
 }
@@ -498,9 +571,16 @@ fn panicking_inspector_produces_failed_status() {
 
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(SuccessInspector {
-            id: InspectorId::Services,
-            section: SectionData::Services(ServiceSection {
-                enabled_units: vec!["httpd.service".into()],
+            id: InspectorId::Units,
+            section: SectionData::Units(UnitSection {
+                inventory: vec![UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                }],
                 ..Default::default()
             }),
         }),
@@ -522,7 +602,7 @@ fn panicking_inspector_produces_failed_status() {
 
     // Non-panicking inspectors must succeed
     assert!(
-        pipeline.state.snapshot.services.is_some(),
+        pipeline.state.snapshot.units.is_some(),
         "services must succeed despite another inspector panicking"
     );
     assert!(
@@ -1174,4 +1254,18 @@ fn test_wave2_rpm_unavailable_fails_all_dependents() {
         }
         // Ok or Degraded are both acceptable — the point is it's not Failed.
     }
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

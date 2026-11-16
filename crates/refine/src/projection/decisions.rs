@@ -13,7 +13,25 @@ use inspectah_pipeline::render::not_carried::{
     NotCarriedPackage, not_carried_notice_for, not_carried_packages,
 };
 
-use super::types::{DecisionProjection, NotCarriedRow, RepoGroup};
+use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::units::{
+    AdminStorageFragment, CarriedUnit, UnitAction, UnitFragment, UnitName,
+};
+use inspectah_pipeline::render::configtree::{
+    Destination, PathError, StagedFileKind, StagedWrites, WithheldWhy, staged_writes,
+};
+use inspectah_pipeline::render::unit_plan::{
+    DeclinedLine, DeclinedMarker, DropInRole, GeneratedSource, OmissionReason, UnitPlan,
+    declined_line, default_target_line, etc_unit_path, install_drop_in_role, plan_units,
+};
+
+use super::types::{
+    AlsoView, ConfigWithheldView, DecisionProjection, DeclinedGeneratedView, DeclinedRenders,
+    DeclinedView, DefaultTargetView, DropInView, FragmentView, GeneratedRowView,
+    GeneratedTimerView, ManualLinkView, MountFindingView, NotCarriedRow, RepoGroup,
+    UndeterminedInstallView, UnitStateView, UnmanagedWithheldView, WithheldView,
+};
+use crate::types::{RefinedDropIn, RefinedServiceState};
 
 /// Build a [`DecisionProjection`] from the current session state.
 ///
@@ -23,8 +41,22 @@ use super::types::{DecisionProjection, NotCarriedRow, RepoGroup};
 pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let snap = session.snapshot_projected();
 
-    // Classify services → tuple of (states, dropins)
-    let (service_states, service_dropins) = classify_services(&snap);
+    // Classify units → tuple of (states, dropins), then attach what the
+    // export does with each: the plan and the stager's decision, computed
+    // once each over the projected snapshot, as the export computes them.
+    let (states, dropins) = classify_services(&snap);
+    let staged = staged_writes(&snap);
+    let plan = plan_units(&snap, &staged);
+    let withheld = WithheldIndex::new(&staged);
+    let unit_states = unit_state_views(&snap, states, &plan);
+    let unit_dropins = drop_in_views(dropins, &withheld);
+    let mount_findings = mount_finding_views(&snap, &plan);
+    let (manual_links, undetermined_installs) = link_finding_views(&snap, &plan);
+    let default_target = default_target_view(&snap, &plan);
+    let config_withheld = config_withheld_views(&snap, &withheld);
+    let declined_generated = declined_generated_views(&plan);
+    let generated_timers = generated_timer_views(&snap);
+    let unmanaged_withheld = unmanaged_withheld_views(&snap, &withheld);
 
     // Classify containers → tuple of (quadlets, flatpaks)
     let (quadlets, flatpaks) = classify_containers(&snap);
@@ -63,8 +95,13 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let baseline_summary = session.baseline_summary();
 
     DecisionProjection {
-        service_states,
-        service_dropins,
+        unit_states,
+        unit_dropins,
+        mount_findings,
+        manual_links,
+        undetermined_installs,
+        default_target,
+        config_withheld,
         quadlets,
         flatpaks,
         tuned,
@@ -75,7 +112,384 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
         baseline_summary,
         not_carried,
         not_carried_notice,
+        declined_generated,
+        generated_timers,
+        unmanaged_withheld,
     }
+}
+
+/// One view per included unmanaged-file row whose file the export
+/// withholds, by the row's own path.
+fn unmanaged_withheld_views(
+    snap: &InspectionSnapshot,
+    withheld: &WithheldIndex<'_>,
+) -> Vec<UnmanagedWithheldView> {
+    snap.unmanaged_files
+        .iter()
+        .flat_map(|section| &section.items)
+        .filter(|file| file.disposition.is_included())
+        .filter_map(|file| {
+            withheld
+                .view(StagedFileKind::UnmanagedFile, &file.path)
+                .map(|withheld| UnmanagedWithheldView {
+                    path: file.path.clone(),
+                    withheld,
+                })
+        })
+        .collect()
+}
+
+/// One view per generated-timer name, in the scheduled section's order,
+/// with the include flag of the projected snapshot. Two cron sources can
+/// generate one name, and the export carries the name while any of its
+/// records is included, so the row is included while any record is. The
+/// session ignores an include of a name while any of its records is
+/// locked, so the row is locked while any record is.
+fn generated_timer_views(snap: &InspectionSnapshot) -> Vec<GeneratedTimerView> {
+    let mut views: Vec<GeneratedTimerView> = Vec::new();
+    for unit in snap
+        .scheduled_tasks
+        .iter()
+        .flat_map(|st| &st.generated_timer_units)
+    {
+        if let Some(view) = views.iter_mut().find(|v| v.name == unit.name) {
+            view.include |= unit.disposition.is_included();
+            view.locked |= unit.locked;
+            continue;
+        }
+        views.push(GeneratedTimerView {
+            name: unit.name.clone(),
+            include: unit.disposition.is_included(),
+            locked: unit.locked,
+        });
+    }
+    views
+}
+
+/// One view per generated unit's request the plan declined, with the row
+/// it came from (§ 11.1).
+fn declined_generated_views(plan: &UnitPlan) -> Vec<DeclinedGeneratedView> {
+    plan.generated_declined
+        .iter()
+        .map(|decline| DeclinedGeneratedView {
+            row: match &decline.source {
+                GeneratedSource::Cron { name } => {
+                    GeneratedRowView::Scheduled { name: name.clone() }
+                }
+                GeneratedSource::FlatpakProvisioning => GeneratedRowView::Flatpak,
+            },
+            unit: decline.unit.clone(),
+            declined: declined_view(&decline.unit, UnitAction::Enable, &decline.reason),
+        })
+        .collect()
+}
+
+/// The default target's row (§ 11.1), from the snapshot's record, with
+/// the plan's decline written by [`default_target_line`], as the
+/// Containerfile writes it.
+fn default_target_view(snap: &InspectionSnapshot, plan: &UnitPlan) -> Option<DefaultTargetView> {
+    let target = snap.units.as_ref()?.default_target.as_ref()?;
+    Some(DefaultTargetView {
+        target: target.target.name().as_unit_name().clone(),
+        include: target.disposition.is_included(),
+        locked: target.locked,
+        declined: plan
+            .default_target_declined
+            .as_ref()
+            .map(|(name, reason)| line_view(default_target_line(name, reason), reason)),
+    })
+}
+
+/// The row's view of a declined command: [`declined_line`] decides the
+/// marker and the text, as it does for the Containerfile.
+fn declined_view(name: &UnitName, action: UnitAction, reason: &OmissionReason) -> DeclinedView {
+    line_view(declined_line(name, action, reason), reason)
+}
+
+/// A declined line as a row shows it: its marker, the reason's variant
+/// name, and its text.
+fn line_view(line: DeclinedLine, reason: &OmissionReason) -> DeclinedView {
+    DeclinedView {
+        renders: match line.marker {
+            DeclinedMarker::Omitted => DeclinedRenders::Omitted,
+            DeclinedMarker::Fixme => DeclinedRenders::Fixme,
+            DeclinedMarker::Advisory => DeclinedRenders::Advisory,
+        },
+        reason: reason.name().to_owned(),
+        text: line.text,
+    }
+}
+
+/// One view per state change row, each with the plan's decline, if any.
+/// A row the plan does not decline (planned, or excluded, as a
+/// runtime updater is) has none. A carried instance's attention notes from
+/// the plan (§ 10.8), then its data advisory, follow the row's own note,
+/// one sentence after another.
+fn unit_state_views(
+    snap: &InspectionSnapshot,
+    states: Vec<RefinedServiceState>,
+    plan: &UnitPlan,
+) -> Vec<UnitStateView> {
+    let declined: BTreeMap<&UnitName, (UnitAction, &OmissionReason)> = plan
+        .declined
+        .iter()
+        .map(|(name, action, reason)| (name, (*action, reason)))
+        .collect();
+    let mut notes: BTreeMap<&UnitName, Vec<&str>> = BTreeMap::new();
+    for (name, note) in plan.instance_notes.iter().chain(&plan.data_advisories) {
+        notes.entry(name).or_default().push(note);
+    }
+    states
+        .into_iter()
+        .map(|RefinedServiceState { entry, triage }| {
+            let name = entry.unit().name();
+            let (fragment, unit_file_path) = match entry.unit() {
+                CarriedUnit::Ordinary(unit) => match unit.fragment() {
+                    UnitFragment::Vendor { .. } => (FragmentView::Vendor, None),
+                    UnitFragment::Local { file } => {
+                        (FragmentView::Local, Some(etc_unit_path(file)))
+                    }
+                    UnitFragment::Shadowed { file, .. } => {
+                        (FragmentView::Shadowed, Some(etc_unit_path(file)))
+                    }
+                    UnitFragment::Absent => (FragmentView::Absent, None),
+                },
+                CarriedUnit::PackagedStorage(_) => (FragmentView::Vendor, None),
+            };
+            UnitStateView {
+                unit: name.clone(),
+                kind: name.kind().suffix().to_owned(),
+                instance_of: name.instance().map(|instance| instance.template()),
+                current_state: entry.current_state(),
+                default_state: entry.default_state,
+                fragment,
+                unit_file_path,
+                owning_package: entry.unit().owning_package().map(str::to_owned),
+                also: entry
+                    .also
+                    .iter()
+                    .map(|member| AlsoView {
+                        unit: member.unit.clone(),
+                        links: member.links,
+                    })
+                    .collect(),
+                // Only the install files: a runtime drop-in recorded for
+                // what an instance reads holds no `[Install]` (§ 7.5).
+                install_drop_ins: entry
+                    .install_drop_ins
+                    .iter()
+                    .filter(|path| install_drop_in_role(snap, &entry, path) == DropInRole::Install)
+                    .cloned()
+                    .collect(),
+                required_config: entry.required_config.clone(),
+                data_paths: entry.data_paths.clone(),
+                include: entry.disposition.is_included(),
+                locked: entry.locked,
+                triage,
+                attention_reason: {
+                    let sentences: Vec<&str> = entry
+                        .attention_reason
+                        .as_deref()
+                        .into_iter()
+                        .chain(notes.get(name).into_iter().flatten().copied())
+                        .collect();
+                    (!sentences.is_empty()).then(|| sentences.join(" "))
+                },
+                declined: declined
+                    .get(name)
+                    .map(|(action, reason)| declined_view(name, *action, reason)),
+            }
+        })
+        .collect()
+}
+
+/// The stager's withheld and refused offers, keyed as a row finds its own:
+/// a withheld file by its destination and the kind of row that offered
+/// it, so a path spelled two ways finds its row; a refused offer by the
+/// path as offered, which is the row's own.
+struct WithheldIndex<'a> {
+    withheld: BTreeMap<(&'a Destination, StagedFileKind), &'a WithheldWhy>,
+    refused: BTreeMap<(StagedFileKind, &'a str), PathError>,
+}
+
+impl<'a> WithheldIndex<'a> {
+    fn new(staged: &'a StagedWrites<'_>) -> Self {
+        let mut withheld = BTreeMap::new();
+        for (dest, kind, why) in &staged.withheld {
+            withheld.entry((dest, *kind)).or_insert(why);
+        }
+        let refused = staged
+            .refused
+            .iter()
+            .map(|(kind, path, error)| ((*kind, path.as_str()), *error))
+            .collect();
+        Self { withheld, refused }
+    }
+
+    /// Why the export does not write the file a row of `kind` offers at
+    /// `path`, or `None` when it writes it.
+    fn view(&self, kind: StagedFileKind, path: &str) -> Option<WithheldView> {
+        match Destination::new(path) {
+            Ok(dest) => self
+                .withheld
+                .get(&(&dest, kind))
+                .map(|why| WithheldView::Withheld {
+                    why: why.name().to_owned(),
+                    text: why.describe(&dest),
+                }),
+            Err(_) => self
+                .refused
+                .get(&(kind, path))
+                .map(|error| WithheldView::Refused {
+                    rule: error.name().to_owned(),
+                    text: error.to_string(),
+                }),
+        }
+    }
+}
+
+/// One view per drop-in row, with its parent's kind and, for an included
+/// row, why the export does not write its file.
+fn drop_in_views(dropins: Vec<RefinedDropIn>, withheld: &WithheldIndex<'_>) -> Vec<DropInView> {
+    dropins
+        .into_iter()
+        .map(|RefinedDropIn { entry, triage }| {
+            let kind = UnitName::try_from(entry.unit.clone())
+                .ok()
+                .map(|name| name.kind().suffix().to_owned());
+            let withheld = entry
+                .disposition
+                .is_included()
+                .then(|| withheld.view(StagedFileKind::DropIn, &entry.path))
+                .flatten();
+            DropInView {
+                entry,
+                triage,
+                kind,
+                withheld,
+            }
+        })
+        .collect()
+}
+
+/// Every included config row whose file the export does not write.
+fn config_withheld_views(
+    snap: &InspectionSnapshot,
+    withheld: &WithheldIndex<'_>,
+) -> Vec<ConfigWithheldView> {
+    snap.config
+        .iter()
+        .flat_map(|config| &config.files)
+        .filter(|file| file.disposition.is_included())
+        .filter_map(|file| {
+            withheld
+                .view(StagedFileKind::ConfigFile, &file.path)
+                .map(|withheld| ConfigWithheldView {
+                    path: file.path.clone(),
+                    withheld,
+                })
+        })
+        .collect()
+}
+
+/// One view per mount finding, with § 10.6's lines from the plan, which
+/// holds one block per finding in the section's order.
+fn mount_finding_views(snap: &InspectionSnapshot, plan: &UnitPlan) -> Vec<MountFindingView> {
+    let Some(units) = &snap.units else {
+        return Vec::new();
+    };
+    let config_rows: BTreeMap<Destination, &str> = snap
+        .config
+        .iter()
+        .flat_map(|config| &config.files)
+        .filter_map(|file| Some((Destination::new(&file.path).ok()?, file.path.as_str())))
+        .collect();
+    debug_assert_eq!(
+        units.mount_findings.len(),
+        plan.mount_advisories.len(),
+        "plan_units builds one advisory block per mount finding, in order, so the two zip \
+         positionally"
+    );
+    units
+        .mount_findings
+        .iter()
+        .zip(&plan.mount_advisories)
+        .map(|(finding, advisories)| {
+            let name = finding.unit.name().as_unit_name();
+            let fragment = match finding.unit.fragment() {
+                AdminStorageFragment::Local => FragmentView::Local,
+                AdminStorageFragment::Shadowed { .. } => FragmentView::Shadowed,
+                AdminStorageFragment::UnownedVendor => FragmentView::Vendor,
+                AdminStorageFragment::MaskOnly => FragmentView::Absent,
+            };
+            let unit_file_path = match fragment {
+                FragmentView::Local | FragmentView::Shadowed => {
+                    Destination::new(&etc_unit_path(name))
+                        .ok()
+                        .and_then(|dest| config_rows.get(&dest))
+                        .map(|path| (*path).to_owned())
+                }
+                FragmentView::Vendor | FragmentView::Absent => None,
+            };
+            MountFindingView {
+                unit: name.clone(),
+                kind: name.kind().suffix().to_owned(),
+                state: finding.state_change.map(|(state, _)| state),
+                mount_point: finding.mount_point.clone(),
+                fragment,
+                unit_file_path,
+                advisories: advisories.clone(),
+            }
+        })
+        .collect()
+}
+
+/// One view per hand-made link and one per undetermined install record,
+/// each with § 10.9's lines and the install files the export does not
+/// stage, from the plan, which holds one per record in the section's
+/// order.
+fn link_finding_views(
+    snap: &InspectionSnapshot,
+    plan: &UnitPlan,
+) -> (Vec<ManualLinkView>, Vec<UndeterminedInstallView>) {
+    let Some(units) = &snap.units else {
+        return (Vec::new(), Vec::new());
+    };
+    debug_assert_eq!(
+        (units.manual_links.len(), units.undetermined_installs.len()),
+        (
+            plan.link_advisories.len(),
+            plan.undetermined_advisories.len()
+        ),
+        "plan_units builds one advisory block per link and per record, in order, so they zip \
+         positionally"
+    );
+    let links = units
+        .manual_links
+        .iter()
+        .zip(&plan.link_advisories)
+        .map(|(link, advisory)| ManualLinkView {
+            relation: link.relation,
+            parent: link.parent.clone(),
+            unit: link.unit.clone(),
+            cause: link.cause,
+            advisories: advisory.lines.clone(),
+            not_applied: advisory.not_applied.clone(),
+        })
+        .collect();
+    let records = units
+        .undetermined_installs
+        .iter()
+        .zip(&plan.undetermined_advisories)
+        .map(|(record, advisory)| UndeterminedInstallView {
+            unit: record.unit.clone(),
+            reason: record.reason,
+            install_files: record.install_files.clone(),
+            advisories: advisory.lines.clone(),
+            not_applied: advisory.not_applied.clone(),
+        })
+        .collect();
+    (links, records)
 }
 
 /// One not-carried package as refine shows it.
@@ -155,12 +569,26 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroup> {
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::snapshot::InspectionSnapshot;
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::{RpmSection, VersionChangeDirection};
-    use inspectah_core::types::services::{
-        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+    use inspectah_core::types::units::{
+        PresetDefault, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
     };
 
     /// Snapshot with one service state change.
@@ -168,23 +596,31 @@ mod tests {
         InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection::default()),
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: Some("httpd".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
+            units: Some(UnitSection {
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "httpd.service".to_owned().try_into().unwrap(),
+                            Some("httpd".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
+                inventory: vec![UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
                 }],
-                enabled_units: vec!["httpd.service".into()],
-                disabled_units: vec![],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         }
@@ -195,8 +631,8 @@ mod tests {
         let session = RefineSession::new(snapshot_with_service());
         let proj = project_decisions(&session);
 
-        assert_eq!(proj.service_states.len(), 1);
-        assert_eq!(proj.service_states[0].entry.unit, "httpd.service");
+        assert_eq!(proj.unit_states.len(), 1);
+        assert_eq!(proj.unit_states[0].unit.as_str(), "httpd.service");
     }
 
     #[test]
@@ -209,8 +645,8 @@ mod tests {
         let session = RefineSession::new(snap);
         let proj = project_decisions(&session);
 
-        assert!(proj.service_states.is_empty());
-        assert!(proj.service_dropins.is_empty());
+        assert!(proj.unit_states.is_empty());
+        assert!(proj.unit_dropins.is_empty());
         assert!(proj.quadlets.is_empty());
         assert!(proj.flatpaks.is_empty());
         assert!(proj.tuned.is_empty());
@@ -279,19 +715,18 @@ mod tests {
                 }],
                 ..Default::default()
             }),
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "sshd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: Some("openssh-server".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                }],
+            units: Some(UnitSection {
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "sshd.service".to_owned().try_into().unwrap(),
+                            Some("openssh-server".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Enable),
+                    )
+                    .unwrap(),
+                ],
                 ..Default::default()
             }),
             config: Some(ConfigSection { files: vec![] }),

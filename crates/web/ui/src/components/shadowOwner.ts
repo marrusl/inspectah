@@ -5,7 +5,7 @@ import type {
 } from "../api/types";
 
 /** Section ID the Service Drop-ins rows render under. */
-const SERVICES_SECTION_ID = "services";
+const SERVICES_SECTION_ID = "units";
 
 /**
  * Where a shadowed config file's include decision actually lives.
@@ -33,7 +33,7 @@ export interface ShadowOwner {
 /**
  * Resolve the owner of a shadowed config entry.
  *
- * The join key is the path string itself: `service_dropins[].path` is the
+ * The join key is the path string itself: `unit_dropins[].path` is the
  * same string the shadow was computed from in
  * `shadow_matching_config_entries`, so no extra field is needed.
  * Returns null when the entry is not shadowed.
@@ -42,7 +42,7 @@ export function resolveShadowOwner(
   entry: ConfigFileEntry,
   dropins: DropInDecisionDto[],
 ): ShadowOwner | null {
-  if (entry.shadowed_by === "services") {
+  if (entry.shadowed_by === "units") {
     const owner = dropins.find((d) => d.path === entry.path);
     return {
       label: "Controlled in Service Drop-ins",

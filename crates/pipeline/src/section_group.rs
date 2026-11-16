@@ -57,7 +57,7 @@ impl SectionGroup {
             "config" | "configs" | "kernel_boot" | "system_tuning" | "selinux" => {
                 Self::SystemConfig
             }
-            "services" | "scheduled_tasks" | "containers" | "compose" => Self::Services,
+            "units" | "scheduled_tasks" | "containers" | "compose" => Self::Services,
             "users_groups" => Self::Identity,
             "network" => Self::Network,
             "storage" => Self::Storage,
@@ -146,7 +146,7 @@ impl SectionGroup {
             ],
             Self::Services => &[
                 SectionMeta {
-                    id: "services",
+                    id: "units",
                     label: "Services",
                     is_triage: true,
                 },
@@ -235,10 +235,7 @@ mod tests {
             SectionGroup::for_section("selinux"),
             SectionGroup::SystemConfig
         );
-        assert_eq!(
-            SectionGroup::for_section("services"),
-            SectionGroup::Services
-        );
+        assert_eq!(SectionGroup::for_section("units"), SectionGroup::Services);
         assert_eq!(
             SectionGroup::for_section("scheduled_tasks"),
             SectionGroup::Services
@@ -300,7 +297,7 @@ mod tests {
             "configs",
             "kernel_boot",
             "selinux",
-            "services",
+            "units",
             "containers",
             "scheduled_tasks",
             "compose",
@@ -316,6 +313,31 @@ mod tests {
         for id in web_ids {
             let _ = SectionGroup::for_section(id);
         }
+    }
+
+    /// The unit section routes by its snapshot key, `units`. The old key
+    /// `services` no longer reaches the group: it falls to the default.
+    #[test]
+    fn unit_section_routes_by_units_not_services() {
+        assert_eq!(SectionGroup::for_section("units"), SectionGroup::Services);
+        assert!(
+            SectionGroup::Services
+                .member_sections()
+                .iter()
+                .any(|s| s.id == "units"),
+            "`units` is a member section of its group"
+        );
+
+        assert_ne!(
+            SectionGroup::for_section("services"),
+            SectionGroup::Services
+        );
+        assert!(
+            SectionGroup::all_in_order()
+                .iter()
+                .all(|g| g.member_sections().iter().all(|s| s.id != "services")),
+            "no group lists `services` as a member section"
+        );
     }
 
     #[test]
@@ -349,7 +371,7 @@ mod tests {
             "kernel_boot",
             "system_tuning",
             "selinux",
-            "services",
+            "units",
             "containers",
             "scheduled_tasks",
             "compose",

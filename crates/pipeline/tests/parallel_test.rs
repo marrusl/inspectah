@@ -195,8 +195,8 @@ fn independent_inspectors_run_concurrently() {
 
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(DelayedInspector {
-            id: InspectorId::Services,
-            section: SectionData::Services(Default::default()),
+            id: InspectorId::Units,
+            section: SectionData::Units(Default::default()),
             delay,
         }),
         Box::new(DelayedInspector {
@@ -224,7 +224,7 @@ fn independent_inspectors_run_concurrently() {
 
     // All three sections must be populated
     assert!(
-        pipeline.state.snapshot.services.is_some(),
+        pipeline.state.snapshot.units.is_some(),
         "services section must be present"
     );
     assert!(
@@ -288,8 +288,8 @@ fn rpm_failure_propagates() {
 
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(DelayedInspector {
-            id: InspectorId::Services,
-            section: SectionData::Services(Default::default()),
+            id: InspectorId::Units,
+            section: SectionData::Units(Default::default()),
             delay: Duration::ZERO,
         }),
         Box::new(FailingInspector {
@@ -308,7 +308,7 @@ fn rpm_failure_propagates() {
 
     // Services should succeed
     assert!(
-        pipeline.state.snapshot.services.is_some(),
+        pipeline.state.snapshot.units.is_some(),
         "services section must be present despite RPM failure"
     );
 
@@ -341,8 +341,8 @@ fn inspector_panic_contained() {
 
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(DelayedInspector {
-            id: InspectorId::Services,
-            section: SectionData::Services(Default::default()),
+            id: InspectorId::Units,
+            section: SectionData::Units(Default::default()),
             delay: Duration::ZERO,
         }),
         Box::new(PanickingInspector),
@@ -364,7 +364,7 @@ fn inspector_panic_contained() {
 
     // Non-panicking inspectors must succeed
     assert!(
-        pipeline.state.snapshot.services.is_some(),
+        pipeline.state.snapshot.units.is_some(),
         "services must succeed despite another inspector panicking"
     );
     assert!(
@@ -542,8 +542,8 @@ fn three_wave_model_enriched_context_api_path() {
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
         Box::new(DelayedInspector {
-            id: InspectorId::Services,
-            section: SectionData::Services(Default::default()),
+            id: InspectorId::Units,
+            section: SectionData::Units(Default::default()),
             delay: Duration::ZERO,
         }),
     ];
@@ -563,7 +563,7 @@ fn three_wave_model_enriched_context_api_path() {
         "RPM section must be present from Wave 1"
     );
     assert!(
-        pipeline.state.snapshot.services.is_some(),
+        pipeline.state.snapshot.units.is_some(),
         "Services section must be present from Wave 1"
     );
 

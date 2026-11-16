@@ -158,4 +158,9 @@ describe("user failures across Undo", () => {
     await failPasswordThenUndo();
     expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
   });
+  it("keeps the failure when the Undo changed no user at all", async () => {
+    serve([ALICE, BOB]);
+    await failPasswordThenUndo();
+    expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
+  });
 });

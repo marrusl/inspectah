@@ -1,0 +1,26 @@
+{
+  "schema_version": 27,
+  "meta": {"hostname": "host-a.example.com"},
+  "system_type": "package-mode",
+  "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
+  "preflight": {"status": "ok"},
+  "warnings": [],
+  "redactions": [],
+  "redaction_state": {"state": "fully_redacted", "redacted_by": "t", "config_hash": "h"},
+  "services": {
+    "state_changes": [
+      {
+        "unit": "httpd.service",
+        "current_state": "enabled",
+        "default_state": "disable",
+        "disposition": {"kind": "actionable", "include": true},
+        "owning_package": "httpd",
+        "aggregate": null
+      }
+    ],
+    "enabled_units": ["httpd.service"],
+    "disabled_units": [],
+    "drop_ins": [],
+    "preset_matched_units": []
+  }
+}

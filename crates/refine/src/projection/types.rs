@@ -2,27 +2,48 @@ use serde::{Deserialize, Serialize};
 
 use crate::baseline_summary::BaselineSummary;
 use crate::types::{
-    ItemId, RefinedDropIn, RefinedFlatpak, RefinedQuadlet, RefinedServiceState,
-    RefinedTunedSelection, RepoProvenance, RepoTier,
+    ItemId, RefinedFlatpak, RefinedQuadlet, RefinedTunedSelection, RepoProvenance, RepoTier,
+    TriageTag,
 };
 use inspectah_core::types::FindingKind;
-use inspectah_core::types::ShadowType;
 use inspectah_core::types::config::{ConfigCategory, ConfigShadow};
 use inspectah_core::types::containers::ComposeService;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
-use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::storage::VarDirBacking;
+use inspectah_core::types::units::{
+    InstallUnknown, LinkRelation, ManualLinkCause, MemberLinks, PresetDefault, SystemdDropIn,
+    UnitName, UnitState,
+};
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
-use inspectah_pipeline::render::service_intent::{AdvisoryReason, OmissionReason};
+use inspectah_pipeline::render::unit_plan::{AdvisoryReason, OmissionReason};
 use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 
 // ── Decision projection ──────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionProjection {
-    pub service_states: Vec<RefinedServiceState>,
-    pub service_dropins: Vec<RefinedDropIn>,
+    /// One row per unit state change (§ 11.1).
+    pub unit_states: Vec<UnitStateView>,
+    /// One row per drop-in or full shadow, whether or not its unit has a
+    /// state change row.
+    pub unit_dropins: Vec<DropInView>,
+    /// One row per administrator's mount, automount or swap unit. These
+    /// rows have no toggle.
+    pub mount_findings: Vec<MountFindingView>,
+    /// One row per link inspectah reports and does not carry (§ 11.1).
+    /// These rows have no toggle.
+    pub manual_links: Vec<ManualLinkView>,
+    /// One row per unit whose `[Install]` cannot be relied on (§ 11.1).
+    /// These rows have no toggle.
+    pub undetermined_installs: Vec<UndeterminedInstallView>,
+    /// The default target the host sets, with its toggle (§ 11.1), or
+    /// `None` when the snapshot records none.
+    pub default_target: Option<DefaultTargetView>,
+    /// The included config rows whose file the export does not write, by
+    /// the row's own `path`: only an included row offers a file, so the
+    /// row is the included config entry at that path.
+    pub config_withheld: Vec<ConfigWithheldView>,
     pub quadlets: Vec<RefinedQuadlet>,
     pub flatpaks: Vec<RefinedFlatpak>,
     pub tuned: Vec<RefinedTunedSelection>,
@@ -36,6 +57,256 @@ pub struct DecisionProjection {
     pub not_carried: Vec<NotCarriedRow>,
     /// The notice the export sends for the rows that own an enabled unit.
     pub not_carried_notice: Option<ExportWarning>,
+    /// Every request for a unit inspectah generates that the plan does not
+    /// write, for the scheduled or flatpak row that asked for it (§ 11.1).
+    pub declined_generated: Vec<DeclinedGeneratedView>,
+    /// One row per generated-timer name in the scheduled section, with
+    /// the include flag its `SetInclude` sets (§ 8): the one control of the
+    /// units generated under that name.
+    pub generated_timers: Vec<GeneratedTimerView>,
+    /// The included unmanaged-file rows whose file the export does not
+    /// write, by the row's own `path` (§ 10.2, § 11.1): a file under
+    /// `/etc/systemd/system`, withheld as `UnmanagedUnitPath`.
+    pub unmanaged_withheld: Vec<UnmanagedWithheldView>,
+}
+
+/// The default target's row (§ 11.1): the recorded target, its toggle
+/// (`ItemId::DefaultTarget`), and the plan's `declined` when the export
+/// does not write its `set-default`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefaultTargetView {
+    pub target: UnitName,
+    pub include: bool,
+    pub locked: bool,
+    pub declined: Option<DeclinedView>,
+}
+
+/// An unmanaged-file row's `withheld` (§ 11.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnmanagedWithheldView {
+    /// The unmanaged row's `path`, as the row records it.
+    pub path: String,
+    pub withheld: WithheldView,
+}
+
+/// A generated-timer row's decision (§ 8, § 11.1). Two cron entries of one
+/// file generate units of one name, which are one row: `SetInclude` on the
+/// name decides them together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratedTimerView {
+    /// The `generated_timer_units` name, the row's `ItemId::GeneratedTimer`
+    /// key.
+    pub name: String,
+    /// Whether the export carries the units of this name. Also false when
+    /// the cron job they were generated from is excluded, which excludes
+    /// them with it.
+    pub include: bool,
+    pub locked: bool,
+}
+
+/// The row a generated unit's request came from (§ 11.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "row", rename_all = "snake_case")]
+pub enum GeneratedRowView {
+    /// A scheduled `generated_timer_units` row; `name` is its name, the
+    /// row's id in the scheduled section.
+    Scheduled { name: String },
+    /// The flatpak applications, which share one provisioning service.
+    Flatpak,
+}
+
+/// A generated unit's request the plan declined, and the row to show it on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclinedGeneratedView {
+    pub row: GeneratedRowView,
+    /// The unit the request would have enabled.
+    pub unit: UnitName,
+    pub declined: DeclinedView,
+}
+
+// ── Unit rows (§ 11.1) ───────────────────────────────────────────
+
+/// Where the unit file behind a row is on the source host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FragmentView {
+    /// Under the vendor directory only (for a mount finding: with no
+    /// package known to own it).
+    Vendor,
+    /// Under `/etc/systemd/system` only.
+    Local,
+    /// A vendor file with a copy in `/etc/systemd/system` that replaces it.
+    Shadowed,
+    /// No unit file: a mask on a name that has none.
+    Absent,
+}
+
+/// How the Containerfile writes a command the plan declined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeclinedRenders {
+    /// An `# Omitted:` line.
+    Omitted,
+    /// A `# FIXME:` line (§ 10.3).
+    Fixme,
+    /// An advisory block: how § 10.2 rule 7 renders a declined command.
+    Advisory,
+}
+
+/// Why the export writes no command for a row, as the plan decided it
+/// against the session's current snapshot (§ 11.1). Independent of the
+/// row's `attention_reason`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclinedView {
+    pub renders: DeclinedRenders,
+    /// The `OmissionReason` variant's name (`OmissionReason::name`).
+    pub reason: String,
+    /// The Containerfile line's text after its marker, unescaped
+    /// (`declined_line`).
+    pub text: String,
+}
+
+/// Why the export does not write a file a row offered (§ 11.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum WithheldView {
+    /// The stager withholds the file: the `WithheldWhy` variant's name and
+    /// its text.
+    Withheld { why: String, text: String },
+    /// The offer's path is not a destination the stager accepts: the
+    /// `PathError` variant's name and its text.
+    Refused { rule: String, text: String },
+}
+
+/// One `Also=` member of a unit state row (§ 11.1): its name and what the
+/// links on the source host say about it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlsoView {
+    pub unit: UnitName,
+    pub links: MemberLinks,
+}
+
+/// One unit state change as refine shows it (§ 11.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitStateView {
+    pub unit: UnitName,
+    /// The type suffix, lowercase (`service`, `mount`, ...).
+    pub kind: String,
+    /// The template, when the unit is an instance (`getty@.service` for
+    /// `getty@tty2.service`).
+    pub instance_of: Option<UnitName>,
+    pub current_state: UnitState,
+    pub default_state: Option<PresetDefault>,
+    pub fragment: FragmentView,
+    /// The `/etc` unit file the row was recorded from, for a local or
+    /// shadowed fragment.
+    pub unit_file_path: Option<String>,
+    pub owning_package: Option<String>,
+    /// Every unit `Also=` reaches from this one, with what its links say
+    /// (§ 11.1).
+    pub also: Vec<AlsoView>,
+    /// The row's install drop-ins under `/etc/systemd/system` (§ 11.1),
+    /// and a drop-in ranked above `/etc` that hides one. A runtime drop-in
+    /// the row records for what an instance reads is left out: it holds no
+    /// `[Install]` ([`install_drop_in_role`]).
+    ///
+    /// [`install_drop_in_role`]: inspectah_pipeline::render::unit_plan::install_drop_in_role
+    pub install_drop_ins: Vec<String>,
+    /// The paths under `/etc` a template instance's enable needs in the
+    /// export (§ 7.5, § 10.8).
+    pub required_config: Vec<String>,
+    /// The paths under `/var` that hold a template instance's data, which
+    /// the image does not carry (§ 7.5, § 10.8).
+    pub data_paths: Vec<String>,
+    pub include: bool,
+    pub locked: bool,
+    pub triage: TriageTag,
+    pub attention_reason: Option<String>,
+    /// Present when the plan writes no command for the row.
+    pub declined: Option<DeclinedView>,
+}
+
+/// One drop-in or full shadow row (§ 11.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DropInView {
+    pub entry: SystemdDropIn,
+    pub triage: TriageTag,
+    /// The parent unit's kind, lowercase; `None` when the parent's name is
+    /// not a unit name.
+    pub kind: Option<String>,
+    /// Present when the export does not write the file this row offers.
+    pub withheld: Option<WithheldView>,
+}
+
+/// An included config row whose file the export does not write.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigWithheldView {
+    /// The config row's `path`, as the row records it.
+    pub path: String,
+    pub withheld: WithheldView,
+}
+
+/// One administrator's mount, automount or swap unit (§ 11.1). No
+/// `include`: the row has no toggle. No mount source: `unit_file_path`
+/// names the config row that holds the scrubbed file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MountFindingView {
+    pub unit: UnitName,
+    /// `mount`, `automount` or `swap`.
+    pub kind: String,
+    /// The recorded state, enabled or masked; `None` when it is neither
+    /// (the collector records no other state for these units).
+    pub state: Option<UnitState>,
+    pub mount_point: Option<String>,
+    /// `local`, `shadowed`, `vendor` for an unowned vendor unit, `absent`
+    /// for a mask with no unit file.
+    pub fragment: FragmentView,
+    /// The path of the config row that holds the unit file and its toggle,
+    /// when the snapshot has one.
+    pub unit_file_path: Option<String>,
+    /// § 10.6's lines for the finding, as the Containerfile writes them
+    /// before escaping.
+    pub advisories: Vec<String>,
+}
+
+/// A link inspectah reports and does not carry, as refine shows it
+/// (§ 11.1). No `include`: the row has no toggle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManualLinkView {
+    pub relation: LinkRelation,
+    /// The unit whose dependency directory holds the link, or the alias
+    /// name.
+    pub parent: UnitName,
+    pub unit: UnitName,
+    /// Why the link is not carried; `undetermined` carries its reason.
+    pub cause: ManualLinkCause,
+    /// § 10.9's lines for the link, as the Containerfile writes them before
+    /// escaping; while `not_applied` holds a path, the unit's `# Omitted:`
+    /// line in their place.
+    pub advisories: Vec<String>,
+    /// For an install difference, the unit's install files the export
+    /// does not stage, which keep the advisory out of the Containerfile
+    /// (§ 7.4). Absent while it applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_applied: Vec<String>,
+}
+
+/// A unit whose `[Install]` cannot be relied on, as refine shows it
+/// (§ 11.1). No `include`: the row has no toggle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UndeterminedInstallView {
+    pub unit: UnitName,
+    pub reason: InstallUnknown,
+    /// The unit's install files under `/etc/systemd/system`.
+    pub install_files: Vec<String>,
+    /// § 10.9's block for the unit, as the Containerfile writes it before
+    /// escaping; while `not_applied` holds a path, the unit's `# Omitted:`
+    /// line in its place.
+    pub advisories: Vec<String>,
+    /// The unit's install files the export does not stage, which keep the
+    /// block out of the Containerfile (§ 7.4). Absent while it applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_applied: Vec<String>,
 }
 
 /// One package the export leaves out as not carried: an auto package
@@ -50,11 +321,12 @@ pub struct NotCarriedRow {
     pub display_name: String,
     /// Repository the package was installed from.
     pub source_repo: String,
-    /// Units in `services.enabled_units` the package owns, sorted.
+    /// Units the package owns that the unit inventory records as
+    /// enabled, sorted.
     pub enabled_units: Vec<String>,
     /// The package owns an enabled unit. Exactly these rows are the
     /// packages `not_carried_notice` names, so a client reads this and
-    /// never decides it from `enabled_units` or the services view.
+    /// never decides it from `enabled_units` or the unit rows.
     pub owns_enabled_unit: bool,
 }
 
@@ -118,12 +390,10 @@ pub struct RefServices {
 #[derive(Debug, Clone)]
 pub struct RefServiceItem {
     pub unit: String,
-    pub current_state: ServiceUnitState,
+    pub current_state: UnitState,
     pub default_state: Option<PresetDefault>,
     pub owning_package: Option<String>,
     pub dropin_contents: Vec<String>,
-    pub shadow_type: Option<ShadowType>,
-    pub shadow_rationale: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -271,7 +541,7 @@ pub struct RefConfigRef {
 /// Every surface that renders one reads this, so they cannot diverge.
 pub fn config_ref_summary(entry: &RefConfigRef) -> String {
     match entry.shadowed_by {
-        Some(ConfigShadow::Services) => CONTROLLED_IN_SERVICE_DROP_INS.to_string(),
+        Some(ConfigShadow::Units) => CONTROLLED_IN_SERVICE_DROP_INS.to_string(),
         None => DECIDED_UNDER_CONFIG_FILES.to_string(),
     }
 }
@@ -280,7 +550,7 @@ pub fn config_ref_summary(entry: &RefConfigRef) -> String {
 /// where the file is actually decided.
 pub const DECIDED_UNDER_CONFIG_FILES: &str = "decided under Configuration Files";
 
-/// Summary on a row whose file is carried by a `services.drop_ins`
+/// Summary on a row whose file is carried by a `units.drop_ins`
 /// entry. The Service Drop-ins row keyed by the same path is the one
 /// decision, and the Configuration Files row is inventory.
 pub const CONTROLLED_IN_SERVICE_DROP_INS: &str = "controlled in Service Drop-ins";
@@ -418,4 +688,41 @@ pub struct GenericRefItem {
     pub summary: Option<String>,
     pub content: Option<String>,
     pub tags: Vec<String>,
+    /// On a scheduled timer row only: the unit the timer is, so the row can
+    /// link to its control. `None` on every other row, and on a timer
+    /// whose `<name>.timer` is not a unit name.
+    pub unit_link: Option<TimerUnitLink>,
+    /// On a scheduled row only: which record the row describes, by its
+    /// kind and its source. `None` on every other row.
+    pub scheduled: Option<ScheduledSource>,
+}
+
+/// The record a scheduled row describes (§ 11.1): its kind and what
+/// identifies it among records of that kind. Two rows can share a name
+/// (a shadowed timer's `/etc` and vendor files, a collected timer and a
+/// generated one, two lines of one cron file), never a source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduledSource {
+    /// A cron file, by its path.
+    CronJob { path: String },
+    /// A collected timer, by its file's path; by its name when the
+    /// snapshot records no path.
+    Timer { path: String, name: String },
+    /// An at job, by its spool file.
+    AtJob { file: String },
+    /// A generated timer, by its place in `generated_timer_units`, and the
+    /// name its decision and any decline are keyed by.
+    GeneratedTimer { index: usize, name: String },
+}
+
+/// The unit a scheduled timer row describes (§ 11.1). The row has no
+/// include flag: the timer's state is its unit row's, when it has one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimerUnitLink {
+    /// `<name>.timer`.
+    pub unit: UnitName,
+    /// Whether `unit_states` holds a row for `unit`: one row per state
+    /// change, so this is whether the snapshot records a state change for
+    /// the timer.
+    pub unit_row: bool,
 }

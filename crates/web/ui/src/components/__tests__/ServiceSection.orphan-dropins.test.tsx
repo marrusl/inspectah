@@ -5,6 +5,7 @@ import { ServiceSectionWithGuard as ServiceSection } from "../../test-utils/with
 import type {
   ServiceDecisionDto,
   DropInDecisionDto,
+  MountFindingDto,
   TriageTag,
 } from "../../api/types";
 
@@ -30,9 +31,14 @@ function makeService(
 ): ServiceDecisionDto {
   return {
     unit: "httpd.service",
+    kind: "service",
+    fragment: "vendor",
     triage: TRIAGE,
     include: true,
+    locked: false,
     current_state: "enabled",
+    required_config: [],
+    data_paths: [],
     ...overrides,
   };
 }
@@ -45,6 +51,7 @@ function makeDropin(
     path: ORPHAN_PATH,
     triage: TRIAGE,
     include: true,
+    locked: false,
     ...overrides,
   };
 }
@@ -52,6 +59,9 @@ function makeDropin(
 const defaultProps = {
   services: [] as ServiceDecisionDto[],
   dropins: [] as DropInDecisionDto[],
+  mountFindings: [] as MountFindingDto[],
+  manualLinks: [],
+  undeterminedInstalls: [],
   onViewUpdate: vi.fn(),
   onMutationError: vi.fn(),
 };
@@ -73,6 +83,14 @@ describe("ServiceSection drop-ins without a parent service row", () => {
     expect(
       screen.getByTestId("dropin-orphan-group-sshd.service"),
     ).toBeInTheDocument();
+  });
+
+  it("states that the group's overrides have no unit-state row", () => {
+    render(<ServiceSection {...defaultProps} dropins={[makeDropin()]} />);
+    const group = screen.getByTestId("dropin-orphans");
+    expect(group).toHaveTextContent("These overrides have no unit-state decision row.");
+    // A record's drop-in lands here too, so the note claims nothing about presets.
+    expect(group.textContent).not.toMatch(/preset/i);
   });
 
   it("renders orphan drop-ins when there are no services at all", () => {

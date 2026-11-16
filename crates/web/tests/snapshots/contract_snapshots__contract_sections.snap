@@ -5,7 +5,7 @@ expression: json
 [
   {
     "display_name": "Services",
-    "id": "services",
+    "id": "units",
     "items": [
       {
         "detail": null,
@@ -95,7 +95,7 @@ expression: json
     "items": [
       {
         "detail": null,
-        "id": "/etc/cron.d/logrotate",
+        "id": "cron:/etc/cron.d/logrotate",
         "searchable_text": "logrotate file cron /etc/cron.d/logrotate",
         "subtitle": "file",
         "title": "logrotate"

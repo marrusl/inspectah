@@ -184,7 +184,7 @@ const crates = [
           { text: 'secrets', detail: 'Redacted secrets summary for review' },
           { text: 'tarball', detail: 'Snapshot archive (.tar.gz) packaging' },
           { text: 'users', detail: 'User/group materialization for Containerfile' },
-          { text: 'service_intent', detail: 'Service intent rendering (quadlet/systemd migration)' },
+          { text: 'unit_plan', detail: 'systemctl lines for every unit kind, checked against the staged export' },
           { text: 'safety', detail: 'Safety checks and destructive-action warnings' },
           { text: 'configtree', detail: 'Config file tree visualization' },
           { text: 'baseline_fmt', detail: 'Baseline comparison formatting' },
@@ -288,7 +288,7 @@ const crates = [
         children: [
           { text: 'rpm/', detail: 'RPM package inventory: parser, classifier, modules, repos, source repos' },
           { text: 'config/', detail: 'Modified config files: rpm -Va, directory walk, classification' },
-          { text: 'services', detail: 'systemd unit enumeration: enabled, running, custom units' },
+          { text: 'units', detail: 'systemd units of every kind: state, drop-ins, mount units' },
           { text: 'containers', detail: 'Podman/Docker container inventory' },
           { text: 'network', detail: 'Network interfaces, firewall rules, DNS config' },
           { text: 'storage', detail: 'Block devices, mounts, LVM layout' },
@@ -335,7 +335,7 @@ const crates = [
         children: [
           { text: 'rpm', detail: 'RPM package types: name, version, epoch, release, arch, source' },
           { text: 'config', detail: 'Config file types: path, owner, permissions, diff status' },
-          { text: 'services', detail: 'Systemd service types: unit name, state, enabled, custom' },
+          { text: 'units', detail: 'Systemd unit types: unit name, state, preset, drop-ins' },
           { text: 'network', detail: 'Network types: interfaces, firewall rules, DNS, proxy' },
           { text: 'containers', detail: 'Container types: image, name, state, engine' },
           { text: 'kernelboot', detail: 'Kernel/boot types: parameters, modules, sysctl' },

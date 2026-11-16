@@ -87,7 +87,7 @@ function renderGlobalSearch(overrides: Partial<GlobalSearchProps> = {}) {
     packageItems: [makePackageItem("httpd"), makePackageItem("nginx")],
     configItems: [makeConfigItem("/etc/httpd/httpd.conf")],
     contextSections: [
-      makeReferenceSection("services", [
+      makeReferenceSection("units", [
         { id: "svc:httpd", title: "httpd.service" },
         { id: "svc:nginx", title: "nginx.service" },
       ]),

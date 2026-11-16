@@ -10,7 +10,6 @@
 //! it beside the outcome so the audit report and the view can show both.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::storage::{
@@ -18,7 +17,8 @@ use inspectah_core::types::storage::{
     declaring_unit_label,
 };
 
-use super::service_intent::{installs_on_its_own_route, pulled_in_by_included};
+use super::configtree::{Destination, StagedWrites, is_staged, staged_writes};
+use super::unit_plan::{installs_on_its_own_route, pulled_in_by_included};
 
 /// The directories a unit file can sit in and still be a unit file this
 /// export can reason about.
@@ -126,17 +126,12 @@ enum UnitReach {
 /// The two sets the proof is made from (§ 3.4), plus the lookups that
 /// place a creator in them.
 struct Evidence<'a> {
-    /// Every `config.files` entry's path and whether it is included.
-    config_files: HashMap<&'a str, bool>,
-    /// The live include decision for each `/etc` unit file, by full
-    /// path.
-    ///
-    /// Not `config_files`, because a unit file the services inspector
-    /// also records carries an `Inventory` `config.files` row whose
-    /// `is_included()` is false while the operator's actual decision,
-    /// in `services.drop_ins`, may well be to carry it. Reading the
-    /// config row alone would call every full shadow excluded.
-    etc_unit_includes: HashMap<&'a str, bool>,
+    /// The stager's decision: an `/etc` fragment or unit file reaches the
+    /// image when the export writes a file at its destination
+    /// ([`is_staged`]), whatever section offered it and however its path
+    /// is spelled. A file the stager withholds (a conflict) or refuses is
+    /// not carried, whatever its row's include decision.
+    staged: StagedWrites<'a>,
     /// Every path `rpm.file_ownership` names, to its owning package.
     file_owners: HashMap<&'a str, &'a str>,
     /// The names of the `packages_added` entries the export installs:
@@ -172,30 +167,6 @@ struct Evidence<'a> {
 
 impl<'a> Evidence<'a> {
     fn from_snapshot(snap: &'a InspectionSnapshot) -> Self {
-        let mut config_files = HashMap::new();
-        let mut etc_unit_includes = HashMap::new();
-        if let Some(config) = &snap.config {
-            for entry in &config.files {
-                let included = entry.disposition.is_included();
-                config_files.insert(entry.path.as_str(), included);
-                // An inventory row is a shadow of a decision taken
-                // elsewhere, so it is not the answer for this path.
-                if parent_dir(&entry.path) == Some(ETC_UNIT_DIR)
-                    && !entry.disposition.is_inventory()
-                {
-                    etc_unit_includes.insert(entry.path.as_str(), included);
-                }
-            }
-        }
-        if let Some(services) = &snap.services {
-            for dropin in &services.drop_ins {
-                if parent_dir(&dropin.path) == Some(ETC_UNIT_DIR) {
-                    etc_unit_includes
-                        .insert(dropin.path.as_str(), dropin.disposition.is_included());
-                }
-            }
-        }
-
         let mut file_owners = HashMap::new();
         let mut install_set = HashSet::new();
         let mut baseline = None;
@@ -234,8 +205,7 @@ impl<'a> Evidence<'a> {
         }
 
         Self {
-            config_files,
-            etc_unit_includes,
+            staged: staged_writes(snap),
             file_owners,
             install_set,
             baseline,
@@ -244,11 +214,15 @@ impl<'a> Evidence<'a> {
 
     /// Whether the unit file at `path` reaches the image.
     ///
-    /// An `/etc` unit file is carried on the operator's decision alone:
-    /// the export writes the file itself. A vendor unit file is carried
-    /// with its package.
+    /// An `/etc` unit file is carried when the stager writes it: the
+    /// export writes the file itself. A vendor unit file is carried with
+    /// its package. `path` is read in normal form ([`Destination`]), so
+    /// another spelling of a unit directory is that directory.
     fn unit_file_reach(&self, path: &str) -> UnitReach {
-        let Some(parent) = parent_dir(path) else {
+        let Ok(dest) = Destination::new(path) else {
+            return UnitReach::Lost;
+        };
+        let Some((parent, _)) = dest.as_str().rsplit_once('/') else {
             return UnitReach::Lost;
         };
         if !SYSTEM_UNIT_DIRS.contains(&parent) {
@@ -260,14 +234,15 @@ impl<'a> Evidence<'a> {
         }
         if parent == ETC_UNIT_DIR {
             // The config walk records every admin-written unit file in
-            // this directory, so a path neither it nor the services
-            // inspector names is one no decision carries.
-            return match self.etc_unit_includes.get(path) {
-                Some(true) => UnitReach::Carried,
-                _ => UnitReach::Lost,
+            // this directory, and a full shadow is a drop-in row, so the
+            // stager's answer covers both.
+            return if is_staged(&self.staged, dest.as_str()) {
+                UnitReach::Carried
+            } else {
+                UnitReach::Lost
             };
         }
-        match self.file_owners.get(path) {
+        match self.file_owners.get(dest.as_str()) {
             Some(package) => match self.carriage(package) {
                 Carriage::Carried => UnitReach::Carried,
                 Carriage::Lost => UnitReach::Lost,
@@ -290,11 +265,6 @@ impl<'a> Evidence<'a> {
             None => Carriage::Unknown,
         }
     }
-}
-
-/// The directory a path sits in directly, as a string.
-fn parent_dir(path: &str) -> Option<&str> {
-    Path::new(path).parent()?.to_str()
 }
 
 /// The § 3.4 table, one arm per source backing.
@@ -324,16 +294,17 @@ fn classify(backing: Option<&VarDirBacking>, evidence: &Evidence) -> EffectiveBa
                     },
                 }
             } else {
-                // An `/etc` fragment follows the config decision and
-                // never the provider: the export carries the file
-                // itself. The collector reads no directory other than
+                // An `/etc` fragment follows the stager and never the
+                // provider: the export carries the file itself, when it
+                // writes it. The collector reads no directory other than
                 // the three, so this arm is the `/etc` one.
                 debug_assert!(conf.starts_with(ETC_TMPFILES_PREFIX));
-                match evidence.config_files.get(conf.as_str()) {
-                    Some(true) => EffectiveBacking::Carried,
-                    _ => EffectiveBacking::Provision {
+                if is_staged(&evidence.staged, conf) {
+                    EffectiveBacking::Carried
+                } else {
+                    EffectiveBacking::Provision {
                         lost: Some(conf.clone()),
-                    },
+                    }
                 }
             }
         }

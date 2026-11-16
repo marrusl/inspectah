@@ -23,19 +23,26 @@ use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 use inspectah_core::types::repo::{RepoId, parse_repo_sections};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+use inspectah_core::types::units::UnitAction;
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
-use super::configtree::{StagedFileKind, staged_unit_file, unstaged_files, validate_path};
+use super::comment::escape_comment_text;
+use super::configtree::{
+    Destination, ETC_UNIT_DIR, KARGS_PATH, StagedFileKind, UnstagedWhy, is_staged, staged_count,
+    staged_unit_file, staged_writes, unstaged_files, validate_path,
+};
 use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repoless::PackageRoute;
 use super::safety::{
     BareWord, CopyToken, ExportPath, ExportToken, double_quoted_word_refusal, is_shell_operand,
-    is_valid_tuned_profile, operand_refusal, operator_kargs, sanitize_shell_value,
-    shell_operand_refusal,
+    is_valid_tuned_profile, operand_refusal, sanitize_shell_value, shell_operand_refusal,
 };
-use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
+use super::unit_plan::{
+    GeneratedSource, OmissionReason, declined_line, generated_unit_name, is_package_installable,
+    manual_follow_up_line, plan_units, systemctl_lines, unit_state_lines,
+};
 use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
 
 /// Human-readable label for a `DegradationReason`.
@@ -170,11 +177,13 @@ fn render_containerfile_inner(
         lines.push(String::new());
     }
 
-    // 2. Services
-    if is_degraded(&snap.completeness, InspectorId::Services) {
-        lines.push("# FIXME: services data may be incomplete (inspector returned degraded)".into());
+    // 2. Unit drop-ins and full shadows. The unit state section follows
+    //    the Configuration Files section (§ 10.7), so the units notice is
+    //    written before each of the two.
+    let units_degraded = is_degraded(&snap.completeness, InspectorId::Units);
+    if units_degraded {
+        lines.push(UNITS_DEGRADED_FIXME.into());
     }
-    lines.extend(services_section_lines(snap));
     lines.extend(drop_ins_section_lines(snap));
 
     // 3. Firewall zones
@@ -196,6 +205,14 @@ fn render_containerfile_inner(
         lines.push("# FIXME: config data may be incomplete (inspector returned degraded)".into());
     }
     lines.extend(config_section_lines(snap, materialized_roots));
+
+    // 5b. Unit state: after every COPY that can stage a file for a
+    //     collected unit (drop-ins and shadows, the config tree), so each
+    //     command acts on the file the image loads (§ 10.7).
+    if units_degraded {
+        lines.push(UNITS_DEGRADED_FIXME.into());
+    }
+    lines.extend(unit_state_section_lines(snap));
 
     // 6. Non-RPM software
     if is_degraded(&snap.completeness, InspectorId::NonRpmSoftware) {
@@ -562,19 +579,15 @@ fn packages_section_lines(
     }
 
     // Repo files
-    // Counted from what the stager writes: a repo file whose path it
-    // refuses is not under `config/`, and the config section below names
+    // Counted from what the stager writes: a repo file it refuses or
+    // withholds is not under `config/`, and the config section below names
     // it in a FIXME.
-    let refused_repo_paths: std::collections::HashSet<&str> = unstaged_files(snap)
-        .into_iter()
-        .filter(|(src, _)| src.kind == StagedFileKind::RepoFile)
-        .map(|(src, _)| src.path)
-        .collect();
+    let staged = staged_writes(snap);
     let included_repos: usize = rpm
         .repo_files
         .iter()
         .filter(|r| r.disposition.is_included() && !r.is_default_repo)
-        .filter(|r| !refused_repo_paths.contains(r.path.as_str()))
+        .filter(|r| is_staged(&staged, &r.path))
         .count();
     if included_repos > 0 {
         let body = vec!["COPY config/etc/yum.repos.d/ /etc/yum.repos.d/".into()];
@@ -627,6 +640,21 @@ fn packages_section_lines(
                     "# FIXME: GPG key {} not copied: {e}",
                     language_packages::sanitize_for_comment(&key.path)
                 ));
+                continue;
+            }
+            // A key whose path the stager refuses (an empty path, one
+            // longer than a filesystem allows) is named here, since the
+            // config section leaves refused keys to this one.
+            if let Err(e) = Destination::new(&key.path) {
+                gpg_body.push(format!(
+                    "# FIXME: GPG key {} not copied: {e}",
+                    language_packages::sanitize_for_comment(&key.path)
+                ));
+                continue;
+            }
+            // A key the stager withholds is named in the config section's
+            // FIXME; neither a COPY nor an import may name it here.
+            if !is_staged(&staged, &key.path) {
                 continue;
             }
             if super::safety::sanitize_shell_value(&key.path).is_none() {
@@ -702,10 +730,13 @@ fn packages_section_lines(
                 language_packages::sanitize_for_comment(reason)
             ));
         }
-        lines.extend(section(
-            &format!("GPG Keys ({})", included_gpg.len()),
-            gpg_body,
-        ));
+        // Counted from what the stager writes: a key it withholds or
+        // refuses is named in a FIXME, not carried.
+        let staged_gpg = included_gpg
+            .iter()
+            .filter(|k| is_staged(&staged, &k.path))
+            .count();
+        lines.extend(section(&format!("GPG Keys ({staged_gpg})"), gpg_body));
     }
 
     let mut crb = CrbFlags::new(rpm);
@@ -867,7 +898,7 @@ fn packages_section_lines(
 
     let no_uploads = inspectah_core::types::verified_upload::VerifiedUploads::new();
     let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
-    let pulled_in = super::service_intent::pulled_in_by_included(rpm);
+    let pulled_in = super::unit_plan::pulled_in_by_included(rpm);
 
     let installable_packages: Vec<&PackageEntry> = rpm
         .packages_added
@@ -1214,33 +1245,35 @@ fn not_carried_lines(snap: &InspectionSnapshot) -> Vec<String> {
     lines
 }
 
-// --- Services section (delegated to service_intent authority) ---
+// --- Unit state section (delegated to the unit plan) ---
 
-fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
-    let plan = render_service_intent(snap);
-    section("Service Enablement", plan.lines)
+/// The notice before each units section when the units inspector returned
+/// degraded data.
+const UNITS_DEGRADED_FIXME: &str =
+    "# FIXME: units data may be incomplete (inspector returned degraded)";
+
+/// The unit state section (§ 10.1), its mount advisories (§ 10.6)
+/// included: empty when the plan has no line to write, so a caller can ask
+/// whether the export has one.
+pub(crate) fn unit_state_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
+    let plan = plan_units(snap, &staged_writes(snap));
+    section("Systemd Unit State", unit_state_lines(&plan))
 }
 
 // --- Service Drop-ins section ---
 
 fn drop_ins_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
-    let services = match &snap.services {
-        Some(s) => s,
-        None => return Vec::new(),
-    };
-
-    let included_count = services
-        .drop_ins
-        .iter()
-        .filter(|d| d.disposition.is_included())
-        .count();
+    // Counted from what the stager writes under `drop-ins/`: a drop-in it
+    // withholds is named in the config section's FIXME, and with none
+    // written there is no tree to copy.
+    let included_count = staged_count(&staged_writes(snap), StagedFileKind::DropIn);
     if included_count == 0 {
         return Vec::new();
     }
 
     let mut body = Vec::new();
     body.push(format!(
-        "# {} service drop-in(s) — override snippets for systemd units",
+        "# {} unit drop-in(s): override snippets for systemd units",
         included_count
     ));
     body.push("COPY drop-ins/etc/systemd/system/ /etc/systemd/system/".into());
@@ -1261,10 +1294,13 @@ fn network_section_lines(snap: &InspectionSnapshot, firewall_only: bool) -> Vec<
         // Only count actionable (non-inventory, non-advisory) items.
         // Network findings are inventory — they display data but never
         // produce Containerfile output.
+        // Counted from what the stager writes: a zone it withholds is
+        // named in the configuration FIXME, not in the COPY.
+        let staged = staged_writes(snap);
         let included_zones: usize = network
             .firewall_zones
             .iter()
-            .filter(|z| z.disposition.is_included())
+            .filter(|z| z.disposition.is_included() && is_staged(&staged, &z.path))
             .count();
         let included_direct_rules: usize = network
             .firewall_direct_rules
@@ -1275,7 +1311,7 @@ fn network_section_lines(snap: &InspectionSnapshot, firewall_only: bool) -> Vec<
             let mut fw_body: Vec<String> = Vec::new();
             if included_zones > 0 {
                 fw_body.push(format!(
-                    "# {} custom firewall zone(s) — included in COPY config/etc/ below",
+                    "# {} custom firewall zone(s): included in COPY config/etc/ below",
                     included_zones
                 ));
             }
@@ -1319,16 +1355,33 @@ fn network_section_lines(snap: &InspectionSnapshot, firewall_only: bool) -> Vec<
 
 // --- Scheduled Tasks section ---
 
+/// The stem of the unit file under `/etc/systemd/system` that loads the
+/// local timer `timer`: its own name's, unless it is an instance timer
+/// described from its template's file (its `path` is the template's),
+/// then the template's (`worker@` for `worker@a`).
+fn timer_file_stem(timer: &inspectah_core::types::scheduled::SystemdTimer) -> String {
+    inspectah_core::types::units::UnitName::try_from(format!("{}.timer", timer.name))
+        .ok()
+        .and_then(|unit| unit.instance().map(|parts| parts.template()))
+        .filter(|template| {
+            format!("{ETC_UNIT_DIR}/{}", template.as_str()) == format!("/{}", timer.path)
+        })
+        .and_then(|template| template.as_str().strip_suffix(".timer").map(str::to_owned))
+        .unwrap_or_else(|| timer.name.clone())
+}
+
 fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let st = match &snap.scheduled_tasks {
         Some(s) => s,
         None => return Vec::new(),
     };
 
+    // A local timer is described here and controlled elsewhere (§ 8): its
+    // files are config entries and its enable is a unit row's.
     let local_timers: Vec<_> = st
         .systemd_timers
         .iter()
-        .filter(|t| t.source == "local" && t.disposition.is_included())
+        .filter(|t| t.source == "local")
         .collect();
 
     let included_timers: Vec<_> = st
@@ -1344,21 +1397,45 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     let mut body = Vec::new();
+    let staged = staged_writes(snap);
+    let plan = plan_units(snap, &staged);
 
-    if !local_timers.is_empty() || !included_timers.is_empty() {
+    // The generated units the plan enables are copied here, before their
+    // enable (§ 10.7).
+    if !plan.scheduled.is_empty() {
         body.push("COPY config/etc/systemd/system/ /etc/systemd/system/".into());
     }
 
-    // Timer names are snapshot strings: every one that reaches a comment
-    // is escaped, or a newline in it would end the comment.
-    if !local_timers.is_empty() {
-        let names: Vec<String> = local_timers
+    // A local timer's file is carried by its config or drop-in row (§ 8):
+    // the comment says which timers that row put in the export and which
+    // it did not. Timer names are snapshot strings: every one that reaches
+    // a comment is escaped, or a newline in it would end the comment. An
+    // instance timer described from its template has no file of its own
+    // name: it is carried when its template's file is (§ 8).
+    let (carried, not_carried): (Vec<_>, Vec<_>) = local_timers.iter().partition(|t| {
+        staged_unit_file(&timer_file_stem(t), "timer")
+            .is_some_and(|file| is_staged(&staged, &format!("{ETC_UNIT_DIR}/{file}")))
+    });
+    let shown = |t: &&&inspectah_core::types::scheduled::SystemdTimer| {
+        language_packages::sanitize_for_comment(&format!("{}.timer", t.name))
+    };
+    if !carried.is_empty() {
+        let names: Vec<String> = carried.iter().map(shown).collect();
+        body.push(format!(
+            "# Local timers carried with their configuration or drop-in row ({}): {}",
+            carried.len(),
+            names.join(", ")
+        ));
+    }
+    if !not_carried.is_empty() {
+        let reason = OmissionReason::UnitFileNotStaged.describe();
+        let names: Vec<String> = not_carried
             .iter()
-            .map(|t| language_packages::sanitize_for_comment(&format!("{}.timer", t.name)))
+            .map(|t| format!("{} ({reason})", shown(t)))
             .collect();
         body.push(format!(
-            "# Existing local timers ({}): {}",
-            local_timers.len(),
+            "# Local timers not carried ({}): {}",
+            not_carried.len(),
             names.join(", ")
         ));
     }
@@ -1376,38 +1453,39 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         ));
     }
 
-    // Consolidate timer enables. A unit is enabled only if the config
-    // tree staged it under the same name and the name is safe in a shell
-    // word; otherwise the Containerfile says so in a FIXME.
-    let mut timer_names = Vec::new();
-    for t in &local_timers {
-        if let Some(unit) = enableable_unit(&t.name, "timer", &mut body) {
-            timer_names.push(unit);
-        }
+    // A name the stager refuses, or that is no unit name, is named in a
+    // FIXME here: it is no plan request. Every other request is the
+    // plan's, enabled with the shared helper or declined with its line.
+    for u in included_timers.iter().filter(|u| !u.name.is_empty()) {
+        let suffix = if u.cron_expr == "@reboot" {
+            "service"
+        } else {
+            "timer"
+        };
+        refused_generated_name_fixme(&u.name, suffix, &mut body);
     }
-    let mut reboot_service_names = Vec::new();
-    for u in &included_timers {
-        if !u.name.is_empty() {
-            // @reboot entries have no timer — enable the service instead
-            if u.cron_expr == "@reboot" {
-                if let Some(unit) = enableable_unit(&u.name, "service", &mut body) {
-                    reboot_service_names.push(unit);
-                }
-            } else if let Some(unit) = enableable_unit(&u.name, "timer", &mut body) {
-                timer_names.push(unit);
-            }
-        }
-    }
-    if !timer_names.is_empty() {
-        body.push(format!("RUN systemctl enable {}", timer_names.join(" ")));
-    }
-    if !reboot_service_names.is_empty() {
-        body.push("# @reboot cron job(s) — boot-triggered oneshot service(s):".to_string());
-        body.push(format!(
-            "RUN systemctl enable {}",
-            reboot_service_names.join(" ")
+    for decline in plan
+        .generated_declined
+        .iter()
+        .filter(|d| matches!(d.source, GeneratedSource::Cron { .. }))
+    {
+        body.push(escape_comment_text(
+            &declined_line(&decline.unit, UnitAction::Enable, &decline.reason).comment(),
         ));
     }
+    let reboot_services: Vec<&str> = plan
+        .scheduled
+        .iter()
+        .map(|p| p.name().as_str())
+        .filter(|name| name.ends_with(".service"))
+        .collect();
+    if !reboot_services.is_empty() {
+        body.push(format!(
+            "# @reboot cron job(s), boot-triggered oneshot service(s): {}",
+            reboot_services.join(", ")
+        ));
+    }
+    body.extend(systemctl_lines(None, &plan.scheduled));
 
     if !st.at_jobs.is_empty() {
         body.push(format!(
@@ -1425,25 +1503,21 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     section("Scheduled Tasks", body)
 }
 
-/// The unit file `name.suffix` if it may be enabled: the config tree
-/// staged it ([`staged_unit_file`]) and it is safe as a shell word.
-/// Otherwise push a FIXME, with the name escaped as comment text, and
-/// return `None`.
-fn enableable_unit(name: &str, suffix: &str, body: &mut Vec<String>) -> Option<String> {
+/// Push a FIXME when the generated unit `name.suffix` is no plan request
+/// ([`generated_unit_name`]): the config tree would not stage it under that
+/// name ([`staged_unit_file`]), or it is no [`UnitName`], or it starts like
+/// an option. The name is escaped as comment text.
+fn refused_generated_name_fixme(name: &str, suffix: &str, body: &mut Vec<String>) {
     let shown = language_packages::sanitize_for_comment(name);
-    let Some(unit) = staged_unit_file(name, suffix) else {
+    if staged_unit_file(name, suffix).is_none() {
         body.push(format!(
             "# FIXME: timer {shown} not staged: the name is not a single path component"
         ));
-        return None;
-    };
-    if !is_shell_operand(&unit) {
+    } else if generated_unit_name(name, suffix).is_none() {
         body.push(format!(
             "# FIXME: Timer unit name contains unsafe characters: {shown}"
         ));
-        return None;
     }
-    Some(unit)
 }
 
 // --- Config section ---
@@ -1462,12 +1536,12 @@ fn config_section_lines(
         None => config_copy_roots_from_snapshot(snap),
     };
 
-    // Every file the config tree stager refuses by path, from the
-    // stager's own list and check. GPG keys are left to the GPG section,
-    // which also keeps a refused key off its `rpm --import` line.
+    // Every file the config tree stager refuses or withholds, from the
+    // stager's own decision. A GPG key refused by path is left to the GPG
+    // section, which names it and keeps it off its `rpm --import` line.
     let unstaged: Vec<_> = unstaged_files(snap)
         .into_iter()
-        .filter(|(src, _)| src.kind != StagedFileKind::GpgKey)
+        .filter(|u| !(u.kind == StagedFileKind::GpgKey && matches!(u.why, UnstagedWhy::Refused(_))))
         .collect();
 
     let has_config_content = !config_roots.is_empty()
@@ -1503,13 +1577,14 @@ fn config_section_lines(
             cfg_body.push(String::new());
         }
 
-        // A file the config tree stager refuses is never written, so
-        // say so here.
-        for (src, e) in &unstaged {
+        // A file the config tree stager refuses or withholds is never
+        // written, so say so here.
+        for u in &unstaged {
             cfg_body.push(format!(
-                "# FIXME: {} {} not copied: {e}",
-                src.kind.label(),
-                language_packages::sanitize_for_comment(src.path)
+                "# FIXME: {} {} not copied: {}",
+                u.kind.label(),
+                language_packages::sanitize_for_comment(&u.path),
+                u.why
             ));
         }
 
@@ -1642,14 +1717,32 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         body.push("COPY quadlet/ /etc/containers/systemd/".into());
     }
     if included_flatpaks > 0 {
-        body.push("# Flatpak applications — installed on first boot via oneshot service".into());
+        // The provisioning service is a plan request (§ 10.2 item 3): its
+        // COPY and its enable sit together here, after the unit state
+        // section, only when the plan enables it; a declined request is
+        // named here.
+        let plan = plan_units(snap, &staged_writes(snap));
+        if !plan.workloads.is_empty() {
+            body.push("# Flatpak applications: installed on first boot via oneshot service".into());
+        }
+        for decline in plan
+            .generated_declined
+            .iter()
+            .filter(|d| d.source == GeneratedSource::FlatpakProvisioning)
+        {
+            body.push(escape_comment_text(
+                &declined_line(&decline.unit, UnitAction::Enable, &decline.reason).comment(),
+            ));
+        }
         body.push("# Manifest: flatpak/flatpak-install.json".into());
         body.push("COPY flatpak/ /usr/share/inspectah/flatpak/".into());
-        body.push(
-            "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service"
-                .into(),
-        );
-        body.push("RUN systemctl enable flatpak-provision.service".into());
+        if !plan.workloads.is_empty() {
+            body.push(
+                "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service"
+                    .into(),
+            );
+            body.extend(systemctl_lines(None, &plan.workloads));
+        }
     }
     let total_workloads = included_quadlets + included_flatpaks;
     lines.extend(section(
@@ -1842,9 +1935,9 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // outer header if there's actual content to show.
     let mut body = Vec::new();
 
-    // Kernel arguments
-    let safe_kargs = operator_kargs(&kb.cmdline);
-    if !safe_kargs.is_empty() {
+    // Kernel arguments, when the stager writes the kargs file: one it
+    // withholds is named in the config section's FIXME.
+    if is_staged(&staged_writes(snap), KARGS_PATH) {
         body.push("# Kernel Arguments (bootc-native kargs.d)".into());
         body.push(
             "# These are applied at install and honored across image upgrades. See bootc documentation:"
@@ -1882,7 +1975,6 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 kb.tuned_active
             ));
             body.push("RUN echo \"manual\" > /etc/tuned/profile_mode".into());
-            body.push("RUN systemctl enable tuned.service".into());
         }
     }
 
@@ -2559,6 +2651,20 @@ fn validate_lines() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::completeness::{Completeness, InspectorId};
@@ -2698,23 +2804,24 @@ mod tests {
             }
             make_disabled_repo_package(&mut snap, "openh264", DISABLED_REPO_ID);
             super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
-            snap.services = Some(inspectah_core::types::services::ServiceSection {
-                state_changes: vec![inspectah_core::types::services::ServiceStateChange {
-                    unit: "openh264.service".into(),
-                    current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
-                    default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: Some("openh264".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                }],
-                enabled_units: vec![],
-                disabled_units: vec![],
+            snap.units = Some(inspectah_core::types::units::UnitSection {
+                state_changes: vec![
+                    inspectah_core::types::units::UnitStateChange::new(
+                        test_carried_unit(
+                            "openh264.service".to_owned().try_into().unwrap(),
+                            Some("openh264".into()),
+                        ),
+                        inspectah_core::types::units::UnitState::Enabled,
+                        Some(inspectah_core::types::units::PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
+                inventory: vec![],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             });
             snap
         };
@@ -3302,23 +3409,24 @@ mod tests {
             pkg.repoless_cached = true;
             pkg.repoless_annotation = "No repo source \u{2014} cached RPM bundled".into();
         }
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
-            state_changes: vec![inspectah_core::types::services::ServiceStateChange {
-                unit: "custom-tool.service".into(),
-                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
-                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                owning_package: Some("custom-tool".into()),
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
-            }],
-            enabled_units: vec![],
-            disabled_units: vec![],
+        snap.units = Some(inspectah_core::types::units::UnitSection {
+            state_changes: vec![
+                inspectah_core::types::units::UnitStateChange::new(
+                    test_carried_unit(
+                        "custom-tool.service".to_owned().try_into().unwrap(),
+                        Some("custom-tool".into()),
+                    ),
+                    inspectah_core::types::units::UnitState::Enabled,
+                    Some(inspectah_core::types::units::PresetDefault::Disable),
+                )
+                .unwrap(),
+            ],
+            inventory: vec![],
             drop_ins: vec![],
-            preset_matched_units: vec![],
+            mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
+            default_target: None,
         });
 
         let output = render_containerfile(&snap, None, None);
@@ -3329,7 +3437,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {needle:?}:\n{output}"))
         };
         let install = at("    /tmp/custom-tool-1.0-1.el9.x86_64.rpm \\");
-        let enable = at("    custom-tool.service");
+        let enable = at("    'custom-tool.service'");
         assert!(install < enable, "{output}");
         assert_eq!(
             output
@@ -4008,24 +4116,18 @@ RUN dnf install -y \
 
     #[test]
     fn test_containerfile_section_ordering() {
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceStateChange, ServiceUnitState,
-        };
+        use inspectah_core::types::units::{PresetDefault, UnitState, UnitStateChange};
         // Build a snapshot with data in multiple sections to verify ordering
         let mut snap = snapshot_with_packages(&["httpd"]);
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
-            state_changes: vec![ServiceStateChange {
-                unit: "httpd.service".into(),
-                current_state: ServiceUnitState::Enabled,
-                default_state: Some(PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                owning_package: None,
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
-            }],
+        snap.units = Some(inspectah_core::types::units::UnitSection {
+            state_changes: vec![
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+            ],
             ..Default::default()
         });
         snap.selinux = Some(inspectah_core::types::selinux::SelinuxSection {
@@ -4037,7 +4139,7 @@ RUN dnf install -y \
 
         // Verify section order: packages before services before selinux before epilogue
         let packages_pos = output.find("dnf install -y").unwrap();
-        let services_pos = output.find("Service Enablement").unwrap();
+        let services_pos = output.find("Systemd Unit State").unwrap();
         let selinux_pos = output.find("Security & Access Control").unwrap();
         let epilogue_pos = output.find("bootc container lint").unwrap();
 
@@ -4087,68 +4189,86 @@ RUN dnf install -y \
 
     #[test]
     fn test_containerfile_services() {
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceStateChange, ServiceUnitState,
+        use inspectah_core::types::units::{
+            PresetDefault, UnitInventoryEntry, UnitState, UnitStateChange,
         };
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
+        snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("sshd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+            ],
+            // The inventory holds every unit: not used by renderer
+            inventory: vec![
+                UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
                 },
-                ServiceStateChange {
-                    unit: "sshd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
+                UnitInventoryEntry {
+                    unit: "sshd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
                 },
-                ServiceStateChange {
-                    unit: "cups.service".into(),
-                    current_state: ServiceUnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
+                UnitInventoryEntry {
+                    unit: "chronyd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "cups.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Disabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "NetworkManager.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Disabled,
+                    preset: None,
                 },
             ],
-            // enabled_units/disabled_units are full inventory — not used by renderer
-            enabled_units: vec![
-                "httpd.service".into(),
-                "sshd.service".into(),
-                "chronyd.service".into(),
-            ],
-            disabled_units: vec!["cups.service".into(), "NetworkManager.service".into()],
             ..Default::default()
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl enable \\\n    httpd.service \\\n    sshd.service"),
+            output.contains("systemctl enable -- \\\n    'httpd.service' \\\n    'sshd.service'"),
             "enable must use multi-line continuation"
         );
         assert!(
-            output.contains("systemctl disable \\\n    cups.service"),
+            output.contains("systemctl disable -- \\\n    'cups.service'"),
             "disable must use multi-line continuation"
         );
-        // Preset-matching units from enabled_units/disabled_units must NOT appear
+        // Preset-matching units from the inventory must NOT appear
         assert!(
             !output.contains("chronyd"),
             "preset-matching enabled unit must not appear"
@@ -4332,14 +4452,15 @@ RUN dnf install -y \
 
     #[test]
     fn test_containerfile_unsafe_timer_fixme() {
-        use inspectah_core::types::scheduled::{ScheduledTaskSection, SystemdTimer};
+        use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection};
         let mut snap = InspectionSnapshot::new();
         snap.scheduled_tasks = Some(ScheduledTaskSection {
-            systemd_timers: vec![SystemdTimer {
+            generated_timer_units: vec![GeneratedTimerUnit {
                 name: "evil$(whoami)".into(),
-                source: "local".into(),
+                cron_expr: "0 2 * * *".into(),
+                timer_content: "[Timer]".into(),
+                service_content: "[Service]".into(),
                 disposition: FindingKind::included(),
-                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -4542,226 +4663,146 @@ RUN dnf install -y \
 
     #[test]
     fn test_service_backslash_continuation_over_3() {
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceStateChange, ServiceUnitState,
-        };
+        use inspectah_core::types::units::{PresetDefault, UnitState, UnitStateChange};
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
+        snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
-                ServiceStateChange {
-                    unit: "sshd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
-                ServiceStateChange {
-                    unit: "chronyd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
-                ServiceStateChange {
-                    unit: "firewalld.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("sshd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("chronyd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("firewalld.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
             ],
             ..Default::default()
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl enable \\"),
+            output.contains("systemctl enable -- \\"),
             "4+ services should use continuation, got:\n{}",
             output
         );
         assert!(
-            output.contains("    httpd.service \\"),
+            output.contains("    'httpd.service' \\"),
             "services on indented lines with continuation"
         );
     }
 
     #[test]
     fn test_service_multi_line_even_under_4() {
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceStateChange, ServiceUnitState,
-        };
+        use inspectah_core::types::units::{PresetDefault, UnitState, UnitStateChange};
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
+        snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
-                ServiceStateChange {
-                    unit: "sshd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("sshd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
             ],
             ..Default::default()
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl enable \\\n    httpd.service \\\n    sshd.service"),
+            output.contains("systemctl enable -- \\\n    'httpd.service' \\\n    'sshd.service'"),
             "2 services must use multi-line continuation"
         );
     }
 
     #[test]
     fn test_containerfile_masked_services() {
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceStateChange, ServiceUnitState,
-        };
+        use inspectah_core::types::units::{PresetDefault, UnitState, UnitStateChange};
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
+        snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                ServiceStateChange {
-                    unit: "cups.service".into(),
-                    current_state: ServiceUnitState::Masked,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
-                ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
+                UnitStateChange::new(
+                    test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Masked,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
             ],
             ..Default::default()
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl mask \\\n    cups.service"),
+            output.contains("systemctl mask -- \\\n    'cups.service'"),
             "masked service must produce systemctl mask with continuation, got:\n{}",
             output
         );
         assert!(
-            output.contains("systemctl enable \\\n    httpd.service"),
+            output.contains("systemctl enable -- \\\n    'httpd.service'"),
             "enabled service must still work alongside masked"
         );
     }
 
     #[test]
     fn test_service_disable_backslash_continuation_over_3() {
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceStateChange, ServiceUnitState,
-        };
+        use inspectah_core::types::units::{PresetDefault, UnitState, UnitStateChange};
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
+        snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                ServiceStateChange {
-                    unit: "cups.service".into(),
-                    current_state: ServiceUnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
-                ServiceStateChange {
-                    unit: "avahi-daemon.service".into(),
-                    current_state: ServiceUnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
-                ServiceStateChange {
-                    unit: "bluetooth.service".into(),
-                    current_state: ServiceUnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
-                ServiceStateChange {
-                    unit: "ModemManager.service".into(),
-                    current_state: ServiceUnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
+                UnitStateChange::new(
+                    test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("avahi-daemon.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("bluetooth.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("ModemManager.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
             ],
             ..Default::default()
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl disable \\"),
+            output.contains("systemctl disable -- \\"),
             "4+ disabled services should use continuation"
         );
     }
@@ -4922,8 +4963,13 @@ RUN dnf install -y \
             "included tuned must produce tuned output"
         );
         assert!(
-            output.contains("RUN systemctl enable tuned.service"),
-            "included tuned must enable tuned.service"
+            output.contains("RUN echo \"manual\" > /etc/tuned/profile_mode"),
+            "included tuned must set the profile mode"
+        );
+        // Whether tuned.service is enabled is its unit row's (§ 10.2).
+        assert!(
+            !output.contains("tuned.service"),
+            "the kernel section writes no tuned.service line:\n{output}"
         );
     }
 
@@ -5011,35 +5057,25 @@ RUN dnf install -y \
 
     #[test]
     fn test_containerfile_excluded_service_generates_no_systemctl() {
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceStateChange, ServiceUnitState,
-        };
+        use inspectah_core::types::units::{PresetDefault, UnitState, UnitStateChange};
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
+        snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
-                ServiceStateChange {
-                    unit: "excluded.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::excluded(), // excluded by triage
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                {
+                    let mut change = UnitStateChange::new(
+                        test_carried_unit("excluded.service".to_owned().try_into().unwrap(), None),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap();
+                    change.disposition = FindingKind::excluded(); // excluded by triage
+                    change
                 },
             ],
             ..Default::default()
@@ -5056,72 +5092,61 @@ RUN dnf install -y \
     }
 
     /// End-to-end: containerfile service section uses implied_action via the
-    /// service_intent authority — enabled/disabled/masked services produce
+    /// unit plan: enabled/disabled/masked services produce
     /// the correct systemctl verbs.
     #[test]
     fn test_containerfile_services_use_implied_action() {
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceStateChange, ServiceUnitState,
-        };
+        use inspectah_core::types::units::{PresetDefault, UnitState, UnitStateChange};
         let mut snap = InspectionSnapshot::new();
         snap.rpm = Some(RpmSection {
             baseline_package_names: Some(vec!["httpd".into(), "cups".into(), "avahi".into()]),
             packages_added: vec![],
             ..Default::default()
         });
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
+        snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: Some("httpd".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
-                ServiceStateChange {
-                    unit: "cups.service".into(),
-                    current_state: ServiceUnitState::Masked,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: Some("cups".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
-                ServiceStateChange {
-                    unit: "avahi-daemon.service".into(),
-                    current_state: ServiceUnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: Some("avahi".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                },
+                UnitStateChange::new(
+                    test_carried_unit(
+                        "httpd.service".to_owned().try_into().unwrap(),
+                        Some("httpd".into()),
+                    ),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit(
+                        "cups.service".to_owned().try_into().unwrap(),
+                        Some("cups".into()),
+                    ),
+                    UnitState::Masked,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit(
+                        "avahi-daemon.service".to_owned().try_into().unwrap(),
+                        Some("avahi".into()),
+                    ),
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
             ],
             ..Default::default()
         });
 
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl enable \\\n    httpd.service"),
+            output.contains("systemctl enable -- \\\n    'httpd.service'"),
             "enabled service must produce systemctl enable with continuation"
         );
         assert!(
-            output.contains("systemctl mask \\\n    cups.service"),
+            output.contains("systemctl mask -- \\\n    'cups.service'"),
             "masked service must produce systemctl mask with continuation"
         );
         assert!(
-            output.contains("systemctl disable \\\n    avahi-daemon.service"),
+            output.contains("systemctl disable -- \\\n    'avahi-daemon.service'"),
             "disabled service must produce systemctl disable with continuation"
         );
     }
@@ -5189,8 +5214,8 @@ RUN dnf install -y \
             "must set active_profile"
         );
         assert!(
-            output.contains("RUN systemctl enable tuned.service"),
-            "must enable tuned.service"
+            !output.contains("systemctl"),
+            "the kernel section leaves tuned.service to its unit row:\n{output}"
         );
     }
 
@@ -5238,9 +5263,9 @@ RUN dnf install -y \
 
     #[test]
     fn test_included_drop_in_generates_copy_line() {
-        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+        use inspectah_core::types::units::{SystemdDropIn, UnitSection};
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "httpd.service".into(),
                 path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
@@ -5306,9 +5331,9 @@ RUN dnf install -y \
 
     #[test]
     fn test_excluded_drop_in_generates_no_copy_line() {
-        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+        use inspectah_core::types::units::{SystemdDropIn, UnitSection};
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "httpd.service".into(),
                 path: "etc/systemd/system/httpd.service.d/limits.conf".into(),
@@ -6766,10 +6791,10 @@ RUN dnf install -y \
         use inspectah_core::types::scheduled::{
             AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
         };
+        // A local timer is a description: its name reaches only a comment.
         let local = |name: &str| SystemdTimer {
             name: name.into(),
             source: "local".into(),
-            disposition: FindingKind::included(),
             ..Default::default()
         };
         let generated = |name: &str, cron_expr: &str| GeneratedTimerUnit {
@@ -6818,14 +6843,16 @@ RUN dnf install -y \
             "a carriage return reached the output: {output}"
         );
         assert!(
-            active.contains(&"RUN systemctl enable good.timer backup.timer"),
-            "the ordinary timers are not enabled: {active:#?}"
+            active
+                .windows(2)
+                .any(|w| w == ["RUN systemctl enable -- \\", "    'backup.timer'"]),
+            "the generated timer is not enabled: {active:#?}"
         );
-        for refused in [
-            "/etc/abs",
-            "../../../../../victim/planted",
-            "../../victim/boot",
-        ] {
+        assert!(
+            !active.iter().any(|l| l.contains("good.timer")),
+            "a local timer's enable is its unit row's: {active:#?}"
+        );
+        for refused in ["../../../../../victim/planted", "../../victim/boot"] {
             assert!(
                 output.contains(&format!("# FIXME: timer {refused} not staged")),
                 "no FIXME for {refused}: {output}"
@@ -7184,7 +7211,7 @@ RUN dnf install -y \
     /// `glibc` are unneeded, so each prints as `name.arch`. Dispositions are
     /// as collected; the not-carried list stays empty until they are set.
     fn not_carried_host() -> InspectionSnapshot {
-        use inspectah_core::types::services::ServiceSection;
+        use inspectah_core::types::units::{UnitInventoryEntry, UnitSection, UnitState};
         let auto = |name: &str, arch: &str| PackageEntry {
             name: name.into(),
             arch: arch.into(),
@@ -7231,11 +7258,32 @@ RUN dnf install -y \
             ],
             ..Default::default()
         });
-        snap.services = Some(ServiceSection {
-            enabled_units: vec![
-                "firewalld.service".into(),
-                "crond.service".into(),
-                "crond-backup.timer".into(),
+        snap.units = Some(UnitSection {
+            inventory: vec![
+                UnitInventoryEntry {
+                    unit: "firewalld.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "crond.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "crond-backup.timer"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
             ],
             ..Default::default()
         });
@@ -7361,6 +7409,8 @@ RUN dnf install -y \
     /// and no line outside a comment carries the payload.
     #[test]
     fn not_carried_block_keeps_hostile_fields_inside_the_comment() {
+        use inspectah_core::types::units::{UnitName, UnitNameError};
+
         const PAYLOAD: &str = "\nRUN touch /tmp/injected\n#";
 
         /// Add an auto package nothing needs, so it is in the class.
@@ -7392,25 +7442,13 @@ RUN dnf install -y \
                 add_unneeded(&mut snap, "twoarch", &format!("i686{PAYLOAD}"));
                 snap
             }),
-            ("enabled unit name", {
-                let mut snap = not_carried_host();
-                let unit = format!("evil{PAYLOAD}.service");
-                snap.rpm
-                    .as_mut()
-                    .expect("fixture has an rpm section")
-                    .file_ownership
-                    .push(owns(
-                        "firewalld",
-                        &[format!("/usr/lib/systemd/system/{unit}").as_str()],
-                    ));
-                snap.services
-                    .as_mut()
-                    .expect("fixture has a services section")
-                    .enabled_units
-                    .push(unit);
-                snap
-            }),
         ];
+
+        // An enabled unit name cannot carry the payload: the inventory holds
+        // parsed names only, and the parse refuses the newline.
+        let refused = UnitName::try_from(format!("evil{PAYLOAD}.service"))
+            .expect_err("a newline is not a unit name character");
+        assert_eq!(refused, UnitNameError::InvalidCharacter { ch: '\n' });
 
         for (field, mut snap) in cases {
             super::super::not_carried::apply_scan_package_defaults(&mut snap);

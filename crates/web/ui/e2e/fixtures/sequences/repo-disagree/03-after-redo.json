@@ -66,9 +66,14 @@
     "baseline_available": false
   },
   "version_changes": [],
-  "service_states": [],
-  "service_dropins": [],
+  "unit_states": [],
+  "unit_dropins": [],
+  "mount_findings": [],
+  "manual_links": [],
+  "undetermined_installs": [],
   "quadlets": [],
+  "declined_generated": [],
+  "generated_timers": [],
   "flatpaks": [],
   "sysctl": {
     "as_written": [],

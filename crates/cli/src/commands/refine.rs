@@ -1,3 +1,4 @@
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -84,7 +85,7 @@ pub(crate) fn resolve_session(
     }
 }
 
-fn read_session_choice(tarball: &Path) -> anyhow::Result<SessionChoice> {
+fn read_session_choice(tarball: &Path, input: &mut impl BufRead) -> anyhow::Result<SessionChoice> {
     use std::io::Write;
 
     match inspectah_refine::autosave::load_session(tarball) {
@@ -101,51 +102,69 @@ fn read_session_choice(tarball: &Path) -> anyhow::Result<SessionChoice> {
 
             eprint!("[r] Resume  [f] Start fresh  [q] Quit: ");
             std::io::stderr().flush()?;
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
-            match input.trim().to_lowercase().as_str() {
+            let mut answer = String::new();
+            input.read_line(&mut answer)?;
+            match answer.trim().to_lowercase().as_str() {
                 "r" | "resume" => Ok(SessionChoice::Resume),
                 "f" | "fresh" => Ok(SessionChoice::Fresh),
                 _ => Ok(SessionChoice::Quit),
             }
         }
-        _ => Ok(SessionChoice::Fresh),
+        Ok(None) => Ok(SessionChoice::Fresh),
+        // Never discard saved decisions the operator has not seen: keep the
+        // file and say how to drop it.
+        Err(e) => anyhow::bail!(
+            "could not load the saved session {}: {e}\n\
+             The saved session was kept. To discard it and start over, run \
+             again with --fresh.",
+            inspectah_refine::autosave::session_file_path(tarball).display()
+        ),
     }
 }
 
-fn read_fresh_confirm(tarball: &Path) -> anyhow::Result<bool> {
+fn read_fresh_confirm(tarball: &Path, input: &mut impl BufRead) -> anyhow::Result<bool> {
     use std::io::Write;
 
     match inspectah_refine::autosave::load_session(tarball) {
         Ok(Some(state)) => {
             eprint!("Discard {} saved operations? [y/N]: ", state.timeline.len());
             std::io::stderr().flush()?;
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
-            Ok(input.trim().to_lowercase() == "y")
+            let mut answer = String::new();
+            input.read_line(&mut answer)?;
+            Ok(answer.trim().to_lowercase() == "y")
         }
         _ => Ok(true),
     }
 }
 
-pub fn run_refine(args: &RefineArgs) -> anyhow::Result<()> {
-    eprintln!("Loading snapshot...");
+/// Ask the operator about any saved session, reading answers from `input`,
+/// and resolve the session to serve.
+pub(crate) fn open_session(
+    tarball: &Path,
+    fresh: bool,
+    input: &mut impl BufRead,
+) -> anyhow::Result<ResolveResult> {
+    let session_path = inspectah_refine::autosave::session_file_path(tarball);
 
-    let session_path = inspectah_refine::autosave::session_file_path(&args.tarball);
-
-    let choice = if !args.fresh && session_path.exists() {
-        Some(read_session_choice(&args.tarball)?)
+    let choice = if !fresh && session_path.exists() {
+        Some(read_session_choice(tarball, input)?)
     } else {
         None
     };
 
-    let fresh_confirmed = if args.fresh && session_path.exists() {
-        read_fresh_confirm(&args.tarball)?
+    let fresh_confirmed = if fresh && session_path.exists() {
+        read_fresh_confirm(tarball, input)?
     } else {
         false
     };
 
-    let session = match resolve_session(&args.tarball, args.fresh, choice, fresh_confirmed)? {
+    resolve_session(tarball, fresh, choice, fresh_confirmed)
+}
+
+pub fn run_refine(args: &RefineArgs) -> anyhow::Result<()> {
+    eprintln!("Loading snapshot...");
+
+    let session = match open_session(&args.tarball, args.fresh, &mut std::io::stdin().lock())? {
         ResolveResult::Session(s) => *s,
         ResolveResult::Quit => {
             eprintln!("Quit.");
@@ -202,17 +221,39 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::snapshot::InspectionSnapshot;
     use inspectah_core::types::redaction::RedactionState;
 
-    fn write_test_tarball(path: &Path) {
+    fn redacted_snapshot() -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
         snap.redaction_state = Some(RedactionState::FullyRedacted {
             redacted_by: "test".into(),
             config_hash: "test".into(),
         });
-        let json = serde_json::to_string(&snap).unwrap();
+        snap
+    }
+
+    fn write_test_tarball(path: &Path) {
+        write_snapshot_tarball(path, &redacted_snapshot());
+    }
+
+    fn write_snapshot_tarball(path: &Path, snap: &InspectionSnapshot) {
+        let json = serde_json::to_string(snap).unwrap();
         let file = std::fs::File::create(path).unwrap();
         let gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
         let mut tar = tar::Builder::new(gz);
@@ -306,5 +347,134 @@ mod tests {
             session_path.exists(),
             "sidecar must survive when not confirmed"
         );
+    }
+
+    const STATE_ROW_UNIT: &str = "httpd.service";
+
+    /// A tarball whose snapshot has one unit state row, `httpd.service`.
+    fn write_units_tarball(path: &Path) {
+        use inspectah_core::types::units::{
+            PresetDefault, UnitName, UnitSection, UnitState, UnitStateChange,
+        };
+
+        let mut snap = redacted_snapshot();
+        snap.units = Some(UnitSection {
+            state_changes: vec![
+                UnitStateChange::new(
+                    test_carried_unit(
+                        UnitName::try_from(STATE_ROW_UNIT.to_string()).unwrap(),
+                        None,
+                    ),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+            ],
+            ..Default::default()
+        });
+        write_snapshot_tarball(path, &snap);
+    }
+
+    /// Write a sidecar for `tarball` holding one exclude of
+    /// `STATE_ROW_UNIT`, with its item id spelled with `kind`, so the
+    /// operation kind retired with the units rename can be written.
+    fn write_sidecar_excluding_unit(tarball: &Path, kind: &str) -> Vec<u8> {
+        use inspectah_core::types::units::UnitName;
+        use inspectah_refine::types::{ItemId, RefinementOp, TimelineEntry};
+
+        let state = inspectah_refine::autosave::SessionState {
+            schema_version: 3,
+            tarball_path: tarball.to_path_buf(),
+            tarball_hash: inspectah_refine::autosave::compute_tarball_hash(tarball).unwrap(),
+            timeline: vec![TimelineEntry::Op(RefinementOp::SetInclude {
+                item_id: ItemId::Unit {
+                    unit: UnitName::try_from(STATE_ROW_UNIT.to_string()).unwrap(),
+                },
+                include: false,
+            })],
+            cursor: 1,
+            saved_at: "2026-11-13T00:00:00Z".into(),
+        };
+        let json = serde_json::to_string(&state)
+            .unwrap()
+            .replace(r#""kind":"Unit""#, &format!(r#""kind":"{kind}""#));
+        assert!(
+            json.contains(&format!(r#""kind":"{kind}""#)),
+            "the sidecar must hold the `{kind}` kind it was asked to write: {json}"
+        );
+        let session_path = inspectah_refine::autosave::session_file_path(tarball);
+        std::fs::write(&session_path, &json).unwrap();
+        json.into_bytes()
+    }
+
+    /// A sidecar saved before the units rename holds a `Service` operation,
+    /// which no longer loads. The command stops with the load error and
+    /// keeps the sidecar untouched instead of discarding it as if the
+    /// operator had chosen to start fresh. The same sidecar with the
+    /// `Unit` kind is the positive control: it resumes and applies.
+    #[test]
+    fn open_unloadable_session_stops_and_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = dir.path().join("test.tar.gz");
+        write_units_tarball(&tarball);
+        let session_path = inspectah_refine::autosave::session_file_path(&tarball);
+
+        let saved = write_sidecar_excluding_unit(&tarball, "Service");
+        // An answer is offered so a prompt, had one been shown, could not
+        // block or quit; the refusal must come before any prompt.
+        let err = match open_session(&tarball, false, &mut std::io::Cursor::new("f\n")) {
+            Err(e) => format!("{e:#}"),
+            Ok(_) => panic!("a sidecar that cannot be loaded must stop the command"),
+        };
+        assert!(
+            err.contains("`Service`"),
+            "the error must carry the load error naming the refused kind: {err}"
+        );
+        assert!(
+            err.contains(&session_path.display().to_string()),
+            "the error must say where the kept session is: {err}"
+        );
+        assert!(
+            err.contains("kept") && err.contains("--fresh"),
+            "the error must say the session was kept and how to discard it: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&session_path).expect("the sidecar must still exist"),
+            saved,
+            "the sidecar must be byte-for-byte intact"
+        );
+
+        // Positive control: the same operation under the `Unit` kind resumes.
+        write_sidecar_excluding_unit(&tarball, "Unit");
+        let session = match open_session(&tarball, false, &mut std::io::Cursor::new("r\n")) {
+            Ok(ResolveResult::Session(s)) => s,
+            Ok(ResolveResult::Quit) => panic!("answering resume must not quit"),
+            Err(e) => panic!("a saved `Unit` operation must resume: {e:#}"),
+        };
+        assert_eq!(session.view().stats.ops_applied, 1);
+        let units = session.snapshot_projected().units.unwrap();
+        let row = units
+            .state_changes
+            .iter()
+            .find(|s| s.unit().name().as_str() == STATE_ROW_UNIT)
+            .expect("the state row is present");
+        assert!(
+            !row.disposition.is_included(),
+            "the resumed exclude must apply to {STATE_ROW_UNIT}"
+        );
+    }
+
+    /// `--fresh` still discards a sidecar that cannot be loaded.
+    #[test]
+    fn open_fresh_flag_discards_unloadable_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = dir.path().join("test.tar.gz");
+        write_units_tarball(&tarball);
+        let session_path = inspectah_refine::autosave::session_file_path(&tarball);
+        write_sidecar_excluding_unit(&tarball, "Service");
+
+        let result = open_session(&tarball, true, &mut std::io::Cursor::new("")).unwrap();
+        assert!(matches!(result, ResolveResult::Session(_)));
+        assert!(!session_path.exists(), "--fresh must discard the sidecar");
     }
 }

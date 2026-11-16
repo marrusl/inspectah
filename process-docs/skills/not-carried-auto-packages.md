@@ -10,7 +10,7 @@ carried**.
 
 An entry of `packages_added` is in the class when it is in
 `auto_packages` and no leaf the export installs pulls it in, as
-`service_intent::pulled_in_by_included` answers from `leaf_dep_tree`.
+`unit_plan::pulled_in_by_included` answers from `leaf_dep_tree`.
 A leaf counts only when `installs_on_its_own_route` holds for it: an
 included leaf the export renders only as a manual step (no repo serves
 it and no RPM is carried, or a repo-enabling package demoted for a
@@ -91,10 +91,10 @@ no list is emitted, when:
   `not_carried_packages` and the notice as `not_carried_notice`; see
   [Refine projection contract](#refine-projection-contract).
 
-Order on every surface: packages owning a unit in `services.enabled_units`
-first, then the rest; each part by name, then arch. The display name is
-`name`, or `name.arch` when the list holds more than one arch of that
-name. All reason wording comes from the one constant `NOT_CARRIED_REASON`.
+Order on every surface: packages owning an enabled unit in
+`units.inventory` first, then the rest; each part by name, then arch.
+The display name is `name`, or `name.arch` when the list holds more
+than one arch of that name. All reason wording comes from the one constant `NOT_CARRIED_REASON`.
 
 ## What it does not promise
 

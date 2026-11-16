@@ -217,9 +217,15 @@
       "direction": "upgrade"
     }
   ],
-  "service_states": [
+  "unit_states": [
     {
       "unit": "httpd.service",
+      "kind": "service",
+      "fragment": "vendor",
+      "locked": false,
+      "current_state": "enabled",
+      "required_config": [],
+      "data_paths": [],
       "triage": {
         "triage": { "mode": "single_host", "baseline": "site" },
         "primary_reason": "service_non_default",
@@ -230,6 +236,13 @@
     },
     {
       "unit": "custom-agent.service",
+      "kind": "service",
+      "fragment": "local",
+      "unit_file_path": "/etc/systemd/system/custom-agent.service",
+      "locked": false,
+      "current_state": "enabled",
+      "required_config": [],
+      "data_paths": [],
       "triage": {
         "triage": { "mode": "single_host", "baseline": "investigate" },
         "primary_reason": "service_non_default",
@@ -245,8 +258,13 @@
       "owning_package": null
     }
   ],
-  "service_dropins": [],
+  "unit_dropins": [],
+  "mount_findings": [],
+  "manual_links": [],
+  "undetermined_installs": [],
   "quadlets": [],
+  "declined_generated": [],
+  "generated_timers": [],
   "flatpaks": [],
   "sysctl": {
     "as_written": [],

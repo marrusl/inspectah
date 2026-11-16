@@ -78,8 +78,10 @@ expression: json
       }
     }
   ],
-  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Configuration Files ===\n# 3 config file(s) captured\n\nCOPY config/etc/ /etc/\n\n# === Container Workloads (1) ===\nCOPY quadlet/ /etc/containers/systemd/\n\n# === Security & Access Control ===\n# FIXME: 1 custom policy module(s) detected — export .pp files to config/selinux/ and uncomment the COPY + semodule lines below\n# COPY config/selinux/ /tmp/selinux/\n# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/\n\n# === /etc/hosts Additions ===\n# FIXME: These /etc/hosts entries need to be added to the image:\n#   10.0.0.50 app-server\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source. Verify how to reinstall it in the image.\n\n# === Configuration Files ===\n# 3 config file(s) captured\n\nCOPY config/etc/ /etc/\n\n# === Container Workloads (1) ===\nCOPY quadlet/ /etc/containers/systemd/\n\n# === Security & Access Control ===\n# FIXME: 1 custom policy module(s) detected — export .pp files to config/selinux/ and uncomment the COPY + semodule lines below\n# COPY config/selinux/ /tmp/selinux/\n# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/\n\n# === /etc/hosts Additions ===\n# FIXME: These /etc/hosts entries need to be added to the image:\n#   10.0.0.50 app-server\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "declined_generated": [],
   "flatpaks": [],
+  "generated_timers": [],
   "generation": 0,
   "has_unmanaged_scan": false,
   "language_packages": [
@@ -101,6 +103,8 @@ expression: json
       "system_site_packages": false
     }
   ],
+  "manual_links": [],
+  "mount_findings": [],
   "not_carried_notice": null,
   "not_carried_packages": [],
   "package_groups": [],
@@ -162,23 +166,6 @@ expression: json
       "tier": "none"
     }
   ],
-  "service_dropins": [],
-  "service_states": [
-    {
-      "current_state": "enabled",
-      "default_state": "disable",
-      "include": false,
-      "locked": false,
-      "triage": {
-        "primary_reason": "service_unknown_origin",
-        "triage": {
-          "investigate": null,
-          "mode": "single_host"
-        }
-      },
-      "unit": "httpd.service"
-    }
-  ],
   "session_is_sensitive": false,
   "stats": {
     "baseline_available": false,
@@ -208,6 +195,28 @@ expression: json
     "state": "unavailable"
   },
   "tuned": [],
+  "undetermined_installs": [],
+  "unit_dropins": [],
+  "unit_states": [
+    {
+      "current_state": "enabled",
+      "data_paths": [],
+      "default_state": "disable",
+      "fragment": "vendor",
+      "include": false,
+      "kind": "service",
+      "locked": false,
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_unknown_origin",
+        "triage": {
+          "investigate": null,
+          "mode": "single_host"
+        }
+      },
+      "unit": "httpd.service"
+    }
+  ],
   "users_groups_decisions": [],
   "version_changes": [
     {

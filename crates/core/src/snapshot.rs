@@ -11,14 +11,14 @@ use crate::types::redaction::{RedactionFinding, RedactionHint, RedactionState};
 use crate::types::rpm::RpmSection;
 use crate::types::scheduled::ScheduledTaskSection;
 use crate::types::selinux::SelinuxSection;
-use crate::types::services::ServiceSection;
 use crate::types::storage::StorageSection;
+use crate::types::units::UnitSection;
 use crate::types::users::UserGroupSection;
 use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 27;
+pub const SCHEMA_VERSION: u32 = 28;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -30,7 +30,7 @@ pub struct InspectionSnapshot {
     pub system_type: SystemType,
     pub rpm: Option<RpmSection>,
     pub config: Option<ConfigSection>,
-    pub services: Option<ServiceSection>,
+    pub units: Option<UnitSection>,
     pub network: Option<NetworkSection>,
     pub storage: Option<StorageSection>,
     pub scheduled_tasks: Option<ScheduledTaskSection>,
@@ -104,16 +104,14 @@ impl InspectionSnapshot {
     /// Held equal to `SCHEMA_VERSION`: the loading contract is an exact
     /// match, not a rolling window.
     ///
-    /// Schema 27 replaces the per-key sysctl override list, which carried
-    /// a decision on each key, with `kernel_boot.sysctl`, the files
-    /// on systemd-sysctl's search path and the running values, resolved
-    /// by its precedence. A schema-26 payload deserializes (serde drops
-    /// the old key), which is why the window closes on it anyway. It was
-    /// collected before the collector followed that precedence: an
-    /// override in it may name a file another file shadowed on the host,
-    /// and the payload holds none of the files, so nothing at load time
-    /// can rebuild the explanation. Only a re-scan can.
-    const MIN_SCHEMA: u32 = 27;
+    /// Schema 28 renames the `services` section to `units`, the section
+    /// that holds every unit kind inspectah models and not services alone.
+    /// A schema-27 payload deserializes (serde drops the old key), which is
+    /// why the window closes on it anyway. It was collected when the
+    /// section held services only, so every socket and timer state the
+    /// host had is absent from it with nothing to say so. Only a re-scan
+    /// can collect them.
+    const MIN_SCHEMA: u32 = 28;
 
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
         let snap: Self = serde_json::from_str(json)?;
@@ -242,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_future_version_rejected() {
-        let json = r#"{"schema_version": 28, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let json = r#"{"schema_version": 29, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
         assert!(
             result.is_err(),

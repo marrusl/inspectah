@@ -73,8 +73,10 @@ runGuarded(key, () =>
   Keep it with the guard's owner, in `useItemFailures`
   (`crates/web/ui/src/hooks/useItemFailures.ts`). The Users section does
   this: `MainContent` holds each user's last failed request by username,
-  and the card shows it on return. `onMutationError` is not a substitute:
-  in `MainContent` it only logs.
+  and the card shows it on return. The generated timer toggle does the
+  same by generated name, and `ContextItem` shows the failure in the
+  row's live region. `onMutationError` is not a substitute: in
+  `MainContent` it only logs.
 - **A kept failure ends with the record it was about.** Kept with a
   long-lived owner, a failure outlives the item too, unless something
   ends it. `useItemFailures` gives each item a lifetime: `clearAll` ends
@@ -96,7 +98,11 @@ runGuarded(key, () =>
   the view on screen with the view the step returned (`changedUsers` in
   `components/userHistory.ts`) and passes the changed names to
   `MainContent` as `historyChange`, which calls `end` on them. Users the
-  step did not change keep their failures. Compare records rather than
+  step did not change keep their failures. App sends `historyChange` on
+  every successful step, with `users` empty when no user record changed,
+  because the generated-timer failures end on any step: a step that
+  changed only a generated row must still end them, or the restored row
+  keeps a failure about the record it replaced. Compare records rather than
   read the undone op from `/api/ops`: that is a separate request that
   can fail, and it would need per-op knowledge of which item an op
   touches.
@@ -148,6 +154,7 @@ runGuarded(key, () =>
 | Tuned row | `TunedSection` | `MainContent` | `tuned:<profile>` |
 | Service row | `ServiceSection` | `MainContent` | `["service", unit]` |
 | Service drop-in row | `ServiceSection` | `MainContent` | `["dropin", path]` |
+| Generated timer row | `ContextItem` (Scheduled Tasks) | `MainContent` | `["generated-timer", name]` |
 | User include, strategy, password | `UsersGroupsSection` | `MainContent` | username |
 | Language package pin | `LanguagePackageList` | `MainContent` | `["pin", ecosystem, env_path, package]` |
 | Bulk pin | `LanguagePackageList` | `MainContent` | `["bulk-pin", ecosystem, env_path]` |

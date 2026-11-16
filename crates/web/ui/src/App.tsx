@@ -60,6 +60,29 @@ function App() {
   return <SingleHostApp healthFromRouter={health} />;
 }
 
+/** Row test id prefixes a reveal looks for, in order. */
+const REVEAL_TESTID_PREFIXES = [
+  "decision-item-",
+  "context-item-",
+  "lang-env-row-",
+  "dropin-item-",
+  "service-item-",
+  "unmanaged-item-",
+];
+
+/**
+ * The element whose `data-testid` is exactly `testId`. Compared as a
+ * string rather than built into a CSS selector: an item id is host data,
+ * and a unit name can hold a backslash (`backup\x2djob.timer`), which a
+ * selector reads as an escape.
+ */
+function elementByTestId(testId: string): HTMLElement | null {
+  for (const el of document.querySelectorAll<HTMLElement>("[data-testid]")) {
+    if (el.getAttribute("data-testid") === testId) return el;
+  }
+  return null;
+}
+
 /**
  * Single-host refine UI. All single-host hooks (useView, useSections,
  * useMutation) live here and are never instantiated in aggregate mode.
@@ -199,8 +222,10 @@ function SingleHostApp({
   useEffect(() => {
     shownViewRef.current = view.data;
   }, [view.data]);
-  // Set after each successful Undo or Redo that changed a user record, so
-  // MainContent can drop failures kept for the records the step replaced.
+  // Set to a new object after every successful Undo or Redo, naming the
+  // users whose record the step changed (possibly none). MainContent drops
+  // the failures kept for those users, and every generated-timer failure,
+  // since any step can replace a generated row's state.
   const [historyChange, setHistoryChange] = useState<HistoryChange>();
 
   const onMutationSuccess = useCallback(
@@ -211,7 +236,7 @@ function SingleHostApp({
           result.users_groups_decisions,
         );
         shownViewRef.current = result;
-        if (users.length > 0) setHistoryChange({ users });
+        setHistoryChange({ users });
       }
       view.invalidate();
 
@@ -547,16 +572,12 @@ function SingleHostApp({
 
     requestAnimationFrame(() => {
       // Try multiple testid patterns to find the target element:
-      // decision items, context items, language env rows, unmanaged items
-      const el = (document.querySelector(
-        `[data-testid="decision-item-${itemId}"]`,
-      ) ??
-        document.querySelector(`[data-testid="context-item-${itemId}"]`) ??
-        document.querySelector(`[data-testid="lang-env-row-${itemId}"]`) ??
-        document.querySelector(`[data-testid="dropin-item-${itemId}"]`) ??
-        document.querySelector(
-          `[data-testid="unmanaged-item-${itemId}"]`,
-        )) as HTMLElement | null;
+      // decision items, context items, language env rows, drop-in and unit
+      // rows, unmanaged items
+      const el = REVEAL_TESTID_PREFIXES.reduce<HTMLElement | null>(
+        (found, prefix) => found ?? elementByTestId(`${prefix}${itemId}`),
+        null,
+      );
       if (!el) return;
 
       pendingFocusItemRef.current = null;
@@ -689,7 +710,7 @@ function SingleHostApp({
         searchConfigItems={configItems}
         searchUserDecisions={view.data?.users_groups_decisions}
         searchContextSections={sections.data}
-        searchServiceDropins={view.data?.service_dropins}
+        searchServiceDropins={view.data?.unit_dropins}
         searchLanguagePackageEnvs={view.data?.language_packages}
         searchUnmanagedFileGroups={view.data?.unmanaged_files}
         onSearchNavigate={handleNavigateFromSearch}

@@ -11,15 +11,13 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::types::services::{
-    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
-};
+use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
 use inspectah_pipeline::render;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp};
 
 const UNIT: &str = "cockpit.socket";
-const ENABLED: &str = "    cockpit.socket";
+const ENABLED: &str = "    'cockpit.socket'";
 const OMITTED: &str = "# Omitted: cockpit.socket (package 'cockpit-ws' is not carried: not user-installed on the source host, and nothing this image installs needs it)";
 
 fn package(name: &str) -> PackageEntry {
@@ -63,23 +61,24 @@ fn snapshot() -> InspectionSnapshot {
         packages,
         extracted_at: "2026-11-08T00:00:00Z".into(),
     });
-    snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: UNIT.into(),
-            current_state: ServiceUnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::included(),
-            locked: false,
-            owning_package: Some("cockpit-ws".into()),
-            aggregate: None,
-            attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
-        }],
-        enabled_units: vec![],
-        disabled_units: vec![],
+    snap.units = Some(UnitSection {
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit(
+                    UNIT.to_owned().try_into().unwrap(),
+                    Some("cockpit-ws".into()),
+                ),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
     });
     snap
 }
@@ -209,4 +208,18 @@ fn an_excluded_parent_omits_the_dependency_unit_alike_on_both_paths() {
         "scan tarball:\n{scan}"
     );
     assert_eq!(omitted(&refine), omitted(&scan), "refine export:\n{refine}");
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

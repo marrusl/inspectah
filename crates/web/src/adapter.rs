@@ -15,27 +15,28 @@ use inspectah_core::types::network::IFCFG_DEPRECATION_NOTE;
 use inspectah_core::types::nonrpm::FileType;
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::VersionChangeDirection;
-use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::storage::{VarDirBacking, declaring_unit_label};
+use inspectah_core::types::units::{PresetDefault, UnitState};
 use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_pipeline::render::advisory::config_advisories;
-use inspectah_pipeline::render::service_intent::AdvisoryReason;
+use inspectah_pipeline::render::unit_plan::AdvisoryReason;
 use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 use inspectah_refine::group_state;
 use inspectah_refine::projection::{
-    GenericRefItem, RefContainers, RefKernelBoot, RefNetwork, RefServices, RefStorage,
-    RefVarDirectory, RefVersionChanges, ReferenceProjection, config_ref_summary,
+    GeneratedTimerView, GenericRefItem, RefContainers, RefKernelBoot, RefNetwork, RefServices,
+    RefStorage, RefVarDirectory, RefVersionChanges, ReferenceProjection, ScheduledSource,
+    config_ref_summary,
 };
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::ItemId;
+use inspectah_refine::types::{ItemId, RefinedView};
 
 use crate::sysctl_view::project_sysctl;
 use crate::web_types::{
-    ContextAdvisory, ContextDecision, ContextItem, ContextSubsection, DropInDecisionDto,
-    FlatpakDecisionDto, GroupInfo, GroupMemberInfo, LanguagePackageDto, LanguagePackageEnvDto,
-    PackageProvenance, ProvenanceSignalsDto, QuadletDecisionDto, ReferenceSection, RepoGroupInfo,
-    ServiceDecisionDto, TunedDecisionDto, UnmanagedFileGroupDto, UnmanagedFileItemDto,
-    VersionChangeEntry, ViewResponse,
+    ConfigFileDto, ContextAdvisory, ContextDecision, ContextItem, ContextSubsection,
+    DropInDecisionDto, FlatpakDecisionDto, GeneratedTimerDto, GroupInfo, GroupMemberInfo,
+    LanguagePackageDto, LanguagePackageEnvDto, PackageProvenance, ProvenanceSignalsDto,
+    QuadletDecisionDto, ReferenceSection, RepoGroupInfo, ServiceDecisionDto, TunedDecisionDto,
+    UnmanagedFileGroupDto, UnmanagedFileItemDto, VersionChangeEntry, ViewResponse,
 };
 
 /// Build a complete [`ViewResponse`] from session state.
@@ -126,32 +127,34 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         })
         .collect();
 
-    // Map service decisions from Refined types to DTOs.
-    // Shadow fields flow from the service entry itself.
-    let service_states: Vec<ServiceDecisionDto> = decisions
-        .service_states
+    // Map service decisions from Refined types to DTOs. A unit's shadow
+    // is reported on its drop-in row, not on the state change.
+    let unit_states: Vec<ServiceDecisionDto> = decisions
+        .unit_states
         .iter()
         .map(|s| ServiceDecisionDto {
-            unit: s.entry.unit.clone(),
+            unit: s.unit.as_str().to_owned(),
+            kind: s.kind.clone(),
+            instance_of: s.instance_of.as_ref().map(|t| t.as_str().to_owned()),
+            fragment: s.fragment,
+            unit_file_path: s.unit_file_path.clone(),
+            declined: s.declined.clone(),
             triage: s.triage.clone(),
-            include: s.entry.disposition.is_included(),
-            locked: s.entry.locked,
-            attention_reason: s.entry.attention_reason.clone(),
-            owning_package: s.entry.owning_package.clone(),
-            default_state: s.entry.default_state.map(|d| d.to_string()),
-            current_state: s.entry.current_state.to_string(),
-            shadow_type: s
-                .entry
-                .shadow_type
-                .as_ref()
-                .and_then(|st| serde_json::to_value(st).ok())
-                .and_then(|v| v.as_str().map(|s| s.to_string())),
-            shadow_rationale: s.entry.shadow_rationale.clone(),
+            include: s.include,
+            locked: s.locked,
+            attention_reason: s.attention_reason.clone(),
+            owning_package: s.owning_package.clone(),
+            default_state: s.default_state.map(|d| d.to_string()),
+            current_state: s.current_state.to_string(),
+            also: s.also.clone(),
+            install_drop_ins: s.install_drop_ins.clone(),
+            required_config: s.required_config.clone(),
+            data_paths: s.data_paths.clone(),
         })
         .collect();
 
-    let service_dropins: Vec<DropInDecisionDto> = decisions
-        .service_dropins
+    let unit_dropins: Vec<DropInDecisionDto> = decisions
+        .unit_dropins
         .iter()
         .map(|d| DropInDecisionDto {
             unit: d.entry.unit.clone(),
@@ -167,6 +170,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                 .and_then(|st| serde_json::to_value(st).ok())
                 .and_then(|v| v.as_str().map(|s| s.to_string())),
             shadow_rationale: d.entry.shadow_rationale.clone(),
+            kind: d.kind.clone(),
+            withheld: d.withheld.clone(),
         })
         .collect();
 
@@ -471,6 +476,19 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                         writable_mount: file.provenance.writable_mount,
                         service_working_dir: file.provenance.service_working_dir,
                     },
+                    // Keyed by the row's own path as recorded; only an
+                    // included row offers a file to withhold.
+                    withheld: file
+                        .disposition
+                        .is_included()
+                        .then(|| {
+                            decisions
+                                .unmanaged_withheld
+                                .iter()
+                                .find(|w| w.path == file.path)
+                                .map(|w| w.withheld.clone())
+                        })
+                        .flatten(),
                 });
             }
             let mut result: Vec<UnmanagedFileGroupDto> = groups
@@ -482,16 +500,59 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         })
         .unwrap_or_default();
 
+    let RefinedView {
+        packages,
+        config_files,
+        containerfile_preview,
+        stats,
+        repo_effective: _,
+        generation,
+    } = view;
+    // `config_withheld` holds one entry per included config row, found by
+    // the row's own `path`, and its value depends on that path alone (the
+    // stager decides by destination). So an included row takes the entry
+    // at its path, and an excluded row, which offers no file, takes none,
+    // even when an included variant shares its path.
+    let config_files = config_files
+        .into_iter()
+        .map(|row| {
+            let withheld = row
+                .entry
+                .disposition
+                .is_included()
+                .then(|| {
+                    decisions
+                        .config_withheld
+                        .iter()
+                        .find(|c| c.path == row.entry.path)
+                        .map(|c| c.withheld.clone())
+                })
+                .flatten();
+            ConfigFileDto { row, withheld }
+        })
+        .collect();
+
+    let projected = session.snapshot_projected();
     ViewResponse {
-        view,
+        packages,
+        config_files,
+        containerfile_preview,
+        stats,
+        generation,
         repo_groups,
         baseline_summary: decisions.baseline_summary.clone(),
         version_changes,
-        service_states,
-        service_dropins,
+        unit_states,
+        unit_dropins,
+        mount_findings: decisions.mount_findings.clone(),
+        manual_links: decisions.manual_links.clone(),
+        undetermined_installs: decisions.undetermined_installs.clone(),
+        default_target: decisions.default_target.clone(),
         quadlets,
         flatpaks,
-        sysctl: project_sysctl(&session.snapshot_projected()),
+        declined_generated: decisions.declined_generated.clone(),
+        generated_timers: generated_timer_dtos(&decisions.generated_timers, &projected),
+        sysctl: project_sysctl(&projected),
         tuned,
         users_groups_decisions: decisions.users_groups.clone(),
         package_groups,
@@ -503,6 +564,38 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         unmanaged_files,
         has_unmanaged_scan,
     }
+}
+
+/// Each generated-timer row's decision, with the excluded cron job that
+/// excludes it, when there is one: the same test the session applies
+/// before it refuses to include the row.
+fn generated_timer_dtos(
+    views: &[GeneratedTimerView],
+    projected: &inspectah_core::snapshot::InspectionSnapshot,
+) -> Vec<GeneratedTimerDto> {
+    let sched = projected.scheduled_tasks.as_ref();
+    views
+        .iter()
+        .map(|view| {
+            let cron_job_excluded = sched.and_then(|st| {
+                st.generated_timer_units
+                    .iter()
+                    .filter(|unit| unit.name == view.name)
+                    .find_map(|unit| {
+                        st.cron_jobs
+                            .iter()
+                            .find(|c| !c.disposition.is_included() && unit.generated_from(&c.path))
+                    })
+                    .map(|cron| cron.path.clone())
+            });
+            GeneratedTimerDto {
+                name: view.name.clone(),
+                include: view.include,
+                locked: view.locked,
+                cron_job_excluded,
+            }
+        })
+        .collect()
 }
 
 // =========================================================================
@@ -557,34 +650,34 @@ fn context_decision(
 /// Map a (current_state, default_state) pair to a human-readable subtitle.
 ///
 /// Ported from `typed_service_subtitle` in handlers.rs.
-fn typed_service_subtitle(current: ServiceUnitState, default: Option<PresetDefault>) -> String {
+fn typed_service_subtitle(current: UnitState, default: Option<PresetDefault>) -> String {
     match (current, default) {
-        (ServiceUnitState::Enabled, Some(PresetDefault::Disable)) => {
+        (UnitState::Enabled, Some(PresetDefault::Disable)) => {
             "enabled (diverges from preset: disable)".to_string()
         }
-        (ServiceUnitState::Disabled, Some(PresetDefault::Enable)) => {
+        (UnitState::Disabled, Some(PresetDefault::Enable)) => {
             "disabled (diverges from preset: enable)".to_string()
         }
-        (ServiceUnitState::Masked, Some(PresetDefault::Enable)) => {
+        (UnitState::Masked, Some(PresetDefault::Enable)) => {
             "masked (preset default: enable)".to_string()
         }
-        (ServiceUnitState::Masked, Some(PresetDefault::Disable)) => {
+        (UnitState::Masked, Some(PresetDefault::Disable)) => {
             "masked (preset default: disable)".to_string()
         }
-        (ServiceUnitState::Masked, None) => "masked (no preset rule)".to_string(),
+        (UnitState::Masked, None) => "masked (no preset rule)".to_string(),
         (state, Some(d)) => format!("{} (diverges from preset: {})", state, d),
         (state, None) => format!("{} (no preset rule)", state),
     }
 }
 
-/// Derive the implied action string from a ServiceUnitState.
+/// Derive the implied action string from a UnitState.
 ///
-/// Mirrors `ServiceStateChange::implied_action().to_string()`.
-fn implied_action_str(state: ServiceUnitState) -> &'static str {
+/// Mirrors `UnitStateChange::implied_action().to_string()`.
+fn implied_action_str(state: UnitState) -> &'static str {
     match state {
-        ServiceUnitState::Enabled => "enable",
-        ServiceUnitState::Disabled => "disable",
-        ServiceUnitState::Masked => "mask",
+        UnitState::Enabled => "enable",
+        UnitState::Disabled => "disable",
+        UnitState::Masked => "mask",
     }
 }
 
@@ -690,7 +783,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
             .map(|o| ContextItem {
                 id: format!("omitted-{}", o.unit),
                 title: o.unit.clone(),
-                subtitle: Some(o.reason.describe(&o.package)),
+                subtitle: Some(o.reason.describe()),
                 detail: None,
                 searchable_text: format!("{} omitted {}", o.unit, o.package),
                 ..Default::default()
@@ -765,7 +858,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
     }
 
     ReferenceSection {
-        id: "services".to_string(),
+        id: "units".to_string(),
         display_name: "Services".to_string(),
         items,
         subsections,
@@ -1623,6 +1716,52 @@ fn unbacked_var_row(vd: &RefVarDirectory, rationale: String, state: Option<Strin
 
 // -- Generic sections (scheduled_tasks, non_rpm_software, selinux) ---------
 
+/// A row's id in the web response. A scheduled row's id is its kind and
+/// its source (`cron:<path>`, `timer:<path>`, `timer-instance:<pair>`,
+/// `at:<file>`, `generated:<index>:<name>`): the kind ends at the first
+/// `:` and holds none itself, so rows of two kinds never share an id, and
+/// within a kind the source is unique. A timer recorded without a path is
+/// identified by its name. An instance timer described from its template's
+/// file records that file as its `path`, which the template's own row and
+/// every other instance share, so it is `timer-instance:` and the
+/// JSON-encoded `[path, name]`, which no two descriptions share and which
+/// no separator could make ambiguous. Every other row keeps the
+/// projection's id.
+fn generic_row_id(item: &GenericRefItem) -> String {
+    match &item.scheduled {
+        None => item.id.clone(),
+        Some(ScheduledSource::CronJob { path }) => format!("cron:{path}"),
+        Some(ScheduledSource::Timer { path, name }) if path.is_empty() => format!("timer:{name}"),
+        Some(ScheduledSource::Timer { path, name }) if describes_own_file(path, name) => {
+            format!("timer:{path}")
+        }
+        Some(ScheduledSource::Timer { path, name }) => {
+            format!("timer-instance:{}", serde_json::json!([path, name]))
+        }
+        Some(ScheduledSource::AtJob { file }) => format!("at:{file}"),
+        Some(ScheduledSource::GeneratedTimer { index, name }) => {
+            format!("generated:{index}:{name}")
+        }
+    }
+}
+
+/// Whether the timer `name` was read from its own file at `path`: the
+/// file is `<name>.timer`, or `name` itself when a snapshot records the
+/// suffix.
+fn describes_own_file(path: &str, name: &str) -> bool {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    file == name || file.strip_suffix(".timer") == Some(name)
+}
+
+/// The generated-timer name a scheduled row describes, which its decision
+/// and any declined request are keyed by. `None` on every other row.
+fn generated_timer_name(item: &GenericRefItem) -> Option<String> {
+    match &item.scheduled {
+        Some(ScheduledSource::GeneratedTimer { name, .. }) => Some(name.clone()),
+        _ => None,
+    }
+}
+
 pub fn web_generic_section(
     id: &str,
     display_name: &str,
@@ -1631,7 +1770,7 @@ pub fn web_generic_section(
     let context_items: Vec<ContextItem> = items
         .iter()
         .map(|item| ContextItem {
-            id: item.id.clone(),
+            id: generic_row_id(item),
             title: item.key.clone(),
             subtitle: item.summary.clone(),
             detail: item.content.clone(),
@@ -1651,6 +1790,14 @@ pub fn web_generic_section(
                 }
                 search
             },
+            unit_link: item
+                .unit_link
+                .as_ref()
+                .map(|link| crate::web_types::ContextUnitLink {
+                    unit: link.unit.clone(),
+                    unit_row: link.unit_row,
+                }),
+            generated_timer: generated_timer_name(item),
             ..Default::default()
         })
         .collect();
@@ -1955,7 +2102,7 @@ mod tests {
         let response = build_web_view(&session);
         let json = serde_json::to_value(&response).expect("serialize");
         assert!(json.get("generation").is_some());
-        assert!(json.get("service_states").is_some());
+        assert!(json.get("unit_states").is_some());
         assert!(json.get("repo_groups").is_some());
         // package_groups present even with no groups
         let groups = json["package_groups"]
@@ -2010,7 +2157,7 @@ mod tests {
         assert_eq!(sections.len(), 8, "must return exactly 8 sections");
 
         let expected_ids = [
-            "services",
+            "units",
             "containers",
             "network",
             "storage",
@@ -2691,63 +2838,6 @@ mod tests {
         assert!(
             json.get("ifcfg_note").is_none(),
             "ifcfg_note None must be skipped in serialization"
-        );
-    }
-
-    #[test]
-    fn ref_service_item_carries_shadow_fields() {
-        use inspectah_core::types::ShadowType;
-        use inspectah_refine::projection::RefServiceItem;
-
-        let item = RefServiceItem {
-            unit: "httpd.service".into(),
-            current_state: ServiceUnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            owning_package: Some("httpd".into()),
-            dropin_contents: vec![],
-            shadow_type: Some(ShadowType::FullShadow),
-            shadow_rationale: Some("full override by custom unit".into()),
-        };
-        assert!(item.shadow_type.is_some());
-        assert_eq!(
-            item.shadow_rationale.as_deref(),
-            Some("full override by custom unit")
-        );
-    }
-
-    #[test]
-    fn service_decision_dto_wires_shadow_fields() {
-        use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
-        use inspectah_core::types::{FindingKind, ShadowType};
-
-        let mut snap = InspectionSnapshot::new();
-        snap.services = Some(ServiceSection {
-            state_changes: vec![ServiceStateChange {
-                unit: "httpd.service".into(),
-                current_state: ServiceUnitState::Enabled,
-                default_state: Some(PresetDefault::Disable),
-                owning_package: Some("httpd".into()),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: Some(ShadowType::FullShadow),
-                shadow_rationale: Some("Custom unit file overrides package default".into()),
-            }],
-            ..Default::default()
-        });
-
-        let session = RefineSession::new(snap);
-        let response = build_web_view(&session);
-        let json = serde_json::to_value(&response).expect("serialize");
-
-        let states = json["service_states"].as_array().unwrap();
-        assert_eq!(states.len(), 1);
-        assert_eq!(states[0]["unit"], "httpd.service");
-        assert_eq!(states[0]["shadow_type"], "full_shadow");
-        assert_eq!(
-            states[0]["shadow_rationale"],
-            "Custom unit file overrides package default"
         );
     }
 

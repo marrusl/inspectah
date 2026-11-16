@@ -9,7 +9,7 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSecti
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 use inspectah_refine::session::{RefineSession, render_refine_export};
 use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 
@@ -354,7 +354,7 @@ fn aggregate_snapshot_with_dropin_variants() -> InspectionSnapshot {
         baseline_provisional: false,
         section_host_counts: Default::default(),
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![
             SystemdDropIn {
                 unit: "httpd.service".into(),

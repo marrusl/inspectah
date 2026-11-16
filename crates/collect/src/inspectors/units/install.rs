@@ -1,0 +1,903 @@
+//! The `[Install]` section `systemctl enable` acts on for one unit (§ 7.2
+//! of the units spec, step 4): read from the unit file and the drop-ins
+//! that apply to it, in systemd's load order, with the reset systemd
+//! performs.
+//!
+//! The reader is a pure function over text. The caller lists the
+//! directories [`drop_in_dirs`] names under both unit directories and
+//! reads the files; nothing here touches the host.
+
+use super::specifiers::{SpecifierSet, expand_unit_specifiers};
+use inspectah_core::types::units::{InstallUnknown, UNIT_FILE_WHITESPACE, UnitName, logical_lines};
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
+
+/// The section header `enable` reads.
+const INSTALL_SECTION: &str = "Install";
+
+/// The suffix of a unit's drop-in directory.
+pub(crate) const DROP_IN_DIR_SUFFIX: &str = ".d";
+
+/// The unit directory a drop-in sits under. The order is the priority:
+/// for one file name in one directory, a file in a directory ranked above
+/// `/etc` replaces an `/etc` one, and an `/etc` file replaces a vendor
+/// one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum DropInRoot {
+    /// A directory systemd ranks above `/etc/systemd/system`, such as
+    /// `/etc/systemd/system.control`, where `systemctl set-property`
+    /// writes. A drop-in there that holds `[Install]` refuses the unit
+    /// before the reader runs (`resolve`), so one read here only hides an
+    /// `/etc` or vendor drop-in of its file name.
+    AboveEtc,
+    /// `/etc/systemd/system`.
+    Etc,
+    /// `/usr/lib/systemd/system`.
+    Vendor,
+}
+
+/// Where one drop-in was read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DropInSource {
+    /// The unit directory it sits under.
+    pub(crate) root: DropInRoot,
+    /// Its directory's name, one of [`drop_in_dirs`]. A drop-in from any
+    /// other directory is not read for `[Install]`.
+    pub(crate) dir: String,
+    /// Its file name, a `.conf` name.
+    pub(crate) file_name: String,
+}
+
+/// The `[Install]` keys `enable` acts on, after every drop-in that applies.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct InstallSection {
+    pub(crate) wanted_by: Vec<UnitName>,
+    pub(crate) required_by: Vec<UnitName>,
+    pub(crate) alias: Vec<UnitName>,
+    pub(crate) also: Vec<UnitName>,
+    pub(crate) default_instance: Option<String>,
+}
+
+/// What a unit's `[Install]` section is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InstallRead {
+    /// The unit has no `[Install]` section.
+    Absent,
+    Known(InstallSection),
+    /// The section cannot be relied on. `assigns_also` says whether any
+    /// line assigns `Also=`, an empty assignment included.
+    Undetermined {
+        reason: InstallUnknown,
+        assigns_also: bool,
+    },
+}
+
+/// The `.d` directory names `enable` reads `[Install]` from for `name`:
+/// its own and, for an instance, its template's. The type-wide directory
+/// (`service.d`) and the dash-prefix directories (`a-.service.d` for
+/// `a-b.service`) are never among them. The caller looks for each under
+/// both unit directories.
+pub(crate) fn drop_in_dirs(name: &UnitName) -> Vec<String> {
+    let mut dirs = vec![format!("{}{DROP_IN_DIR_SUFFIX}", name.as_str())];
+    if let Some(parts) = name.instance() {
+        dirs.push(format!("{}{DROP_IN_DIR_SUFFIX}", parts.template().as_str()));
+    }
+    dirs
+}
+
+/// The effective `[Install]` section of `name`, whose unit file reads
+/// `fragment`, with `%i`, `%p` and `%N` expanded. `systemctl enable` does
+/// not expand `%I`, so a value holding one is undetermined.
+///
+/// Load order: the unit file first, then one drop-in per file name, in
+/// file-name order across every directory of [`drop_in_dirs`] and both
+/// roots, not one root at a time. Of the drop-ins that share a file name,
+/// the first in systemd's search order is read: every directory of the
+/// instance's own name before every directory of its template's, and
+/// within each, [`DropInRoot`]'s order: a directory ranked above `/etc`
+/// (in search-path order among those), then `/etc`, then the vendor one.
+/// So a vendor file in the instance's `.d` hides an `/etc` file of its
+/// name in the template's, and a `system.control` file hides an `/etc`
+/// file of its name in the same `.d`. That order follows systemd's source
+/// (252 and 257: the search order in `install.c`, the first file of a name
+/// kept in `conf-files.c`) and was measured on RHEL 9 and 10: "R5's open
+/// items" in `process-docs/skills/real-host-validation-runs.md`.
+///
+/// An empty `WantedBy=`, `RequiredBy=` or `Alias=` clears every value of
+/// that key before it (measured on RHEL 9 and 10); an empty `Also=` clears
+/// nothing. Any `UpheldBy=`, a specifier the reader does not
+/// expand and a value that is not a [`UnitName`] each make the section
+/// [`InstallRead::Undetermined`], with the first such reason in load order.
+/// A reason, once found, stands even if a later reset clears the value
+/// that caused it.
+pub(crate) fn read_install(
+    name: &UnitName,
+    fragment: &str,
+    drop_ins: &[(DropInSource, &str)],
+) -> InstallRead {
+    let mut reader = Reader::new(name);
+    reader.read(fragment);
+    for text in selected_drop_ins(name, drop_ins) {
+        reader.read(text);
+    }
+    reader.finish()
+}
+
+/// The texts of the drop-ins of `drop_ins` that systemd reads for `name`,
+/// in load order: one per file name, in file-name order, the first of a
+/// name in the search order [`read_install`] gives. A drop-in from a
+/// directory [`drop_in_dirs`] does not name is left out.
+pub(crate) fn selected_drop_ins<'t>(
+    name: &UnitName,
+    drop_ins: &[(DropInSource, &'t str)],
+) -> Vec<&'t str> {
+    let dirs = drop_in_dirs(name);
+    let mut selected: BTreeMap<&str, ((usize, DropInRoot), &'t str)> = BTreeMap::new();
+    for (source, text) in drop_ins {
+        let Some(dir_rank) = dirs.iter().position(|dir| *dir == source.dir) else {
+            continue;
+        };
+        let rank = (dir_rank, source.root);
+        match selected.entry(source.file_name.as_str()) {
+            Entry::Vacant(slot) => {
+                slot.insert((rank, text));
+            }
+            Entry::Occupied(mut slot) => {
+                if rank < slot.get().0 {
+                    slot.insert((rank, text));
+                }
+            }
+        }
+    }
+    selected.into_values().map(|(_, text)| text).collect()
+}
+
+/// The `[Install]` section the package alone provides for `name` (§ 7.2
+/// of the units spec, "The vendor-side read"): [`read_install`] over
+/// `vendor_fragment`, the vendor unit file's text, and the vendor drop-ins
+/// of `drop_ins` only, with nothing from `/etc`. It is the section the
+/// image's package install acts on, before any `COPY`.
+pub(crate) fn read_vendor_install(
+    name: &UnitName,
+    vendor_fragment: &str,
+    drop_ins: &[(DropInSource, &str)],
+) -> InstallRead {
+    let vendor: Vec<(DropInSource, &str)> = drop_ins
+        .iter()
+        .filter(|(source, _)| source.root == DropInRoot::Vendor)
+        .cloned()
+        .collect();
+    read_install(name, vendor_fragment, &vendor)
+}
+
+/// The `[Install]` assignments read so far, in load order.
+struct Reader<'a> {
+    /// The unit name without its type suffix, which the specifiers expand
+    /// from.
+    stem: &'a str,
+    /// Whether any file read so far has an `[Install]` header.
+    has_section: bool,
+    section: InstallSection,
+    /// The first reason the section cannot be relied on.
+    unknown: Option<InstallUnknown>,
+    assigns_also: bool,
+}
+
+impl<'a> Reader<'a> {
+    fn new(name: &'a UnitName) -> Self {
+        let (stem, _) = name
+            .as_str()
+            .rsplit_once('.')
+            .expect("a unit name ends in its type suffix");
+        Self {
+            stem,
+            has_section: false,
+            section: InstallSection::default(),
+            unknown: None,
+            assigns_also: false,
+        }
+    }
+
+    /// Apply the `[Install]` assignments of one file, by logical line.
+    fn read(&mut self, text: &str) {
+        let mut in_install = false;
+        for line in logical_lines(text) {
+            let line = line.trim_matches(UNIT_FILE_WHITESPACE);
+            if let Some(header) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                in_install = header == INSTALL_SECTION;
+                self.has_section |= in_install;
+                continue;
+            }
+            if !in_install {
+                continue;
+            }
+            if let Some((key, value)) = line.split_once('=') {
+                self.assign(
+                    key.trim_matches(UNIT_FILE_WHITESPACE),
+                    value.trim_matches(UNIT_FILE_WHITESPACE),
+                );
+            }
+        }
+    }
+
+    fn assign(&mut self, key: &str, value: &str) {
+        match key {
+            "WantedBy" if value.is_empty() => self.section.wanted_by.clear(),
+            "WantedBy" => self.extend(value, |s| &mut s.wanted_by),
+            "Alias" if value.is_empty() => self.section.alias.clear(),
+            "Alias" => self.extend(value, |s| &mut s.alias),
+            "Also" => {
+                self.assigns_also = true;
+                self.extend(value, |s| &mut s.also);
+            }
+            "RequiredBy" if value.is_empty() => self.section.required_by.clear(),
+            "RequiredBy" => self.extend(value, |s| &mut s.required_by),
+            "UpheldBy" => self.decline(InstallUnknown::UpheldBy),
+            "DefaultInstance" if value.is_empty() => self.section.default_instance = None,
+            "DefaultInstance" => {
+                match expand_unit_specifiers(value, self.stem, SpecifierSet::Install) {
+                    Some(instance) => self.section.default_instance = Some(instance),
+                    None => self.decline(InstallUnknown::Specifier),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Add each whitespace-separated unit name of `value` to the list
+    /// `list` picks, once.
+    fn extend(&mut self, value: &str, list: fn(&mut InstallSection) -> &mut Vec<UnitName>) {
+        for word in value.split(UNIT_FILE_WHITESPACE).filter(|w| !w.is_empty()) {
+            let Some(expanded) = expand_unit_specifiers(word, self.stem, SpecifierSet::Install)
+            else {
+                self.decline(InstallUnknown::Specifier);
+                continue;
+            };
+            match UnitName::try_from(expanded) {
+                Ok(unit) => {
+                    let values = list(&mut self.section);
+                    if !values.contains(&unit) {
+                        values.push(unit);
+                    }
+                }
+                Err(_) => self.decline(InstallUnknown::ForeignName),
+            }
+        }
+    }
+
+    fn decline(&mut self, reason: InstallUnknown) {
+        self.unknown.get_or_insert(reason);
+    }
+
+    fn finish(self) -> InstallRead {
+        match (self.unknown, self.has_section) {
+            (Some(reason), _) => InstallRead::Undetermined {
+                reason,
+                assigns_also: self.assigns_also,
+            },
+            (None, false) => InstallRead::Absent,
+            (None, true) => InstallRead::Known(self.section),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unit(name: &str) -> UnitName {
+        UnitName::try_from(name.to_owned()).expect("a valid unit name")
+    }
+
+    fn units(names: &[&str]) -> Vec<UnitName> {
+        names.iter().map(|n| unit(n)).collect()
+    }
+
+    fn source(root: DropInRoot, dir: &str, file_name: &str) -> DropInSource {
+        DropInSource {
+            root,
+            dir: dir.to_owned(),
+            file_name: file_name.to_owned(),
+        }
+    }
+
+    fn wanted(names: &[&str]) -> InstallRead {
+        InstallRead::Known(InstallSection {
+            wanted_by: units(names),
+            ..InstallSection::default()
+        })
+    }
+
+    fn undetermined(reason: InstallUnknown, assigns_also: bool) -> InstallRead {
+        InstallRead::Undetermined {
+            reason,
+            assigns_also,
+        }
+    }
+
+    use DropInRoot::{AboveEtc, Etc, Vendor};
+
+    /// A unit file whose section wants `multi-user.target`.
+    const WANTS_MULTI_USER: &str = "[Unit]\nDescription=x\n\n[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n";
+
+    /// A unit file whose section requires it from `multi-user.target`, the
+    /// unit of the 2026-11-16 `RequiredBy=` measurement.
+    const REQUIRED_BY_MULTI_USER: &str =
+        "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=multi-user.target\n";
+
+    /// A unit file with no `[Install]` section.
+    const NO_INSTALL: &str = "[Unit]\nDescription=x\n\n[Service]\nExecStart=/bin/true\n";
+
+    /// A drop-in that changes no `[Install]` key.
+    const NO_INSTALL_DROP_IN: &str = "[Service]\nNice=5\n";
+
+    /// Every reader case of § 7.2 step 4, the load order, the reset rule
+    /// and the undetermined reasons: the unit, its file, its drop-ins as
+    /// (root, directory, file name, text), and the section `enable` acts on.
+    #[test]
+    fn the_install_reader_follows_systemds_load_order_and_resets() {
+        type DropIns<'a> = &'a [(DropInRoot, &'a str, &'a str, &'a str)];
+        let cases: &[(&str, &str, &str, DropIns, InstallRead)] = &[
+            (
+                "WantedBy= from the unit file",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[],
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "WantedBy= from an /etc drop-in only",
+                "a.service",
+                NO_INSTALL,
+                &[(
+                    Etc,
+                    "a.service.d",
+                    "10-a.conf",
+                    "[Install]\nWantedBy=extra.target\n",
+                )],
+                wanted(&["extra.target"]),
+            ),
+            (
+                "WantedBy= from a vendor drop-in only",
+                "a.service",
+                NO_INSTALL,
+                &[(
+                    Vendor,
+                    "a.service.d",
+                    "10-a.conf",
+                    "[Install]\nWantedBy=extra.target\n",
+                )],
+                wanted(&["extra.target"]),
+            ),
+            (
+                "WantedBy= from the template's .d for an instance",
+                "t@x.service",
+                NO_INSTALL,
+                &[(
+                    Vendor,
+                    "t@.service.d",
+                    "10-a.conf",
+                    "[Install]\nWantedBy=extra.target\n",
+                )],
+                wanted(&["extra.target"]),
+            ),
+            (
+                "a later drop-in adds to the unit file's list",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[(
+                    Etc,
+                    "a.service.d",
+                    "10-a.conf",
+                    "[Install]\nWantedBy=extra.target\n",
+                )],
+                wanted(&["multi-user.target", "extra.target"]),
+            ),
+            (
+                "file-name order across both roots, not root by root",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[
+                    (Etc, "a.service.d", "20-b.conf", "[Install]\nWantedBy=\n"),
+                    (
+                        Vendor,
+                        "a.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=extra.target\n",
+                    ),
+                ],
+                wanted(&[]),
+            ),
+            (
+                "file-name order across both roots, reversed",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[
+                    (Etc, "a.service.d", "10-a.conf", "[Install]\nWantedBy=\n"),
+                    (
+                        Vendor,
+                        "a.service.d",
+                        "20-b.conf",
+                        "[Install]\nWantedBy=extra.target\n",
+                    ),
+                ],
+                wanted(&["extra.target"]),
+            ),
+            (
+                "file-name order across the own and the template's .d",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                &[
+                    (Etc, "t@x.service.d", "20-b.conf", "[Install]\nWantedBy=\n"),
+                    (
+                        Vendor,
+                        "t@.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=extra.target\n",
+                    ),
+                ],
+                wanted(&[]),
+            ),
+            (
+                "an /etc file replaces a vendor file of its name in the same directory",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Vendor,
+                        "a.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=extra.target\n",
+                    ),
+                    (Etc, "a.service.d", "10-a.conf", NO_INSTALL_DROP_IN),
+                ],
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "an /etc file in the instance's .d replaces a vendor one in the template's",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Vendor,
+                        "t@.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=extra.target\n",
+                    ),
+                    (Etc, "t@x.service.d", "10-a.conf", NO_INSTALL_DROP_IN),
+                ],
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "a vendor file in the instance's .d hides an /etc one of its name in the template's",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Vendor,
+                        "t@x.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=own.target\n",
+                    ),
+                    (
+                        Etc,
+                        "t@.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=etc.target\n",
+                    ),
+                ],
+                wanted(&["multi-user.target", "own.target"]),
+            ),
+            (
+                "a file ranked above /etc hides an /etc one of its name in the same .d",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Etc,
+                        "a.service.d",
+                        "50-CPUQuota.conf",
+                        "[Install]\nWantedBy=extra.target\n",
+                    ),
+                    (
+                        AboveEtc,
+                        "a.service.d",
+                        "50-CPUQuota.conf",
+                        "[Service]\nCPUQuota=20%\n",
+                    ),
+                ],
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "a file ranked above /etc hides a vendor one of its name",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Vendor,
+                        "a.service.d",
+                        "50-CPUQuota.conf",
+                        "[Install]\nWantedBy=extra.target\n",
+                    ),
+                    (
+                        AboveEtc,
+                        "a.service.d",
+                        "50-CPUQuota.conf",
+                        "[Service]\nCPUQuota=20%\n",
+                    ),
+                ],
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "an /etc file in the instance's .d is read over one ranked above /etc in the template's",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                &[
+                    (AboveEtc, "t@.service.d", "10-a.conf", NO_INSTALL_DROP_IN),
+                    (
+                        Etc,
+                        "t@x.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=own.target\n",
+                    ),
+                ],
+                wanted(&["multi-user.target", "own.target"]),
+            ),
+            (
+                "the same placement given in the other order",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Etc,
+                        "t@.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=etc.target\n",
+                    ),
+                    (
+                        Vendor,
+                        "t@x.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=own.target\n",
+                    ),
+                ],
+                wanted(&["multi-user.target", "own.target"]),
+            ),
+            (
+                "an /etc file replaces a vendor file of its name in the template's .d",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Vendor,
+                        "t@.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=vendor.target\n",
+                    ),
+                    (
+                        Etc,
+                        "t@.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=etc.target\n",
+                    ),
+                ],
+                wanted(&["multi-user.target", "etc.target"]),
+            ),
+            (
+                "of two vendor files of one name, the instance's own .d is read",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Vendor,
+                        "t@.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=template.target\n",
+                    ),
+                    (
+                        Vendor,
+                        "t@x.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=own.target\n",
+                    ),
+                ],
+                wanted(&["multi-user.target", "own.target"]),
+            ),
+            (
+                "the type-wide and dash-prefix directories are not read",
+                "a-b.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Vendor,
+                        "service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=typewide.target\n",
+                    ),
+                    (
+                        Etc,
+                        "a-.service.d",
+                        "10-b.conf",
+                        "[Install]\nWantedBy=dash.target\n",
+                    ),
+                ],
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "a drop-in holding only an empty WantedBy= expects nothing",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nWantedBy=\n")],
+                wanted(&[]),
+            ),
+            (
+                "a reset then a value in one drop-in keeps only the value",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[(
+                    Etc,
+                    "a.service.d",
+                    "10-a.conf",
+                    "[Install]\nWantedBy=\nWantedBy=graphical.target\n",
+                )],
+                wanted(&["graphical.target"]),
+            ),
+            (
+                "a reset in 10-a.conf and a value in 20-b.conf keeps the value",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[
+                    (Etc, "a.service.d", "10-a.conf", "[Install]\nWantedBy=\n"),
+                    (
+                        Etc,
+                        "a.service.d",
+                        "20-b.conf",
+                        "[Install]\nWantedBy=extra.target\n",
+                    ),
+                ],
+                wanted(&["extra.target"]),
+            ),
+            (
+                "a value in 10-a.conf and a reset in 20-b.conf expects nothing",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Etc,
+                        "a.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=extra.target\n",
+                    ),
+                    (Etc, "a.service.d", "20-b.conf", "[Install]\nWantedBy=\n"),
+                ],
+                wanted(&[]),
+            ),
+            (
+                "an empty Alias= clears the unit file's alias",
+                "a.service",
+                "[Install]\nWantedBy=multi-user.target\nAlias=b.service\n",
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nAlias=\n")],
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "an empty Also= keeps the unit file's member",
+                "a.service",
+                "[Install]\nWantedBy=multi-user.target\nAlso=a.socket\n",
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nAlso=\n")],
+                InstallRead::Known(InstallSection {
+                    wanted_by: units(&["multi-user.target"]),
+                    also: units(&["a.socket"]),
+                    ..InstallSection::default()
+                }),
+            ),
+            (
+                "an empty RequiredBy= in a drop-in clears the unit file's values",
+                "a.service",
+                REQUIRED_BY_MULTI_USER,
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nRequiredBy=\n")],
+                InstallRead::Known(InstallSection::default()),
+            ),
+            (
+                "an empty RequiredBy= then a value in a drop-in expects the value only",
+                "a.service",
+                REQUIRED_BY_MULTI_USER,
+                &[(
+                    Etc,
+                    "a.service.d",
+                    "10-a.conf",
+                    "[Install]\nRequiredBy=\nRequiredBy=graphical.target\n",
+                )],
+                InstallRead::Known(InstallSection {
+                    required_by: units(&["graphical.target"]),
+                    ..InstallSection::default()
+                }),
+            ),
+            (
+                "a value then an empty RequiredBy= in the unit file expects nothing",
+                "a.service",
+                "[Install]\nRequiredBy=multi-user.target\nRequiredBy=\n",
+                &[],
+                InstallRead::Known(InstallSection::default()),
+            ),
+            (
+                "the empty RequiredBy= clears RequiredBy= alone",
+                "a.service",
+                "[Install]\nWantedBy=multi-user.target\nRequiredBy=a.target\n",
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nRequiredBy=\n")],
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "control: RequiredBy= with no drop-in is kept",
+                "a.service",
+                REQUIRED_BY_MULTI_USER,
+                &[],
+                InstallRead::Known(InstallSection {
+                    required_by: units(&["multi-user.target"]),
+                    ..InstallSection::default()
+                }),
+            ),
+            (
+                "an empty RequiredBy= with no value before it is ignored",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nRequiredBy=\n")],
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "UpheldBy= is undetermined",
+                "a.service",
+                "[Install]\nWantedBy=multi-user.target\nUpheldBy=multi-user.target\n",
+                &[],
+                undetermined(InstallUnknown::UpheldBy, false),
+            ),
+            (
+                "an empty UpheldBy= is undetermined",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nUpheldBy=\n")],
+                undetermined(InstallUnknown::UpheldBy, false),
+            ),
+            (
+                "%H is undetermined, and the Also= line is recorded",
+                "a.service",
+                "[Install]\nWantedBy=%H.target\nAlso=a.socket\n",
+                &[],
+                undetermined(InstallUnknown::Specifier, true),
+            ),
+            (
+                "%i expands for an instance",
+                "t@x.service",
+                "[Install]\nWantedBy=multi-user.target\nAlias=alias-%i.service\n",
+                &[],
+                InstallRead::Known(InstallSection {
+                    wanted_by: units(&["multi-user.target"]),
+                    alias: units(&["alias-x.service"]),
+                    ..InstallSection::default()
+                }),
+            ),
+            (
+                "a .device value is a foreign name",
+                "a.service",
+                "[Install]\nWantedBy=dev-sda.device\n",
+                &[],
+                undetermined(InstallUnknown::ForeignName, false),
+            ),
+            (
+                "a later reset does not undo a specifier decline",
+                "a.service",
+                "[Install]\nWantedBy=%H.target\n",
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nWantedBy=\n")],
+                undetermined(InstallUnknown::Specifier, false),
+            ),
+            (
+                "a later reset does not undo a foreign-name decline",
+                "a.service",
+                "[Install]\nWantedBy=dev-sda.device\n",
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nWantedBy=\n")],
+                undetermined(InstallUnknown::ForeignName, false),
+            ),
+            (
+                "an empty Also= in an undetermined section assigns Also=",
+                "a.service",
+                "[Install]\nUpheldBy=multi-user.target\nAlso=\n",
+                &[],
+                undetermined(InstallUnknown::UpheldBy, true),
+            ),
+            (
+                "no section is absent",
+                "a.service",
+                NO_INSTALL,
+                &[],
+                InstallRead::Absent,
+            ),
+            (
+                "an [Install] header with CRLF and a value with trailing CR read as plain",
+                "a.service",
+                "[Unit]\r\nDescription=x\r\n[Install]\r\nWantedBy=multi-user.target \r\n",
+                &[],
+                wanted(&["multi-user.target"]),
+            ),
+        ];
+        for (label, name, fragment, drop_ins, expected) in cases {
+            let drop_ins: Vec<(DropInSource, &str)> = drop_ins
+                .iter()
+                .map(|&(root, dir, file, text)| (source(root, dir, file), text))
+                .collect();
+            assert_eq!(
+                &read_install(&unit(name), fragment, &drop_ins),
+                expected,
+                "{label}"
+            );
+        }
+    }
+
+    /// `systemctl enable` expands no `%I` in `[Install]` (systemd's install
+    /// expansion table, 252 and 257), so a value holding one is
+    /// undetermined, in the unit file, a drop-in or `DefaultInstance=`.
+    /// Control: `%i`, `%p` and `%N` on the same instance expand.
+    #[test]
+    fn percent_capital_i_in_install_is_undetermined() {
+        let cases: &[(&str, &str, &str, Option<&str>, InstallRead)] = &[
+            (
+                "WantedBy= in the unit file",
+                "t@x.service",
+                "[Install]\nWantedBy=multi-user%I.target\n",
+                None,
+                undetermined(InstallUnknown::Specifier, false),
+            ),
+            (
+                "Alias= in a drop-in",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                Some("[Install]\nAlias=alias-%I.service\n"),
+                undetermined(InstallUnknown::Specifier, false),
+            ),
+            (
+                "DefaultInstance=",
+                "t@.service",
+                "[Install]\nWantedBy=multi-user.target\nDefaultInstance=%I\n",
+                None,
+                undetermined(InstallUnknown::Specifier, false),
+            ),
+            (
+                "control: %i, %p and %N expand",
+                "t@x.service",
+                "[Install]\nWantedBy=%p.target\nAlias=%N-alias.service alias-%i.service\n",
+                None,
+                InstallRead::Known(InstallSection {
+                    wanted_by: units(&["t.target"]),
+                    alias: units(&["t@x-alias.service", "alias-x.service"]),
+                    ..InstallSection::default()
+                }),
+            ),
+        ];
+        for (label, name, fragment, drop_in, expected) in cases {
+            let drop_ins: Vec<(DropInSource, &str)> = drop_in
+                .iter()
+                .map(|text| (source(Etc, &format!("{name}.d"), "10-a.conf"), *text))
+                .collect();
+            assert_eq!(
+                &read_install(&unit(name), fragment, &drop_ins),
+                expected,
+                "{label}"
+            );
+        }
+    }
+
+    /// `enable` reads `[Install]` from the unit's own `.d` and, for an
+    /// instance, its template's, and from no type-wide or dash-prefix
+    /// directory.
+    #[test]
+    fn drop_in_dirs_are_the_own_and_the_templates() {
+        for (name, expected) in [
+            ("a-b-c.service", vec!["a-b-c.service.d"]),
+            ("t@x.service", vec!["t@x.service.d", "t@.service.d"]),
+        ] {
+            let dirs = drop_in_dirs(&unit(name));
+            assert_eq!(dirs, expected, "{name}");
+            for refused in ["service.d", "a-.service.d", "a-b-.service.d", "t@.d"] {
+                assert!(!dirs.iter().any(|d| d == refused), "{name} lists {refused}");
+            }
+        }
+    }
+}

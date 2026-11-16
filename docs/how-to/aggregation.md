@@ -251,6 +251,10 @@ Section coverage:
 Output: aggregate-scans-20261104-234033.tar.gz
 ```
 
+This output was recorded before the snapshot's `services` section was
+renamed `units`. The coverage line now reads `units: 2/2 hosts` and
+follows `storage`.
+
 Treat warnings (e.g., mismatched image references across hosts) as errors:
 
 ```bash

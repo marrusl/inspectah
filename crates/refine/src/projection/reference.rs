@@ -5,7 +5,9 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigCategory;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::selinux::FcontextRule;
-use inspectah_pipeline::render::service_intent::render_service_intent;
+use inspectah_core::types::units::{UnitName, UnitState};
+use inspectah_pipeline::render::configtree::staged_writes;
+use inspectah_pipeline::render::unit_plan::plan_units;
 use inspectah_pipeline::render::var_dirs::effective_var_backing;
 
 use super::types::DECIDED_UNDER_CONFIG_FILES;
@@ -16,7 +18,7 @@ use super::types::{
     RefLvmVolume, RefMountPoint, RefNMConnection, RefNetwork, RefOmittedService, RefProxyEnv,
     RefQuadletItem, RefRunningContainerItem, RefServiceAdvisory, RefServiceItem, RefServiceWarning,
     RefServices, RefStaticRoute, RefStorage, RefVarDirectory, RefVersionChangeItem,
-    RefVersionChanges, ReferenceProjection,
+    RefVersionChanges, ReferenceProjection, ScheduledSource, TimerUnitLink,
 };
 
 /// Project version changes from snapshot into reference format.
@@ -81,28 +83,39 @@ pub fn project_ref_version_changes(snap: &InspectionSnapshot) -> RefVersionChang
 /// 4. **Preset-unknown disabled** — disabled units not in divergent or matched sets
 /// 5. **Standalone drop-ins** — drop-ins for units not covered by any of the above
 ///
-/// Omitted/advisory data comes from `render_service_intent` in the pipeline crate.
-/// Warnings are filtered from `snap.warnings` where `inspector == "services"`.
+/// Omitted/advisory data comes from `plan_units` in the pipeline crate.
+/// Warnings are filtered from `snap.warnings` where `inspector == "units"`.
 pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
-    let svc = match &snap.services {
+    let svc = match &snap.units {
         Some(s) => s,
         None => return RefServices::default(),
     };
 
-    let render_plan = render_service_intent(snap);
+    let render_plan = plan_units(snap, &staged_writes(snap));
 
     let matched_set: HashSet<&str> = svc
-        .preset_matched_units
+        .inventory
         .iter()
-        .map(|s| s.as_str())
+        .filter(|e| e.matches_preset())
+        .map(|e| e.unit.as_str())
         .collect();
     let divergent_set: HashSet<&str> = svc
         .state_changes
         .iter()
-        .map(|sc| sc.unit.as_str())
+        .map(|sc| sc.unit().name().as_str())
         .collect();
-    let enabled_set: HashSet<&str> = svc.enabled_units.iter().map(|s| s.as_str()).collect();
-    let disabled_set: HashSet<&str> = svc.disabled_units.iter().map(|s| s.as_str()).collect();
+    let enabled = || {
+        svc.inventory
+            .iter()
+            .filter(|e| e.state == UnitState::Enabled)
+    };
+    let disabled = || {
+        svc.inventory
+            .iter()
+            .filter(|e| e.state == UnitState::Disabled)
+    };
+    let enabled_set: HashSet<&str> = enabled().map(|e| e.unit.as_str()).collect();
+    let disabled_set: HashSet<&str> = disabled().map(|e| e.unit.as_str()).collect();
 
     // Build drop-in lookup: units covered by any category get their drop-ins
     // folded in; everything else is standalone.
@@ -129,98 +142,87 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
     }
 
     // Collect omitted unit names so they are excluded from the main list.
+    // Only the package reasons, as before the plan declined for its own
+    // files: the rows that show the other reasons are a later task's.
     let omitted_units: HashSet<&str> = render_plan
-        .omissions
+        .declined
         .iter()
-        .map(|o| o.unit.as_str())
+        .filter(|(_, _, reason)| reason.owning_package().is_some())
+        .map(|(name, _, _)| name.as_str())
         .collect();
 
     // 1. Divergent items (from state_changes)
     let mut divergent = Vec::new();
     for sc in &svc.state_changes {
-        if omitted_units.contains(sc.unit.as_str()) {
+        if omitted_units.contains(sc.unit().name().as_str()) {
             continue;
         }
         divergent.push(RefServiceItem {
-            unit: sc.unit.clone(),
-            current_state: sc.current_state,
+            unit: sc.unit().name().as_str().to_owned(),
+            current_state: sc.current_state(),
             default_state: sc.default_state,
-            owning_package: sc.owning_package.clone(),
+            owning_package: sc.unit().owning_package().map(str::to_owned),
             dropin_contents: dropin_by_unit
-                .get(sc.unit.as_str())
+                .get(sc.unit().name().as_str())
                 .cloned()
                 .unwrap_or_default(),
-            shadow_type: sc.shadow_type.clone(),
-            shadow_rationale: sc.shadow_rationale.clone(),
         });
     }
 
     // 2. Preset-matched with drop-in (without drop-in are suppressed entirely)
     let mut preset_matched_with_dropins = Vec::new();
-    for unit_name in &svc.preset_matched_units {
-        if let Some(contents) = dropin_by_unit.get(unit_name.as_str()) {
-            let current_state = if enabled_set.contains(unit_name.as_str()) {
-                inspectah_core::types::services::ServiceUnitState::Enabled
-            } else {
-                inspectah_core::types::services::ServiceUnitState::Disabled
-            };
+    for entry in svc.inventory.iter().filter(|e| e.matches_preset()) {
+        if let Some(contents) = dropin_by_unit.get(entry.unit.as_str()) {
             preset_matched_with_dropins.push(RefServiceItem {
-                unit: unit_name.clone(),
-                current_state,
+                unit: entry.unit.as_str().to_owned(),
+                current_state: entry.state,
                 default_state: None, // matched means current == default; no divergence to record
                 owning_package: None,
                 dropin_contents: contents.clone(),
-                shadow_type: None,
-                shadow_rationale: None,
             });
         }
     }
 
     // 3. Preset-unknown enabled units (not divergent, not matched)
     let mut preset_unknown_enabled = Vec::new();
-    for unit_name in &svc.enabled_units {
-        if !divergent_set.contains(unit_name.as_str()) && !matched_set.contains(unit_name.as_str())
-        {
+    for entry in enabled() {
+        let unit_name = entry.unit.as_str();
+        if !divergent_set.contains(unit_name) && !matched_set.contains(unit_name) {
             preset_unknown_enabled.push(RefServiceItem {
-                unit: unit_name.clone(),
-                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
+                unit: unit_name.to_owned(),
+                current_state: UnitState::Enabled,
                 default_state: None,
                 owning_package: None,
-                dropin_contents: dropin_by_unit
-                    .get(unit_name.as_str())
-                    .cloned()
-                    .unwrap_or_default(),
-                shadow_type: None,
-                shadow_rationale: None,
+                dropin_contents: dropin_by_unit.get(unit_name).cloned().unwrap_or_default(),
             });
         }
     }
 
     // 4. Preset-unknown disabled units (not divergent, not matched)
     let mut preset_unknown_disabled = Vec::new();
-    for unit_name in &svc.disabled_units {
-        if !divergent_set.contains(unit_name.as_str()) && !matched_set.contains(unit_name.as_str())
-        {
+    for entry in disabled() {
+        let unit_name = entry.unit.as_str();
+        if !divergent_set.contains(unit_name) && !matched_set.contains(unit_name) {
             preset_unknown_disabled.push(RefServiceItem {
-                unit: unit_name.clone(),
-                current_state: inspectah_core::types::services::ServiceUnitState::Disabled,
+                unit: unit_name.to_owned(),
+                current_state: UnitState::Disabled,
                 default_state: None,
                 owning_package: None,
                 dropin_contents: Vec::new(),
-                shadow_type: None,
-                shadow_rationale: None,
             });
         }
     }
 
     // Omitted services (owning package excluded, or proven absent)
     let omitted: Vec<RefOmittedService> = render_plan
-        .omissions
+        .declined
         .iter()
-        .map(|o| RefOmittedService {
-            unit: o.unit.clone(),
-            package: o.owning_package.clone(),
-            reason: o.reason,
+        .filter_map(|(name, _, reason)| {
+            Some(RefOmittedService {
+                unit: name.as_str().to_owned(),
+                package: reason.owning_package()?.to_owned(),
+                reason: reason.clone(),
+            })
         })
         .collect();
 
@@ -229,7 +231,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
         .advisories
         .iter()
         .map(|a| RefServiceAdvisory {
-            unit: a.unit.clone(),
+            unit: a.unit.as_str().to_owned(),
             owning_package: a.owning_package.clone(),
             reasons: a.reasons.clone(),
         })
@@ -239,7 +241,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
     let warnings: Vec<RefServiceWarning> = snap
         .warnings
         .iter()
-        .filter(|w| w.inspector == "services")
+        .filter(|w| w.inspector == "units")
         .map(|w| {
             let unit = w
                 .extra
@@ -596,11 +598,25 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
     }
 }
 
+/// The unit a collected timer `name` is, and whether the units section
+/// records a state change for it, which is what puts a row in
+/// `unit_states` (§ 11.1). `None` when `<name>.timer` is not a unit name.
+fn timer_unit_link(snap: &InspectionSnapshot, name: &str) -> Option<TimerUnitLink> {
+    let unit = UnitName::try_from(format!("{name}.timer")).ok()?;
+    let unit_row = snap.units.as_ref().is_some_and(|units| {
+        units
+            .state_changes
+            .iter()
+            .any(|change| *change.unit().name() == unit)
+    });
+    Some(TimerUnitLink { unit, unit_row })
+}
+
 /// Project scheduled tasks from snapshot into generic reference items.
 ///
 /// Maps four task types to `GenericRefItem`:
 /// - **CronJob**: key = file basename, summary = source, tags = `["cron"]`
-/// - **SystemdTimer**: key = timer name, summary = on_calendar, content = description + exec_start, tags = `["timer"]`
+/// - **SystemdTimer**: key = timer name, summary = on_calendar, content = description + exec_start, tags = `["timer"]`, and the unit it links to (`unit_link`)
 /// - **AtJob**: key = file name, summary = `user: command`, content = working_dir, tags = `["at"]`
 /// - **GeneratedTimerUnit**: key = unit name, summary = cron_expr, content = source_path + command, tags = `["generated-timer"]`
 fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
@@ -626,6 +642,10 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
             },
             content: None,
             tags: vec!["cron".into(), cj.path.clone()],
+            unit_link: None,
+            scheduled: Some(ScheduledSource::CronJob {
+                path: cj.path.clone(),
+            }),
         });
     }
 
@@ -651,6 +671,11 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
                 Some(content_parts.join("\n"))
             },
             tags: vec!["timer".into()],
+            unit_link: timer_unit_link(snap, &st.name),
+            scheduled: Some(ScheduledSource::Timer {
+                path: st.path.clone(),
+                name: st.name.clone(),
+            }),
         });
     }
 
@@ -665,10 +690,14 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
                 Some(aj.working_dir.clone())
             },
             tags: vec!["at".into()],
+            unit_link: None,
+            scheduled: Some(ScheduledSource::AtJob {
+                file: aj.file.clone(),
+            }),
         });
     }
 
-    for gtu in &sched.generated_timer_units {
+    for (index, gtu) in sched.generated_timer_units.iter().enumerate() {
         let mut content_parts = Vec::new();
         if !gtu.source_path.is_empty() {
             content_parts.push(gtu.source_path.clone());
@@ -690,6 +719,11 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
                 Some(content_parts.join("\n"))
             },
             tags: vec!["generated-timer".into()],
+            unit_link: None,
+            scheduled: Some(ScheduledSource::GeneratedTimer {
+                index,
+                name: gtu.name.clone(),
+            }),
         });
     }
 
@@ -747,6 +781,8 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(subtitle),
             content: detail,
             tags,
+            unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -772,6 +808,8 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
                 Some(ef.content.clone())
             },
             tags: vec!["env-file".into(), ef.path.clone()],
+            unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -808,6 +846,8 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(se.mode.clone()),
             content: None,
             tags: vec!["mode".into()],
+            unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -820,6 +860,8 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(fips_label.into()),
             content: None,
             tags: vec!["fips".into()],
+            unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -832,6 +874,8 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(pl.label_type.clone()),
             content: None,
             tags: vec!["port-label".into()],
+            unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -853,6 +897,8 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(value),
             content: None,
             tags: vec!["boolean".into()],
+            unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -864,6 +910,8 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some("custom module".into()),
             content: None,
             tags: vec!["module".into()],
+            unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -886,6 +934,8 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some("fcontext".into()),
             content: None,
             tags: vec!["fcontext".into()],
+            unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -906,6 +956,8 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(DECIDED_UNDER_CONFIG_FILES.into()),
             content: None,
             tags: vec![tag.into()],
+            unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -927,7 +979,7 @@ pub fn project_reference(snap: &InspectionSnapshot) -> ReferenceProjection {
         non_rpm_software: project_ref_non_rpm(snap),
         selinux: project_ref_selinux(snap),
         collected: CollectedSections {
-            services: snap.services.is_some(),
+            services: snap.units.is_some(),
             containers: snap.containers.is_some(),
             network: snap.network.is_some(),
             storage: snap.storage.is_some(),
@@ -941,6 +993,20 @@ pub fn project_reference(snap: &InspectionSnapshot) -> ReferenceProjection {
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::baseline::BaselineData;
     use inspectah_core::types::FindingKind;
@@ -1047,15 +1113,15 @@ mod tests {
 
     // ── project_ref_services tests ──────────────────────────────────
 
-    use inspectah_core::types::services::{
-        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+    use inspectah_core::types::units::{
+        PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
     };
     use inspectah_core::types::warnings::Warning;
 
     #[test]
     fn test_no_services_returns_default() {
         let snap = InspectionSnapshot {
-            services: None,
+            units: None,
             ..Default::default()
         };
 
@@ -1074,23 +1140,31 @@ mod tests {
     #[test]
     fn test_divergent_service_categorized() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "firewalld.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: Some("firewalld".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
+            units: Some(UnitSection {
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "firewalld.service".to_owned().try_into().unwrap(),
+                            Some("firewalld".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
+                inventory: vec![UnitInventoryEntry {
+                    unit: "firewalld.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
                 }],
-                enabled_units: vec!["firewalld.service".into()],
-                disabled_units: Vec::new(),
                 drop_ins: Vec::new(),
-                preset_matched_units: Vec::new(),
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1099,13 +1173,13 @@ mod tests {
 
         assert_eq!(result.divergent.len(), 1);
         assert_eq!(result.divergent[0].unit, "firewalld.service");
-        assert_eq!(result.divergent[0].current_state, ServiceUnitState::Enabled);
+        assert_eq!(result.divergent[0].current_state, UnitState::Enabled);
         assert_eq!(
             result.divergent[0].default_state,
             Some(PresetDefault::Disable)
         );
         assert_eq!(result.divergent[0].owning_package, Some("firewalld".into()));
-        // firewalld is in enabled_units AND divergent_set, so it should NOT
+        // firewalld is enabled in the inventory AND in divergent_set, so it should NOT
         // also appear in preset_unknown_enabled.
         assert!(result.preset_unknown_enabled.is_empty());
     }
@@ -1113,10 +1187,16 @@ mod tests {
     #[test]
     fn test_preset_matched_with_dropin_visible() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: Vec::new(),
-                enabled_units: vec!["chronyd.service".into()],
-                disabled_units: Vec::new(),
+                inventory: vec![UnitInventoryEntry {
+                    unit: "chronyd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: Some(PresetDefault::Enable),
+                }],
                 drop_ins: vec![SystemdDropIn {
                     unit: "chronyd.service".into(),
                     path: "/etc/systemd/system/chronyd.service.d/override.conf".into(),
@@ -1125,7 +1205,10 @@ mod tests {
                     locked: false,
                     ..Default::default()
                 }],
-                preset_matched_units: vec!["chronyd.service".into()],
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1139,7 +1222,7 @@ mod tests {
         );
         assert_eq!(
             result.preset_matched_with_dropins[0].current_state,
-            ServiceUnitState::Enabled
+            UnitState::Enabled
         );
         assert_eq!(
             result.preset_matched_with_dropins[0].dropin_contents.len(),
@@ -1152,12 +1235,21 @@ mod tests {
     #[test]
     fn test_preset_matched_without_dropin_suppressed() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: Vec::new(),
-                enabled_units: vec!["chronyd.service".into()],
-                disabled_units: Vec::new(),
+                inventory: vec![UnitInventoryEntry {
+                    unit: "chronyd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: Some(PresetDefault::Enable),
+                }],
                 drop_ins: Vec::new(),
-                preset_matched_units: vec!["chronyd.service".into()],
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1173,12 +1265,31 @@ mod tests {
     #[test]
     fn test_unknown_enabled_and_disabled_categorized() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: Vec::new(),
-                enabled_units: vec!["custom-agent.service".into()],
-                disabled_units: vec!["unused.service".into()],
+                inventory: vec![
+                    UnitInventoryEntry {
+                        unit: "custom-agent.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
+                    },
+                    UnitInventoryEntry {
+                        unit: "unused.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Disabled,
+                        preset: None,
+                    },
+                ],
                 drop_ins: Vec::new(),
-                preset_matched_units: Vec::new(),
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1192,24 +1303,23 @@ mod tests {
         );
         assert_eq!(
             result.preset_unknown_enabled[0].current_state,
-            ServiceUnitState::Enabled
+            UnitState::Enabled
         );
 
         assert_eq!(result.preset_unknown_disabled.len(), 1);
         assert_eq!(result.preset_unknown_disabled[0].unit, "unused.service");
         assert_eq!(
             result.preset_unknown_disabled[0].current_state,
-            ServiceUnitState::Disabled
+            UnitState::Disabled
         );
     }
 
     #[test]
     fn test_standalone_dropin_for_uncovered_unit() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: Vec::new(),
-                enabled_units: Vec::new(),
-                disabled_units: Vec::new(),
+                inventory: Vec::new(),
                 drop_ins: vec![SystemdDropIn {
                     unit: "phantom.service".into(),
                     path: "/etc/systemd/system/phantom.service.d/10-custom.conf".into(),
@@ -1218,7 +1328,10 @@ mod tests {
                     locked: false,
                     ..Default::default()
                 }],
-                preset_matched_units: Vec::new(),
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1240,21 +1353,26 @@ mod tests {
     #[test]
     fn test_dropin_folded_into_divergent_item() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: Some("httpd".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
+            units: Some(UnitSection {
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "httpd.service".to_owned().try_into().unwrap(),
+                            Some("httpd".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
+                inventory: vec![UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
                 }],
-                enabled_units: vec!["httpd.service".into()],
-                disabled_units: Vec::new(),
                 drop_ins: vec![SystemdDropIn {
                     unit: "httpd.service".into(),
                     path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
@@ -1263,7 +1381,10 @@ mod tests {
                     locked: false,
                     ..Default::default()
                 }],
-                preset_matched_units: Vec::new(),
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1283,23 +1404,49 @@ mod tests {
     #[test]
     fn test_three_way_split() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "firewalld.service".into(),
-                    current_state: ServiceUnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: Some("firewalld".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                }],
-                enabled_units: vec!["firewalld.service".into(), "custom.service".into()],
-                disabled_units: vec!["unused.service".into()],
+            units: Some(UnitSection {
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "firewalld.service".to_owned().try_into().unwrap(),
+                            Some("firewalld".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
+                inventory: vec![
+                    UnitInventoryEntry {
+                        unit: "firewalld.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
+                    },
+                    UnitInventoryEntry {
+                        unit: "custom.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
+                    },
+                    UnitInventoryEntry {
+                        unit: "unused.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Disabled,
+                        preset: None,
+                    },
+                ],
                 drop_ins: Vec::new(),
-                preset_matched_units: Vec::new(),
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1320,16 +1467,18 @@ mod tests {
     #[test]
     fn test_service_warnings_extracted() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: Vec::new(),
-                enabled_units: Vec::new(),
-                disabled_units: Vec::new(),
+                inventory: Vec::new(),
                 drop_ins: Vec::new(),
-                preset_matched_units: Vec::new(),
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             warnings: vec![
                 Warning {
-                    inspector: "services".into(),
+                    inspector: "units".into(),
                     message: "unit file not found".into(),
                     extra: [("unit".to_string(), serde_json::json!("ghost.service"))]
                         .into_iter()
@@ -1355,23 +1504,24 @@ mod tests {
     #[test]
     fn test_masked_service_in_divergent() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "cups.service".into(),
-                    current_state: ServiceUnitState::Masked,
-                    default_state: None,
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: Some("cups".into()),
-                    aggregate: None,
-                    attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
-                }],
-                enabled_units: Vec::new(),
-                disabled_units: Vec::new(),
+            units: Some(UnitSection {
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "cups.service".to_owned().try_into().unwrap(),
+                            Some("cups".into()),
+                        ),
+                        UnitState::Masked,
+                        None,
+                    )
+                    .unwrap(),
+                ],
+                inventory: Vec::new(),
                 drop_ins: Vec::new(),
-                preset_matched_units: Vec::new(),
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1379,7 +1529,7 @@ mod tests {
         let result = project_ref_services(&snap);
 
         assert_eq!(result.divergent.len(), 1);
-        assert_eq!(result.divergent[0].current_state, ServiceUnitState::Masked);
+        assert_eq!(result.divergent[0].current_state, UnitState::Masked);
         assert_eq!(result.divergent[0].default_state, None);
     }
 

@@ -11,8 +11,10 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 use inspectah_core::types::kernelboot::KernelBootSection;
 // redaction types used indirectly via the redaction engine in test 8
-use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::storage::{CredentialRef, FstabEntry, StorageSection};
+use inspectah_core::types::units::{
+    SystemdDropIn, UnitInventoryEntry, UnitSection, UnitStateChange,
+};
 use inspectah_pipeline::render::{audit, configtree, containerfile, kickstart, report, secrets};
 use tempfile::TempDir;
 
@@ -21,37 +23,41 @@ use tempfile::TempDir;
 // ---------------------------------------------------------------------------
 
 fn snapshot_with_services() -> InspectionSnapshot {
-    use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
+    use inspectah_core::types::units::{PresetDefault, UnitState};
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![
-            ServiceStateChange {
-                unit: "httpd.service".into(),
-                current_state: ServiceUnitState::Enabled,
-                default_state: Some(PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                owning_package: None,
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
+            UnitStateChange::new(
+                test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+            UnitStateChange::new(
+                test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
+                UnitState::Disabled,
+                Some(PresetDefault::Enable),
+            )
+            .unwrap(),
+        ],
+        inventory: vec![
+            UnitInventoryEntry {
+                unit: "httpd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
             },
-            ServiceStateChange {
-                unit: "cups.service".into(),
-                current_state: ServiceUnitState::Disabled,
-                default_state: Some(PresetDefault::Enable),
-                disposition: FindingKind::included(),
-                locked: false,
-                owning_package: None,
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
+            UnitInventoryEntry {
+                unit: "cups.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Disabled,
+                preset: None,
             },
         ],
-        enabled_units: vec!["httpd.service".into()],
-        disabled_units: vec!["cups.service".into()],
         drop_ins: vec![SystemdDropIn {
             unit: "httpd.service".into(),
             path: "etc/systemd/system/httpd.service.d/override.conf".into(),
@@ -60,7 +66,10 @@ fn snapshot_with_services() -> InspectionSnapshot {
             locked: false,
             ..Default::default()
         }],
-        preset_matched_units: Vec::new(),
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
     });
     snap
 }
@@ -105,7 +114,7 @@ fn snapshot_with_kernelboot() -> InspectionSnapshot {
 
 fn snapshot_all_sections() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
-    snap.services = snapshot_with_services().services;
+    snap.units = snapshot_with_services().units;
     snap.storage = snapshot_with_storage().storage;
     snap.kernel_boot = snapshot_with_kernelboot().kernel_boot;
     snap.config = Some(ConfigSection {
@@ -139,8 +148,8 @@ fn services_in_containerfile() {
         "Containerfile must contain systemctl disable for cups.service"
     );
     assert!(
-        output.contains("Service Enablement"),
-        "Containerfile must contain the Service Enablement section heading"
+        output.contains("Systemd Unit State"),
+        "Containerfile must contain the Systemd Unit State section heading"
     );
 }
 
@@ -362,8 +371,8 @@ fn all_sections_in_audit_report() {
 
     // Services state changes appear
     assert!(
-        md.contains("Service State Changes"),
-        "audit report must contain Service State Changes heading"
+        md.contains("### Unit State Changes"),
+        "audit report must contain the Unit State Changes heading"
     );
     assert!(
         md.contains("httpd.service"),
@@ -450,7 +459,7 @@ fn credential_refs_in_secrets_review() {
 
     // Plant secrets that the redaction engine will detect:
     // 1. Drop-in with a password environment variable
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "myapp.service".into(),
             path: "etc/systemd/system/myapp.service.d/override.conf".into(),
@@ -1571,7 +1580,7 @@ fn selinux_two_collected_rows_with_one_subject_dedup_or_conflict() {
 }
 
 /// A collected row mapping the other direction is a conflict whether or not
-/// anything triggers the synthesis (Mark, 2026-10-28): `/srv` is a symlink to
+/// anything triggers the synthesis: `/srv` is a symlink to
 /// `/var/srv` on the image, so the row inverts the base's own layout and is
 /// wrong on its own terms.
 #[test]
@@ -1917,7 +1926,7 @@ fn selinux_header_count_is_plural_for_two_rules() {
 /// synthesis and a conflict are reported the same way everywhere. After the
 /// collision rule the helper can hold a synthesized row the block never
 /// emits, so emission is part of what it reports rather than something each
-/// consumer re-derives (Mark, 2026-10-28).
+/// consumer re-derives.
 #[test]
 fn selinux_equivalences_marks_a_synthesis_the_block_never_emits() {
     use inspectah_pipeline::render::selinux::{EquivalenceOrigin, selinux_equivalences};
@@ -2777,4 +2786,18 @@ fn the_conflict_sentence_reaches_all_three_surfaces() {
         html_of(&snap).contains(&html_escape(cause)),
         "the HTML report does not carry {cause:?}"
     );
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

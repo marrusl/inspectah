@@ -1,3 +1,6 @@
+#[path = "../../cli/tests/support/unit_hosts.rs"]
+mod unit_hosts;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -20,10 +23,10 @@ use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection, SystemdTim
 use inspectah_core::types::selinux::{
     FcontextFileType, FcontextRule, SelinuxContext, SelinuxSection,
 };
-use inspectah_core::types::services::{
-    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
-};
 use inspectah_core::types::storage::{FstabEntry, StorageSection};
+use inspectah_core::types::units::{
+    PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
+};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use inspectah_refine::session::RefineSession;
@@ -367,8 +370,15 @@ fn not_carried_state() -> Arc<AppState> {
         }],
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
-        enabled_units: vec!["firewalld.service".into()],
+    snap.units = Some(UnitSection {
+        inventory: vec![UnitInventoryEntry {
+            unit: "firewalld.service"
+                .to_owned()
+                .try_into()
+                .expect("valid unit name"),
+            state: UnitState::Enabled,
+            preset: None,
+        }],
         ..Default::default()
     });
     Arc::new(AppState {
@@ -518,6 +528,965 @@ async fn apply_valid_op() {
         .find(|s| s["kind"] == "package")
         .expect("package section should exist");
     assert_eq!(pkg_stats["included"], 1);
+}
+
+/// Path of the full-shadow unit file in [`units_view_state`].
+const FULL_SHADOW_PATH: &str = "/etc/systemd/system/sshd.service";
+
+/// A unit whose state differs from its preset, with a drop-in, and an
+/// enabled unit at its preset whose only finding is a full shadow. The
+/// collector writes no state change for the second one, and the config
+/// entry at the shadow's path is owned by the drop-in.
+fn units_view_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.units = Some(UnitSection {
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit(
+                    "kdump.service".to_owned().try_into().unwrap(),
+                    Some("kexec-tools".into()),
+                ),
+                UnitState::Disabled,
+                Some(PresetDefault::Enable),
+            )
+            .unwrap(),
+        ],
+        drop_ins: vec![
+            SystemdDropIn {
+                unit: "kdump.service".into(),
+                path: "/etc/systemd/system/kdump.service.d/override.conf".into(),
+                content: "[Service]\nTimeoutSec=600\n".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                shadow_type: Some(inspectah_core::types::ShadowType::DropIn),
+                ..Default::default()
+            },
+            SystemdDropIn {
+                unit: "sshd.service".into(),
+                path: FULL_SHADOW_PATH.into(),
+                content: "[Service]\nExecStart=/usr/sbin/sshd -D\n".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                shadow_type: Some(inspectah_core::types::ShadowType::FullShadow),
+                shadow_rationale: Some("Full unit override replaces vendor sshd.service".into()),
+                ..Default::default()
+            },
+        ],
+        inventory: vec![],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
+    });
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: FULL_SHADOW_PATH.into(),
+            kind: ConfigFileKind::Unowned,
+            disposition: FindingKind::inventory(),
+            locked: false,
+            shadowed_by: Some(inspectah_core::types::config::ConfigShadow::Units),
+            ..Default::default()
+        }],
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// T3 and T4 through the production handlers: the view names the unit
+/// rows `unit_states` and `unit_dropins`, a full shadow on a unit at its
+/// preset is a drop-in row and not a state row, and the old keys are gone.
+#[tokio::test]
+async fn the_view_carries_unit_fields_and_no_service_fields() {
+    let app = app(units_view_state());
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let states = json["unit_states"]
+        .as_array()
+        .expect("the view carries unit_states");
+    let state_units: Vec<&str> = states.iter().filter_map(|s| s["unit"].as_str()).collect();
+    assert_eq!(state_units, ["kdump.service"], "{json}");
+    assert!(
+        states[0].get("shadow_type").is_none(),
+        "a state row carries no shadow: {}",
+        states[0]
+    );
+
+    let dropins = json["unit_dropins"]
+        .as_array()
+        .expect("the view carries unit_dropins");
+    assert_eq!(dropins.len(), 2, "{json}");
+    let full_shadows: Vec<&str> = dropins
+        .iter()
+        .filter(|d| d["shadow_type"] == "full_shadow")
+        .filter_map(|d| d["path"].as_str())
+        .collect();
+    assert_eq!(full_shadows, [FULL_SHADOW_PATH]);
+
+    let shadowed = json["config_files"]
+        .as_array()
+        .expect("config_files")
+        .iter()
+        .find(|c| c["entry"]["path"] == FULL_SHADOW_PATH)
+        .expect("the shadowed config entry is in the view");
+    assert_eq!(shadowed["entry"]["shadowed_by"], "units");
+
+    // The new keys are present with content above; the old ones are gone.
+    assert!(json.get("service_states").is_none(), "{json}");
+    assert!(json.get("service_dropins").is_none(), "{json}");
+}
+
+/// The context section list names the unit section `units`.
+#[tokio::test]
+async fn the_context_sections_name_the_unit_section_units() {
+    let app = app(rich_state());
+    let (status, json) = get_json(&app, "/api/snapshot/sections").await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<&str> = json
+        .as_array()
+        .expect("sections is an array")
+        .iter()
+        .filter_map(|s| s["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"units"), "{ids:?}");
+    assert!(!ids.contains(&"services"), "{ids:?}");
+}
+
+/// Path of the cron job in [`scheduled_timer_state`].
+const TIMER_CRON_PATH: &str = "/etc/cron.d/backup";
+
+/// A host with two collected timers and a cron job. `backup.timer` has a
+/// state change, so a row in `unit_states`; `cleanup.timer` has none.
+fn scheduled_timer_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.units = Some(UnitSection {
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit("backup.timer".to_owned().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
+        drop_ins: vec![],
+        inventory: vec![],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
+    });
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        cron_jobs: vec![CronJob {
+            path: TIMER_CRON_PATH.into(),
+            source: "0 2 * * * root /usr/local/bin/backup.sh".into(),
+            ..Default::default()
+        }],
+        // The unit the cron job generates, which its operation carries.
+        generated_timer_units: vec![generated_backup()],
+        systemd_timers: vec![
+            SystemdTimer {
+                name: "backup".into(),
+                on_calendar: "daily".into(),
+                exec_start: "/usr/local/bin/backup.sh".into(),
+                ..Default::default()
+            },
+            SystemdTimer {
+                name: "cleanup".into(),
+                on_calendar: "weekly".into(),
+                exec_start: "/usr/local/bin/cleanup.sh".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// The unit the scheduled inspector generates from [`TIMER_CRON_PATH`].
+fn generated_backup() -> inspectah_core::types::scheduled::GeneratedTimerUnit {
+    inspectah_core::types::scheduled::GeneratedTimerUnit {
+        name: "cron-backup".into(),
+        cron_expr: "0 2 * * *".into(),
+        source_path: TIMER_CRON_PATH.into(),
+        timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00\n[Install]\nWantedBy=timers.target\n"
+            .into(),
+        service_content: "[Service]\nType=oneshot\nExecStart=/usr/local/bin/backup.sh\n".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    }
+}
+
+/// T20 through the production handlers: a scheduled timer row names its
+/// unit and whether that unit has a row, and offers no include flag; the
+/// timer's unit row keeps its own.
+#[tokio::test]
+async fn a_scheduled_timer_row_names_its_unit_and_offers_no_include() {
+    let app = app(scheduled_timer_state());
+    let (status, sections) = get_json(&app, "/api/snapshot/sections").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = sections
+        .as_array()
+        .expect("sections is an array")
+        .iter()
+        .find(|s| s["id"] == "scheduled_tasks")
+        .expect("a scheduled_tasks section")["items"]
+        .as_array()
+        .expect("scheduled items")
+        .clone();
+    let row = |id: &str| {
+        items
+            .iter()
+            .find(|i| i["id"] == id)
+            .unwrap_or_else(|| panic!("no scheduled row {id}: {items:?}"))
+            .clone()
+    };
+
+    let backup = row("timer:backup");
+    assert_eq!(backup["unit"], "backup.timer", "{backup}");
+    assert_eq!(backup["unit_row"], true, "{backup}");
+    let cleanup = row("timer:cleanup");
+    assert_eq!(cleanup["unit"], "cleanup.timer", "{cleanup}");
+    assert_eq!(cleanup["unit_row"], false, "{cleanup}");
+    for timer in [&backup, &cleanup] {
+        assert!(timer.get("include").is_none(), "{timer}");
+        assert!(timer.get("decision").is_none(), "{timer}");
+    }
+    // A cron row is not a unit and names none.
+    let cron = row(&format!("cron:{TIMER_CRON_PATH}"));
+    assert!(cron.get("unit").is_none(), "{cron}");
+    assert!(cron.get("unit_row").is_none(), "{cron}");
+
+    // The positive control: the timer's unit row carries the flag.
+    let (status, view) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let unit_row = view["unit_states"]
+        .as_array()
+        .expect("unit_states")
+        .iter()
+        .find(|s| s["unit"] == "backup.timer")
+        .unwrap_or_else(|| panic!("no unit row for backup.timer: {view}"));
+    assert_eq!(unit_row["include"], true, "{unit_row}");
+    assert!(
+        !view.to_string().contains("SystemdTimer"),
+        "the view names no timer operation"
+    );
+}
+
+/// The services and scheduling group toggle reaches the cron job and the
+/// timer's unit row, and emits no timer operation.
+#[tokio::test]
+async fn the_scheduling_group_toggle_emits_no_timer_operation() {
+    let state = scheduled_timer_state();
+    let (status, body) = post_json(
+        &app(state.clone()),
+        "/api/batch-toggle/services-scheduling",
+        serde_json::json!({"include": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = timeline_items(&state);
+    assert!(
+        items.contains(&inspectah_refine::types::ItemId::CronJob {
+            path: TIMER_CRON_PATH.into()
+        }),
+        "{items:?}"
+    );
+    assert!(
+        items.contains(&inspectah_refine::types::ItemId::Unit {
+            unit: "backup.timer".to_owned().try_into().unwrap()
+        }),
+        "{items:?}"
+    );
+    let kinds: Vec<serde_json::Value> = items
+        .iter()
+        .map(|item| serde_json::to_value(item).expect("an item id serializes")["kind"].clone())
+        .collect();
+    assert!(
+        !kinds.contains(&serde_json::json!("SystemdTimer")),
+        "{kinds:?}"
+    );
+}
+
+/// A scheduled section with the cron job of [`scheduled_timer_state`] and
+/// its generated unit, a cron job whose file holds no entry, and an at job.
+fn scheduled_bulk_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        cron_jobs: vec![
+            CronJob {
+                path: TIMER_CRON_PATH.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            CronJob {
+                path: QUIET_CRON_PATH.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+        ],
+        generated_timer_units: vec![generated_backup()],
+        at_jobs: vec![inspectah_core::types::scheduled::AtJob {
+            file: "var/spool/at/a0000101b2c3d4".into(),
+            command: "/usr/local/bin/one-off".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// A cron job whose file holds no entry, so it generates no unit.
+const QUIET_CRON_PATH: &str = "/etc/cron.d/quiet";
+
+/// What the projected snapshot of `state` exports of `cron-backup`: whether
+/// its timer and service are staged, and whether the plan enables the
+/// timer from the scheduled section.
+fn generated_backup_exported(state: &AppState) -> (bool, bool, bool) {
+    use inspectah_pipeline::render::configtree::staged_writes;
+    use inspectah_pipeline::render::unit_plan::plan_units;
+    let snap = state.session.lock().unwrap().snapshot_projected();
+    let staged = staged_writes(&snap);
+    let at = |name: &str| {
+        staged
+            .writes
+            .keys()
+            .any(|d| d.as_str() == format!("/etc/systemd/system/{name}"))
+    };
+    let enabled = plan_units(&snap, &staged)
+        .scheduled
+        .iter()
+        .any(|p| p.name().as_str() == "cron-backup.timer");
+    (at("cron-backup.timer"), at("cron-backup.service"), enabled)
+}
+
+/// § 8 through the production handler: the services and scheduling group
+/// toggle emits the operations that change the export, a cron job that
+/// generates a unit and the generated-timer row, and none that would be
+/// refused, the at job and the cron job that generates nothing. Excluding
+/// drops the generated pair and its enable from what the export stages and
+/// plans; including again restores them. Presence first.
+#[tokio::test]
+async fn the_scheduling_group_toggle_carries_and_drops_generated_units() {
+    use inspectah_refine::types::ItemId;
+    let state = scheduled_bulk_state();
+    assert_eq!(generated_backup_exported(&state), (true, true, true));
+
+    let (status, body) = post_json(
+        &app(state.clone()),
+        "/api/batch-toggle/services-scheduling",
+        serde_json::json!({"include": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = timeline_items(&state);
+    assert_eq!(
+        items,
+        [
+            ItemId::CronJob {
+                path: TIMER_CRON_PATH.into()
+            },
+            ItemId::GeneratedTimer {
+                name: "cron-backup".into()
+            },
+        ],
+        "{items:?}"
+    );
+    assert_eq!(generated_backup_exported(&state), (false, false, false));
+
+    let (status, body) = post_json(
+        &app(state.clone()),
+        "/api/batch-toggle/services-scheduling",
+        serde_json::json!({"include": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(generated_backup_exported(&state), (true, true, true));
+}
+
+/// A request naming the removed timer operation is refused with the
+/// variant named; the same request on the cron job is applied.
+#[tokio::test]
+async fn api_op_refuses_the_removed_timer_operation() {
+    let op = |item_id: serde_json::Value| {
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {"item_id": item_id, "include": false}
+        })
+    };
+    let app = app(scheduled_timer_state());
+    let (status, json) = post_json(
+        &app,
+        "/api/op",
+        op(serde_json::json!({"kind": "CronJob", "key": {"path": TIMER_CRON_PATH}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+
+    let (status, json) = post_json(
+        &app,
+        "/api/op",
+        op(serde_json::json!({"kind": "SystemdTimer", "key": {"name": "backup"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("unknown variant `SystemdTimer`")),
+        "{json}"
+    );
+}
+
+/// The generated cron timer in [`generated_collision_state`].
+const GENERATED_TIMER: &str = "cron-backup";
+/// The flatpak provisioning service inspectah generates.
+const FLATPAK_PROVISION: &str = "flatpak-provision.service";
+
+/// A host with a generated cron timer `cron-backup` and an included
+/// flatpak application. With `collected`, the host also has a collected
+/// unit of each generated unit's name, `cron-backup.timer` and
+/// `flatpak-provision.service`, both enabled against a `disable` preset,
+/// so both generated requests are declined for the name collision, and a
+/// collected `cron-backup` timer row in the scheduled section.
+fn generated_collision_state(collected: bool) -> Arc<AppState> {
+    use inspectah_core::types::scheduled::GeneratedTimerUnit;
+    let mut snap = InspectionSnapshot::new();
+    if collected {
+        let change = |unit: &str| {
+            UnitStateChange::new(
+                test_carried_unit(unit.to_owned().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap()
+        };
+        snap.units = Some(UnitSection {
+            state_changes: vec![
+                change(&format!("{GENERATED_TIMER}.timer")),
+                change(FLATPAK_PROVISION),
+            ],
+            drop_ins: vec![],
+            inventory: vec![],
+            mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
+            default_target: None,
+        });
+    }
+    // With `collected`, the host's own timer of the generated name is a
+    // collected timer row in the scheduled section too.
+    let systemd_timers = if collected {
+        vec![SystemdTimer {
+            name: GENERATED_TIMER.into(),
+            on_calendar: "daily".into(),
+            exec_start: "/usr/bin/vendor-backup".into(),
+            ..Default::default()
+        }]
+    } else {
+        vec![]
+    };
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        systemd_timers,
+        generated_timer_units: vec![GeneratedTimerUnit {
+            name: GENERATED_TIMER.into(),
+            cron_expr: "0 2 * * *".into(),
+            timer_content: "[Timer]\nOnCalendar=daily\n".into(),
+            service_content: "[Service]\nExecStart=/usr/bin/backup\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap.containers = Some(ContainerSection {
+        flatpak_apps: vec![FlatpakApp {
+            app_id: "org.gimp.GIMP".into(),
+            origin: "flathub".into(),
+            branch: "stable".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// The view's `declined` for a generated `unit` declined for the name
+/// collision: the plan's own marker, reason name and text.
+fn collision_declined(unit: &str) -> serde_json::Value {
+    use inspectah_core::types::units::UnitAction;
+    use inspectah_pipeline::render::unit_plan::{OmissionReason, Reservation, declined_line};
+    let reason = OmissionReason::GeneratedNameCollision {
+        name: unit.to_owned().try_into().unwrap(),
+        reserved_by: Reservation::Row,
+    };
+    let line = declined_line(
+        &unit.to_owned().try_into().unwrap(),
+        UnitAction::Enable,
+        &reason,
+    );
+    serde_json::json!({
+        "renders": "fixme",
+        "reason": "GeneratedNameCollision",
+        "text": line.text,
+    })
+}
+
+/// § 11.1 and T21's refine half through the production handlers: a
+/// generated cron timer and the flatpak provisioning service, each named
+/// for a collected unit, are declined on the scheduled row and on the
+/// flatpak row that asked for them, with the plan's reason and text.
+/// Control: without the collected units nothing is declined.
+#[tokio::test]
+async fn a_declined_generated_unit_is_carried_for_its_row() {
+    let (status, view) = get_json(&app(generated_collision_state(true)), "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let timer = format!("{GENERATED_TIMER}.timer");
+    assert_eq!(
+        view["declined_generated"],
+        serde_json::json!([
+            {
+                "row": {"row": "scheduled", "name": GENERATED_TIMER},
+                "unit": timer,
+                "declined": collision_declined(&timer),
+            },
+            {
+                "row": {"row": "flatpak"},
+                "unit": FLATPAK_PROVISION,
+                "declined": collision_declined(FLATPAK_PROVISION),
+            },
+        ]),
+        "{view}"
+    );
+    let text = view["declined_generated"][0]["declined"]["text"]
+        .as_str()
+        .expect("a text");
+    assert!(
+        text.starts_with("cron-backup.timer (inspectah generates this unit"),
+        "{text}"
+    );
+
+    let (status, control) = get_json(&app(generated_collision_state(false)), "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        control["declined_generated"],
+        serde_json::json!([]),
+        "{control}"
+    );
+}
+
+/// Every scheduled row of [`scheduled_identity_state`]'s sections
+/// response, as `(id, generated_timer)`.
+async fn scheduled_rows(state: Arc<AppState>) -> Vec<(String, Option<String>)> {
+    let (status, sections) = get_json(&app(state), "/api/snapshot/sections").await;
+    assert_eq!(status, StatusCode::OK);
+    sections
+        .as_array()
+        .expect("sections is an array")
+        .iter()
+        .find(|s| s["id"] == "scheduled_tasks")
+        .expect("a scheduled_tasks section")["items"]
+        .as_array()
+        .expect("scheduled items")
+        .iter()
+        .map(|i| {
+            (
+                i["id"].as_str().expect("an id").to_owned(),
+                i["generated_timer"].as_str().map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
+/// A host whose scheduled section holds every pair of rows that once
+/// shared an id: a shadowed timer's `/etc` and vendor descriptions, a
+/// collected timer named `generated:cron-backup.timer` beside the
+/// generated `cron-backup` row, and two generated rows of one name from
+/// two lines of one cron file.
+fn scheduled_identity_state() -> Arc<AppState> {
+    use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit};
+    let timer = |name: &str, path: &str| SystemdTimer {
+        name: name.into(),
+        path: path.into(),
+        on_calendar: "daily".into(),
+        ..Default::default()
+    };
+    let generated = |command: &str| GeneratedTimerUnit {
+        name: "cron-backup".into(),
+        cron_expr: "0 2 * * *".into(),
+        source_path: "etc/cron.d/backup".into(),
+        command: command.into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        cron_jobs: vec![CronJob {
+            path: "/etc/cron.d/backup".into(),
+            ..Default::default()
+        }],
+        systemd_timers: vec![
+            timer("backup", "/etc/systemd/system/backup.timer"),
+            timer("backup", "/usr/lib/systemd/system/backup.timer"),
+            timer(
+                "generated:cron-backup",
+                "/etc/systemd/system/generated:cron-backup.timer",
+            ),
+        ],
+        at_jobs: vec![AtJob {
+            file: "a00001".into(),
+            ..Default::default()
+        }],
+        generated_timer_units: vec![generated("/usr/bin/backup"), generated("/usr/bin/prune")],
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// Each scheduled row's id is its kind and its source: the cron file, the
+/// timer file's path, the at job's file, and the generated row's place in
+/// the section. No two rows share an id, and only a generated row names
+/// the generated unit it is, which is what a decline and the row's
+/// control join on.
+#[tokio::test]
+async fn each_scheduled_row_has_its_own_id() {
+    let rows = scheduled_rows(scheduled_identity_state()).await;
+    let none = None::<String>;
+    let generated = Some("cron-backup".to_owned());
+    assert_eq!(
+        rows,
+        [
+            ("cron:/etc/cron.d/backup".to_owned(), none.clone()),
+            (
+                "timer:/etc/systemd/system/backup.timer".to_owned(),
+                none.clone()
+            ),
+            (
+                "timer:/usr/lib/systemd/system/backup.timer".to_owned(),
+                none.clone()
+            ),
+            (
+                "timer:/etc/systemd/system/generated:cron-backup.timer".to_owned(),
+                none.clone()
+            ),
+            ("at:a00001".to_owned(), none.clone()),
+            ("generated:0:cron-backup".to_owned(), generated.clone()),
+            ("generated:1:cron-backup".to_owned(), generated),
+        ]
+    );
+    let mut ids: Vec<&String> = rows.iter().map(|(id, _)| id).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), rows.len(), "{rows:?}");
+}
+
+/// A timer recorded without its file's path, as an imported snapshot may
+/// be, is identified by its name.
+#[tokio::test]
+async fn a_scheduled_timer_without_a_path_is_identified_by_name() {
+    let rows = scheduled_rows(scheduled_timer_state()).await;
+    let ids: Vec<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "cron:/etc/cron.d/backup",
+            "timer:backup",
+            "timer:cleanup",
+            "generated:0:cron-backup"
+        ]
+    );
+}
+
+/// A timer template whose instances `a` and `b` are enabled by their links.
+fn worker_instances_host() -> unit_hosts::UnitHost {
+    let mut host = unit_hosts::UnitHost::new()
+        .base_package("glibc")
+        .unit("worker@.timer", "indirect")
+        .unit("worker@.service", "static")
+        .preset("disable *")
+        .etc_unit(
+            "worker@.timer",
+            "[Unit]\nDescription=Worker %i\n[Timer]\nOnCalendar=daily\n\
+             [Install]\nWantedBy=timers.target\n",
+        )
+        .etc_unit(
+            "worker@.service",
+            "[Service]\nType=oneshot\nExecStart=/usr/local/bin/worker %i\n",
+        );
+    for instance in ["a", "b"] {
+        host = host.link(
+            &format!("/etc/systemd/system/timers.target.wants/worker@{instance}.timer"),
+            "/etc/systemd/system/worker@.timer",
+        );
+    }
+    host
+}
+
+/// An instance timer is described from its template's file, so the
+/// template's row and both instances' rows record one `path`. Through the
+/// production sections handler each row still has its own id: the
+/// template's row, which describes its own file, keeps `timer:<path>`, and
+/// an instance's row is identified by that path and its own name.
+#[tokio::test]
+async fn a_timer_template_and_its_instances_have_their_own_ids() {
+    const TEMPLATE_PATH: &str = "etc/systemd/system/worker@.timer";
+    let snap = unit_hosts::scan(worker_instances_host());
+    let described: Vec<(&str, &str)> = snap
+        .scheduled_tasks
+        .as_ref()
+        .expect("a scheduled section")
+        .systemd_timers
+        .iter()
+        .map(|t| (t.name.as_str(), t.path.as_str()))
+        .collect();
+    assert_eq!(
+        described,
+        [
+            ("worker@", TEMPLATE_PATH),
+            ("worker@a", TEMPLATE_PATH),
+            ("worker@b", TEMPLATE_PATH),
+        ],
+        "presence: the collector records the template's path for each"
+    );
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(unit_hosts::session(&snap))),
+    });
+    let ids: Vec<String> = scheduled_rows(state)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            format!("timer:{TEMPLATE_PATH}"),
+            format!(r#"timer-instance:["{TEMPLATE_PATH}","worker@a"]"#),
+            format!(r#"timer-instance:["{TEMPLATE_PATH}","worker@b"]"#),
+        ]
+    );
+}
+
+/// A `SetInclude` on `item_id` through `/api/op`.
+async fn set_include(
+    app: &axum::Router,
+    item_id: serde_json::Value,
+    include: bool,
+) -> (StatusCode, serde_json::Value) {
+    post_json(
+        app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {"item_id": item_id, "include": include}
+        }),
+    )
+    .await
+}
+
+/// D1 through the production handlers: a generated timer row is decided
+/// on its own row. The view carries its state, excluding it takes its
+/// enable out of the export preview, and including it again brings the
+/// enable back. Excluding its cron job excludes it with the job, and the
+/// view names that job; including the generated row is then refused.
+#[tokio::test]
+async fn a_generated_timer_row_is_decided_on_its_row() {
+    let app = app(scheduled_timer_state());
+    let generated = serde_json::json!({"kind": "GeneratedTimer", "key": {"name": "cron-backup"}});
+    let enable = "'cron-backup.timer'";
+
+    let (status, view) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        view["generated_timers"],
+        serde_json::json!([{"name": "cron-backup", "include": true, "locked": false}])
+    );
+    let preview = view["containerfile_preview"].as_str().expect("a preview");
+    assert!(preview.contains(enable), "{preview}");
+
+    let (status, view) = set_include(&app, generated.clone(), false).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["generated_timers"][0]["include"], false, "{view}");
+    let preview = view["containerfile_preview"].as_str().expect("a preview");
+    assert!(!preview.contains(enable), "{preview}");
+
+    let (status, view) = set_include(&app, generated.clone(), true).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["generated_timers"][0]["include"], true, "{view}");
+    let preview = view["containerfile_preview"].as_str().expect("a preview");
+    assert!(preview.contains(enable), "{preview}");
+
+    let cron = serde_json::json!({"kind": "CronJob", "key": {"path": TIMER_CRON_PATH}});
+    let (status, view) = set_include(&app, cron, false).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(
+        view["generated_timers"],
+        serde_json::json!([{
+            "name": "cron-backup",
+            "include": false,
+            "locked": false,
+            "cron_job_excluded": TIMER_CRON_PATH
+        }])
+    );
+    let (status, json) = set_include(&app, generated, true).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+}
+
+/// D4 through the production handlers: an included unmanaged file under
+/// `/etc/systemd/system` carries the stager's `withheld` on its row, by the
+/// row's own path as recorded. Controls: an unmanaged file elsewhere is
+/// written and has none, and an excluded file at a unit path offers
+/// nothing to withhold.
+#[tokio::test]
+async fn an_unmanaged_file_at_a_unit_path_is_withheld_on_its_row() {
+    use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+    const UNIT_PATH: &str = "/etc/systemd/system/backup.service";
+    // The same directory spelled with an interior `.`, as an imported
+    // snapshot may record it: the row keeps that spelling.
+    const DOTTED_UNIT_PATH: &str = "/etc/systemd/./system/report.service";
+    const EXCLUDED_UNIT_PATH: &str = "/etc/systemd/system/other.service";
+    const OPT_PATH: &str = "/opt/app/bin/run";
+    let file = |path: &str, disposition: FindingKind| UnmanagedFile {
+        path: path.into(),
+        size: 10,
+        disposition,
+        ..Default::default()
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.unmanaged_files = Some(UnmanagedFileSection {
+        items: vec![
+            file(UNIT_PATH, FindingKind::included()),
+            file(DOTTED_UNIT_PATH, FindingKind::included()),
+            file(EXCLUDED_UNIT_PATH, FindingKind::excluded()),
+            file(OPT_PATH, FindingKind::included()),
+        ],
+        usr_entries: Vec::new(),
+        total_size: 40,
+        total_count: 4,
+    });
+    let app = app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    }));
+    let (status, view) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let rows: Vec<&serde_json::Value> = view["unmanaged_files"]
+        .as_array()
+        .expect("unmanaged_files")
+        .iter()
+        .flat_map(|g| g["items"].as_array().expect("group items").iter())
+        .collect();
+    let row = |path: &str| {
+        *rows
+            .iter()
+            .find(|r| r["path"] == path)
+            .unwrap_or_else(|| panic!("no unmanaged row {path}: {view}"))
+    };
+
+    let withheld = &row(UNIT_PATH)["withheld"];
+    assert_eq!(withheld["outcome"], "withheld", "{withheld}");
+    assert_eq!(withheld["why"], "UnmanagedUnitPath", "{withheld}");
+    assert!(
+        withheld["text"].as_str().is_some_and(
+            |t| t.contains("an unmanaged file is not written under /etc/systemd/system")
+        ),
+        "{withheld}"
+    );
+    assert_eq!(
+        row(DOTTED_UNIT_PATH)["withheld"]["why"],
+        "UnmanagedUnitPath",
+        "{}",
+        row(DOTTED_UNIT_PATH)
+    );
+    assert!(row(OPT_PATH).get("withheld").is_none(), "{}", row(OPT_PATH));
+    assert!(
+        row(EXCLUDED_UNIT_PATH).get("withheld").is_none(),
+        "{}",
+        row(EXCLUDED_UNIT_PATH)
+    );
+}
+
+/// Two cron sources that generate one name, `/etc/cron.d/crontab` and
+/// `/etc/crontab`, in the given order. Both generated records are
+/// included.
+fn two_source_generated_state(first: &str, second: &str) -> Arc<AppState> {
+    use inspectah_core::types::scheduled::GeneratedTimerUnit;
+    let generated = |source: &str| GeneratedTimerUnit {
+        name: "cron-crontab".into(),
+        cron_expr: "0 2 * * *".into(),
+        source_path: source.trim_start_matches('/').into(),
+        timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00\n[Install]\nWantedBy=timers.target\n"
+            .into(),
+        service_content: "[Service]\nType=oneshot\nExecStart=/usr/local/bin/job.sh\n".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    let cron = |path: &str| CronJob {
+        path: path.into(),
+        ..Default::default()
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        cron_jobs: vec![cron(first), cron(second)],
+        generated_timer_units: vec![generated(first), generated(second)],
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// Two cron sources generate `cron-crontab`; only `/etc/cron.d/crontab` is
+/// excluded. The other record still exports the timer's files and enable,
+/// so the row says included and offers exclude, whichever record comes
+/// first. Excluding the name takes the enable out; including it again is
+/// refused while the one source is excluded.
+#[tokio::test]
+async fn a_generated_name_with_one_included_source_shows_included() {
+    const EXCLUDED: &str = "/etc/cron.d/crontab";
+    const INCLUDED: &str = "/etc/crontab";
+    let enable = "'cron-crontab.timer'";
+    let generated = serde_json::json!({"kind": "GeneratedTimer", "key": {"name": "cron-crontab"}});
+    for (first, second) in [(EXCLUDED, INCLUDED), (INCLUDED, EXCLUDED)] {
+        let app = app(two_source_generated_state(first, second));
+        let cron = serde_json::json!({"kind": "CronJob", "key": {"path": EXCLUDED}});
+        let (status, view) = set_include(&app, cron, false).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+
+        let row = &view["generated_timers"];
+        assert_eq!(row.as_array().map(Vec::len), Some(1), "{row}");
+        assert_eq!(
+            row[0]["include"], true,
+            "order {first} then {second}: {row}"
+        );
+        assert_eq!(row[0]["cron_job_excluded"], EXCLUDED, "{row}");
+        let preview = view["containerfile_preview"].as_str().expect("a preview");
+        assert!(
+            preview.contains(enable),
+            "the export still enables it: {preview}"
+        );
+        assert!(
+            preview.contains("COPY config/etc/systemd/system/ /etc/systemd/system/"),
+            "the export still copies its files: {preview}"
+        );
+
+        let (status, view) = set_include(&app, generated.clone(), false).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        assert_eq!(view["generated_timers"][0]["include"], false, "{view}");
+        let preview = view["containerfile_preview"].as_str().expect("a preview");
+        assert!(!preview.contains(enable), "{preview}");
+
+        let (status, json) = set_include(&app, generated.clone(), true).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    }
 }
 
 /// Path of the advisory config entry in [`advisory_state`].
@@ -971,18 +1940,16 @@ fn rich_snapshot() -> InspectionSnapshot {
         ..Default::default()
     });
 
-    snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: "httpd.service".into(),
-            current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
-            default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
-            disposition: FindingKind::excluded(),
-            locked: false,
-            owning_package: None,
-            aggregate: None,
-            attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
+    snap.units = Some(UnitSection {
+        state_changes: vec![{
+            let mut change = UnitStateChange::new(
+                test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                inspectah_core::types::units::UnitState::Enabled,
+                Some(inspectah_core::types::units::PresetDefault::Disable),
+            )
+            .unwrap();
+            change.disposition = FindingKind::excluded();
+            change
         }],
         drop_ins: vec![
             SystemdDropIn {
@@ -998,9 +1965,28 @@ fn rich_snapshot() -> InspectionSnapshot {
                 ..Default::default()
             },
         ],
-        enabled_units: vec!["sshd.service".into()],
-        disabled_units: vec!["cups.service".into()],
-        preset_matched_units: Vec::new(),
+        inventory: vec![
+            UnitInventoryEntry {
+                unit: "sshd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            },
+            UnitInventoryEntry {
+                unit: "cups.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Disabled,
+                preset: None,
+            },
+        ],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
     });
 
     snap.containers = Some(ContainerSection {
@@ -1189,7 +2175,7 @@ async fn sections_returns_eight_sections() {
     assert_eq!(sections.len(), 8, "exactly 8 context sections");
 
     let ids: Vec<&str> = sections.iter().filter_map(|s| s["id"].as_str()).collect();
-    assert!(ids.contains(&"services"));
+    assert!(ids.contains(&"units"));
     assert!(ids.contains(&"containers"));
     assert!(ids.contains(&"network"));
     assert!(ids.contains(&"storage"));
@@ -1262,7 +2248,7 @@ async fn viewed_roundtrip() {
     let status = post_raw(
         &app,
         "/api/viewed",
-        serde_json::json!({"id": "services:httpd.service"}),
+        serde_json::json!({"id": "units:httpd.service"}),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -1282,7 +2268,7 @@ async fn viewed_roundtrip() {
     let ids = json["ids"].as_array().unwrap();
     assert_eq!(ids.len(), 2);
     let id_strs: Vec<&str> = ids.iter().filter_map(|v| v.as_str()).collect();
-    assert!(id_strs.contains(&"services:httpd.service"));
+    assert!(id_strs.contains(&"units:httpd.service"));
     assert!(id_strs.contains(&"storage:/boot"));
 }
 
@@ -1295,13 +2281,13 @@ async fn viewed_idempotent() {
     post_raw(
         &app,
         "/api/viewed",
-        serde_json::json!({"id": "services:httpd.service"}),
+        serde_json::json!({"id": "units:httpd.service"}),
     )
     .await;
     post_raw(
         &app,
         "/api/viewed",
-        serde_json::json!({"id": "services:httpd.service"}),
+        serde_json::json!({"id": "units:httpd.service"}),
     )
     .await;
 
@@ -1686,7 +2672,7 @@ fn normalize_services_maps_state_changes_with_dropins() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
     let sections = build_web_sections(&session.reference());
-    let svc = sections.iter().find(|s| s.id == "services").unwrap();
+    let svc = sections.iter().find(|s| s.id == "units").unwrap();
 
     // httpd.service state_change (with folded drop-in detail)
     let httpd = svc.items.iter().find(|i| i.id == "httpd.service").unwrap();
@@ -1716,11 +2702,11 @@ fn normalize_services_maps_state_changes_with_dropins() {
         .unwrap();
     assert_eq!(standalone.subtitle.as_deref(), Some("drop-in override"));
 
-    // enabled_units (legacy snapshot with empty preset_matched_units)
+    // enabled inventory entry with no preset
     let sshd = svc.items.iter().find(|i| i.id == "sshd.service").unwrap();
     assert_eq!(sshd.subtitle.as_deref(), Some("enabled (no preset rule)"));
 
-    // disabled_units (legacy snapshot with empty preset_matched_units)
+    // disabled inventory entry with no preset
     let cups = svc.items.iter().find(|i| i.id == "cups.service").unwrap();
     assert_eq!(cups.subtitle.as_deref(), Some("disabled (no preset rule)"));
 }
@@ -1846,14 +2832,14 @@ fn normalize_scheduled_tasks_maps_cron_and_timers() {
     let cron = sched
         .items
         .iter()
-        .find(|i| i.id == "/etc/cron.d/backup")
+        .find(|i| i.id == "cron:/etc/cron.d/backup")
         .unwrap();
     assert_eq!(cron.title, "backup");
 
     let timer = sched
         .items
         .iter()
-        .find(|i| i.id == "logrotate.timer")
+        .find(|i| i.id == "timer:logrotate.timer")
         .unwrap();
     assert_eq!(timer.subtitle.as_deref(), Some("daily"));
 }
@@ -1997,7 +2983,7 @@ fn build_web_sections_section_count_and_ids() {
     assert_eq!(sections.len(), 8, "exactly 8 context sections");
 
     let expected_ids = [
-        "services",
+        "units",
         "containers",
         "network",
         "storage",
@@ -2022,7 +3008,7 @@ fn build_web_sections_item_counts() {
     let sections = build_web_sections(&session.reference());
 
     // Verify non-zero item counts for sections with data
-    let svc = sections.iter().find(|s| s.id == "services").unwrap();
+    let svc = sections.iter().find(|s| s.id == "units").unwrap();
     assert!(
         !svc.items.is_empty(),
         "services should have items from rich_snapshot"
@@ -2074,40 +3060,36 @@ fn service_subsection_state() -> Arc<AppState> {
         }],
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![
-            ServiceStateChange {
-                unit: "custom-app.service".into(),
-                current_state: ServiceUnitState::Enabled,
-                default_state: Some(PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                owning_package: Some("custom-app".into()),
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
-            },
-            ServiceStateChange {
-                unit: "sssd-kcm.service".into(),
-                current_state: ServiceUnitState::Disabled,
-                default_state: Some(PresetDefault::Enable),
-                disposition: FindingKind::included(),
-                locked: false,
-                owning_package: Some("sssd".into()),
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
-            },
+            UnitStateChange::new(
+                test_carried_unit(
+                    "custom-app.service".to_owned().try_into().unwrap(),
+                    Some("custom-app".into()),
+                ),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+            UnitStateChange::new(
+                test_carried_unit(
+                    "sssd-kcm.service".to_owned().try_into().unwrap(),
+                    Some("sssd".into()),
+                ),
+                UnitState::Disabled,
+                Some(PresetDefault::Enable),
+            )
+            .unwrap(),
         ],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
     });
     snap.warnings.push(Warning {
-        inspector: "services".into(),
+        inspector: "units".into(),
         message: "unit linked.service has state 'linked'".into(),
         severity: Some(WarningSeverity::Warning),
         extra: std::collections::HashMap::from([
@@ -2127,7 +3109,7 @@ async fn sections_include_service_subsections() {
     assert_eq!(status, StatusCode::OK);
 
     let sections = json.as_array().unwrap();
-    let svc = sections.iter().find(|s| s["id"] == "services").unwrap();
+    let svc = sections.iter().find(|s| s["id"] == "units").unwrap();
 
     let subsections = svc["subsections"]
         .as_array()
@@ -2296,12 +3278,14 @@ fn locked_package_state() -> Arc<AppState> {
         }],
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
     });
     snap.config = Some(ConfigSection { files: vec![] });
     Arc::new(AppState {
@@ -4129,4 +5113,924 @@ async fn batch_toggle_system_config_group_still_reaches_the_tuned_row() {
         }),
         "the group toggle reaches the other sections too: {items:?}"
     );
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
+}
+
+// ---------------------------------------------------------------------
+// Every unit kind and its reasons on `/api/view` (§ 11.1).
+// ---------------------------------------------------------------------
+
+/// A token the secret pattern matches, planted in a local mount unit's
+/// `What=` (T10).
+const MOUNT_TOKEN: &str = "t10-mount-source-7f3a";
+const MOUNT_UNIT: &str = "srv-data.mount";
+const MOUNT_UNIT_PATH: &str = "/etc/systemd/system/srv-data.mount";
+/// A protected unit masked on the host: the plan declines its mask.
+const PROTECTED_UNIT: &str = "ostree-remount.service";
+/// T15's pair of imported config entries, a file and a file under it.
+const CONFLICT_FILE: &str = "/etc/app/conf";
+const CONFLICT_CHILD: &str = "/etc/app/conf/x";
+/// An imported zero-length unit file, its path spelled with an interior
+/// `.`: the stager withholds it, and its row is found by that spelling.
+const ZERO_LENGTH_UNIT: &str = "/etc/systemd/system/./zero.service";
+/// An imported config entry the export writes: the control.
+const WRITTEN_CONFIG: &str = "/etc/app.d/written.conf";
+
+/// A host, through the scan against a base image (so refine keeps the
+/// socket's owner included), with a socket enabled against its preset, a
+/// masked protected unit and an administrator's mount unit whose `What=`
+/// holds a credential; then the config entries above added as an imported
+/// snapshot would carry them, since the collector cannot produce them.
+fn every_kind_state() -> Arc<AppState> {
+    let service = "[Service]\nExecStart=/usr/bin/true\n[Install]\nWantedBy=multi-user.target\n";
+    let mut snap = unit_hosts::scan(
+        unit_hosts::UnitHost::new()
+            .base_package("glibc")
+            .package("cockpit-ws")
+            .unit("cockpit.socket", "enabled")
+            .unit(PROTECTED_UNIT, "masked")
+            .unit(MOUNT_UNIT, "enabled")
+            .preset("disable *")
+            .vendor_unit(
+                "cockpit.socket",
+                "[Socket]\nListenStream=9090\n[Install]\nWantedBy=sockets.target\n",
+                Some("cockpit-ws"),
+            )
+            .vendor_unit(PROTECTED_UNIT, service, Some("ostree"))
+            .mask(PROTECTED_UNIT)
+            .etc_unit(
+                MOUNT_UNIT,
+                &format!(
+                    "[Unit]\nDescription=Data volume\n\n[Mount]\n\
+                     What=https://files.example/volume?token={MOUNT_TOKEN}\n\
+                     Where=/srv/data\nOptions=defaults,nofail\n\n\
+                     [Install]\nWantedBy=multi-user.target\n"
+                ),
+            ),
+    );
+    let files = &mut snap.config.as_mut().expect("a config section").files;
+    for (path, content) in [
+        (CONFLICT_FILE, "a=1\n"),
+        (CONFLICT_CHILD, "b=2\n"),
+        (ZERO_LENGTH_UNIT, ""),
+        (WRITTEN_CONFIG, "c=3\n"),
+    ] {
+        files.push(ConfigFileEntry {
+            path: path.into(),
+            category: ConfigCategory::Other,
+            content: content.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+    }
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(unit_hosts::session(&snap))),
+    })
+}
+
+/// The row of `rows` whose `key` is `value`.
+fn row_by<'a>(rows: &'a serde_json::Value, key: &str, value: &str) -> &'a serde_json::Value {
+    rows.as_array()
+        .expect("an array")
+        .iter()
+        .find(|r| r[key] == value)
+        .unwrap_or_else(|| panic!("no row with {key} {value}: {rows}"))
+}
+
+/// § 11.1 through the production handlers: a socket row has its kind and
+/// no `declined` until its owner is excluded, then the plan's reason with
+/// the Containerfile's own text and no `attention_reason`; a protected
+/// unit's row has its FIXME,
+/// the config rows that offered a withheld file say so (and a written one
+/// does not), and the mount finding is a row with its advisories and no
+/// `include` key at all.
+#[tokio::test]
+async fn the_view_serves_unit_kinds_reasons_and_mount_findings() {
+    let app = app(every_kind_state());
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let preview = json["containerfile_preview"].as_str().expect("a preview");
+
+    let socket = row_by(&json["unit_states"], "unit", "cockpit.socket");
+    assert_eq!(socket["kind"], "socket", "{socket}");
+    assert_eq!(socket["fragment"], "vendor", "{socket}");
+    assert!(socket.get("declined").is_none(), "{socket}");
+
+    let protected = row_by(&json["unit_states"], "unit", PROTECTED_UNIT);
+    assert_eq!(protected["kind"], "service");
+    assert_eq!(protected["declined"]["renders"], "fixme", "{protected}");
+    assert_eq!(protected["declined"]["reason"], "TargetNeedsUnit");
+    let text = protected["declined"]["text"].as_str().expect("a text");
+    assert!(
+        preview.contains(&format!("# FIXME: {text}")),
+        "the row's text is the Containerfile's line: {text}\n{preview}"
+    );
+
+    // Excluding the socket's owner declines its enable, on a row whose
+    // `attention_reason` is null: `declined` stands on its own.
+    set_package_include(&app, "cockpit-ws", "x86_64", false).await;
+    let (_, after) = get_json(&app, "/api/view").await;
+    let socket = row_by(&after["unit_states"], "unit", "cockpit.socket");
+    assert!(socket.get("attention_reason").is_none(), "{socket}");
+    assert_eq!(
+        socket["declined"],
+        serde_json::json!({
+            "renders": "omitted",
+            "reason": "PackageExcluded",
+            "text": "cockpit.socket (package 'cockpit-ws' was excluded)",
+        })
+    );
+    let after_preview = after["containerfile_preview"].as_str().expect("a preview");
+    assert!(
+        after_preview.contains("# Omitted: cockpit.socket (package 'cockpit-ws' was excluded)"),
+        "{after_preview}"
+    );
+
+    let config = |path: &str| -> serde_json::Value {
+        json["config_files"]
+            .as_array()
+            .expect("config_files")
+            .iter()
+            .find(|c| c["entry"]["path"] == path)
+            .unwrap_or_else(|| panic!("no config row {path}"))
+            .clone()
+    };
+    let conflict = |other: &str| {
+        serde_json::json!({
+            "outcome": "withheld",
+            "why": "Conflict",
+            "text": format!(
+                "{other} is also staged, and one of the two paths is a directory of the \
+                 other; exclude one of the two"
+            ),
+        })
+    };
+    assert_eq!(config(CONFLICT_FILE)["withheld"], conflict(CONFLICT_CHILD));
+    assert_eq!(config(CONFLICT_CHILD)["withheld"], conflict(CONFLICT_FILE));
+    assert_eq!(
+        config(ZERO_LENGTH_UNIT)["withheld"]["why"],
+        "ZeroLengthUnitFile",
+        "the row is found by its own spelling"
+    );
+    // Control: a config row the export writes has no `withheld` key.
+    assert!(config(WRITTEN_CONFIG).get("withheld").is_none());
+    assert!(config(WRITTEN_CONFIG).get("entry").is_some());
+
+    let finding = row_by(&json["mount_findings"], "unit", MOUNT_UNIT);
+    assert_eq!(finding["kind"], "mount", "{finding}");
+    assert_eq!(finding["state"], "enabled");
+    assert_eq!(finding["mount_point"], "/srv/data");
+    assert_eq!(finding["fragment"], "local");
+    assert_eq!(finding["unit_file_path"], MOUNT_UNIT_PATH);
+    let advisories = finding["advisories"].as_array().expect("advisories");
+    assert!(!advisories.is_empty(), "{finding}");
+    for line in advisories {
+        let line = line.as_str().expect("a string");
+        assert!(preview.contains(line), "{line}\n{preview}");
+    }
+    // Presence of a toggle key on the unit rows first, then its absence.
+    assert!(socket.get("include").is_some());
+    for row in json["mount_findings"].as_array().expect("an array") {
+        assert!(row.get("include").is_none(), "{row}");
+    }
+}
+
+/// T10 on the wire: the finding row exists with its mount point and
+/// advisories, and the planted mount source is nowhere in `/api/view`.
+#[tokio::test]
+async fn the_mount_source_is_nowhere_in_the_view_response() {
+    let app = app(every_kind_state());
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let finding = row_by(&json["mount_findings"], "unit", MOUNT_UNIT);
+    assert_eq!(finding["mount_point"], "/srv/data");
+    assert!(
+        !finding["advisories"]
+            .as_array()
+            .expect("advisories")
+            .is_empty()
+    );
+    let body = json.to_string();
+    assert!(body.contains(MOUNT_UNIT_PATH), "presence first");
+    assert!(!body.contains(MOUNT_TOKEN), "the mount source leaked");
+}
+
+/// T10 for a `What=` continued onto the next line: systemd reads the
+/// `Where=/opt/token=...` line after it as part of the mount source. The
+/// finding row has the mount point systemd uses, and the token is nowhere
+/// in the `/api/view` body as the handler sends it.
+#[tokio::test]
+async fn a_continued_mount_source_is_nowhere_in_the_view_response() {
+    use unit_hosts::{CONTINUED_MOUNT_POINT, CONTINUED_MOUNT_TOKEN, CONTINUED_MOUNT_UNIT};
+    // Presence first: the host's unit file holds the token before redaction.
+    let raw = unit_hosts::scan_unredacted(unit_hosts::continued_mount_host());
+    assert!(
+        serde_json::to_string(&raw)
+            .expect("the snapshot serializes")
+            .contains(CONTINUED_MOUNT_TOKEN),
+        "the fixture plants the token"
+    );
+    let snap = unit_hosts::scan(unit_hosts::continued_mount_host());
+    let app = app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(unit_hosts::session(&snap))),
+    }));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/view")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(bytes.to_vec()).expect("the view is UTF-8");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("the view is JSON");
+
+    let finding = row_by(&json["mount_findings"], "unit", CONTINUED_MOUNT_UNIT);
+    assert_eq!(finding["mount_point"], CONTINUED_MOUNT_POINT, "{finding}");
+    assert!(body.contains(CONTINUED_MOUNT_UNIT), "presence first");
+    assert!(
+        !body.contains(CONTINUED_MOUNT_TOKEN),
+        "the continued mount source leaked"
+    );
+}
+
+/// Two aggregate variants at one unit path, the selected one with content
+/// and the alternative zero-length. The projection's `config_withheld`
+/// lists one entry per included row at the path; the view puts each on
+/// an included row at that path and never on an excluded one. Excluding
+/// the path (which reaches the first variant) leaves the zero-length
+/// alternative as the one included row, and only it carries `withheld`.
+#[test]
+fn withheld_lands_on_the_included_variant_rows_only() {
+    use inspectah_core::types::aggregate::VariantSelection;
+    use inspectah_refine::types::{ItemId, RefinementOp};
+    const PATH: &str = "/etc/systemd/system/variant.service";
+    let variant = |content: &str, selection| ConfigFileEntry {
+        path: PATH.into(),
+        kind: ConfigFileKind::Unowned,
+        category: ConfigCategory::Other,
+        content: content.into(),
+        disposition: FindingKind::included(),
+        variant_selection: selection,
+        ..Default::default()
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: vec![
+            variant("[Unit]\n", VariantSelection::Selected),
+            variant("", VariantSelection::Alternative),
+        ],
+    });
+    let mut session = RefineSession::new(snap);
+    // (content, included, withheld) per config row, in view order.
+    let rows = |session: &RefineSession| -> Vec<(String, bool, Option<serde_json::Value>)> {
+        let json = serde_json::to_value(inspectah_web::adapter::build_web_view(session))
+            .expect("the view serializes");
+        json["config_files"]
+            .as_array()
+            .expect("config_files")
+            .iter()
+            .map(|c| {
+                (
+                    c["entry"]["content"].as_str().expect("content").to_owned(),
+                    c["entry"]["disposition"]["include"] == true,
+                    c.get("withheld").cloned(),
+                )
+            })
+            .collect()
+    };
+
+    let both = rows(&session);
+    assert!(both.iter().all(|(_, included, _)| *included), "{both:?}");
+    let listed: Vec<serde_json::Value> = session
+        .decisions()
+        .config_withheld
+        .iter()
+        .filter(|c| c.path == PATH)
+        .map(|c| serde_json::to_value(&c.withheld).expect("serializes"))
+        .collect();
+    let carried: Vec<serde_json::Value> = both.iter().filter_map(|(_, _, w)| w.clone()).collect();
+    assert_eq!(listed.len(), 2, "both included variants offer the file");
+    assert_eq!(carried, listed);
+
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config { path: PATH.into() },
+            include: false,
+        })
+        .expect("the config row toggles");
+    let one = rows(&session);
+    assert_eq!(
+        one.iter()
+            .map(|(content, included, w)| (content.as_str(), *included, w.is_some()))
+            .collect::<Vec<_>>(),
+        [("[Unit]\n", false, false), ("", true, true)],
+        "{one:?}"
+    );
+    assert_eq!(
+        one[1].2.as_ref().expect("withheld")["why"],
+        "ZeroLengthUnitFile"
+    );
+}
+
+/// Plan review focus 1 at the web response: an escaped instance name, the
+/// root slice `-.slice` and a 255-byte name round-trip through the
+/// production `/api/view` handler byte for byte, and a `SetInclude` naming
+/// each through `/api/op` is accepted and moves that row alone.
+///
+/// Built by hand, with the instance a vendor unit whose file is its
+/// template, which the state change type admits for an enabled instance.
+#[tokio::test]
+async fn unusual_unit_names_round_trip_through_the_view_and_an_op() {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitName, UnitSubject};
+    let long = format!("{}.service", "a".repeat(255 - ".service".len()));
+    assert_eq!(long.len(), 255);
+    let names = [r"probe@a\x2db.service", "-.slice", long.as_str()];
+    let name = |s: &str| UnitName::try_from(s.to_owned()).expect("a unit name");
+    let change = |unit: &str, file: &str| {
+        let subject = UnitSubject::new(
+            name(unit),
+            UnitFragment::Vendor {
+                file: name(file),
+                owning_package: None,
+            },
+        )
+        .expect("a subject");
+        UnitStateChange::new(
+            CarriedUnit::try_from(subject).expect("a carried unit"),
+            UnitState::Enabled,
+            None,
+        )
+        .expect("a state change")
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.units = Some(UnitSection {
+        state_changes: vec![
+            change(names[0], "probe@.service"),
+            change(names[1], names[1]),
+            change(names[2], names[2]),
+        ],
+        ..Default::default()
+    });
+    let app = app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    }));
+
+    let row = |json: &serde_json::Value, unit: &str| -> serde_json::Value {
+        json["unit_states"]
+            .as_array()
+            .expect("the view carries unit_states")
+            .iter()
+            .find(|s| s["unit"].as_str() == Some(unit))
+            .cloned()
+            .unwrap_or_else(|| panic!("no unit_states row named {unit:?}: {json}"))
+    };
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    for unit in names {
+        assert_eq!(row(&json, unit)["unit"], unit, "byte for byte");
+        assert_eq!(row(&json, unit)["include"], true, "{unit}");
+    }
+
+    for (generation, unit) in (1..).zip(names) {
+        let (status, response) = post_json(
+            &app,
+            "/api/op",
+            serde_json::json!({
+                "kind": "Op",
+                "op": "SetInclude",
+                "target": {
+                    "item_id": {"kind": "Unit", "key": {"unit": unit}},
+                    "include": false
+                }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{unit}: {response}");
+        assert_eq!(response["generation"], generation, "{unit}");
+        let (_, json) = get_json(&app, "/api/view").await;
+        assert_eq!(row(&json, unit)["include"], false, "{unit} is excluded");
+        for later in names.iter().skip(generation) {
+            assert_eq!(row(&json, later)["include"], true, "{later} is untouched");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Links, `UndeterminedInstall` records, `Also=` members and the default
+// target on `/api/view` (§ 11.1, Task 4.11), from scanned hosts.
+// ---------------------------------------------------------------------
+
+/// The package that owns the vendor units of the link hosts.
+const LINK_PACKAGE: &str = "apppkg";
+/// A service with no `[Install]` section.
+const NO_INSTALL_SERVICE: &str = "[Service]\nExecStart=/bin/true\n";
+/// A service wanted by `multi-user.target`.
+const WANTED_SERVICE: &str =
+    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n";
+
+/// An app over a refine session opened from `host`'s scan.
+fn scanned_app(host: unit_hosts::UnitHost) -> axum::Router {
+    let snap = unit_hosts::scan(host);
+    app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(unit_hosts::session(&snap))),
+    }))
+}
+
+/// A host with `LINK_PACKAGE` installed over a base image holding glibc,
+/// so refine keeps the package included.
+fn link_host() -> unit_hosts::UnitHost {
+    unit_hosts::UnitHost::new()
+        .base_package("glibc")
+        .package(LINK_PACKAGE)
+}
+
+/// `host` with a link to `unit` in `<parent>.wants` under `/etc`.
+fn with_wants_link(host: unit_hosts::UnitHost, parent: &str, unit: &str) -> unit_hosts::UnitHost {
+    host.link(
+        &format!("/etc/systemd/system/{parent}.wants/{unit}"),
+        &format!("/usr/lib/systemd/system/{unit}"),
+    )
+}
+
+/// The view's `containerfile_preview`.
+fn preview_of(json: &serde_json::Value) -> &str {
+    json["containerfile_preview"].as_str().expect("a preview")
+}
+
+/// The one row of `rows` matching every `(key, value)` of `by`.
+fn row_where<'a>(rows: &'a serde_json::Value, by: &[(&str, &str)]) -> &'a serde_json::Value {
+    let found: Vec<_> = rows
+        .as_array()
+        .expect("an array")
+        .iter()
+        .filter(|r| by.iter().all(|(k, v)| r[*k] == *v))
+        .collect();
+    assert_eq!(found.len(), 1, "one row with {by:?}: {rows}");
+    found[0]
+}
+
+/// Each of `row`'s `advisories`, which must be lines of `preview`.
+fn advisories_in_preview(row: &serde_json::Value, preview: &str) -> Vec<String> {
+    let lines: Vec<String> = row["advisories"]
+        .as_array()
+        .expect("advisories")
+        .iter()
+        .map(|l| l.as_str().expect("a string").to_owned())
+        .collect();
+    assert!(!lines.is_empty(), "{row}");
+    for line in &lines {
+        assert!(
+            preview.lines().any(|l| l == line),
+            "{line}\nis not a line of\n{preview}"
+        );
+    }
+    lines
+}
+
+/// A `.wants` link to a unit with no `[Install]` is a `manual_links[]`
+/// row with its relation, parent, the bare-string cause, the
+/// Containerfile's lines and no `include` key, while the unit row beside
+/// it has one. A link of an `UpheldBy=` unit carries the object cause
+/// with its reason.
+#[tokio::test]
+async fn the_view_serves_hand_made_links_with_no_toggle() {
+    let host = with_wants_link(
+        link_host()
+            .unit("backup.service", "static")
+            .vendor_unit("backup.service", NO_INSTALL_SERVICE, None)
+            .unit("app.service", "enabled")
+            .preset("disable *")
+            .vendor_unit("app.service", WANTED_SERVICE, Some(LINK_PACKAGE)),
+        "multi-user.target",
+        "backup.service",
+    );
+    let app = scanned_app(host);
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let link = row_where(&json["manual_links"], &[("unit", "backup.service")]);
+    assert_eq!(link["relation"], "wants", "{link}");
+    assert_eq!(link["parent"], "multi-user.target", "{link}");
+    assert_eq!(link["cause"], "static_unit", "{link}");
+    let lines = advisories_in_preview(link, preview_of(&json));
+    assert!(
+        lines.iter().any(|l| l.contains("add-wants")),
+        "the command to carry it: {lines:?}"
+    );
+    assert!(link.get("not_applied").is_none(), "{link}");
+    // Presence of a toggle key on the unit row first, then its absence.
+    assert!(
+        row_by(&json["unit_states"], "unit", "app.service")
+            .get("include")
+            .is_some()
+    );
+    assert!(link.get("include").is_none(), "{link}");
+
+    let upheld = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n\
+                  UpheldBy=multi-user.target\n";
+    let host = with_wants_link(
+        unit_hosts::UnitHost::new()
+            .base_package("needpkg")
+            .unit("need.service", "disabled")
+            .preset("enable need.service")
+            .vendor_unit("need.service", upheld, Some("needpkg")),
+        "multi-user.target",
+        "need.service",
+    );
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let link = row_where(&json["manual_links"], &[("unit", "need.service")]);
+    assert_eq!(
+        link["cause"],
+        serde_json::json!({"undetermined": {"reason": "upheld_by"}}),
+        "{link}"
+    );
+    advisories_in_preview(link, preview_of(&json));
+}
+
+/// The install-difference rows of Task 4.5b: `also` with
+/// `vendor_install_only`, and a `.wants` link each way (T41's host). With
+/// one install file excluded through `/api/op`, both link rows hold its
+/// path in `not_applied` and the unit's `# Omitted:` line, which is in the
+/// preview once; included again, `not_applied` goes and the blocks return.
+#[tokio::test]
+async fn the_view_serves_install_difference_links_and_their_omission() {
+    let vendor = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n\
+                  Also=helper.service\n";
+    let host = with_wants_link(
+        link_host()
+            .unit("app.service", "enabled")
+            .preset("enable app.service")
+            .vendor_unit("app.service", vendor, Some(LINK_PACKAGE)),
+        "multi-user.target",
+        "app.service",
+    )
+    .etc_unit("app.service", WANTED_SERVICE);
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let also = row_where(&json["manual_links"], &[("relation", "also")]);
+    assert_eq!(also["parent"], "app.service", "{also}");
+    assert_eq!(also["unit"], "helper.service", "{also}");
+    assert_eq!(also["cause"], "vendor_install_only", "{also}");
+    assert_eq!(
+        advisories_in_preview(also, preview_of(&json)),
+        [
+            "# Advisory: app.service's package unit names helper.service in Also=, and its \
+             files under /etc/systemd/system do not. The package install in the image acted \
+             on the package's list.",
+            "#   Check helper.service with systemctl is-enabled in the image.",
+        ]
+    );
+
+    let reset = "/etc/systemd/system/app.service.d/10-reset.conf";
+    let add = "/etc/systemd/system/app.service.d/20-add.conf";
+    let host = with_wants_link(
+        link_host()
+            .unit("app.service", "enabled")
+            .preset("enable app.service")
+            .vendor_unit("app.service", WANTED_SERVICE, Some(LINK_PACKAGE)),
+        "graphical.target",
+        "app.service",
+    )
+    .file(reset, "[Install]\nWantedBy=\n")
+    .file(add, "[Install]\nWantedBy=graphical.target\n");
+    let app = scanned_app(host);
+    let (_, json) = get_json(&app, "/api/view").await;
+    let preview = preview_of(&json).to_owned();
+    let host_only = row_where(
+        &json["manual_links"],
+        &[
+            ("parent", "graphical.target"),
+            ("cause", "host_install_only"),
+        ],
+    );
+    let vendor_only = row_where(
+        &json["manual_links"],
+        &[
+            ("parent", "multi-user.target"),
+            ("cause", "vendor_install_only"),
+        ],
+    );
+    let host_only_lines = advisories_in_preview(host_only, &preview);
+    let vendor_only_lines = advisories_in_preview(vendor_only, &preview);
+    for row in [host_only, vendor_only] {
+        assert_eq!(row["relation"], "wants", "{row}");
+        assert!(row.get("not_applied").is_none(), "{row}");
+    }
+
+    let drop_in = |path: &str| serde_json::json!({"kind": "DropIn", "key": {"path": path}});
+    let (status, body) = set_include(&app, drop_in(add), false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    let preview = preview_of(&json);
+    let rows = json["manual_links"].as_array().expect("manual_links");
+    assert_eq!(rows.len(), 2, "both rows stay: {rows:?}");
+    let omitted = format!(
+        "# Omitted: app.service links (excluded from the export: {add}; the [Install] the \
+         image reads is not the one recorded, so the source host's links for app.service are \
+         not reproduced, and links its package install made may remain in the image. Check \
+         them with systemctl is-enabled in the image.)"
+    );
+    for row in rows {
+        assert_eq!(row["not_applied"], serde_json::json!([add]), "{row}");
+        assert_eq!(row["advisories"], serde_json::json!([omitted]), "{row}");
+    }
+    assert_eq!(
+        preview.lines().filter(|l| *l == omitted).count(),
+        1,
+        "{preview}"
+    );
+    assert!(!preview.contains("add-wants"), "{preview}");
+
+    let (status, body) = set_include(&app, drop_in(add), true).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    for row in json["manual_links"].as_array().expect("manual_links") {
+        assert!(row.get("not_applied").is_none(), "{row}");
+    }
+    let preview = preview_of(&json);
+    for line in host_only_lines.iter().chain(&vendor_only_lines) {
+        assert!(preview.lines().any(|l| l == line), "{line}\n{preview}");
+    }
+    assert!(!preview.contains(&omitted), "{preview}");
+}
+
+/// T40's `UpheldBy=` drop-in unit: an `undetermined_installs[]` row with
+/// its reason, its install file and the Containerfile's block, and no
+/// `include` key. With the drop-in excluded, `not_applied` holds it and
+/// `advisories` the unit's `# Omitted:` line, which the preview holds.
+#[tokio::test]
+async fn the_view_serves_undetermined_installs_and_their_omission() {
+    const DROP_IN: &str = "/etc/systemd/system/need.service.d/10-reset.conf";
+    let host = unit_hosts::UnitHost::new()
+        .base_package("needpkg")
+        .unit("need.service", "disabled")
+        .preset("enable need.service")
+        .vendor_unit(
+            "need.service",
+            "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n",
+            Some("needpkg"),
+        )
+        .file(DROP_IN, "[Install]\nUpheldBy=a.target\n");
+    let app = scanned_app(host);
+    let (_, json) = get_json(&app, "/api/view").await;
+    let row = row_by(&json["undetermined_installs"], "unit", "need.service");
+    assert_eq!(row["reason"], "upheld_by", "{row}");
+    assert_eq!(row["install_files"], serde_json::json!([DROP_IN]), "{row}");
+    let block = advisories_in_preview(row, preview_of(&json));
+    assert!(
+        block[0].starts_with("# Advisory: need.service is not carried:"),
+        "{block:?}"
+    );
+    assert!(row.get("not_applied").is_none(), "{row}");
+    // Presence of a toggle key on the drop-in row first, then its absence.
+    assert!(
+        row_by(&json["unit_dropins"], "path", DROP_IN)
+            .get("include")
+            .is_some()
+    );
+    assert!(row.get("include").is_none(), "{row}");
+
+    let (status, body) = set_include(
+        &app,
+        serde_json::json!({"kind": "DropIn", "key": {"path": DROP_IN}}),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    let row = row_by(&json["undetermined_installs"], "unit", "need.service");
+    assert_eq!(row["not_applied"], serde_json::json!([DROP_IN]), "{row}");
+    let lines = advisories_in_preview(row, preview_of(&json));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("# Omitted: need.service"), "{lines:?}");
+    assert!(lines[0].contains(DROP_IN), "{lines:?}");
+}
+
+/// A host whose base-image `systemd` ships `graphical.target`, with
+/// `app.service` enabled and `default.target` linked to `link` when given.
+fn default_target_host(link: Option<&str>) -> unit_hosts::UnitHost {
+    let host = link_host()
+        .base_package("systemd")
+        .unit("app.service", "enabled")
+        .preset("disable *")
+        .vendor_unit("app.service", WANTED_SERVICE, Some(LINK_PACKAGE))
+        .vendor_unit(
+            "graphical.target",
+            "[Unit]\nDescription=Graphical Interface\n",
+            Some("systemd"),
+        );
+    match link {
+        Some(target) => host.link("/etc/systemd/system/default.target", target),
+        None => host,
+    }
+}
+
+/// T26 through the handlers: the view's `default_target` row, and its
+/// toggle, `ItemId::DefaultTarget` on the wire as a kind with no key,
+/// takes the `set-default` line out of the preview and puts it back. With
+/// no default target the key is absent and the operation is refused.
+#[tokio::test]
+async fn the_default_target_row_toggles_its_set_default_line() {
+    const SET_DEFAULT: &str = "RUN systemctl set-default -- 'graphical.target'";
+    let app = scanned_app(default_target_host(Some(
+        "/usr/lib/systemd/system/graphical.target",
+    )));
+    let (_, json) = get_json(&app, "/api/view").await;
+    assert_eq!(
+        json["default_target"],
+        serde_json::json!({
+            "target": "graphical.target",
+            "include": true,
+            "locked": false,
+            "declined": null,
+        })
+    );
+    assert!(preview_of(&json).lines().any(|l| l == SET_DEFAULT));
+
+    let item = serde_json::json!({"kind": "DefaultTarget"});
+    let (status, body) = set_include(&app, item.clone(), false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    assert_eq!(json["default_target"]["include"], false);
+    assert!(!preview_of(&json).contains("set-default"), "{json}");
+
+    let (status, body) = set_include(&app, item.clone(), true).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    assert_eq!(json["default_target"]["include"], true);
+    assert!(preview_of(&json).lines().any(|l| l == SET_DEFAULT));
+
+    let none = scanned_app(default_target_host(None));
+    let (_, json) = get_json(&none, "/api/view").await;
+    assert!(json.get("default_target").is_none(), "{json}");
+    let (status, body) = set_include(&none, item, false).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body.to_string().contains("default target"), "{body}");
+}
+
+/// T26 (§ 10.5): a local target whose config row is excluded is declined,
+/// and the row's `declined` text is the preview's `# Omitted:` line.
+#[tokio::test]
+async fn a_declined_default_target_shows_the_omitted_line() {
+    const LOCAL: &str = "/etc/systemd/system/custom.target";
+    let app = scanned_app(
+        default_target_host(Some(LOCAL)).etc_unit("custom.target", "[Unit]\nDescription=Custom\n"),
+    );
+    let (_, json) = get_json(&app, "/api/view").await;
+    assert_eq!(json["default_target"]["target"], "custom.target");
+    assert!(json["default_target"]["declined"].is_null(), "{json}");
+
+    let (status, body) = set_include(
+        &app,
+        serde_json::json!({"kind": "Config", "key": {"path": LOCAL}}),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    let declined = &json["default_target"]["declined"];
+    assert_eq!(declined["renders"], "omitted", "{declined}");
+    let text = declined["text"].as_str().expect("a text");
+    assert!(
+        preview_of(&json)
+            .lines()
+            .any(|l| l == format!("# Omitted: {text}")),
+        "{text}\n{}",
+        preview_of(&json)
+    );
+    assert!(
+        json["default_target"]["include"] == true,
+        "the record stays included"
+    );
+}
+
+/// A unit row carries its `Also=` members with what their links say (T25
+/// (a)'s owner with one member unlinked), and a unit whose `WantedBy=`
+/// comes from an `/etc` drop-in carries that drop-in in
+/// `install_drop_ins`. Each row lacks the other's list.
+#[tokio::test]
+async fn a_unit_row_serves_its_also_members_and_install_drop_ins() {
+    let wanted_also = format!("{WANTED_SERVICE}Also=a.service b.service c.service\n");
+    let mut host = link_host();
+    for (name, state) in [
+        ("bundle.service", "enabled"),
+        ("a.service", "enabled"),
+        ("b.service", "enabled"),
+        ("c.service", "disabled"),
+    ] {
+        host = host.unit(name, state);
+    }
+    for rule in [
+        "enable bundle.service",
+        "enable a.service",
+        "enable b.service",
+        "disable *",
+    ] {
+        host = host.preset(rule);
+    }
+    for (name, text) in [
+        ("bundle.service", wanted_also.as_str()),
+        ("a.service", WANTED_SERVICE),
+        ("b.service", WANTED_SERVICE),
+        ("c.service", WANTED_SERVICE),
+    ] {
+        host = host.vendor_unit(name, text, Some(LINK_PACKAGE));
+    }
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let owner = row_by(&json["unit_states"], "unit", "bundle.service");
+    assert_eq!(
+        owner["also"],
+        serde_json::json!([
+            {"unit": "a.service", "links": "installed"},
+            {"unit": "b.service", "links": "installed"},
+            {"unit": "c.service", "links": "unlinked"},
+        ]),
+        "{owner}"
+    );
+    assert!(owner.get("install_drop_ins").is_none(), "{owner}");
+
+    const DROP_IN: &str = "/etc/systemd/system/app.service.d/10-install.conf";
+    let host = link_host()
+        .unit("app.service", "enabled")
+        .preset("disable *")
+        .vendor_unit("app.service", NO_INSTALL_SERVICE, Some(LINK_PACKAGE))
+        .file(DROP_IN, "[Install]\nWantedBy=multi-user.target\n");
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let row = row_by(&json["unit_states"], "unit", "app.service");
+    assert_eq!(
+        row["install_drop_ins"],
+        serde_json::json!([DROP_IN]),
+        "{row}"
+    );
+    assert!(row.get("also").is_none(), "{row}");
+}
+
+/// The 389 Directory Server template, cut to what § 7.5 reads: the
+/// instance's configuration is `/etc/dirsrv/slapd-%i` and its data
+/// `/var/lib/dirsrv/slapd-%i`.
+const DIRSRV_TEMPLATE: &str = "[Unit]\nDescription=389 Directory Server %i.\n\n[Service]\n\
+     Type=notify\nExecStart=/usr/sbin/ns-slapd -D /etc/dirsrv/slapd-%i -i /run/dirsrv/slapd-%i.pid\n\n\
+     [Install]\nWantedBy=multi-user.target\n";
+
+/// § 11.1 through the production handlers: an instance row carries its
+/// template in `instance_of`, its configuration in `required_config` and
+/// its data in `data_paths`; a plain unit row carries both lists empty
+/// and no `instance_of`.
+#[tokio::test]
+async fn an_instance_row_serves_its_template_configuration_and_data() {
+    const INSTANCE: &str = "dirsrv@example.service";
+    const TEMPLATE: &str = "dirsrv@.service";
+    const PACKAGE: &str = "389-ds-base";
+    let host = unit_hosts::UnitHost::new()
+        .base_package("glibc")
+        .package(PACKAGE)
+        .unit(TEMPLATE, "indirect")
+        .preset("disable *")
+        .vendor_unit(TEMPLATE, DIRSRV_TEMPLATE, Some(PACKAGE))
+        .link(
+            &format!("/etc/systemd/system/multi-user.target.wants/{INSTANCE}"),
+            &format!("/usr/lib/systemd/system/{TEMPLATE}"),
+        )
+        .file("/etc/dirsrv/slapd-example/dse.ldif", "dn: cn=config\n")
+        .dir("/var/lib/dirsrv/slapd-example");
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let row = row_by(&json["unit_states"], "unit", INSTANCE);
+    assert_eq!(row["instance_of"], TEMPLATE, "{row}");
+    assert_eq!(
+        row["required_config"],
+        serde_json::json!(["/etc/dirsrv/slapd-example"]),
+        "{row}"
+    );
+    assert_eq!(
+        row["data_paths"],
+        serde_json::json!(["/var/lib/dirsrv/slapd-example"]),
+        "{row}"
+    );
+
+    let host = link_host()
+        .unit("app.service", "enabled")
+        .preset("disable *")
+        .vendor_unit("app.service", WANTED_SERVICE, Some(LINK_PACKAGE));
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let row = row_by(&json["unit_states"], "unit", "app.service");
+    assert!(row.get("instance_of").is_none(), "{row}");
+    assert_eq!(row["required_config"], serde_json::json!([]), "{row}");
+    assert_eq!(row["data_paths"], serde_json::json!([]), "{row}");
 }

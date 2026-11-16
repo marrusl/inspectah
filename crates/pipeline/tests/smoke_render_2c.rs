@@ -59,10 +59,8 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
         systemd_timers: vec![SystemdTimer {
             name: "logrotate".into(),
             source: "local".into(),
-            timer_content: "[Timer]\nOnCalendar=daily".into(),
-            service_content: "[Service]\nExecStart=/usr/sbin/logrotate".into(),
-            disposition: FindingKind::included(),
-            locked: false,
+            on_calendar: "daily".into(),
+            exec_start: "/usr/sbin/logrotate".into(),
             ..Default::default()
         }],
         generated_timer_units: vec![
@@ -694,32 +692,6 @@ fn audit_no_content_for_missing_scheduled() {
 // ---------------------------------------------------------------------------
 // Tests 24–27: Negative contract tests
 // ---------------------------------------------------------------------------
-
-#[test]
-fn configtree_vendor_timers_not_copied() {
-    // Vendor timers from /usr/lib/systemd/system/ MUST NOT appear in config tree
-    let mut snap = InspectionSnapshot::new();
-    snap.scheduled_tasks = Some(ScheduledTaskSection {
-        systemd_timers: vec![SystemdTimer {
-            name: "fstrim".into(),
-            source: "vendor".into(),
-            path: "/usr/lib/systemd/system/fstrim.timer".into(),
-            timer_content: "[Timer]\nOnCalendar=weekly".into(),
-            service_content: "[Service]\nExecStart=/usr/sbin/fstrim -a".into(),
-            disposition: FindingKind::excluded(), // vendor timers excluded
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
-    let dir = TempDir::new().unwrap();
-    configtree::write_config_tree(&snap, dir.path()).unwrap();
-    assert!(
-        !dir.path()
-            .join("config/usr/lib/systemd/system/fstrim.timer")
-            .exists(),
-        "vendor timer from /usr/lib/systemd/system/ must NOT appear in config tree"
-    );
-}
 
 #[test]
 fn configtree_cron_spool_not_materialized() {

@@ -6,8 +6,8 @@
 
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
-use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
+use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector};
 use inspectah_core::traits::progress::NullProgress;
@@ -57,26 +57,52 @@ const TUNED_FIXTURE: &str = include_str!("../../../testdata/fixtures/kernelboot/
 // ── Mock builders ───────────────────────────────────────────────────
 
 fn services_mock() -> MockExecutor {
-    MockExecutor::new()
-        .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
-            ExecResult {
-                stdout: SYSTEMCTL_FIXTURE.into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
-        .with_file(
-            "/usr/lib/systemd/system-preset/90-default.preset",
-            PRESET_FIXTURE,
-        )
-        .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
-        .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
-        .with_file(
-            "/etc/systemd/system/httpd.service.d/override.conf",
-            DROPIN_FIXTURE,
-        )
+    // A vendor unit file for every listed unit, as its package installs it,
+    // wanted by `multi-user.target`, and the link `systemctl enable` made
+    // for every unit the listing calls `enabled`.
+    let wants = "/etc/systemd/system/multi-user.target.wants";
+    let mut exec = MockExecutor::new();
+    for line in SYSTEMCTL_FIXTURE.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let [unit, state, ..] = words.as_slice() else {
+            continue;
+        };
+        if !unit.ends_with(".service") {
+            continue;
+        }
+        exec = exec.with_file(
+            &format!("/usr/lib/systemd/system/{unit}"),
+            "[Unit]\n\n[Install]\nWantedBy=multi-user.target\n",
+        );
+        if *state == "enabled" {
+            exec = exec
+                .with_dir_entry("/etc/systemd/system", "multi-user.target.wants")
+                .with_dir_entry(wants, unit)
+                .with_link(
+                    &format!("{wants}/{unit}"),
+                    &format!("/usr/lib/systemd/system/{unit}"),
+                );
+        }
+    }
+    exec.with_command(
+        "systemctl list-unit-files --no-pager",
+        ExecResult {
+            stdout: SYSTEMCTL_FIXTURE.into(),
+            exit_code: 0,
+            ..Default::default()
+        },
+    )
+    .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+    .with_file(
+        "/usr/lib/systemd/system-preset/90-default.preset",
+        PRESET_FIXTURE,
+    )
+    .with_dir_entry("/etc/systemd/system", "httpd.service.d")
+    .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
+    .with_file(
+        "/etc/systemd/system/httpd.service.d/override.conf",
+        DROPIN_FIXTURE,
+    )
 }
 
 fn storage_mock() -> MockExecutor {
@@ -147,7 +173,7 @@ fn kernelboot_mock() -> MockExecutor {
 
 // ── Services inspector correctness ──────────────────────────────────
 
-/// Runs ServicesInspector on fixture data and verifies the output is
+/// Runs UnitsInspector on fixture data and verifies the output is
 /// structurally valid and self-consistent.
 #[test]
 fn test_services_inspector_correctness() {
@@ -160,23 +186,23 @@ fn test_services_inspector_correctness() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
+    let output = UnitsInspector::new()
         .inspect(&ctx, &NullProgress)
         .expect("services inspector should succeed on full fixture set");
 
     let section = match &output.section {
-        SectionData::Services(s) => s,
-        other => panic!("expected SectionData::Services, got {:?}", other),
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
     };
 
     // Verify output is valid JSON that round-trips through the concrete type
     let rust_json = serde_json::to_string_pretty(section).unwrap();
-    let roundtrip: inspectah_core::types::services::ServiceSection =
+    let roundtrip: inspectah_core::types::units::UnitSection =
         serde_json::from_str(&rust_json).expect("inspector output must be valid JSON");
     let roundtrip_json = serde_json::to_string_pretty(&roundtrip).unwrap();
     assert_eq!(
         rust_json, roundtrip_json,
-        "inspector output must round-trip faithfully through ServiceSection"
+        "inspector output must round-trip faithfully through UnitSection"
     );
 
     // Verify structural correctness
@@ -185,7 +211,10 @@ fn test_services_inspector_correctness() {
         "inspector must produce state_changes from fixture data"
     );
     for sc in &section.state_changes {
-        assert!(!sc.unit.is_empty(), "state_change unit must not be empty");
+        assert!(
+            !sc.unit().name().as_str().is_empty(),
+            "state_change unit must not be empty"
+        );
         // current_state is a typed enum — the fact that it deserialized proves
         // it is one of Enabled, Disabled, or Masked.
         // implied_action() derives from current_state and is exhaustive.

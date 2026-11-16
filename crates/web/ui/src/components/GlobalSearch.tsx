@@ -19,7 +19,7 @@ import type {
 } from "../api/types";
 
 export interface GlobalSearchResult {
-  /** Section ID (e.g. "packages", "configs", "services"). */
+  /** Section ID (e.g. "packages", "configs", "units"). */
   sectionId: string;
   /** Human-readable section label. */
   sectionLabel: string;
@@ -33,7 +33,7 @@ export interface GlobalSearchResult {
 const SECTION_LABELS: Record<string, string> = {
   packages: "Packages",
   configs: "Config Files",
-  services: "Services",
+  units: "Services",
   containers: "Containers",
   compose: "Compose",
   users_groups: "Users & Groups",
@@ -193,8 +193,8 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       if (serviceDropins) {
         for (const di of serviceDropins) {
           results.push({
-            sectionId: "services",
-            sectionLabel: SECTION_LABELS.services,
+            sectionId: "units",
+            sectionLabel: SECTION_LABELS.units,
             title: di.path,
             itemId: di.path,
           });

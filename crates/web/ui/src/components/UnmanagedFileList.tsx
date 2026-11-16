@@ -92,6 +92,7 @@ function FileRow({
   const handleToggle = useCallback(() => {
     onToggle(item.path);
   }, [onToggle, item.path]);
+  const withheldId = `unmanaged-withheld-${item.path}`;
 
   return (
     <div
@@ -102,6 +103,7 @@ function FileRow({
       role="listitem"
       tabIndex={-1}
       aria-label={item.path}
+      aria-describedby={item.withheld ? withheldId : undefined}
       onKeyDown={onKeyDown}
     >
       <input
@@ -138,6 +140,15 @@ function FileRow({
       >
         {announceText}
       </div>
+      {item.withheld && (
+        <div
+          id={withheldId}
+          data-testid={withheldId}
+          className="inspectah-decision-row__helper-text inspectah-unit-note inspectah-unit-note--withheld"
+        >
+          {item.withheld.text}
+        </div>
+      )}
     </div>
   );
 }

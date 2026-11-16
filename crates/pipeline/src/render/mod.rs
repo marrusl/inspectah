@@ -34,7 +34,7 @@ pub mod report_data;
 
 pub mod language_packages;
 pub mod not_carried;
-pub mod service_intent;
+pub mod unit_plan;
 
 pub mod repo_enabling;
 pub mod repoless;
@@ -307,8 +307,11 @@ mod tests {
         use inspectah_core::types::network::FirewallZone;
         use inspectah_core::types::rpm::RepoFile;
         use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, SystemdTimer};
-        use inspectah_core::types::services::SystemdDropIn;
         use inspectah_core::types::sysctl::{SysctlFile, SysctlFileBody, SysctlSection};
+        use inspectah_core::types::units::{
+            AlsoMember, DefaultTarget, ManualLink, MountUnitFinding, SystemdDropIn,
+            UndeterminedInstall, UnitInventoryEntry,
+        };
 
         // `config.files[]` and `non_rpm_software.env_files[]`.
         let ConfigFileEntry {
@@ -339,7 +342,7 @@ mod tests {
             shipped_by_base: _,   // identifier: an rpm package name
         } = RepoFile::default();
 
-        // `services.drop_ins[]`.
+        // `units.drop_ins[]`.
         let SystemdDropIn {
             content: _, // scrubbed: drop-in pass
             unit: _,
@@ -352,6 +355,89 @@ mod tests {
             shadow_type: _,
             shadow_rationale: _,
         } = SystemdDropIn::default();
+
+        // `units.state_changes[]`: `UnitStateChange` keeps its unit and
+        // state private, so this pattern cannot name them here. Its guard
+        // is in the type's own module, `crates/core/src/types/units.rs`
+        // (`every_field_of_a_unit_state_change_is_classified`), with the
+        // same rule: no `..`, every field classified. The unit types nested
+        // in it and in `MountUnitFinding` are classified field by field
+        // there too (`every_field_of_a_nested_unit_type_is_classified`).
+
+        // `units.state_changes[].also[]`: names and what the links say.
+        fn _classify_also_member(member: AlsoMember) {
+            let AlsoMember {
+                unit: _,            // exempt: a proved unit name
+                links: _,           // exempt: installed, unlinked, inert or other
+                vendor_drop_ins: _, // identifiers: file names, no content
+            } = member;
+        }
+
+        // `units.inventory[]`. No `Default`, so the pattern sits in a
+        // function that is never called, as the sysctl ones below.
+        fn _classify_unit_inventory_entry(entry: UnitInventoryEntry) {
+            let UnitInventoryEntry {
+                unit: _,   // exempt: a proved unit name
+                state: _,  // exempt: enabled, disabled or masked
+                preset: _, // exempt: enable or disable
+            } = entry;
+        }
+
+        // `units.mount_findings[]`. There is no field for the mount source
+        // (`What=`): it can hold a credential, and a copy here is one the
+        // config pass never visits. Refine links the row to the unit
+        // file's config entry, which the config pass scrubs.
+        fn _classify_mount_unit_finding(finding: MountUnitFinding) {
+            let MountUnitFinding {
+                // exempt: a proved unit name, and the owning package's name.
+                // Every field inside is classified in `units.rs`
+                // (`every_field_of_a_nested_unit_type_is_classified`).
+                unit: _,
+                state_change: _, // exempt: a state and a preset
+                // EXEMPT, pinned by SENTINEL-MOUNT-POINT in the sweep below:
+                // an identifier, an absolute path from `Where=`.
+                mount_point: _,
+                nofail: _,    // exempt: an optional boolean from `Options=`
+                aggregate: _, // fleet counts
+            } = finding;
+        }
+
+        // `units.manual_links[]`. Names and a cause only: no content is
+        // read into it, and its advisory is built from these fields and
+        // fixed text (§ 6.7).
+        fn _classify_manual_link(link: ManualLink) {
+            let ManualLink {
+                relation: _, // exempt: wants, requires, upholds, alias or also
+                parent: _,   // exempt: a proved unit name
+                unit: _,     // exempt: a proved unit name
+                cause: _,    // exempt: a cause and, for one, a reason
+                // identifiers: paths under /etc/systemd/system from a
+                // directory listing, no content
+                install_files: _,
+                aggregate: _, // fleet counts
+            } = link;
+        }
+
+        // `units.undetermined_installs[]`, the same: names, a reason and
+        // paths.
+        fn _classify_undetermined_install(record: UndeterminedInstall) {
+            let UndeterminedInstall {
+                unit: _,          // exempt: a proved unit name
+                reason: _,        // exempt: why the section cannot be relied on
+                install_files: _, // identifiers: paths from a directory listing
+                aggregate: _,     // fleet counts
+            } = record;
+        }
+
+        // `units.default_target`: a proved target and its toggle.
+        fn _classify_default_target(target: DefaultTarget) {
+            let DefaultTarget {
+                target: _,      // exempt: a proved target name and its fragment
+                disposition: _, // exempt: the toggle
+                locked: _,      // exempt: a flag
+                aggregate: _,   // fleet counts
+            } = target;
+        }
 
         // `scheduled_tasks.generated_timer_units[]`.
         let GeneratedTimerUnit {
@@ -367,17 +453,17 @@ mod tests {
         } = GeneratedTimerUnit::default();
 
         // `scheduled_tasks.systemd_timers[]`.
+        // A description only (§ 8): the files are config entries, which
+        // the config pass scrubs.
         let SystemdTimer {
-            exec_start: _,      // scrubbed
-            service_content: _, // scrubbed
-            timer_content: _,   // scrubbed (Finding 9)
+            exec_start: _, // scrubbed
             name: _,
             on_calendar: _, // schedule expression
             description: _, // scrubbed: the one free-text line a .timer has
             source: _,
             path: _,
-            disposition: _,
-            locked: _,
+            trigger: _,          // identifier: a proved UnitName or `unresolved`
+            trigger_drop_ins: _, // identifiers: drop-in paths, no content
             aggregate: _,
         } = SystemdTimer::default();
 
@@ -526,9 +612,11 @@ mod tests {
         use inspectah_core::types::scheduled::{
             AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
         };
-        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
         use inspectah_core::types::sysctl::{
             SysctlDir, SysctlFile, SysctlFileBody, SysctlKey, SysctlSection,
+        };
+        use inspectah_core::types::units::{
+            MountUnitFinding, SystemdDropIn, UnitFragment, UnitName, UnitSection, UnitSubject,
         };
 
         // Each sentinel is planted behind a keyword the pattern set
@@ -544,8 +632,6 @@ mod tests {
             "SENTINEL-GENTIMER-SERVICE",
             "SENTINEL-GENTIMER-TIMER",
             "SENTINEL-GENTIMER-COMMAND",
-            "SENTINEL-SYSTIMER-SERVICE",
-            "SENTINEL-SYSTIMER-TIMER",
             "SENTINEL-SYSTIMER-EXEC",
             "SENTINEL-SYSTIMER-DESC",
             "SENTINEL-ATJOB",
@@ -557,6 +643,7 @@ mod tests {
             "SENTINEL-SYSCTL-LINK",
             "SENTINEL-SYSCTL-OUTSIDE",
             "SENTINEL-SYSCTL-RUNTIME",
+            "SENTINEL-MOUNT-WHAT",
         ];
 
         // Declared exempt, and planted anyway so the exemption is a
@@ -564,20 +651,36 @@ mod tests {
         // one's reason is recorded beside its field in
         // `every_field_of_a_content_bearing_type_is_classified`.
         const EXEMPT: &[&str] = &[
-            "SENTINEL-FIREWALL",   // firewalld zone XML holds no credential
-            "SENTINEL-NRSCONTENT", // no collector writes NonRpmItem.content
+            "SENTINEL-FIREWALL",    // firewalld zone XML holds no credential
+            "SENTINEL-NRSCONTENT",  // no collector writes NonRpmItem.content
+            "SENTINEL-MOUNT-POINT", // MountUnitFinding.mount_point is a path
         ];
 
         let mut snap = test_snapshot();
 
+        // A local mount unit's file is a config entry, so its `What=` is
+        // scrubbed by the config pass; the finding below has no copy.
+        let mount_unit = "/etc/systemd/system/srv-data.mount";
         snap.config = Some(ConfigSection {
-            files: vec![ConfigFileEntry {
-                path: "/etc/myapp/app.conf".into(),
-                kind: ConfigFileKind::Unowned,
-                content: "password=SENTINEL-CONFIG\n".into(),
-                disposition: FindingKind::included(),
-                ..Default::default()
-            }],
+            files: vec![
+                ConfigFileEntry {
+                    path: "/etc/myapp/app.conf".into(),
+                    kind: ConfigFileKind::Unowned,
+                    content: "password=SENTINEL-CONFIG\n".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: mount_unit.into(),
+                    kind: ConfigFileKind::Unowned,
+                    content:
+                        "[Mount]\nWhat=https://files.example/volume?token=SENTINEL-MOUNT-WHAT\n\
+                              Where=/srv/data\n"
+                            .into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+            ],
         });
 
         if let Some(ref mut rpm) = snap.rpm {
@@ -593,13 +696,27 @@ mod tests {
             }];
         }
 
-        snap.services = Some(ServiceSection {
+        let srv_data = UnitName::try_from("srv-data.mount".to_owned()).unwrap();
+        let advisory = UnitSubject::new(srv_data.clone(), UnitFragment::Local { file: srv_data })
+            .unwrap()
+            .try_into()
+            .unwrap();
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "app.service".into(),
                 path: "/etc/systemd/system/app.service.d/override.conf".into(),
                 content: "[Service]\nEnvironment=DB_PASSWORD=SENTINEL-DROPIN\n".into(),
                 disposition: FindingKind::included(),
                 ..Default::default()
+            }],
+            mount_findings: vec![MountUnitFinding {
+                unit: advisory,
+                state_change: None,
+                // Behind a keyword, as every sentinel is: a visited field
+                // would lose it.
+                mount_point: Some("/srv/token=SENTINEL-MOUNT-POINT".into()),
+                nofail: Some(false),
+                aggregate: None,
             }],
             ..Default::default()
         });
@@ -627,12 +744,6 @@ mod tests {
                 source: "local".into(),
                 path: "/etc/systemd/system/report.timer".into(),
                 exec_start: "/usr/bin/report --password=SENTINEL-SYSTIMER-EXEC".into(),
-                service_content: "[Service]\nEnvironment=API_TOKEN=SENTINEL-SYSTIMER-SERVICE\n"
-                    .into(),
-                timer_content:
-                    "[Timer]\nOnCalendar=daily\nDescription=sync api_key=SENTINEL-SYSTIMER-TIMER\n"
-                        .into(),
-                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             at_jobs: vec![AtJob {

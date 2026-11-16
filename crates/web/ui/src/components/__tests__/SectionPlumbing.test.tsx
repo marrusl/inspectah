@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MainContent } from "../MainContent";
 import type { ViewResponse } from "../../api/types";
+import { emptyView } from "../../test-utils/emptyView";
 
 // Mock the API client (required by MainContent internals)
 vi.mock("../../api/client", () => ({
@@ -10,26 +11,9 @@ vi.mock("../../api/client", () => ({
   applyOp: vi.fn(),
 }));
 
-/** Minimal ViewResponse that renders without crashing for non-package sections. */
-function makeViewData(
-  overrides: Partial<ViewResponse> = {},
-): Partial<ViewResponse> {
-  return {
-    packages: [],
-    config_files: [],
-    repo_groups: [],
-    package_groups: [],
-    generation: 1,
-    stats: {
-      sections: [],
-      needs_review_count: 0,
-      ops_applied: 0,
-      can_undo: false,
-      can_redo: false,
-      baseline_available: false,
-    },
-    ...overrides,
-  };
+/** An empty view with a test's fields over it. */
+function makeViewData(overrides: Partial<ViewResponse> = {}): ViewResponse {
+  return emptyView(overrides);
 }
 
 const langPkgFixture: ViewResponse["language_packages"] = [
@@ -114,7 +98,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
       />,
@@ -129,7 +113,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
       />,
@@ -146,7 +130,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -168,7 +152,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -187,7 +171,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         revealItemId="pip:/opt/myapp/venv"
@@ -205,7 +189,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         onToggleLangEnv={onToggleLangEnv}
@@ -232,7 +216,7 @@ describe("MainContent — Unmanaged Files section", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
       />,
@@ -247,7 +231,7 @@ describe("MainContent — Unmanaged Files section", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
       />,
@@ -264,7 +248,7 @@ describe("MainContent — Unmanaged Files section", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -288,7 +272,7 @@ describe("MainContent — Unmanaged Files section", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -308,7 +292,7 @@ describe("MainContent — Unmanaged Files section", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         onToggleUnmanagedFile={onToggleUnmanagedFile}
@@ -335,7 +319,7 @@ describe("MainContent — Focus management", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -358,7 +342,7 @@ describe("MainContent — Focus management", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -374,5 +358,102 @@ describe("MainContent — Focus management", () => {
       name: /\/opt\/splunk/,
     });
     expect(document.activeElement).toBe(firstGroupHeader);
+  });
+});
+
+describe("MainContent: unit section", () => {
+  const triage = {
+    triage: { mode: "single_host" as const, site: null },
+    primary_reason: "service_non_default_state",
+    annotations: [],
+  } as unknown as ViewResponse["unit_states"][number]["triage"];
+
+  const unitStates: ViewResponse["unit_states"] = [
+    {
+      unit: "kdump.service",
+      kind: "service",
+      fragment: "vendor",
+      triage,
+      include: true,
+      locked: false,
+      current_state: "disabled",
+      default_state: "enable",
+      required_config: [],
+      data_paths: [],
+    },
+  ];
+
+  // A full shadow on a unit at its preset has no state row: it is only
+  // a drop-in row. The plain drop-in is the control the count must skip.
+  const unitDropins: ViewResponse["unit_dropins"] = [
+    {
+      unit: "sshd.service",
+      path: "/etc/systemd/system/sshd.service",
+      triage,
+      include: true,
+      locked: false,
+      shadow_type: "full_shadow",
+      shadow_rationale: "Full unit override replaces vendor sshd.service",
+    },
+    {
+      unit: "kdump.service",
+      path: "/etc/systemd/system/kdump.service.d/override.conf",
+      triage,
+      include: true,
+      locked: false,
+      shadow_type: "drop_in",
+    },
+  ];
+
+  it("renders the rows of unit_states under section id units", () => {
+    render(
+      <MainContent
+        activeSection="units"
+        viewData={
+          makeViewData({
+            unit_states: unitStates,
+            unit_dropins: [],
+            mount_findings: [],
+            manual_links: [],
+            undetermined_installs: [],
+          })
+        }
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByTestId("service-item-kdump.service")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
+      /^Services$/,
+    );
+  });
+
+  it("counts shadow overrides from the full-shadow drop-ins", () => {
+    render(
+      <MainContent
+        activeSection="units"
+        viewData={
+          makeViewData({
+            unit_states: unitStates,
+            unit_dropins: unitDropins,
+            mount_findings: [],
+            manual_links: [],
+            undetermined_installs: [],
+          })
+        }
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
+      "Services (1 shadow override)",
+    );
+    // Both drop-ins are listed; only the full shadow is counted.
+    expect(
+      screen.getByTestId("dropin-item-/etc/systemd/system/sshd.service"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId(
+        "dropin-item-/etc/systemd/system/kdump.service.d/override.conf",
+      ),
+    ).toBeInTheDocument();
   });
 });

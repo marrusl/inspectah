@@ -512,7 +512,6 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
         systemd_timers: vec![SystemdTimer {
             name: "deploy.timer".into(),
             exec_start: "/usr/local/bin/deploy --token=timer_secret_77".into(),
-            service_content: "[Service]\nType=oneshot\nExecStart=/usr/local/bin/deploy --token=timer_svc_secret_22\n".into(),
             source: "local".into(),
             path: "/etc/systemd/system/deploy.timer".into(),
             ..Default::default()
@@ -534,7 +533,6 @@ const PLANTED_SECRETS: &[&str] = &[
     "pam_secret_11",
     "git_secret_66",
     "svc_content_secret_44",
-    "timer_svc_secret_22",
     "ghp_tokenOnlySecret990123456789012345678901",
 ];
 

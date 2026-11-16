@@ -17,6 +17,7 @@ const DROPIN: DropInDecisionDto = {
   path: DROPIN_PATH,
   triage: TRIAGE,
   include: true,
+  locked: false,
 };
 
 function renderSearch(onNavigate = vi.fn()) {
@@ -60,6 +61,6 @@ describe("GlobalSearch service drop-in indexing", () => {
       "override.conf",
     );
     await userEvent.click(screen.getByTestId("global-search-result-0"));
-    expect(onNavigate).toHaveBeenCalledWith("services", DROPIN_PATH);
+    expect(onNavigate).toHaveBeenCalledWith("units", DROPIN_PATH);
   });
 });

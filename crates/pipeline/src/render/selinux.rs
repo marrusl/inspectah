@@ -28,6 +28,26 @@ use inspectah_core::types::selinux::{
 /// support.
 pub const VAR_SYMLINKED_TOPLEVELS: &[(&str, &str)] = &[("/srv", "/var/srv")];
 
+/// Top-level directories that are symlinks into `/var` on both RHEL bootc
+/// base images, aliased by the policy or not (measured; § 10.6 of the units
+/// spec). A mount unit for a path under one must be renamed for the
+/// resolved path. A fedora-bootc or centos-bootc base creates a different
+/// set and is not covered.
+pub const BASE_VAR_SYMLINKS: &[&str] = &["/home", "/mnt", "/root", "/srv"];
+
+/// Top-level directories that are real directories of the image on both
+/// RHEL bootc base images, not links into `/var` (measured; § 10.6 of the
+/// units spec). `/usr/local` is one too, and is covered by the `/usr` line
+/// of the mount advisory, so only `/opt` is listed here.
+pub const BASE_IMAGE_DIRECTORIES: &[&str] = &["/opt"];
+
+/// Mount points bootc and ostree own on the target (§ 10.6 of the units
+/// spec), each matched as a whole path.
+pub const BOOTC_OWNED_MOUNT_POINTS: &[&str] = &["/", "/boot", "/boot/efi", "/sysroot", "/var"];
+
+/// The top level of the read-only image on the target.
+pub const IMAGE_USR: &str = "/usr";
+
 /// § 3.1's install precondition: `semanage` is not in the bootc base, and
 /// every command this block emits needs it.
 ///
@@ -89,7 +109,7 @@ const EQUIVALENCE_FORBIDDEN: &[char] = &['*', '?', '[', ']', '(', ')', '|', '\\'
 /// bootc pulls the image, and deployment checkout is later (verified in
 /// `container/store.rs` against rhel9/rhel-bootc:9.8, 2026-10-28). The
 /// count paragraph says the same thing, and two sentences in one block
-/// disagreeing is worse than one being imprecise (Mark, 2026-10-28).
+/// disagreeing is worse than one being imprecise.
 const FIXME_INSTRUCTION: &str = "# FIXME: add this file context by hand with: RUN semanage fcontext -a -t <type> '<spec>' || semanage fcontext -m -t <type> '<spec>' (labels apply when bootc pulls the image; no restorecon needed)";
 
 /// Prefix of the second line of the unrenderable form, which carries the
@@ -107,7 +127,7 @@ const SEMANAGE_LIST_NOTE: &str = "# NOTE: rule order comes from a sorted listing
 /// collision rule) on whether any rule needing a synthesized row survives,
 /// none of which a consumer can see. § 3.1 says this helper exists so the
 /// three consumers report the same thing, and a row reported as synthesized
-/// that the build never adds breaks exactly that (Mark, 2026-10-28).
+/// that the build never adds breaks exactly that.
 ///
 /// The cause travels with the fact because a consumer cannot reconstruct it:
 /// [`rule_faults`] is private, and a synthesized row nothing needs leaves no
@@ -210,7 +230,7 @@ pub fn selinux_equivalences(snap: &InspectionSnapshot) -> Vec<Equivalence> {
 
         // A collected row mapping the other direction is a conflict whether
         // or not anything triggers the synthesis, and whatever the subject
-        // key below would do with it (Mark, 2026-10-28). `/srv` **is** a
+        // key below would do with it. `/srv` **is** a
         // symlink to `/var/srv` on the image, so a row declaring the reverse
         // inverts the base's own layout; emitting it is wrong on its own
         // terms. It claims a different subject, so the subject key would

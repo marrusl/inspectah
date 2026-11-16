@@ -1,6 +1,6 @@
 use crate::types::FindingKind;
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::types::aggregate::{AggregatePrevalence, RepoSourceEntry, VariantSelection};
 
@@ -142,11 +142,29 @@ impl AggregateMergeable for ConfigFileEntry {
 // Service types
 // ---------------------------------------------------------------------------
 
-use crate::types::services::{ServiceStateChange, SystemdDropIn};
+use crate::types::units::{MountUnitFinding, SystemdDropIn, UnitStateChange};
 
-impl AggregateMergeable for ServiceStateChange {
+/// Identity on the unit name, as for a state change (§ 12). Hosts that
+/// disagree about a field collapse to one finding: [`merge_items`] keeps
+/// the whole finding the most hosts recorded, a tie going to the first host
+/// by hostname.
+impl AggregateMergeable for MountUnitFinding {
     fn identity_key(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.unit)
+        Cow::Borrowed(self.unit.name().as_unit_name().as_str())
+    }
+
+    fn aggregate_mut(&mut self) -> &mut Option<AggregatePrevalence> {
+        &mut self.aggregate
+    }
+
+    /// A finding is reported, never carried, and has no include flag:
+    /// narrowing has nothing to set (§ 12).
+    fn set_include(&mut self, _val: bool) {}
+}
+
+impl AggregateMergeable for UnitStateChange {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.unit().name().as_str())
     }
 
     fn aggregate_mut(&mut self) -> &mut Option<AggregatePrevalence> {
@@ -453,9 +471,10 @@ impl AggregateMergeable for SystemdTimer {
         &mut self.aggregate
     }
 
-    fn set_include(&mut self, val: bool) {
-        self.disposition = self.disposition.with_include(val);
-    }
+    /// A timer is a description with no include flag (§ 8 of the units
+    /// spec): its state is a unit row and its file a config entry, each
+    /// merged with its own flag.
+    fn set_include(&mut self, _val: bool) {}
 }
 
 impl AggregateMergeable for AtJob {
@@ -1084,8 +1103,10 @@ use crate::types::nonrpm::NonRpmSoftwareSection;
 use crate::types::rpm::RpmSection;
 use crate::types::scheduled::ScheduledTaskSection;
 use crate::types::selinux::{FcontextRule, FcontextSource, SelinuxSection};
-use crate::types::services::ServiceSection;
 use crate::types::storage::StorageSection;
+use crate::types::units::{
+    AlsoMember, DefaultTarget, MemberLinks, UnitInventoryEntry, UnitName, UnitSection, UnitState,
+};
 use crate::types::users::UserGroupSection;
 
 /// Pick an optional scalar value from a specific host index.
@@ -1522,36 +1543,237 @@ pub fn merge_config_sections(
 
 /// Merge service sections from multiple hosts.
 pub fn merge_service_sections(
-    sections: Vec<Option<ServiceSection>>,
+    sections: Vec<Option<UnitSection>>,
     total_hosts: usize,
     hostnames: &[String],
-) -> Option<ServiceSection> {
+) -> Option<UnitSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
     }
 
-    let state_changes = merge_items(
-        collect_items(&sections, |s| &s.state_changes),
-        total_hosts,
-        hostnames,
-    );
+    let observed = collect_items(&sections, |s| &s.state_changes);
+    let mut state_changes = merge_items(observed.clone(), total_hosts, hostnames);
+    for change in &mut state_changes {
+        union_lists(change, &observed);
+    }
+    // `merge_items` includes every row on every host, so a runtime updater
+    // each host excluded would come out included (§ 12 "The exception").
+    for change in &mut state_changes {
+        crate::baseline::apply_runtime_updater_default(change);
+    }
     let drop_ins = merge_items(
         collect_items(&sections, |s| &s.drop_ins),
         total_hosts,
         hostnames,
     );
-    let enabled_units = dedup_strings(collect_string_lists(&sections, |s| &s.enabled_units));
-    let disabled_units = dedup_strings(collect_string_lists(&sections, |s| &s.disabled_units));
-    let preset_matched_units =
-        dedup_strings(collect_string_lists(&sections, |s| &s.preset_matched_units));
+    let inventory = merge_unit_inventory(&sections);
+    let mount_findings = merge_items(
+        collect_items(&sections, |s| &s.mount_findings),
+        total_hosts,
+        hostnames,
+    );
 
-    Some(ServiceSection {
+    let manual_links = merge_by_first_host(
+        collect_items(&sections, |s| &s.manual_links),
+        |a, b| a.relation == b.relation && a.parent == b.parent && a.unit == b.unit,
+        |link| (&mut link.install_files, &mut link.aggregate),
+        total_hosts,
+        hostnames,
+    );
+    let undetermined_installs = merge_by_first_host(
+        collect_items(&sections, |s| &s.undetermined_installs),
+        |a, b| a.unit == b.unit,
+        |record| (&mut record.install_files, &mut record.aggregate),
+        total_hosts,
+        hostnames,
+    );
+
+    Some(UnitSection {
         state_changes,
-        enabled_units,
-        disabled_units,
+        inventory,
         drop_ins,
-        preset_matched_units,
+        mount_findings,
+        manual_links,
+        undetermined_installs,
+        default_target: merge_default_target(&sections, total_hosts, hostnames),
     })
+}
+
+/// The default target of an aggregate (§ 12): the target the most hosts
+/// set, a tie going to the first host in hostname order, as that host
+/// recorded it. Its prevalence counts the hosts that set it, and it is
+/// excluded unless every host did, the rule [`narrow_non_universal`]
+/// applies: a host that sets another target, or none, disagrees. `None`
+/// when no host sets one.
+fn merge_default_target(
+    sections: &[Option<UnitSection>],
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<DefaultTarget> {
+    let mut groups: Vec<(DefaultTarget, Vec<String>)> = Vec::new();
+    for (host_idx, target) in sections.iter().enumerate().filter_map(|(idx, section)| {
+        section
+            .as_ref()
+            .and_then(|s| s.default_target.as_ref())
+            .map(|t| (idx, t))
+    }) {
+        let host = hostnames[host_idx].clone();
+        match groups
+            .iter_mut()
+            .find(|(first, _)| first.target.name() == target.target.name())
+        {
+            Some((_, hosts)) => hosts.push(host),
+            None => groups.push((target.clone(), vec![host])),
+        }
+    }
+    // The first group with the most hosts: `max_by_key` keeps the last of
+    // equals, so the search runs from the end.
+    let (mut target, mut hosts) = groups
+        .into_iter()
+        .rev()
+        .max_by_key(|(_, hosts)| hosts.len())?;
+    hosts.sort();
+    let count = hosts.len();
+    if count < total_hosts {
+        target.disposition = target.disposition.with_include(false);
+    }
+    target.aggregate = Some(AggregatePrevalence {
+        count: count as i32,
+        total: total_hosts as i32,
+        hosts,
+        ..Default::default()
+    });
+    Some(target)
+}
+
+/// Gives the merged `change` the union of the list fields of every row
+/// `observed` holds for its unit (§ 12): `install_drop_ins`,
+/// `vendor_drop_ins`, `required_config` and `data_paths` sorted, as the
+/// collector records them, the first host's `needs_unknown` of any host
+/// that recorded one, since one host's unknown needs leave the fleet's
+/// unknown too, and `also` in
+/// the order the hosts recorded its members, host by host. A member that
+/// two hosts record with different `links` becomes
+/// [`MemberLinks::Other`], and its `vendor_drop_ins` are the union of the
+/// names.
+fn union_lists(change: &mut UnitStateChange, observed: &[(usize, UnitStateChange)]) {
+    let rows: Vec<&UnitStateChange> = observed
+        .iter()
+        .map(|(_, row)| row)
+        .filter(|row| row.unit().name() == change.unit().name())
+        .collect();
+    change.install_drop_ins = dedup_strings(
+        rows.iter()
+            .map(|row| row.install_drop_ins.clone())
+            .collect(),
+    );
+    change.vendor_drop_ins =
+        dedup_strings(rows.iter().map(|row| row.vendor_drop_ins.clone()).collect());
+    change.required_config =
+        dedup_strings(rows.iter().map(|row| row.required_config.clone()).collect());
+    change.data_paths = dedup_strings(rows.iter().map(|row| row.data_paths.clone()).collect());
+    change.needs_unknown = rows.iter().find_map(|row| row.needs_unknown.clone());
+    let mut also: Vec<AlsoMember> = Vec::new();
+    for member in rows.iter().flat_map(|row| &row.also) {
+        match also.iter_mut().find(|seen| seen.unit == member.unit) {
+            Some(seen) => {
+                if seen.links != member.links {
+                    seen.links = MemberLinks::Other;
+                }
+                seen.vendor_drop_ins = dedup_strings(vec![
+                    std::mem::take(&mut seen.vendor_drop_ins),
+                    member.vendor_drop_ins.clone(),
+                ]);
+            }
+            None => also.push(member.clone()),
+        }
+    }
+    change.also = also;
+}
+
+/// Merges findings that have no include flag and keep the first host's
+/// value (§ 12): one row per group of findings `same` puts together, in the
+/// order the first of each was recorded. The row is the first host's
+/// finding in hostname order, with the `install_files` of every host's
+/// finding in the group, in first-recorded order, and a prevalence that
+/// counts every host that recorded one. `parts` gives a finding's
+/// `install_files` and `aggregate`.
+fn merge_by_first_host<T: Clone>(
+    items: Vec<(usize, T)>,
+    same: impl Fn(&T, &T) -> bool,
+    parts: impl Fn(&mut T) -> (&mut Vec<String>, &mut Option<AggregatePrevalence>),
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Vec<T> {
+    let mut groups: Vec<(T, Vec<String>)> = Vec::new();
+    for (host_idx, mut item) in items {
+        let host = hostnames[host_idx].clone();
+        match groups.iter_mut().find(|(first, _)| same(first, &item)) {
+            Some((first, hosts)) => {
+                let (files, _) = parts(&mut item);
+                let files = std::mem::take(files);
+                let (merged, _) = parts(first);
+                for file in files {
+                    if !merged.contains(&file) {
+                        merged.push(file);
+                    }
+                }
+                if !hosts.contains(&host) {
+                    hosts.push(host);
+                }
+            }
+            None => groups.push((item, vec![host])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(mut row, mut hosts)| {
+            hosts.sort();
+            let (_, aggregate) = parts(&mut row);
+            *aggregate = Some(AggregatePrevalence {
+                count: hosts.len() as i32,
+                total: total_hosts as i32,
+                hosts,
+                ..Default::default()
+            });
+            row
+        })
+        .collect()
+}
+
+/// Merge the unit inventories of every host into one entry per unit name,
+/// sorted by name.
+///
+/// The entry keeps the state the most hosts have. A tie goes to the state
+/// seen first, which is the first host by hostname since sections are
+/// pre-sorted, as in [`most_prevalent_scalar`]. The preset is the one the
+/// first host with the winning state recorded.
+fn merge_unit_inventory(sections: &[Option<UnitSection>]) -> Vec<UnitInventoryEntry> {
+    let mut by_unit: BTreeMap<&UnitName, Vec<&UnitInventoryEntry>> = BTreeMap::new();
+    for entry in sections.iter().flatten().flat_map(|s| &s.inventory) {
+        by_unit.entry(&entry.unit).or_default().push(entry);
+    }
+
+    by_unit
+        .into_values()
+        .map(|entries| {
+            let mut counts: Vec<(UnitState, usize)> = Vec::new();
+            for entry in &entries {
+                match counts.iter_mut().find(|(state, _)| *state == entry.state) {
+                    Some((_, n)) => *n += 1,
+                    None => counts.push((entry.state, 1)),
+                }
+            }
+            // Stable: highest count first; ties keep first-seen order.
+            counts.sort_by(|(_, a), (_, b)| b.cmp(a));
+            let winner = counts[0].0;
+            entries
+                .into_iter()
+                .find(|e| e.state == winner)
+                .expect("the winning state was counted from these entries")
+                .clone()
+        })
+        .collect()
 }
 
 /// Merge container sections from multiple hosts.

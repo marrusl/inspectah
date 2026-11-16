@@ -8,7 +8,7 @@ use inspectah_core::types::aggregate::{
 };
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
-use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::ContentHash;
 use inspectah_web::handlers::AppState;
@@ -658,7 +658,7 @@ async fn aggregate_view_informational_variants_from_quadlets_and_dropins() {
     });
 
     // Service drop-in with 2 variants
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![
             SystemdDropIn {
                 unit: "httpd.service".into(),
@@ -742,7 +742,7 @@ async fn aggregate_view_informational_variants_from_quadlets_and_dropins() {
     // Verify the services section has a drop-in item with variants
     let services = sections
         .iter()
-        .find(|s| s["id"] == "services")
+        .find(|s| s["id"] == "units")
         .expect("services section should exist");
     let dropin_item = find_item_in_section(services, "DropIn");
     assert!(
@@ -1225,4 +1225,81 @@ async fn aggregate_tuned_selection_is_under_system_tuning() {
         !section_ids(&json).contains(&"tuned"),
         "the tuned row has one section"
     );
+}
+
+/// T20 in the fleet view: the scheduled section lists the cron job and no
+/// timer row, so no include flag on a timer; the timer's unit row in the
+/// units section keeps its own.
+#[tokio::test]
+async fn aggregate_scheduled_section_offers_no_timer_include() {
+    use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection, SystemdTimer};
+    use inspectah_core::types::units::{
+        CarriedUnit, PresetDefault, UnitFragment, UnitName, UnitState, UnitStateChange, UnitSubject,
+    };
+
+    let mut snap = InspectionSnapshot::new();
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
+        label: "timers".into(),
+        host_count: 2,
+        hostnames: vec!["host-01".into(), "host-02".into()],
+        merged_at: "2026-05-21T12:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: BTreeMap::from([("scheduled_tasks".into(), 2), ("units".into(), 2)]),
+    });
+    let name = UnitName::try_from("backup.timer".to_owned()).expect("a timer unit name");
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package: None,
+    };
+    let unit = CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a vendor unit is carried");
+    snap.units = Some(UnitSection {
+        state_changes: vec![
+            UnitStateChange::new(unit, UnitState::Enabled, Some(PresetDefault::Disable))
+                .expect("a state change"),
+        ],
+        ..Default::default()
+    });
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        cron_jobs: vec![CronJob {
+            path: "/etc/cron.d/backup".into(),
+            source: "0 2 * * * root /usr/local/bin/backup.sh".into(),
+            ..Default::default()
+        }],
+        systemd_timers: vec![SystemdTimer {
+            name: "backup".into(),
+            on_calendar: "daily".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let app = app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    }));
+    let (status, json) = get_json(&app, "/api/aggregate/view").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let section = |id: &str| {
+        json["sections"]
+            .as_array()
+            .expect("sections array")
+            .iter()
+            .find(|s| s["id"] == id)
+            .unwrap_or_else(|| panic!("no {id} section in {:?}", section_ids(&json)))
+    };
+    let kinds: Vec<&str> = section_items(section("scheduled"))
+        .iter()
+        .map(|i| i["item_id"]["kind"].as_str().expect("an item kind"))
+        .collect();
+    assert_eq!(kinds, ["CronJob"], "the cron job only");
+    assert!(
+        !json.to_string().contains("SystemdTimer"),
+        "the aggregate view names no timer operation"
+    );
+
+    let unit_row = section_items(section("units"))
+        .into_iter()
+        .find(|i| i["item_id"]["kind"] == "Unit" && i["item_id"]["key"]["unit"] == "backup.timer")
+        .unwrap_or_else(|| panic!("no unit row for backup.timer"));
+    assert_eq!(unit_row["include"], true, "{unit_row}");
 }

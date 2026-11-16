@@ -11,7 +11,7 @@ const SINGLE_HOST_SECTION_IDS = [
   "packages", // 1
   "configs", // 2
   "users_groups", // 3
-  "services", // 4
+  "units", // 4
   "containers", // 5
   "language_packages", // 6
   "unmanaged_files", // 7

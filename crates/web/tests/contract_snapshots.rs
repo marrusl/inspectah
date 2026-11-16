@@ -26,10 +26,8 @@ use inspectah_core::types::rpm::{
 };
 use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection};
 use inspectah_core::types::selinux::SelinuxSection;
-use inspectah_core::types::services::{
-    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
-};
 use inspectah_core::types::storage::{FstabEntry, StorageSection, VarDirBacking, VarDirectory};
+use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
 use inspectah_refine::projection::project_reference;
 use inspectah_refine::session::RefineSession;
 use inspectah_web::adapter::{VAR_SUMMARY_ID, build_web_sections};
@@ -58,6 +56,8 @@ fn plain_context_item_is_byte_identical() {
         searchable_text: "net.ipv4.ip_forward 1 0 /etc/sysctl.d/k8s.conf".to_string(),
         decision: None,
         advisory: None,
+        unit_link: None,
+        generated_timer: None,
     };
     insta::assert_snapshot!(
         serde_json::to_string(&item).expect("ContextItem serializes"),
@@ -108,18 +108,16 @@ fn contract_snapshot() -> InspectionSnapshot {
         ..Default::default()
     });
 
-    snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: "httpd.service".into(),
-            current_state: ServiceUnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::excluded(),
-            locked: false,
-            owning_package: None,
-            aggregate: None,
-            attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
+    snap.units = Some(UnitSection {
+        state_changes: vec![{
+            let mut change = UnitStateChange::new(
+                test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap();
+            change.disposition = FindingKind::excluded();
+            change
         }],
         ..Default::default()
     });
@@ -809,7 +807,7 @@ fn an_uncollected_section_is_data_unavailable() {
     assert_eq!(
         reasons,
         vec![
-            ("services".to_string(), Some("data_unavailable".to_string())),
+            ("units".to_string(), Some("data_unavailable".to_string())),
             (
                 "containers".to_string(),
                 Some("data_unavailable".to_string())
@@ -863,4 +861,18 @@ fn a_populated_section_has_no_empty_reason() {
         empty.is_empty(),
         "the contract fixture populates all eight sections, got {empty:?}"
     );
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

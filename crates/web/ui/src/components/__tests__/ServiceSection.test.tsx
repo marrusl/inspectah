@@ -6,6 +6,7 @@ import { ServiceSectionWithGuard as ServiceSection } from "../../test-utils/with
 import type {
   ServiceDecisionDto,
   DropInDecisionDto,
+  MountFindingDto,
   ViewResponse,
   TriageTag,
 } from "../../api/types";
@@ -41,9 +42,14 @@ function makeService(
 ): ServiceDecisionDto {
   return {
     unit: "httpd.service",
+    kind: "service",
+    fragment: "vendor",
     triage: makeTriage("site"),
     include: true,
+    locked: false,
     current_state: "enabled",
+    required_config: [],
+    data_paths: [],
     ...overrides,
   };
 }
@@ -56,6 +62,7 @@ function makeDropin(
     path: "/etc/systemd/system/httpd.service.d/override.conf",
     triage: makeTriage("site"),
     include: true,
+    locked: false,
     ...overrides,
   };
 }
@@ -75,10 +82,15 @@ const MOCK_VIEW: ViewResponse = {
   generation: 1,
   repo_groups: [],
   version_changes: [],
-  service_states: [],
-  service_dropins: [],
+  unit_states: [],
+  unit_dropins: [],
+  mount_findings: [],
+  manual_links: [],
+  undetermined_installs: [],
   quadlets: [],
   flatpaks: [],
+  declined_generated: [],
+  generated_timers: [],
   sysctl: { state: "unavailable", reason: "not collected" },
   tuned: [],
   users_groups_decisions: [],
@@ -91,6 +103,9 @@ const MOCK_VIEW: ViewResponse = {
 const defaultProps = {
   services: [] as ServiceDecisionDto[],
   dropins: [] as DropInDecisionDto[],
+  mountFindings: [] as MountFindingDto[],
+  manualLinks: [],
+  undeterminedInstalls: [],
   onViewUpdate: vi.fn(),
   onMutationError: vi.fn(),
 };
@@ -387,7 +402,7 @@ describe("ServiceSection toggle operations", () => {
     const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(callBody.op).toBe("SetInclude");
     expect(callBody.target.item_id).toEqual({
-      kind: "Service",
+      kind: "Unit",
       key: { unit: "httpd.service" },
     });
     expect(callBody.target.include).toBe(false);
@@ -434,184 +449,175 @@ describe("ServiceSection toggle operations", () => {
   });
 });
 
-describe("ServiceSection shadow override rendering", () => {
-  it("renders amber border-left for full-shadow service", () => {
-    const services = [
-      makeService({
-        unit: "shadow.service",
-        shadow_type: "full_shadow",
-        shadow_rationale: "This service is critical for bootc",
-        triage: makeTriage("baseline"), // baseline has no triage border
-      }),
-    ];
-    render(<ServiceSection {...defaultProps} services={services} />);
+describe("ServiceSection full shadow on the drop-in row", () => {
+  const SHADOW_PATH = "/etc/systemd/system/httpd.service";
+  const PLAIN_PATH = "/etc/systemd/system/httpd.service.d/override.conf";
 
-    const row = screen.getByTestId("service-item-shadow.service");
+  function shadowDropin(
+    overrides: Partial<DropInDecisionDto> = {},
+  ): DropInDecisionDto {
+    return makeDropin({
+      path: SHADOW_PATH,
+      shadow_type: "full_shadow",
+      shadow_rationale: "This service is critical for bootc",
+      ...overrides,
+    });
+  }
+
+  it("renders the badge and rationale on a full shadow and neither on a sibling drop-in", () => {
+    render(
+      <ServiceSection
+        {...defaultProps}
+        services={[makeService()]}
+        dropins={[
+          shadowDropin(),
+          makeDropin({ path: PLAIN_PATH, shadow_type: "drop_in" }),
+        ]}
+      />,
+    );
+
+    const shadowRow = screen.getByTestId(`dropin-item-${SHADOW_PATH}`);
+    expect(within(shadowRow).getByText("Shadow override")).toBeInTheDocument();
+    expect(
+      within(shadowRow).getByTestId(`shadow-rationale-dropin-${SHADOW_PATH}`),
+    ).toHaveTextContent("This service is critical for bootc");
+
+    const plainRow = screen.getByTestId(`dropin-item-${PLAIN_PATH}`);
+    expect(within(plainRow).queryByText("Shadow override")).toBeNull();
+    expect(
+      within(plainRow).queryByTestId(`shadow-rationale-dropin-${PLAIN_PATH}`),
+    ).toBeNull();
+  });
+
+  it("shows a full shadow on a unit at its preset, which has no state row", () => {
+    render(
+      <ServiceSection
+        {...defaultProps}
+        services={[]}
+        dropins={[shadowDropin({ unit: "sshd.service" })]}
+      />,
+    );
+
+    const orphans = screen.getByTestId("dropin-orphans");
+    const row = within(orphans).getByTestId(`dropin-item-${SHADOW_PATH}`);
+    expect(
+      within(row).getByTestId(`shadow-badge-dropin-${SHADOW_PATH}`),
+    ).toHaveTextContent("Shadow override");
+    expect(screen.queryByTestId("service-item-sshd.service")).toBeNull();
+  });
+
+  it("renders amber border-left for a full shadow", () => {
+    render(
+      <ServiceSection
+        {...defaultProps}
+        dropins={[shadowDropin({ triage: makeTriage("baseline") })]}
+      />,
+    );
+
+    const row = screen.getByTestId(`dropin-item-${SHADOW_PATH}`);
     expect(row.style.borderLeft).toContain(
       "var(--pf-t--global--color--status--warning--default)",
     );
   });
 
-  it("renders Shadow override badge for full-shadow service", () => {
-    const services = [
-      makeService({
-        unit: "shadow.service",
-        shadow_type: "full_shadow",
-        shadow_rationale: "This service is critical for bootc",
-      }),
-    ];
-    render(<ServiceSection {...defaultProps} services={services} />);
-
-    expect(
-      screen.getByTestId("shadow-badge-service-shadow.service"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Shadow override")).toBeInTheDocument();
-  });
-
-  it("renders shadow rationale with correct id", () => {
-    const services = [
-      makeService({
-        unit: "shadow.service",
-        shadow_type: "full_shadow",
-        shadow_rationale: "This service is critical for bootc",
-      }),
-    ];
-    render(<ServiceSection {...defaultProps} services={services} />);
-
-    const rationale = screen.getByTestId("shadow-rationale-shadow.service");
-    expect(rationale).toHaveAttribute("id", "shadow-rationale-shadow.service");
-    expect(rationale).toHaveTextContent("This service is critical for bootc");
-  });
-
-  it("wires aria-describedby on checkbox to shadow rationale", () => {
-    const services = [
-      makeService({
-        unit: "shadow.service",
-        shadow_type: "full_shadow",
-        shadow_rationale: "This service is critical for bootc",
-      }),
-    ];
-    render(<ServiceSection {...defaultProps} services={services} />);
-
-    const row = screen.getByTestId("service-item-shadow.service");
-    const checkbox = within(row).getByRole("checkbox");
-    expect(checkbox).toHaveAttribute(
-      "aria-describedby",
-      "shadow-rationale-shadow.service",
+  it("uses background color when the triage border conflicts with the shadow border", () => {
+    render(
+      <ServiceSection
+        {...defaultProps}
+        dropins={[shadowDropin({ triage: makeTriage("investigate") })]}
+      />,
     );
-  });
 
-  it("combines shadow and locked aria-describedby on checkbox when both apply (shadow-first ordering)", () => {
-    const services = [
-      makeService({
-        unit: "shadow.service",
-        shadow_type: "full_shadow",
-        shadow_rationale: "This service is critical for bootc",
-        locked: true,
-        attention_reason: "Cannot change",
-      }),
-    ];
-    render(<ServiceSection {...defaultProps} services={services} />);
-
-    const row = screen.getByTestId("service-item-shadow.service");
-    const checkbox = within(row).getByRole("checkbox");
-    // Checkbox should have aria-describedby with shadow-first ordering
-    expect(checkbox).toHaveAttribute(
-      "aria-describedby",
-      "shadow-rationale-shadow.service locked-reason-service-shadow.service",
-    );
-    // Row should NOT have aria-describedby (moved to checkbox)
-    expect(row).not.toHaveAttribute("aria-describedby");
-  });
-
-  it("uses background color when triage border conflicts with shadow border", () => {
-    const services = [
-      makeService({
-        unit: "shadow.service",
-        shadow_type: "full_shadow",
-        shadow_rationale: "This service is critical for bootc",
-        triage: makeTriage("investigate"), // Has border
-      }),
-    ];
-    render(<ServiceSection {...defaultProps} services={services} />);
-
-    const row = screen.getByTestId("service-item-shadow.service");
-    // Triage border wins the left edge
+    const row = screen.getByTestId(`dropin-item-${SHADOW_PATH}`);
     expect(row.style.borderLeft).toContain(
       "var(--pf-t--global--color--status--danger--default)",
     );
-    // Shadow gets background color
     expect(row.style.backgroundColor).toContain(
       "var(--pf-t--global--color--status--warning--default)",
     );
   });
 
-  it("does not render shadow indicators for non-shadow services", () => {
-    const services = [
-      makeService({
-        unit: "regular.service",
-        // no shadow_type
-      }),
-    ];
-    render(<ServiceSection {...defaultProps} services={services} />);
+  it("renders the rationale with its id and wires the checkbox to it", () => {
+    render(<ServiceSection {...defaultProps} dropins={[shadowDropin()]} />);
 
-    expect(
-      screen.queryByTestId("shadow-badge-service-regular.service"),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByTestId("shadow-rationale-regular.service"),
-    ).not.toBeInTheDocument();
+    const row = screen.getByTestId(`dropin-item-${SHADOW_PATH}`);
+    const rationale = within(row).getByTestId(
+      `shadow-rationale-dropin-${SHADOW_PATH}`,
+    );
+    expect(rationale.id).not.toBe("");
+    expect(within(row).getByRole("checkbox")).toHaveAttribute(
+      "aria-describedby",
+      rationale.id,
+    );
   });
 
-  it("badge order is triage → shadow → locked when not locked", () => {
-    const services = [
-      makeService({
-        unit: "triage-shadow.service",
-        shadow_type: "full_shadow",
-        shadow_rationale: "Critical",
-        triage: makeTriage("investigate"),
-      }),
-    ];
-    render(<ServiceSection {...defaultProps} services={services} />);
+  it.each([
+    ["null", null],
+    ["absent", undefined],
+  ])(
+    "leaves the checkbox undescribed when a full shadow's rationale is %s",
+    (_label, rationale) => {
+      render(
+        <ServiceSection
+          {...defaultProps}
+          dropins={[shadowDropin({ shadow_rationale: rationale })]}
+        />,
+      );
 
-    const row = screen.getByTestId("service-item-triage-shadow.service");
-    const badges = within(row).getAllByRole("gridcell");
-    const badgeTexts = badges.map((b) => b.textContent);
+      const row = screen.getByTestId(`dropin-item-${SHADOW_PATH}`);
+      // Still a full shadow: the badge renders.
+      expect(
+        within(row).getByTestId(`shadow-badge-dropin-${SHADOW_PATH}`),
+      ).toHaveTextContent("Shadow override");
+      expect(
+        within(row).queryByTestId(`shadow-rationale-dropin-${SHADOW_PATH}`),
+      ).toBeNull();
+      expect(within(row).getByRole("checkbox")).not.toHaveAttribute(
+        "aria-describedby",
+      );
+    },
+  );
 
-    // When not locked, triage badge appears before shadow badge
-    expect(badgeTexts).toContain("Unknown Origin"); // triage
-    expect(badgeTexts).toContain("Shadow override"); // shadow
+  it("badge order is triage then shadow when not locked", () => {
+    render(
+      <ServiceSection
+        {...defaultProps}
+        dropins={[shadowDropin({ triage: makeTriage("investigate") })]}
+      />,
+    );
 
+    const row = screen.getByTestId(`dropin-item-${SHADOW_PATH}`);
+    const badgeTexts = within(row)
+      .getAllByRole("gridcell")
+      .map((b) => b.textContent);
     const triageIdx = badgeTexts.indexOf("Unknown Origin");
     const shadowIdx = badgeTexts.indexOf("Shadow override");
+    expect(triageIdx).toBeGreaterThanOrEqual(0);
     expect(triageIdx).toBeLessThan(shadowIdx);
   });
 
-  it("shows shadow and locked badges when service is locked (no triage badge)", () => {
-    const services = [
-      makeService({
-        unit: "shadow-locked.service",
-        shadow_type: "full_shadow",
-        shadow_rationale: "Critical",
-        locked: true,
-        attention_reason: "Cannot change",
-        triage: makeTriage("investigate"),
-      }),
-    ];
-    render(<ServiceSection {...defaultProps} services={services} />);
+  it("shows shadow before locked when the drop-in is locked (no triage badge)", () => {
+    render(
+      <ServiceSection
+        {...defaultProps}
+        dropins={[
+          shadowDropin({
+            locked: true,
+            attention_reason: "Cannot change",
+            triage: makeTriage("investigate"),
+          }),
+        ]}
+      />,
+    );
 
-    const row = screen.getByTestId("service-item-shadow-locked.service");
-
-    // When locked, triage badge does not appear (locked badge replaces it)
-    expect(screen.queryByText("Unknown Origin")).not.toBeInTheDocument();
-    expect(screen.getByText("Shadow override")).toBeInTheDocument();
-    expect(screen.getByText("Cannot change")).toBeInTheDocument();
-
-    // Shadow badge should come before locked badge
-    const badges = within(row).getAllByRole("gridcell");
-    const badgeTexts = badges.map((b) => b.textContent);
+    const row = screen.getByTestId(`dropin-item-${SHADOW_PATH}`);
+    expect(within(row).queryByText("Unknown Origin")).toBeNull();
+    const badgeTexts = within(row)
+      .getAllByRole("gridcell")
+      .map((b) => b.textContent);
     const shadowIdx = badgeTexts.indexOf("Shadow override");
     const lockedIdx = badgeTexts.indexOf("Cannot change");
+    expect(shadowIdx).toBeGreaterThanOrEqual(0);
     expect(shadowIdx).toBeLessThan(lockedIdx);
   });
 });

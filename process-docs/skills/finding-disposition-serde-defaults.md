@@ -38,7 +38,7 @@ pub tuned_disposition: FindingKind,
 
 Both helpers live in `crates/core/src/types/finding.rs`. Actionable
 findings (`PackageEntry`, `ConfigFileEntry`,
-`ServiceStateChange`, …) correctly keep bare `#[serde(default)]` — for
+`UnitStateChange`, …) correctly keep bare `#[serde(default)]`: for
 those, included-by-default is the intended contract.
 
 ## Why a Struct `Default` Impl Does Not Cover You

@@ -853,7 +853,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false, false);
 
         feed_rpm(&r, 613, 6);
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);
@@ -879,7 +879,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false, true);
 
         feed_rpm(&r, 613, 6);
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);
@@ -905,7 +905,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false, false);
 
         feed_rpm(&r, 613, 6);
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);
@@ -954,7 +954,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false, false);
 
         feed_rpm(&r, 613, 6);
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);
@@ -1051,7 +1051,7 @@ mod tests {
         // Network finishes first (fast).
         feed_simple_complete(&r, InspectorId::Network);
         // Services finishes second.
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         // RPM finishes last (slow).
         feed_rpm(&r, 613, 6);
 
@@ -1064,8 +1064,8 @@ mod tests {
             lines[0]
         );
         assert!(
-            lines[1].contains("Services"),
-            "second line should be Services: {}",
+            lines[1].contains("Units"),
+            "second line should be Units: {}",
             lines[1]
         );
         assert!(
@@ -1106,23 +1106,23 @@ mod tests {
         let (r, buf) = test_renderer(false, true, false);
 
         // Services with a step, then Network simple.
-        r.handle(ProgressEvent::InspectorStarted(InspectorId::Services));
+        r.handle(ProgressEvent::InspectorStarted(InspectorId::Units));
         r.handle(ProgressEvent::StepStarted {
-            inspector: InspectorId::Services,
+            inspector: InspectorId::Units,
             step: StepId::QueryingPackages,
         });
         r.handle(ProgressEvent::StepFinished {
-            inspector: InspectorId::Services,
+            inspector: InspectorId::Units,
             step: StepId::QueryingPackages,
             outcome: StepOutcome::Complete,
         });
         r.handle(ProgressEvent::Metric {
-            inspector: InspectorId::Services,
+            inspector: InspectorId::Units,
             kind: MetricKind::UnitsFound,
             value: 42,
         });
         r.handle(ProgressEvent::InspectorFinished {
-            id: InspectorId::Services,
+            id: InspectorId::Units,
             outcome: InspectorOutcome::Complete,
         });
 
@@ -1134,17 +1134,17 @@ mod tests {
 
         // Services parent line should be first.
         assert!(
-            lines[0].contains("Services"),
-            "expected Services parent first: {}",
+            lines[0].contains("Units"),
+            "expected Units parent first: {}",
             lines[0]
         );
         // Child lines should be indented and appear between Services and Network.
-        let services_idx = lines.iter().position(|l| l.contains("Services")).unwrap();
+        let services_idx = lines.iter().position(|l| l.contains("Units")).unwrap();
         let network_idx = lines.iter().position(|l| l.contains("Network")).unwrap();
         // Children between parent and next inspector.
         assert!(
             network_idx > services_idx + 1,
-            "expected child lines between Services and Network"
+            "expected child lines between Units and Network"
         );
         // Child lines should be indented with 6 spaces.
         for line in &lines[(services_idx + 1)..network_idx] {
@@ -1162,11 +1162,11 @@ mod tests {
     fn receipt_lines_accumulate() {
         let (r, _buf) = test_renderer(false, false, false);
         feed_rpm(&r, 100, 3);
-        feed_simple_complete(&r, InspectorId::Services);
+        feed_simple_complete(&r, InspectorId::Units);
         let lines = r.receipt_lines();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].id, InspectorId::Rpm);
-        assert_eq!(lines[1].id, InspectorId::Services);
+        assert_eq!(lines[1].id, InspectorId::Units);
     }
 
     #[test]
@@ -1520,7 +1520,7 @@ mod tests {
         let mut state = test_state(vec![
             (InspectorId::Rpm, InspectorTracker::with_started_at(old_rpm)),
             (
-                InspectorId::Services,
+                InspectorId::Units,
                 InspectorTracker::with_started_at(recent_svc),
             ),
         ]);
@@ -1528,9 +1528,9 @@ mod tests {
 
         // Services finishes — doesn't own spinner, so no clear.
         // (In handle(), the clear only happens when spinner_active == id.)
-        let finishing_id = InspectorId::Services;
+        let finishing_id = InspectorId::Units;
         let owns_spinner = state.spinner_active == Some(finishing_id);
-        assert!(!owns_spinner, "Services should not own the spinner");
+        assert!(!owns_spinner, "Units should not own the spinner");
 
         // Spinner stays on RPM.
         assert_eq!(
@@ -1540,13 +1540,13 @@ mod tests {
         );
 
         // Clean up Services tracker.
-        state.trackers.remove(&InspectorId::Services);
+        state.trackers.remove(&InspectorId::Units);
 
         // RPM still has the spinner.
         assert_eq!(
             state.spinner_active,
             Some(InspectorId::Rpm),
-            "spinner should still be on RPM after Services finishes"
+            "spinner should still be on RPM after Units finishes"
         );
     }
 
@@ -1601,7 +1601,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false, false);
 
         feed_rpm(&r, 613, 6);
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);
@@ -1644,7 +1644,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false, false);
 
         // Wave 1: fast inspectors arrive first.
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 27);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 27);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);
@@ -1709,7 +1709,7 @@ mod tests {
             },
         });
 
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
 
@@ -1764,7 +1764,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false, false);
 
         feed_rpm(&r, 200, 3);
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 15);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 15);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);
@@ -1796,7 +1796,7 @@ mod tests {
 
         // 5 complete.
         feed_rpm(&r, 613, 6);
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);
@@ -1838,7 +1838,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false, true);
 
         feed_rpm(&r, 613, 6);
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);
@@ -1881,7 +1881,7 @@ mod tests {
         let (r, buf) = test_renderer(false, false, false);
 
         feed_rpm(&r, 613, 6);
-        feed_with_metric(&r, InspectorId::Services, MetricKind::UnitsFound, 42);
+        feed_with_metric(&r, InspectorId::Units, MetricKind::UnitsFound, 42);
         feed_simple_complete(&r, InspectorId::Storage);
         feed_simple_complete(&r, InspectorId::KernelBoot);
         feed_simple_complete(&r, InspectorId::Network);

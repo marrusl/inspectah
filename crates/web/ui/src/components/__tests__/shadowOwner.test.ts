@@ -37,6 +37,7 @@ function dropin(overrides: Partial<DropInDecisionDto> = {}): DropInDecisionDto {
     path: DROPIN_PATH,
     triage: TRIAGE,
     include: true,
+    locked: false,
     ...overrides,
   };
 }
@@ -53,26 +54,26 @@ describe("resolveShadowOwner", () => {
 
   it("names the Service Drop-ins owner and routes to it by path", () => {
     const owner = resolveShadowOwner(
-      configEntry({ shadowed_by: "services" }),
+      configEntry({ shadowed_by: "units" }),
       [dropin()],
     );
     expect(owner).not.toBeNull();
     expect(owner!.label).toBe("Controlled in Service Drop-ins");
     expect(owner!.target).toEqual({
-      sectionId: "services",
+      sectionId: "units",
       itemId: DROPIN_PATH,
     });
   });
 
   it("reports the drop-in owner's own include state", () => {
     const included = resolveShadowOwner(
-      configEntry({ shadowed_by: "services" }),
+      configEntry({ shadowed_by: "units" }),
       [dropin({ include: true })],
     );
     expect(included!.state).toEqual({ text: "Owner included", included: true });
 
     const excluded = resolveShadowOwner(
-      configEntry({ shadowed_by: "services" }),
+      configEntry({ shadowed_by: "units" }),
       [dropin({ include: false })],
     );
     expect(excluded!.state).toEqual({
@@ -83,7 +84,7 @@ describe("resolveShadowOwner", () => {
 
   it("joins on the exact path, not a prefix", () => {
     const owner = resolveShadowOwner(
-      configEntry({ shadowed_by: "services" }),
+      configEntry({ shadowed_by: "units" }),
       [dropin({ path: `${DROPIN_PATH}.bak` })],
     );
     // Label still names the owning surface — the shadow is real — but there
@@ -94,7 +95,7 @@ describe("resolveShadowOwner", () => {
 
   it("explains where the decision went", () => {
     const services = resolveShadowOwner(
-      configEntry({ shadowed_by: "services" }),
+      configEntry({ shadowed_by: "units" }),
       [dropin()],
     );
     expect(services!.explanation).toContain("Service Drop-ins");
@@ -105,7 +106,7 @@ describe("buildShadowOwners", () => {
   it("keys owners by config path and skips unshadowed entries", () => {
     const owners = buildShadowOwners(
       [
-        { entry: configEntry({ shadowed_by: "services" }), triage: TRIAGE },
+        { entry: configEntry({ shadowed_by: "units" }), triage: TRIAGE },
         { entry: configEntry({ path: "/etc/hosts" }), triage: TRIAGE },
       ],
       [dropin()],

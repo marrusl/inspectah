@@ -1,13 +1,29 @@
 import { EmptyState, EmptyStateBody } from "@patternfly/react-core";
 import { CubesIcon } from "@patternfly/react-icons";
-import type { ReferenceSection } from "../api/types";
+import type {
+  ContextItem as ContextItemType,
+  DeclinedView,
+  ReferenceSection,
+} from "../api/types";
 import { ContextItem } from "./ContextItem";
+import type { ContextRowControl } from "./ContextItem";
 
 export interface ContextListProps {
   section: ReferenceSection;
+  /** Opens the unit row a scheduled timer row names. */
+  onNavigateToUnit?: (unit: string) => void;
+  /** The declined generated unit a row shows, if any. */
+  declinedFor?: (item: ContextItemType) => DeclinedView | undefined;
+  /** The include control a row offers, if any. */
+  controlFor?: (item: ContextItemType) => ContextRowControl | undefined;
 }
 
-export function ContextList({ section }: ContextListProps) {
+export function ContextList({
+  section,
+  onNavigateToUnit,
+  declinedFor,
+  controlFor,
+}: ContextListProps) {
   const subsections = (section.subsections ?? []).filter(
     (sub) => sub.items.length > 0,
   );
@@ -32,7 +48,13 @@ export function ContextList({ section }: ContextListProps) {
       {section.items.length > 0 && (
         <div role="list" aria-label={`${section.display_name} context items`}>
           {section.items.map((item) => (
-            <ContextItem key={item.id} item={item} />
+            <ContextItem
+              key={item.id}
+              item={item}
+              onNavigateToUnit={onNavigateToUnit}
+              declined={declinedFor?.(item)}
+              control={controlFor?.(item)}
+            />
           ))}
         </div>
       )}
@@ -51,7 +73,13 @@ export function ContextList({ section }: ContextListProps) {
           </h4>
           <div role="list" aria-label={`${sub.display_name} context items`}>
             {sub.items.map((item) => (
-              <ContextItem key={item.id} item={item} />
+              <ContextItem
+                key={item.id}
+                item={item}
+                onNavigateToUnit={onNavigateToUnit}
+                declined={declinedFor?.(item)}
+                control={controlFor?.(item)}
+              />
             ))}
           </div>
         </section>

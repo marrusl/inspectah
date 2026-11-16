@@ -12,7 +12,7 @@ use inspectah_core::baseline::{
 };
 use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
+use inspectah_core::types::units::{UnitInventoryEntry, UnitSection, UnitState, UnitStateChange};
 use inspectah_pipeline::render::containerfile::{base_image_from_snapshot, render_containerfile};
 use inspectah_refine::normalize::load_for_refine;
 use inspectah_refine::session::RefineSession;
@@ -197,34 +197,39 @@ fn old_schema_version_rejected() {
 fn service_surface_agreement() {
     // Build a snapshot JSON with dnf-makecache.service in services
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![
-            ServiceStateChange {
-                unit: "dnf-makecache.service".into(),
-                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
-                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                owning_package: None,
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
+            UnitStateChange::new(
+                test_carried_unit("dnf-makecache.service".to_owned().try_into().unwrap(), None),
+                inspectah_core::types::units::UnitState::Enabled,
+                Some(inspectah_core::types::units::PresetDefault::Disable),
+            )
+            .unwrap(),
+            UnitStateChange::new(
+                test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                inspectah_core::types::units::UnitState::Enabled,
+                Some(inspectah_core::types::units::PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
+        inventory: vec![
+            UnitInventoryEntry {
+                unit: "dnf-makecache.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
             },
-            ServiceStateChange {
-                unit: "httpd.service".into(),
-                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
-                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                owning_package: None,
-                aggregate: None,
-                attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
+            UnitInventoryEntry {
+                unit: "httpd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
             },
         ],
-        enabled_units: vec!["dnf-makecache.service".into(), "httpd.service".into()],
         ..Default::default()
     });
 
@@ -232,13 +237,13 @@ fn service_surface_agreement() {
 
     // Cross-crate: load_for_refine calls normalize_incompatible_services
     let normalized = load_for_refine(&raw_json).unwrap();
-    let services = normalized.services.as_ref().unwrap();
+    let services = normalized.units.as_ref().unwrap();
 
     // dnf-makecache.service must have include: false in state_changes
     let dnf_sc = services
         .state_changes
         .iter()
-        .find(|sc| sc.unit == "dnf-makecache.service")
+        .find(|sc| sc.unit().name().as_str() == "dnf-makecache.service")
         .expect("dnf-makecache.service must be in state_changes");
     assert!(
         !dnf_sc.disposition.is_included(),
@@ -249,27 +254,29 @@ fn service_surface_agreement() {
     let httpd_sc = services
         .state_changes
         .iter()
-        .find(|sc| sc.unit == "httpd.service")
+        .find(|sc| sc.unit().name().as_str() == "httpd.service")
         .expect("httpd.service must be in state_changes");
     assert!(
         httpd_sc.disposition.is_included(),
         "httpd.service must remain include=true"
     );
 
-    // dnf-makecache.service must NOT be in enabled_units
+    // httpd.service should remain an enabled inventory entry
+    let enabled = |unit: &str| {
+        services
+            .inventory
+            .iter()
+            .any(|e| e.unit.as_str() == unit && e.state == UnitState::Enabled)
+    };
     assert!(
-        !services
-            .enabled_units
-            .contains(&"dnf-makecache.service".to_string()),
-        "dnf-makecache.service must be removed from enabled_units"
+        enabled("httpd.service"),
+        "httpd.service must remain an enabled inventory entry"
     );
 
-    // httpd.service should remain in enabled_units
+    // dnf-makecache.service must NOT be an enabled inventory entry
     assert!(
-        services
-            .enabled_units
-            .contains(&"httpd.service".to_string()),
-        "httpd.service must remain in enabled_units"
+        !enabled("dnf-makecache.service"),
+        "dnf-makecache.service must be removed from the enabled inventory"
     );
 
     // Cross-crate: render_containerfile on the normalized snapshot
@@ -366,4 +373,18 @@ fn baseline_summary_count_stability() {
     // Image ref must match
     assert_eq!(s1.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
     assert_eq!(s1.image_digest, "sha256:deadbeef1234");
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

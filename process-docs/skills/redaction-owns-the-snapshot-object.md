@@ -47,6 +47,16 @@ and recognises `python venv`, `pip dist-info`, `npm lockfile` and
 JSON is the *only* copy of the manifest in the export, so a writer-side
 scrub reaches none of them.
 
+**A warning is never scrubbed.** `redact()` scrubs file contents and the
+fields it knows; `snapshot.warnings` serializes as written, and the README
+and refine's Services section print each `message`. So a warning names
+where a host value is (the unit, the key, the file and line), never the
+value: the units collector's unknown-needs warning once copied a whole
+`ExecStart=` line, token and all, into `message` and `extra.value`. A
+test for a new warning puts a sentinel credential in the host value and
+asserts it is absent from every file of both exports and from refine's
+view and sections.
+
 ## Search forward from the key, never from the start of the line
 
 This was the single defect behind eight separate credential leaks
@@ -243,6 +253,11 @@ Four fields had this gap, found one at a time:
 | `containers.quadlet_units[].content` | **the built image** | review of the first fix |
 | `scheduled_tasks.*.timer_content` | `config/etc/systemd/system/` | review of the first fix |
 | `scheduled_tasks.systemd_timers[].description` | the audit report | the sweep test below |
+
+`SystemdTimer` has carried no file content since phase 3 of the units
+plan: a local timer's file is a config entry or a drop-in row, scrubbed
+by those passes. `timer_content` and `service_content` remain on
+`generated_timer_units` only.
 
 The sysctl section (`kernel_boot.sysctl`) was classified when it was
 added, not found later: `SysctlSection.runtime` values,

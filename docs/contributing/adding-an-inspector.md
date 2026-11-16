@@ -92,7 +92,7 @@ In `crates/core/src/types/completeness.rs`, add a variant to the
 pub enum InspectorId {
     Rpm,
     Config,
-    Services,
+    Units,
     Network,
     Storage,
     ScheduledTasks,

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub enum InspectorId {
     Rpm,
     Config,
-    Services,
+    Units,
     Network,
     Storage,
     ScheduledTasks,
@@ -44,8 +44,8 @@ pub enum SectionData {
     Rpm(super::rpm::RpmSection),
     #[serde(rename = "config")]
     Config(super::config::ConfigSection),
-    #[serde(rename = "services")]
-    Services(super::services::ServiceSection),
+    #[serde(rename = "units")]
+    Units(super::units::UnitSection),
     #[serde(rename = "network")]
     Network(super::network::NetworkSection),
     #[serde(rename = "storage")]

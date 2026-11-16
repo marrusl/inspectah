@@ -225,7 +225,7 @@ expression: value
     },
     {
       "display_name": "Services",
-      "id": "services",
+      "id": "units",
       "is_decision_section": true,
       "zones": {
         "consensus": {
@@ -237,7 +237,7 @@ expression: value
                 "key": {
                   "unit": "httpd.service"
                 },
-                "kind": "Service"
+                "kind": "Unit"
               },
               "prevalence": {
                 "count": 3,

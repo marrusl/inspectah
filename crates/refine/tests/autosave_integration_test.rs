@@ -378,3 +378,153 @@ fn resume_does_not_truncate_redo_on_autosave() {
     );
     assert_eq!(state.cursor, 2, "sidecar cursor must remain at 2");
 }
+
+// ── Saved sessions naming the retired `Service` kind ─────────────────
+
+const STATE_ROW_UNIT: &str = "httpd.service";
+const SHADOW_ONLY_UNIT: &str = "sshd.service";
+
+/// A snapshot with one unit state change and one unit whose only finding
+/// is a full shadow (no state row).
+fn units_snapshot() -> InspectionSnapshot {
+    use inspectah_core::types::ShadowType;
+    use inspectah_core::types::units::{
+        PresetDefault, SystemdDropIn, UnitName, UnitSection, UnitState, UnitStateChange,
+    };
+
+    let mut snap = test_snapshot_redacted();
+    snap.units = Some(UnitSection {
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit(
+                    UnitName::try_from(STATE_ROW_UNIT.to_string()).unwrap(),
+                    None,
+                ),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
+        inventory: vec![],
+        drop_ins: vec![SystemdDropIn {
+            unit: SHADOW_ONLY_UNIT.into(),
+            path: format!("/etc/systemd/system/{SHADOW_ONLY_UNIT}"),
+            content: "[Service]\nExecStart=/usr/sbin/sshd -D\n".into(),
+            disposition: FindingKind::included(),
+            shadow_type: Some(ShadowType::FullShadow),
+            ..Default::default()
+        }],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
+    });
+    snap
+}
+
+/// Replace every occurrence of `from` inside `value` with `to`.
+fn replace_value(value: &mut serde_json::Value, from: &serde_json::Value, to: &serde_json::Value) {
+    if value == from {
+        *value = to.clone();
+        return;
+    }
+    match value {
+        serde_json::Value::Array(items) => {
+            items.iter_mut().for_each(|v| replace_value(v, from, to));
+        }
+        serde_json::Value::Object(map) => {
+            map.values_mut().for_each(|v| replace_value(v, from, to));
+        }
+        _ => {}
+    }
+}
+
+/// Write a v3 session file for `tarball` holding one exclude op whose item
+/// id is `item_id`, given in its wire form so a retired kind can be written.
+fn write_session_excluding(tarball: &std::path::Path, item_id: serde_json::Value) {
+    use inspectah_refine::autosave::{SessionState, compute_tarball_hash};
+    use inspectah_refine::types::TimelineEntry;
+
+    let placeholder = ItemId::Package {
+        name: "placeholder".into(),
+        arch: "noarch".into(),
+    };
+    let state = SessionState {
+        schema_version: 3,
+        tarball_path: tarball.to_path_buf(),
+        tarball_hash: compute_tarball_hash(tarball).unwrap(),
+        timeline: vec![TimelineEntry::Op(RefinementOp::SetInclude {
+            item_id: placeholder.clone(),
+            include: false,
+        })],
+        cursor: 1,
+        saved_at: "0s".into(),
+    };
+    let mut json = serde_json::to_value(&state).unwrap();
+    let from = serde_json::to_value(&placeholder).unwrap();
+    replace_value(&mut json, &from, &item_id);
+    assert!(
+        json.to_string().contains(&item_id.to_string()),
+        "the session file must hold the item id it was asked to write"
+    );
+    std::fs::write(session_file_path(tarball), json.to_string()).unwrap();
+}
+
+/// A session saved before the rename holds `{"kind":"Service",...}`.
+/// Resuming it is refused, and the refusal names the kind; nothing is
+/// migrated or pruned. The unit here has no state row (its only finding is
+/// a full shadow), the case whose old synthetic row is gone. The same op
+/// under the `Unit` kind, for a unit with a state row, is the positive
+/// control.
+#[test]
+fn a_saved_session_naming_the_service_kind_is_refused_on_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let tarball = dir.path().join("test.tar.gz");
+    write_real_tarball(&tarball, &units_snapshot());
+
+    write_session_excluding(
+        &tarball,
+        serde_json::json!({"kind": "Service", "key": {"unit": SHADOW_ONLY_UNIT}}),
+    );
+    match RefineSession::resume_from(&tarball) {
+        Err(RefineError::SnapshotLoad(msg)) => assert!(
+            msg.contains("`Service`"),
+            "the refusal must name the refused kind, got: {msg}"
+        ),
+        Err(other) => panic!("expected a SnapshotLoad refusal, got: {other}"),
+        Ok(_) => panic!("a saved `Service` op must not resume"),
+    }
+
+    // Positive control: a saved `Unit` op resumes and applies.
+    write_session_excluding(
+        &tarball,
+        serde_json::json!({"kind": "Unit", "key": {"unit": STATE_ROW_UNIT}}),
+    );
+    let resumed = RefineSession::resume_from(&tarball)
+        .expect("a saved `Unit` op must resume")
+        .expect("the session file exists");
+    let units = resumed.snapshot_projected().units.unwrap();
+    let row = units
+        .state_changes
+        .iter()
+        .find(|s| s.unit().name().as_str() == STATE_ROW_UNIT)
+        .expect("the state row is present");
+    assert!(
+        !row.disposition.is_included(),
+        "the resumed exclude must apply to {STATE_ROW_UNIT}"
+    );
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
+}

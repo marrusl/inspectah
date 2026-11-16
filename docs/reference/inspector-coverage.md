@@ -23,7 +23,7 @@ Inspectors run in two waves:
 
 If the RPM inspector fails entirely, the Wave 2 inspectors that require RPM state return `InspectorError::Failed`: Config, ScheduledTasks, Selinux, and NonRpm. The rest still run, and the scan is marked incomplete.
 
-After both waves, one cross-inspector pass marks a file that two sections both carry. The section that writes the file to the export keeps the decision, and the other section's entry becomes Inventory. See [Service shadows](#service-shadows).
+After both waves, one cross-inspector pass marks a file that two sections both carry. The section that writes the file to the export keeps the decision, and the other section's entry becomes Inventory. See [Unit shadows](#unit-shadows).
 
 The modernization advisory catalog (`inspectors/modernization.rs`) is not an inspector. The Config inspector calls it. See [Advisory catalogs](#advisory-catalogs).
 
@@ -94,43 +94,132 @@ The modernization advisory catalog (`inspectors/modernization.rs`) is not an ins
 
 ---
 
-### ServicesInspector
+### UnitsInspector
 
 | | |
 |:---|:---|
-| **ID** | `Services` |
+| **ID** | `Units` |
 | **Applies to** | `PackageBased` systems |
-| **Snapshot field** | `services` (`ServiceSection`) |
-| **Source** | `inspectors/services.rs` |
+| **Snapshot field** | `units` (`UnitSection`) |
+| **Source** | `inspectors/units/` (`mod.rs`; `resolve.rs` for the unit file each name loads; `install.rs` for its `[Install]` section; `links.rs` for the links and what they mean; `also.rs` for `Also=` members) |
+
+**Unit kinds.** Services, sockets, paths, timers, targets and slices carry their state. A mount, automount or swap unit carries its state when a package owns its unit file under `/usr/lib/systemd/system/`; one the administrator wrote is a mount finding (below) and never gets a `systemctl` line. Device and scope units are not recorded, though drop-ins for them are. A template carries only a mask. A template instance enabled by a link under `/etc/systemd/system/`, an instance with a unit file of its own, and a masked instance are recorded with their state and carried like any unit; a masked instance is carried as `systemctl mask`. A disabled instance backed only by its template has no link left, so the scan finds it from the presets (the template's `DefaultInstance=` under a bare `enable` rule, or each instance a rule lists) and from the `Also=` of enabled units, and records it as disabled. An instance at its preset has no state change and no line. An instance's `enable` is carried only when every configuration file it reads under `/etc` is in the export as the host had it (below). An instance of a template inspectah has no table entry for, whose unit file names nothing it reads, is carried on its unit file alone, with a note on its `refine` row.
 
 **What it reads:**
 
 | Data source | Purpose |
 |:------------|:--------|
-| `systemctl list-unit-files --type=service` | Installed service units and their states |
+| `systemctl list-unit-files --no-pager` | Installed units of every kind. Its `enabled` and `disabled` are not used: the state is read from the links. Only when no preset file can be read does the degraded unit inventory record them |
 | `/usr/lib/systemd/system-preset/`, `/etc/systemd/system-preset/` (`*.preset`) | Preset rules, to tell an operator change from a vendor default |
-| `rpm -qf --queryformat` on `/usr/lib/systemd/system/<unit>` | Owning package of each unit that has a state change |
-| `/etc/systemd/system/*.service.d/*.conf` | Drop-in overrides |
-| `/etc/systemd/system/*.service` against `/usr/lib/systemd/system/` | Full unit shadows |
+| `/etc/systemd/system/<unit>` and `/usr/lib/systemd/system/<unit>` | The unit file the name loads: local, a full shadow of a vendor file, the vendor file, or a mask |
+| `[Install]` in the unit file and in the `.conf` drop-ins of `<unit>.d/` and, for an instance, its template's `.d/`, under both directories | The links `systemctl enable` would make, and the units its `Also=` names |
+| Links in `*.wants/`, `*.requires/` and `*.upholds/`, and aliases, under `/etc/systemd/system/` | The links the source host has, which decide whether a unit is enabled |
+| Links under `/usr/lib/systemd/system/` | The links packages ship, which complete an install and never start one |
+| `/etc/systemd/system/default.target` | The default target |
+| The rest of systemd's unit search path (`/usr/local/lib/systemd/system/`, `/run/systemd/system/`, `/etc/systemd/system.control/` and others) | Only checked: a unit file or `[Install]` drop-in there that changes what loads refuses the unit with a warning |
+| `rpm -qf --queryformat` on `/usr/lib/systemd/system/<unit>` | Owning package of each vendor unit file |
+| `/etc/systemd/system/<unit>.d/*.conf` | Drop-in overrides, for a unit of any kind |
+| `/etc/systemd/system/<unit>` against `/usr/lib/systemd/system/` | Full unit shadows |
+| `Where=` and `Options=` in an administrator's mount, automount or swap unit file | The mount point and whether the unit is `nofail`, for its mount finding |
+| The paths holding `%i` or `%I` in an enabled template instance's unit file and drop-ins (any key outside `[Install]`, and `StateDirectory=` under `/var/lib`), and inspectah's table for the templates whose unit file does not name them (`wg-quick@.service`, `openvpn-client@.service`, `openvpn-server@.service`, `dirsrv@.service`) | The configuration under `/etc` the instance reads (`required_config`), and the data under `/var` it keeps, recorded when the path exists on the host (`data_paths`) |
 
-**What becomes a state change.** The inspector records operator intent only. A masked service is always recorded. An enabled or disabled service is recorded when it differs from its preset. Static, alias, indirect and generated units are dropped silently, and runtime-only or invalid states produce a warning. Template units (names containing `@`) are skipped. Units at their preset state are listed as preset-matched and produce no state change.
+**Enablement is read from the links.** `systemctl list-unit-files` says `enabled` whenever it finds a link to a unit, whoever made it. The inspector reads the unit's effective `[Install]` section instead, as `systemctl enable` reads it (an empty `WantedBy=`, `RequiredBy=` or `Alias=` in a drop-in clears the values before it; type-wide `service.d/` and dash-prefix `a-.service.d/` drop-ins are not read for it), and compares the links it names with the links on the host. A unit is enabled when every link its section names is under `/etc/systemd/system/` or shipped by a package, and at least one is under `/etc`; it is disabled when none is under `/etc`. A link a package ships completes an install and never starts one. A unit with some of its links and not others, or whose `[Install]` names no link, has no state of its own and gets no state change.
 
-#### Service shadows
+**What becomes a state change.** The inspector records operator intent only. A masked unit is always recorded, whichever form the mask takes: a link to `/dev/null` or a zero-length file. A vendor unit, a full shadow, or a package-owned storage unit is recorded when its state differs from its preset; with no matching preset rule there is no evidence of a change, and nothing is recorded. A preset line with a verb the inspector does not read stops the lookup for the units it matches and gives a warning naming the line. A local unit, whose file is only under `/etc/systemd/system/`, is recorded when it is enabled, whatever the presets say, because the image does not have it unless the export carries it; a disabled local unit is not recorded. A unit file a package owns under `/etc/systemd/system/` counts as local, with no owner. Timers follow the same rules as every other kind: a local timer that is enabled, or a vendor timer whose state differs from its preset, is a state change, and the unit row is the timer's one state control. Units at their preset state produce no state change, with two exceptions for a packaged unit enabled under an `enable` preset. When its full shadow or `/etc` drop-ins only add links the package's unit does not make, it is an enabled state change, since the image's package install linked it from the package's `[Install]` and the `enable` after the `COPY` adds the rest. When one of its `Also=` members is not enabled on the host, it is an enabled state change, so that the export can say what enabling it would also do (see Links and `[Install]` below). Every unit with an install state, or a mask, is recorded in the section's `inventory` with its state and preset.
 
-A unit file under `/etc/systemd/system/` can change a service two ways, and the export treats them differently.
+Alias and generated units are dropped silently, and so are static and indirect units, unless a link under `/etc/systemd/system/` names one or it has a file or drop-in directory of its own name there. Runtime-only or invalid states produce a warning. `remote-cryptsetup.target` disabled against its `enable` preset is left alone, since a stock RHEL 9 install leaves it that way. A unit whose file or `[Install]` drop-in sits elsewhere on the search path where it changes what loads (under `/usr/local/lib/systemd/system/` or `/run`, for example), an alias, and a link to a file elsewhere each get a warning naming the path and no state change, whatever the unit's state. A unit file that is not valid UTF-8 keeps its unit, and its `[Install]` section is one the scan cannot rely on (below).
+
+**Units the export never switches off.** A `disable` or `mask` of `bootc-*`, `ostree-*` or `systemd-remount-fs.service`, and a `mask` of `tmp.mount`, are not carried: the Containerfile writes a `# FIXME:` saying why, and refine shows the same reason on the row. An `enable` of any of them is carried. The bootc base image mounts `/tmp` from `tmp.mount`, and without it `/tmp` is read-only.
+
+**Units that update packages in place.** `dnf-automatic*.timer` and `packagekit-offline-update.service` are recorded with their state and excluded by default, since an image-based host is updated by a new image. Include one in `refine` to carry it anyway.
+
+#### Links and `[Install]`
+
+The inspector reports what the links and `[Install]` sections say that a `systemctl` line cannot carry. Each finding is an advisory in the unit state section, comment lines only, and a row with no toggle in `refine`'s single-host Services list:
+
+| Finding | What the advisory gives |
+|:--------|:------------------------|
+| A link under `/etc/systemd/system/` the unit's `[Install]` does not make: one made by hand, one for a unit with no `[Install]` links, one of a unit with only some of its links, an `.upholds` link, or an alias | Why it is not carried, and the `RUN systemctl add-wants` or `add-requires` line that recreates a `.wants` or `.requires` link, or how to add an `.upholds` link or an alias by hand (for an alias: make the link after the configuration `COPY`, or add `Alias=` in a drop-in and enable the unit after that `COPY`) |
+| A link to an instance of `systemd-cryptsetup@.service` or `systemd-fsck@.service`, which names a volume or device of the source host | Why it is not carried, with no command |
+| A unit whose `[Install]` holds an `UpheldBy=`, a specifier the scan does not expand (any but `%i`, `%p` and `%N`), or a name it does not admit, or whose unit file or `[Install]` drop-in cannot be read as text | Each of its links with the reason; and, when it has an `[Install]` file under `/etc` or assigns `Also=`, one block saying the image's links can differ from the source host's. The unit gets no `enable` or `disable` then |
+| A preset-enabled packaged unit whose `/etc` files drop or replace a link the package's unit makes, or change its `Also=` | One advisory per difference: the `add-wants` or `add-requires` line for a link only the source host has, a quoted `RUN test -L '<path>' && rm -- '<path>'` line for a link only the package install makes (or, when the export copies a file to that path, a line saying that file replaces the link), and no command for an `Also=` difference |
+
+While the export leaves out one of a unit's `[Install]` files, that unit's advisories become one `# Omitted:` line naming the files that are not in the export. A link a package ships under `/usr/lib/systemd/system/` is never reported, and a link whose parent or own name is not a unit name gets a warning.
+
+**`Also=` members.** `systemctl enable` and `disable` also act on every unit a unit's `[Install]` names in `Also=`, and on the units those name. Each state change records those members and what the links say about each. An `enable` or `disable` of a unit with members is carried only when every member's links match what the command does, a member with a row of its own is carried with the same verb, and neither the unit nor a member has an `[Install]` file under `/etc/systemd/system/`, whether or not the export copies it. Otherwise the command is an advisory naming the members that keep it from being carried and, where it can, the lines to add by hand. In a fleet aggregate such a command is always an advisory.
+
+#### The default target
+
+When `/etc/systemd/system/default.target` links to a target with a unit file the scan reads, the export sets it with `RUN systemctl set-default`, as the first command of the unit state section. It is not compared with a preset. It is left out with an `# Omitted:` line when the target is local or a replacement whose file the export excludes, or when the target's package is not in the image. In `refine` it has its own toggle. A link to anything else gives a warning and nothing is set. A fleet aggregate keeps the target most hosts set, included only when every host sets it.
+
+#### What the export does with each state change
+
+The Containerfile writes the commands in a `# === Systemd Unit State ===` section after the configuration `COPY`, so each command runs after the files it names are in place. The default target comes first, then each verb is one `RUN` (`enable`, then `disable`, then `mask`), with every unit single-quoted after `--`:
+
+```dockerfile
+# === Systemd Unit State ===
+RUN systemctl set-default -- 'multi-user.target'
+RUN systemctl enable -- \
+    'httpd.service' \
+    'cockpit.socket'
+RUN systemctl mask -- \
+    'kdump.service'
+```
+
+A command the export cannot reproduce is left out with a `# Omitted:` line naming the unit and the reason, and `refine` shows the same reason on the unit row:
+
+| Condition | Reason given |
+|:----------|:-------------|
+| A local unit whose unit file is excluded | its unit file is not in the export |
+| A shadowed unit whose shadow is excluded, or a vendor unit with a unit file staged at its name | the `[Install]` section in the image would not be the one recorded on the source host |
+| An `enable` or `disable` whose `[Install]` drop-in is excluded, or with an `[Install]` drop-in the export would copy that the scan did not record | the `[Install]` section in the image would not be the one recorded on the source host |
+| A template instance's `enable` whose configuration file is excluded, or is not in the export | its configuration is excluded from the export, or is not in the export |
+| A template instance's `enable` whose configuration file was not captured | its configuration was not captured |
+| A template instance's `enable` whose configuration file holds a value the redaction pass replaced | its configuration holds a redacted value; provision the secret on the deployed host and enable the unit there |
+| On a fleet aggregate, a template instance's `enable` whose configuration file has more than one content variant across hosts | its configuration differs between hosts in the fleet, so the staged copy may not be the one this instance reads |
+| A template instance's `enable` when a setting of its unit file or drop-ins names a path for it in a form inspectah cannot read as systemd does, or a drop-in directory or drop-in it reads could not be read | the setting and the file and line it is on, or the file that could not be read, never the setting's value, and that the `enable` is not carried |
+| A package-owned mount, automount or swap unit with an administrator's file staged at its name | the export carries an administrator's unit file for it |
+| A `mask` where a unit file is staged at the same name (`systemctl mask` fails on a regular file) | the export also carries a unit file at that path |
+| A vendor or package-owned storage unit whose package is excluded, not carried, or not in the target image | the package |
+
+A shadowed unit's command depends on its shadow, not on its package; the rules in the table above, and the rule for units the image needs, still apply to it. A mask follows its package like an `enable`: the mask of a vendor unit whose package is excluded, not carried, or not in the target image is left out with the package reason. The rule for units the image needs and the staged-file rule are checked first. A mask with no unit file, or of a unit no package owns, is carried. On a fleet aggregate, a local unit or shadow whose file has more than one content variant across hosts is left out too: the row may have been recorded from another host's file.
+
+A template instance whose `enable` is carried and that keeps data under `/var` gets one `# Advisory:` line before the `RUN` lines, since the image carries the unit's configuration and not its data. `refine` shows the same sentence on the unit row:
+
+```dockerfile
+# Advisory: dirsrv@example.service keeps data under /var/lib/dirsrv/slapd-example. The image does not carry it, and the carried enable may start the unit on first boot. Put the data in place before that boot, or the unit starts without it.
+```
+
+A carried instance's `refine` row also notes each configuration file the export stages unredacted, when the scan ran with `--no-redaction`, and each that holds a value the redaction pass flagged and did not change. These notes are not Containerfile lines.
+
+#### Mount findings
+
+A mount, automount or swap unit the administrator wrote is recorded in `mount_findings`: a unit file only under `/etc/systemd/system/`, a full copy over a vendor file, a vendor file no package owns, or a mask with no unit file anywhere. Its unit file stays a Configuration Files entry, carried on that row's own decision. The Containerfile writes an advisory for each finding in the unit state section, comment lines only, never an instruction:
+
+```dockerfile
+# Advisory: srv.mount is enabled on the source host. inspectah does not enable, disable or mask a mount, automount or swap unit the administrator wrote.
+#   Its unit file is copied into the image. No enable line is written, but the unit still starts if another unit requires it or names its mount point in RequiresMountsFor=, and it replaces a unit of the same name that the image ships.
+#   /srv is a symlink into /var in the RHEL bootc base image. The unit must be renamed for the resolved path (for /srv: var-srv.mount with Where=/var/srv).
+```
+
+The lines that follow the first depend on the finding: whether its unit file is staged; a mount point under `/usr`, one bootc and ostree own (`/`, `/boot`, `/boot/efi`, `/sysroot`, `/var`), one under `/home`, `/mnt`, `/root` or `/srv` (links into `/var` in the base image), or one under `/opt` (a directory of the read-only image); a staged `tmp.mount`; a mount or swap whose unit file was read and has no `nofail`, and with no drop-in, which could set it (a unit file that is not text or could not be read gets no `nofail` line); and, for an enabled or masked unit, the line to add by hand. A masked finding does not mount, so it gets no mount point or `nofail` line. The line to add by hand is left out where the advisory rules it out: for an enabled unit the advisory says to rename, as in the example, for a masked unit whose unit file is staged at its name (`systemctl mask` fails on a regular file there), and for a masked `tmp.mount`. `Where=` and `Options=` are read by logical line, as systemd reads them, so a line that continues another setting is part of that setting. The mount source (`What=`) is not recorded.
+
+#### Unit shadows
+
+A unit file under `/etc/systemd/system/` can change a unit two ways, and the export treats them differently.
 
 | Kind | Detected by | What it means |
 |:-----|:------------|:--------------|
-| Drop-in | A `.conf` file under `/etc/systemd/system/<unit>.service.d/` | An override merged on top of the vendor unit. Base image updates to the vendor unit still apply. |
-| Full shadow | A `<unit>.service` file directly under `/etc/systemd/system/` whose vendor unit exists in `/usr/lib/systemd/system/` | The administrator's file replaces the vendor unit. Base image updates to that unit are silently ignored. |
+| Drop-in | A `.conf` file under `/etc/systemd/system/<unit>.d/` | An override merged on top of the vendor unit. Base image updates to the vendor unit still apply. |
+| Full shadow | A non-empty `<unit>` file directly under `/etc/systemd/system/` whose vendor unit exists in `/usr/lib/systemd/system/` | The administrator's file replaces the vendor unit. Base image updates to that unit are silently ignored. |
 
-Both are Service Drop-ins entries. A full shadow is found whether or not the unit also has a state change, so a unit enabled at its preset (for example `sshd.service`) is still reported. A masked unit is a link to `/dev/null` and matches the full-shadow test as well; it carries no replacement content.
+Both are Service Drop-ins entries. Drop-ins are collected for a unit of any kind, mount, automount, swap and timer units included. Full shadows are collected for every kind except storage units: a full copy of a mount, automount or swap unit is a mount finding. A timer's full shadow is a Service Drop-ins entry like any other. A full shadow is found whether or not the unit also has a state change, so a unit enabled at its preset (for example `sshd.service`) is still reported. A mask is not a shadow: it is a masked state, carried only as `systemctl mask`.
 
-Full shadows that have no state change do not get a service row from the scan. When you open the snapshot in `refine`, the session adds a synthetic state change for each one whose enabled or disabled state is known, so the unit is a toggle target through classify, export and reload. A full shadow with no known state is not synthesized.
+A full shadow that has no state change gets no unit row, in the scan or in `refine`. Its decision is its Service Drop-ins row, which carries the shadow badge and explanation and the include toggle for the file. Excluding that row leaves the file out of the export; the export writes no `systemctl` line for the unit.
 
 **One decision per file.** The same path can appear in Configuration Files (from the `/etc` walk) and in Service Drop-ins. The Service Drop-ins row owns the decision. The Configuration Files entry for that path is marked Inventory with the note "controlled in Service Drop-ins", and `refine` refuses to toggle it. This avoids two checkboxes over one file, where one could be on and the other off. Sysctl files need no such handling: the Kernel/Boot inspector records them for its explanation and offers no decision over them.
 
-**Drop-ins for units at their preset state.** A unit at its preset state has no state change, so it has no parent service row. In `refine`, its drop-ins appear in a separate group headed "Other drop-in overrides", with the note that the unit is at its preset state, so the drop-in is the whole decision.
+**Drop-ins with no unit-state row.** A unit with no state change, such as one at its preset state, has no parent unit row. In `refine`, its drop-ins appear in a separate group headed "Other drop-in overrides", with the note "These overrides have no unit-state decision row." Each drop-in row there is the decision for its file.
 
 ---
 
@@ -230,6 +319,8 @@ The summary row reads `all backed by tmpfiles.d, unit directives, or package own
 | `/var/spool/at/` | Pending at jobs |
 
 **Extra output:** Generates systemd timer unit equivalents for discovered cron entries (stored as `GeneratedTimerUnit`).
+
+**Timers are described here and controlled elsewhere.** An existing timer's row records its schedule (`OnCalendar=`), its command (`ExecStart=`), its description and where its file is, and has no include toggle. Its state (enabled, disabled or masked) is a row in the units section, and a local timer's file is a Configuration Files entry, or a Service Drop-ins entry when it is a copy of a vendor timer. A generated cron timer is the exception: its row is its one control, and the export copies and enables it in the Scheduled Tasks section. Excluding the row in refine leaves its timer, its service and its enable out, and excluding the cron job it came from does the same for every unit generated from that job. When a unit collected from the host has the name of a generated file, a unit with a row or one listed in the unit inventory, the generated files are not written and the Containerfile says so in a `# FIXME:` naming that unit. At jobs are listed in a `# FIXME:` and never carried, so their rows take no operation.
 
 Scans cron, at and timer command content for secret-like patterns (`password`, `secret`, `token`, `key`, `credential`) and emits redaction hints.
 
@@ -473,7 +564,7 @@ If the path is already a Configuration Files entry, it becomes an advisory. Othe
 
 For each unowned symlink under `/etc`, the Config inspector resolves the final target. A link that crosses `/etc` to `/var` or `/etc` to `/usr` produces an advisory: a link into `/var` makes the configuration stateful through `/var` persistence, outside the `/etc` three-way merge, and a link into `/usr` points into the read-only `/usr` layer. A link that cannot be resolved produces a "Broken cross-tree symlink" advisory. These standard system links are allowlisted and produce nothing: `/etc/localtime` into `/usr/share/zoneinfo/`, `/etc/alternatives/` into `/usr/`, the CA bundle and `cert.pem` links into `/etc/pki/`, `/etc/crypto-policies/back-ends/` into `/usr/share/crypto-policies/`, and `/etc/resolv.conf` into `/run/`.
 
-An advisory entry is never written to the export. It also keeps its advisory status when a service drop-in would otherwise shadow the same path.
+An advisory entry is never written to the export. It also keeps its advisory status when a unit drop-in would otherwise shadow the same path.
 
 ### ifcfg deprecation banner
 

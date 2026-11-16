@@ -1,0 +1,116 @@
+---
+source: crates/collect/tests/units_test.rs
+expression: section
+---
+{
+  "state_changes": [
+    {
+      "unit": {
+        "name": "bluetooth.service",
+        "fragment": "vendor",
+        "file": "bluetooth.service",
+        "owning_package": null
+      },
+      "current_state": "enabled",
+      "default_state": "disable",
+      "disposition": {
+        "kind": "actionable",
+        "include": true
+      },
+      "aggregate": null
+    },
+    {
+      "unit": {
+        "name": "gdm.service",
+        "fragment": "vendor",
+        "file": "gdm.service",
+        "owning_package": null
+      },
+      "current_state": "disabled",
+      "default_state": "enable",
+      "disposition": {
+        "kind": "actionable",
+        "include": true
+      },
+      "aggregate": null
+    }
+  ],
+  "inventory": [
+    {
+      "unit": "auditd.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "bluetooth.service",
+      "state": "enabled",
+      "preset": "disable"
+    },
+    {
+      "unit": "chronyd.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "cups.service",
+      "state": "disabled",
+      "preset": null
+    },
+    {
+      "unit": "firewalld.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "gdm.service",
+      "state": "disabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "httpd.service",
+      "state": "enabled",
+      "preset": null
+    },
+    {
+      "unit": "kdump.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "libvirtd.service",
+      "state": "enabled",
+      "preset": null
+    },
+    {
+      "unit": "NetworkManager.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "sshd.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "tuned.service",
+      "state": "enabled",
+      "preset": "enable"
+    }
+  ],
+  "drop_ins": [
+    {
+      "unit": "httpd.service",
+      "path": "/etc/systemd/system/httpd.service.d/override.conf",
+      "content": "[Service]\nEnvironment=LANG=C\nLimitNOFILE=65535\n",
+      "disposition": {
+        "kind": "actionable",
+        "include": true
+      },
+      "variant_selection": "Only",
+      "aggregate": null
+    }
+  ],
+  "mount_findings": [],
+  "manual_links": [],
+  "undetermined_installs": []
+}

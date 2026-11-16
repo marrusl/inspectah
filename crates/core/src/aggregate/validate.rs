@@ -269,7 +269,7 @@ fn extract_os_major_version(snap: &InspectionSnapshot) -> Option<String> {
 fn is_empty_snapshot(snap: &InspectionSnapshot) -> bool {
     snap.rpm.is_none()
         && snap.config.is_none()
-        && snap.services.is_none()
+        && snap.units.is_none()
         && snap.network.is_none()
         && snap.storage.is_none()
         && snap.scheduled_tasks.is_none()

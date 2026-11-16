@@ -8,6 +8,7 @@ function makeItem(
 ): AggregateItem {
   return {
     include: true,
+    locked: false,
     triage: {
       bucket: "universal" as const,
       prevalence: { count: 1, total: 1 },
@@ -31,6 +32,17 @@ describe("ItemDetailPane", () => {
     expect(packageTexts.length).toBe(2);
     expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
     expect(screen.getByText("2/3 hosts")).toBeInTheDocument();
+  });
+
+  it("names a unit item by its unit and shows its kind", () => {
+    const item = makeItem({
+      item_id: { kind: "Unit", key: { unit: "httpd.service" } },
+    });
+
+    render(<ItemDetailPane item={item} />);
+
+    expect(screen.getByText("httpd.service")).toBeInTheDocument();
+    expect(screen.getByText("Unit")).toBeInTheDocument();
   });
 
   it("renders base fields for a path item", () => {

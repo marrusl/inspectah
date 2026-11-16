@@ -56,6 +56,8 @@ sysctl harness (`crates/cli/tests/support/sysctl_hosts.rs`,
 `SysctlHost::link`) applies this rule for every link it is given,
 and for a link to a directory it registers the target's listing and
 files under the link's path too.
+`file_exists` is true for a registered file or a registered directory
+(`with_dir`), as `Path::exists` is for both on a real host.
 
 **6. Link checks behave like the real syscalls.** `resolve_final_target`
 follows a link on any component, so `/etc/sysctl.d/a.conf` under a
@@ -66,16 +68,23 @@ on a registered path that is not a link and `NotFound` on an
 unregistered one. A collector that must not read an entry before it
 knows where the entry resolves (the sysctl reader) treats only
 `InvalidInput` as "not a link"; use `with_link_error()` to inject any
-other failure. Callers that only ask `is_ok()` are unaffected.
+other failure. A resolution through a `with_link_error()` path fails
+with the same kind, as `canonicalize` does, so it also injects a
+failure partway along a chain. A loop fails with `ELOOP`
+(`raw_os_error()`), as `canonicalize` does. Callers that only ask
+`is_ok()` are unaffected.
 
 **7. `read_dir` returns a partial listing.** Both executors' `read_dir`
 drop an entry the directory iterator fails on and return the rest,
 which inspectors that tolerate a missing file rely on. A caller whose
 answer is wrong when one entry is missing (the sysctl reader: the
 missing file could set or cancel any key) uses `read_dir_strict`, which
-fails instead. `with_dir_iteration_error()` makes a mock directory list
-its entries and then fail: `read_dir` hides it, `read_dir_strict`
-returns it. A `with_dir_error()` test does not cover this case: it
+fails instead; so does every listing the units inspector decides install
+state, links or drop-ins from, and the timer trigger reader.
+`with_dir_iteration_error()` makes a mock directory list its entries and
+then fail: `read_dir` hides it, `read_dir_strict` returns it. The scan
+harness's `UnitHost::partial_listing(dir, hidden)` leaves `hidden` out of
+the listing as well, as a real failed iteration does. A `with_dir_error()` test does not cover this case: it
 fails the open, which both methods already report.
 
 **8. The RPM ownership query key.** The RPM inspector lists owned paths

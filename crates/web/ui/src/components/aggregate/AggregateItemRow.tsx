@@ -75,10 +75,12 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.module_stream;
     case "VersionLock":
       return itemId.key.name_arch;
-    case "Service":
+    case "Unit":
       return itemId.key.unit;
     case "DropIn":
       return itemId.key.path;
+    case "DefaultTarget":
+      return "default.target";
     case "Quadlet":
       return itemId.key.path;
     case "Compose":
@@ -99,8 +101,6 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.profile;
     case "CronJob":
       return itemId.key.path;
-    case "SystemdTimer":
-      return itemId.key.name;
     case "AtJob":
       return itemId.key.file;
     case "GeneratedTimer":

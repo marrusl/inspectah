@@ -9,7 +9,7 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerSection, QuadletUnit,
 };
-use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
 
@@ -682,7 +682,7 @@ fn make_dropin_variant_snapshot(
         }),
         ..Default::default()
     };
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![
             SystemdDropIn {
                 unit: "test.service".into(),
@@ -846,7 +846,7 @@ fn make_compose_variant_snapshot(path: &str) -> InspectionSnapshot {
 
 /// Helper to find all DropIn entries for a given path in a projected snapshot.
 fn dropins_for_path(snap: &InspectionSnapshot, path: &str) -> Vec<SystemdDropIn> {
-    snap.services
+    snap.units
         .as_ref()
         .map(|s| {
             s.drop_ins

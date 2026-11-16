@@ -17,6 +17,7 @@ import { MainContent } from "../MainContent";
 import type { MainContentProps } from "../MainContent";
 import type { UserDecision, ViewResponse } from "../../api/types";
 import * as client from "../../api/client";
+import { emptyView } from "../../test-utils/emptyView";
 import * as crypt from "../../utils/crypt";
 
 vi.mock("../../api/client", () => ({
@@ -53,30 +54,7 @@ const BOB: UserDecision = {
 const PASSWORD_FAILURE = "Failed to set password. Please try again.";
 
 function view(users: UserDecision[]): ViewResponse {
-  return {
-    packages: [],
-    config_files: [],
-    repo_groups: [],
-    package_groups: [],
-    generation: 1,
-    stats: {
-      sections: [],
-      needs_review_count: 0,
-      ops_applied: 0,
-      can_undo: false,
-      can_redo: false,
-      baseline_available: false,
-    },
-    version_changes: [],
-    service_states: [],
-    service_dropins: [],
-    quadlets: [],
-    flatpaks: [],
-    sysctl: { state: "unavailable", reason: "not collected" },
-    tuned: [],
-    users_groups_decisions: users,
-    session_is_sensitive: false,
-  } as unknown as ViewResponse;
+  return emptyView({ users_groups_decisions: users });
 }
 
 function baseProps(): MainContentProps {

@@ -27,10 +27,10 @@ use inspectah_core::types::rpm::{
     EnabledModuleStream, InstalledGroup, PackageEntry, PackageState, RepoFile, RpmSection,
     VersionLockEntry,
 };
-use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer};
+use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection};
 use inspectah_core::types::selinux::{SelinuxPortLabel, SelinuxSection};
-use inspectah_core::types::services::{
-    ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+use inspectah_core::types::units::{
+    SystemdDropIn, UnitName, UnitNameError, UnitSection, UnitState, UnitStateChange,
 };
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
@@ -369,7 +369,7 @@ fn with_firewall_zone(path: &str) -> InspectionSnapshot {
 
 fn with_drop_in(path: &str) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "app.service".into(),
             path: path.into(),
@@ -425,7 +425,7 @@ const STAGED_ROWS: &[Row] = &[
                 "/etc/systemd/system/app.service.d/{v}.conf"
             )))
         },
-        reached: Reached::Fixme("# FIXME: service drop-in"),
+        reached: Reached::Fixme("# FIXME: unit drop-in"),
     },
 ];
 
@@ -719,21 +719,17 @@ fn selinux(boolean: (&str, &str), port: (&str, &str, &str)) -> String {
     render_containerfile(&snap, None, None)
 }
 
-fn service(unit: &str, state: ServiceUnitState) -> String {
+fn service(unit: &str, state: UnitState) -> String {
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: unit.into(),
-            current_state: state,
-            default_state: None,
-            disposition: FindingKind::included(),
-            locked: false,
-            owning_package: None,
-            aggregate: None,
-            attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
-        }],
+    snap.units = Some(UnitSection {
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit(unit.to_owned().try_into().unwrap(), None),
+                state,
+                None,
+            )
+            .unwrap(),
+        ],
         ..Default::default()
     });
     render_containerfile(&snap, None, None)
@@ -839,36 +835,6 @@ const OPERAND_ROWS: &[OperandRow] = &[
         fixme: "# FIXME: port label",
     },
     OperandRow {
-        field: "systemctl enable unit",
-        render: |v| service(&format!("{v}.service"), ServiceUnitState::Enabled),
-        fixme: "# FIXME: unit",
-    },
-    OperandRow {
-        field: "systemctl disable unit",
-        render: |v| service(&format!("{v}.service"), ServiceUnitState::Disabled),
-        fixme: "# FIXME: unit",
-    },
-    OperandRow {
-        field: "systemctl mask unit",
-        render: |v| service(&format!("{v}.service"), ServiceUnitState::Masked),
-        fixme: "# FIXME: unit",
-    },
-    OperandRow {
-        field: "local timer unit",
-        render: |v| {
-            scheduled(ScheduledTaskSection {
-                systemd_timers: vec![SystemdTimer {
-                    name: v.into(),
-                    source: "local".into(),
-                    disposition: FindingKind::included(),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-        },
-        fixme: "# FIXME: Timer unit name",
-    },
-    OperandRow {
         field: "cron-converted timer unit",
         render: |v| {
             scheduled(ScheduledTaskSection {
@@ -914,6 +880,48 @@ fn operands_never_start_like_an_option_or_a_comment() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
+/// A unit-state operand is not refused, it is quoted (§ 10.1): a value a
+/// [`UnitName`] admits, `-` first included, renders as one single-quoted
+/// operand after `--`, for each verb. A value outside the systemd
+/// character set (`#foo.service`) is refused by the type when the snapshot
+/// loads, so the renderer never sees it.
+#[test]
+fn unit_state_operands_are_quoted_after_the_end_of_options() {
+    for value in OPERAND_VALUES {
+        let unit = format!("{value}.service");
+        if let Err(e) = UnitName::try_from(unit.clone()) {
+            assert!(
+                matches!(e, UnitNameError::InvalidCharacter { .. }),
+                "{unit:?}: expected a character refusal, got {e}"
+            );
+            continue;
+        }
+        for (state, verb) in [
+            (UnitState::Enabled, "enable"),
+            (UnitState::Disabled, "disable"),
+            (UnitState::Masked, "mask"),
+        ] {
+            let output = service(&unit, state);
+            let lines: Vec<&str> = output.split(LINE_TERMINATORS).collect();
+            let at = lines
+                .iter()
+                .position(|l| *l == format!("RUN systemctl {verb} -- \\"))
+                .unwrap_or_else(|| panic!("{unit} {verb}: no RUN line\n{output}"));
+            assert_eq!(
+                lines[at + 1],
+                format!("    '{unit}'"),
+                "{unit} {verb}\n{output}"
+            );
+            for line in lines.iter().filter(|l| !l.starts_with('#')) {
+                assert!(
+                    line.split_whitespace().all(|w| w != unit),
+                    "{unit} {verb}: the name reached a command line unquoted: {line:?}"
+                );
+            }
+        }
+    }
+}
+
 /// The benign value of each operand row still renders its command.
 #[test]
 fn operands_render_benign_values() {
@@ -938,8 +946,8 @@ fn operands_render_benign_values() {
             "RUN semanage port -a -t http_port_t -p tcp 8080",
         ),
         (
-            service("httpd.service", ServiceUnitState::Enabled),
-            "    httpd.service",
+            service("httpd.service", UnitState::Enabled),
+            "    'httpd.service'",
         ),
     ];
     for (out, line) in cases {
@@ -1402,4 +1410,166 @@ fn repo_copy_needs_a_staged_repo_file() {
     let output = materialized_containerfile(&snap);
     assert!(output.contains(REPO_COPY), "{output}");
     assert!(output.contains("Custom Repositories (1)"), "{output}");
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
+}
+
+/// § 15: every `systemctl` site writes `--` and then single-quoted
+/// operands, the timer, `@reboot` and flatpak requests included, which the
+/// plan writes in their own sections. Each benign value renders exactly
+/// that line, and no `systemctl` instruction anywhere in the output names
+/// an operand without the quotes. The hostile values of the timer rows are
+/// refused by `OPERAND_ROWS` as before.
+#[test]
+fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
+    // Each scheduled unit has a body, so the stager writes the file its
+    // enable names: an `@reboot` entry has a service and no timer.
+    let timer = |cron: &str| {
+        scheduled(ScheduledTaskSection {
+            generated_timer_units: vec![GeneratedTimerUnit {
+                name: "backup".into(),
+                cron_expr: cron.into(),
+                timer_content: if cron == "@reboot" { "" } else { "[Timer]\n" }.into(),
+                service_content: "[Service]\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+    };
+    let mut flatpak = InspectionSnapshot::new();
+    flatpak.containers = Some(ContainerSection {
+        flatpak_apps: vec![flatpak_app()],
+        ..Default::default()
+    });
+    let cases = [
+        (
+            "cron timer",
+            timer("0 3 * * *"),
+            "RUN systemctl enable -- 'backup.timer'",
+        ),
+        (
+            "@reboot service",
+            timer("@reboot"),
+            "RUN systemctl enable -- 'backup.service'",
+        ),
+        (
+            "flatpak",
+            render_containerfile(&flatpak, None, None),
+            "RUN systemctl enable -- 'flatpak-provision.service'",
+        ),
+    ];
+    for (label, output, line) in cases {
+        let joined = joined_instructions(&output);
+        assert!(
+            joined.iter().any(|l| l == line),
+            "{label}: missing {line:?}\n{output}"
+        );
+        for l in joined
+            .iter()
+            .filter(|l| !l.starts_with('#') && l.contains("systemctl "))
+        {
+            let (_, operands) = l
+                .split_once(" -- ")
+                .unwrap_or_else(|| panic!("{label}: no `--` in {l:?}"));
+            assert!(
+                operands
+                    .split_whitespace()
+                    .filter(|w| *w != "\\")
+                    .all(|w| w.starts_with('\'') && w.ends_with('\'')),
+                "{label}: an unquoted operand in {l:?}"
+            );
+        }
+    }
+}
+
+/// Each line of `output`, with an instruction's `\` continuation lines
+/// joined onto it by one space, as the shell reads it.
+fn joined_instructions(output: &str) -> Vec<String> {
+    let mut joined: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in output.lines() {
+        let (text, continues) = match line.strip_suffix('\\') {
+            Some(head) => (head.trim(), true),
+            None => (line.trim(), false),
+        };
+        match joined.last_mut() {
+            Some(last) if open => {
+                last.push(' ');
+                last.push_str(text);
+            }
+            _ => joined.push(text.to_owned()),
+        }
+        open = continues;
+    }
+    joined
+}
+
+/// The timer and `@reboot` sites enable only names that parse as a
+/// `UnitName`: a name with a control character or a space gets no
+/// instruction and the sites' refusal FIXME, at the cron timer and
+/// `@reboot` sites alike; a legal escaped name (`\x2d`) is
+/// enabled as a quoted operand. Each name has a file body, so whether the
+/// stager writes the file is not what decides.
+#[test]
+fn scheduled_sites_enable_only_proved_unit_names() {
+    const ESCAPED: &str = r"backup\x2djob";
+    type Section = fn(&str) -> ScheduledTaskSection;
+    let sites: [(&str, &str, Section); 2] = [
+        ("cron timer", "timer", |name| ScheduledTaskSection {
+            generated_timer_units: vec![GeneratedTimerUnit {
+                name: name.into(),
+                cron_expr: "0 3 * * *".into(),
+                timer_content: "[Timer]\n".into(),
+                service_content: "[Service]\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        ("@reboot service", "service", |name| ScheduledTaskSection {
+            generated_timer_units: vec![GeneratedTimerUnit {
+                name: name.into(),
+                cron_expr: "@reboot".into(),
+                service_content: "[Service]\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    ];
+    for (site, suffix, section) in sites {
+        for refused in ["report\u{1b}", "report job"] {
+            let output = scheduled(section(refused));
+            let active: Vec<&str> = output.lines().filter(|l| !l.starts_with('#')).collect();
+            assert!(
+                !active.iter().any(|l| l.contains("systemctl")),
+                "{site}, {refused:?}: {active:#?}"
+            );
+            assert!(
+                output.lines().any(|l| l
+                    .starts_with("# FIXME: Timer unit name contains unsafe characters")
+                    && l.contains("report")),
+                "{site}, {refused:?}: the site names the refusal:\n{output}"
+            );
+        }
+        let output = scheduled(section(ESCAPED));
+        let line = format!("RUN systemctl enable -- '{ESCAPED}.{suffix}'");
+        assert!(
+            joined_instructions(&output).contains(&line),
+            "{site}: missing {line:?}\n{output}"
+        );
+    }
 }

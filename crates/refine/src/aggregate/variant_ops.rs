@@ -18,7 +18,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::QuadletUnit;
-use inspectah_core::types::services::SystemdDropIn;
+use inspectah_core::types::units::SystemdDropIn;
 
 use crate::types::{ContentHash, ItemId, RefineError};
 
@@ -89,7 +89,7 @@ pub fn apply_edit(
             })
             .unwrap_or(false),
         ItemId::DropIn { .. } => snap
-            .services
+            .units
             .as_ref()
             .map(|s| {
                 s.drop_ins.iter().any(|e| {
@@ -188,7 +188,7 @@ pub fn validate_select(
             .map(|c| c.files.iter().any(|e| e.path == path))
             .unwrap_or(false),
         ItemId::DropIn { .. } => snap
-            .services
+            .units
             .as_ref()
             .map(|s| s.drop_ins.iter().any(|e| e.path == path))
             .unwrap_or(false),
@@ -230,7 +230,7 @@ pub fn validate_select(
             })
             .unwrap_or(false),
         ItemId::DropIn { .. } => snap
-            .services
+            .units
             .as_ref()
             .map(|s| {
                 s.drop_ins.iter().any(|e| {
@@ -366,7 +366,7 @@ pub fn validate_discard(
             })
             .unwrap_or(false),
         ItemId::DropIn { .. } => snap
-            .services
+            .units
             .as_ref()
             .map(|s| {
                 s.drop_ins.iter().any(|e| {
@@ -532,7 +532,7 @@ fn materialize_dropin_variants(
     state: &VariantProjectionState,
     affected_paths: &HashSet<String>,
 ) {
-    let Some(ref mut services) = snap.services else {
+    let Some(ref mut services) = snap.units else {
         return;
     };
 

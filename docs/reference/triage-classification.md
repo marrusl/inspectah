@@ -272,13 +272,13 @@ It carries a rationale and nothing else. Three advisory types exist, in the
 Two related reports are not advisory dispositions:
 
 - **Full unit shadows.** A unit file in `/etc/systemd/system/` that replaces the
-  vendor unit in `/usr/lib/systemd/system/` is collected as a service drop-in
-  with a shadow rationale: base image updates to that unit are silently
-  ignored. It is detected even when the unit's state matches its preset. When a shadowed unit
-  has no state divergence entry of its own and the scan recorded whether it is
-  enabled or disabled, refine adds a service entry for it so the unit can be
-  decided. In refine the full shadow is an Actionable row with the rationale
-  attached. The audit report lists it under Advisories.
+  vendor unit in `/usr/lib/systemd/system/` is collected as a Service Drop-ins
+  entry with a shadow rationale: base image updates to that unit are silently
+  ignored. It is detected even when the unit's state matches its preset. A
+  shadowed unit at its preset has no unit row, and refine does not add one:
+  the shadow's own row is the decision. In refine the full shadow is an
+  Actionable row with the rationale attached. The audit report lists it under
+  Advisories.
 - **The ifcfg note.** When a network connection was collected from
   `/etc/sysconfig/network-scripts/`, the Network section shows a deprecation
   banner: RHEL 9 and later use NetworkManager keyfiles, and ifcfg support is
@@ -304,7 +304,7 @@ owner instead of a control:
 
 | Badge | When | Where the decision lives |
 |---|---|---|
-| Controlled in Service Drop-ins | The file's path is also a Service Drop-ins entry (a `*.service.d/*.conf` drop-in, or a full unit shadow). | The Service Drop-ins row for the same path. |
+| Controlled in Service Drop-ins | The file's path is also a Service Drop-ins entry (a `<unit>.d/*.conf` drop-in for a unit of any kind, or a full unit shadow). | The Service Drop-ins row for the same path. |
 
 The badge links to the owning row. An advisory entry is never converted this
 way, so the warning is not lost.
@@ -376,11 +376,14 @@ The Containerfile action depends on the item type:
 |---|---|
 | RPM package | `RUN dnf install -y <names>`, followed by `dnf clean all` |
 | Config file | `COPY config/<root>/ /<root>/`, one per top-level directory of the included files (for example `COPY config/etc/ /etc/`) |
-| Service enable/disable/mask | `RUN systemctl enable`, `disable`, or `mask` with the unit names |
-| Service drop-in or full unit shadow | `COPY drop-ins/etc/systemd/system/ /etc/systemd/system/` |
+| Unit enable/disable/mask | `RUN systemctl enable -- 'unit' ...`, then `disable`, then `mask`, each unit single-quoted, in the `Systemd Unit State` section after the configuration `COPY`. A command the export cannot reproduce is an `# Omitted:` line with the reason instead |
+| Unit drop-in or full unit shadow | `COPY drop-ins/etc/systemd/system/ /etc/systemd/system/` |
+| Administrator's mount, automount or swap unit | No instruction: an advisory comment in the `Systemd Unit State` section. Its unit file is a config file |
 | Quadlet unit | `COPY quadlet/ /etc/containers/systemd/` |
 | Sysctl file (`/etc/sysctl.conf`, `/etc/sysctl.d/*.conf`) | A config file: carried unchanged by the `COPY config/etc/ /etc/` line |
-| Scheduled task (timer) | `COPY config/etc/systemd/system/ /etc/systemd/system/` and `RUN systemctl enable <name>.timer` |
+| Scheduled task: a timer converted from cron | `COPY config/etc/systemd/system/ /etc/systemd/system/` and `RUN systemctl enable -- '<name>.timer'` in the Scheduled Tasks section, unless a unit collected from the host has the name of one of its files (a `# FIXME:` instead) |
+| Scheduled task: an `@reboot` service converted from cron | `COPY config/etc/systemd/system/ /etc/systemd/system/` and `RUN systemctl enable -- '<name>.service'` in the Scheduled Tasks section, unless a unit collected from the host has its name (a `# FIXME:` instead) |
+| Scheduled task: an existing timer | No instruction of its own: a description. Its file is a config file or a unit drop-in row, and its state a unit row in the `Systemd Unit State` section |
 
 Advisory and Inventory findings produce no Containerfile line, apart from
 the unbacked `/var` directories the export provisions. That includes
@@ -401,7 +404,9 @@ In the refine UI, users can:
 - **Exclude** a Site or Investigate item to remove it from the Containerfile
   (e.g., dropping a debugging package you do not want in the target image)
 - **Select a variant** in aggregate mode when multiple hosts have different
-  versions of the same config file
+  versions of the same config file. Selecting a different variant does not
+  yet change which variant is included, and the export writes the included
+  one.
 
 These user decisions override the automatic classification. The triage bucket
 itself does not change, only the include/exclude flag is toggled. This

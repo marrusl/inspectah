@@ -78,7 +78,7 @@ pub struct ReportFilterData {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_files: Vec<FilterableConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub services: Vec<FilterableService>,
+    pub units: Vec<FilterableService>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scheduled: Vec<FilterableScheduled>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -159,15 +159,15 @@ pub fn build_filter_data(snap: &InspectionSnapshot) -> ReportFilterData {
         })
         .unwrap_or_default();
 
-    let services = snap
-        .services
+    let units = snap
+        .units
         .as_ref()
         .map(|svc| {
             svc.state_changes
                 .iter()
                 .map(|s| FilterableService {
-                    unit: s.unit.clone(),
-                    state: enum_to_string(&s.current_state),
+                    unit: s.unit().name().as_str().to_owned(),
+                    state: enum_to_string(&s.current_state()),
                 })
                 .collect()
         })
@@ -227,7 +227,7 @@ pub fn build_filter_data(snap: &InspectionSnapshot) -> ReportFilterData {
     ReportFilterData {
         packages,
         config_files,
-        services,
+        units,
         scheduled,
         users,
     }

@@ -85,10 +85,8 @@ pub fn merge_snapshots(
     let rpm_sections: Vec<Option<_>> = sorted_snapshots.iter().map(|s| s.rpm.clone()).collect();
     let config_sections: Vec<Option<_>> =
         sorted_snapshots.iter().map(|s| s.config.clone()).collect();
-    let service_sections: Vec<Option<_>> = sorted_snapshots
-        .iter()
-        .map(|s| s.services.clone())
-        .collect();
+    let service_sections: Vec<Option<_>> =
+        sorted_snapshots.iter().map(|s| s.units.clone()).collect();
     let network_sections: Vec<Option<_>> =
         sorted_snapshots.iter().map(|s| s.network.clone()).collect();
     let storage_sections: Vec<Option<_>> =
@@ -243,7 +241,7 @@ pub fn merge_snapshots(
         merged.rpm_repo_conflicts = repo_conflicts;
     }
     merged.config = merge_config_sections(config_sections, total, &hostnames);
-    merged.services = merge_service_sections(service_sections, total, &hostnames);
+    merged.units = merge_service_sections(service_sections, total, &hostnames);
     merged.network = merge_network_sections(network_sections, total, &hostnames);
     merged.storage = merge_storage_sections(storage_sections, total, &hostnames);
     merged.scheduled_tasks = merge_scheduled_sections(scheduled_sections, total, &hostnames);
@@ -266,7 +264,7 @@ fn compute_section_host_counts(snapshots: &[InspectionSnapshot]) -> BTreeMap<Str
     let section_checkers: &[SectionChecker] = &[
         ("rpm", |s| s.rpm.is_some()),
         ("config", |s| s.config.is_some()),
-        ("services", |s| s.services.is_some()),
+        ("units", |s| s.units.is_some()),
         ("network", |s| s.network.is_some()),
         ("storage", |s| s.storage.is_some()),
         ("scheduled_tasks", |s| s.scheduled_tasks.is_some()),
@@ -490,10 +488,12 @@ mod tests {
 
         let mut s2 = InspectionSnapshot::new();
         s2.rpm = Some(crate::types::rpm::RpmSection::default());
+        s2.units = Some(crate::types::units::UnitSection::default());
 
         let counts = compute_section_host_counts(&[s1, s2]);
         assert_eq!(counts.get("rpm"), Some(&2));
         assert_eq!(counts.get("config"), Some(&1));
+        assert_eq!(counts.get("units"), Some(&1));
         assert!(!counts.contains_key("services"));
     }
 

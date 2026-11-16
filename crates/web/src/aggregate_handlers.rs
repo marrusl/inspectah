@@ -690,8 +690,8 @@ fn build_aggregate_sections(
         let mut items: Vec<AggregateItem> = states
             .iter()
             .map(|s| {
-                let item_id = ItemId::Service {
-                    unit: s.entry.unit.clone(),
+                let item_id = ItemId::Unit {
+                    unit: s.entry.unit().name().clone(),
                 };
                 let fp = s.entry.aggregate.as_ref();
                 AggregateItem {
@@ -770,7 +770,7 @@ fn build_aggregate_sections(
         }
 
         if !items.is_empty() {
-            sections.push(build_section("services", "Services", true, &items, ctx));
+            sections.push(build_section("units", "Services", true, &items, ctx));
         }
     }
 
@@ -1145,25 +1145,6 @@ fn build_reference_sections(
                 item_id,
                 include: cron.disposition.is_included(),
                 locked: cron.locked,
-                attention_reason: None,
-                triage: default_context_triage(fp, ctx),
-                prevalence: aggregate_prevalence_dto(fp, ctx),
-                variants: None,
-                source_repo: String::new(),
-                repo_conflict: None,
-                section_metadata: None,
-                variant_payload: None,
-            });
-        }
-        for timer in &sched.systemd_timers {
-            let item_id = ItemId::SystemdTimer {
-                name: timer.name.clone(),
-            };
-            let fp = timer.aggregate.as_ref();
-            items.push(AggregateItem {
-                item_id,
-                include: timer.disposition.is_included(),
-                locked: timer.locked,
                 attention_reason: None,
                 triage: default_context_triage(fp, ctx),
                 prevalence: aggregate_prevalence_dto(fp, ctx),

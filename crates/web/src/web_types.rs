@@ -8,11 +8,17 @@ use std::collections::HashMap;
 
 use inspectah_core::types::AdvisoryType;
 use inspectah_core::types::sysctl::SysctlDir;
+use inspectah_core::types::units::UnitName;
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
 use inspectah_refine::baseline_summary::BaselineSummary;
-use inspectah_refine::projection::NotCarriedRow;
-use inspectah_refine::types::{ItemId, RefinedView, RepoProvenance, RepoTier, TriageTag};
+use inspectah_refine::projection::{
+    AlsoView, DeclinedGeneratedView, DeclinedView, DefaultTargetView, FragmentView, ManualLinkView,
+    MountFindingView, NotCarriedRow, UndeterminedInstallView, WithheldView,
+};
+use inspectah_refine::types::{
+    ItemId, RefineStats, RefinedConfig, RefinedPackage, RepoProvenance, RepoTier, TriageTag,
+};
 use serde::Serialize;
 
 // -- Non-RPM DTOs (language packages + unmanaged files for the frontend) ----
@@ -61,6 +67,11 @@ pub struct UnmanagedFileItemDto {
     pub is_var_path: bool,
     pub include: bool,
     pub provenance: ProvenanceSignalsDto,
+    /// Why the export does not write this included file, as the config
+    /// rows' `withheld` says it (§ 11.1). Absent when the file is written
+    /// or the row is excluded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<WithheldView>,
 }
 
 /// Directory group for unmanaged files.
@@ -117,6 +128,26 @@ pub struct ContextItem {
     /// and the user cannot decide (§ 3.8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub advisory: Option<ContextAdvisory>,
+    /// On a scheduled timer row only: the unit the timer is, serialized
+    /// as the row's `unit` and `unit_row` fields (§ 11.1). Absent on every
+    /// other row.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub unit_link: Option<ContextUnitLink>,
+    /// On a generated timer row only: the generated-timer name, which the
+    /// view's `generated_timers` and `declined_generated` are keyed by.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generated_timer: Option<String>,
+}
+
+/// The unit a scheduled timer row describes, so the row can link to the
+/// unit row that holds the timer's state. The timer row itself has no
+/// include flag.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ContextUnitLink {
+    /// `<name>.timer`.
+    pub unit: UnitName,
+    /// Whether `unit_states` holds a row for `unit`.
+    pub unit_row: bool,
 }
 
 /// The decision a reference row carries, keyed by the same [`ItemId`]
@@ -178,10 +209,24 @@ pub struct RepoGroupInfo {
     pub enabled: bool,
 }
 
-/// A classified service state change, projected for the view response.
+/// A classified unit state change, projected for the view response
+/// (§ 11.1). The name keeps "Service" from before units of every kind.
 #[derive(Serialize, Clone, Debug)]
 pub struct ServiceDecisionDto {
     pub unit: String,
+    /// The type suffix, lowercase (`service`, `socket`, `mount`, ...).
+    pub kind: String,
+    /// The template, when the unit is an instance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_of: Option<String>,
+    pub fragment: FragmentView,
+    /// The `/etc` unit file, for a local or shadowed fragment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit_file_path: Option<String>,
+    /// Present when the export writes no command for the row: how the
+    /// Containerfile renders it, the reason's name and its text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declined: Option<DeclinedView>,
     pub triage: TriageTag,
     pub include: bool,
     pub locked: bool,
@@ -192,12 +237,20 @@ pub struct ServiceDecisionDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_state: Option<String>,
     pub current_state: String,
-    /// Present when a full-shadow drop-in overrides this service unit.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shadow_type: Option<String>,
-    /// Rationale text for the shadow override (displayed below the toggle).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shadow_rationale: Option<String>,
+    /// Every unit `Also=` reaches from this one, with what its links on
+    /// the source host say. Absent when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<AlsoView>,
+    /// The unit's install drop-ins under `/etc/systemd/system`. Absent
+    /// when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub install_drop_ins: Vec<String>,
+    /// The paths under `/etc` a template instance's enable needs in the
+    /// export. Always present, empty for a unit that is not an instance.
+    pub required_config: Vec<String>,
+    /// The paths under `/var` that hold a template instance's data, which
+    /// the image does not carry. Always present, empty when none.
+    pub data_paths: Vec<String>,
 }
 
 /// A classified service drop-in override, projected for the view response.
@@ -217,6 +270,24 @@ pub struct DropInDecisionDto {
     /// Rationale text for the shadow override.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow_rationale: Option<String>,
+    /// The parent unit's kind, lowercase; absent when the parent's name is
+    /// not a unit name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Present when the export does not write the file this row offers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<WithheldView>,
+}
+
+/// A config row for the view response: the refined row as before, and
+/// why the export does not write the file it offers, when it does not
+/// (§ 11.1).
+#[derive(Serialize, Clone, Debug)]
+pub struct ConfigFileDto {
+    #[serde(flatten)]
+    pub row: RefinedConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<WithheldView>,
 }
 
 /// A classified quadlet unit, projected for the view response.
@@ -525,17 +596,59 @@ pub struct PackageProvenance {
     pub group_name: String,
 }
 
+/// A generated-timer row's decision as the view shows it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct GeneratedTimerDto {
+    /// The `generated_timer_units` name, the row's
+    /// `ItemId::GeneratedTimer` key.
+    pub name: String,
+    pub include: bool,
+    pub locked: bool,
+    /// The excluded cron job this unit is generated from, which excludes
+    /// it whatever its own row says. While set, including the row is
+    /// refused: the cron job has to be included first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cron_job_excluded: Option<String>,
+}
+
+/// The `/api/view` body. The first five fields are `RefinedView`'s wire
+/// fields, listed here so each config row can carry its `withheld`; the
+/// adapter destructures `RefinedView` whole, so a field added there does
+/// not compile until it is placed here.
 #[derive(Serialize)]
 pub struct ViewResponse {
-    #[serde(flatten)]
-    pub view: RefinedView,
+    pub packages: Vec<RefinedPackage>,
+    pub config_files: Vec<ConfigFileDto>,
+    pub containerfile_preview: String,
+    pub stats: RefineStats,
+    pub generation: u64,
     pub repo_groups: Vec<RepoGroupInfo>,
     pub baseline_summary: Option<BaselineSummary>,
     pub version_changes: Vec<VersionChangeEntry>,
-    pub service_states: Vec<ServiceDecisionDto>,
-    pub service_dropins: Vec<DropInDecisionDto>,
+    pub unit_states: Vec<ServiceDecisionDto>,
+    pub unit_dropins: Vec<DropInDecisionDto>,
+    /// The administrator's mount, automount and swap units. No `include`:
+    /// these rows have no toggle.
+    pub mount_findings: Vec<MountFindingView>,
+    /// The links inspectah reports and does not carry, `Also=` names
+    /// included. No `include`: these rows have no toggle.
+    pub manual_links: Vec<ManualLinkView>,
+    /// The units whose `[Install]` cannot be relied on. No `include`:
+    /// these rows have no toggle.
+    pub undetermined_installs: Vec<UndeterminedInstallView>,
+    /// The default target the export sets, with its toggle
+    /// (`ItemId::DefaultTarget`). Absent when the snapshot records none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_target: Option<DefaultTargetView>,
     pub quadlets: Vec<QuadletDecisionDto>,
     pub flatpaks: Vec<FlatpakDecisionDto>,
+    /// Each request for a unit inspectah generates that the export does
+    /// not write, with the scheduled or flatpak row it is shown on
+    /// (§ 11.1). Always present; empty when nothing is declined.
+    pub declined_generated: Vec<DeclinedGeneratedView>,
+    /// Each generated-timer row's decision, by its name (§ 8, § 11.1).
+    /// Always present; empty when the host has no generated timer.
+    pub generated_timers: Vec<GeneratedTimerDto>,
     /// The read-only sysctl panel. Always present.
     pub sysctl: SysctlViewDto,
     pub tuned: Vec<TunedDecisionDto>,

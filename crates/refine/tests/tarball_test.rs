@@ -251,6 +251,71 @@ fn schema_26_snapshot_is_refused() {
     }
 }
 
+/// A schema-27 snapshot holds services only, under `services`: every
+/// socket and timer state the host had is absent from it with nothing to
+/// say so. Refine refuses to open it. The same section under `units` at
+/// the current version, its three unit name lists replaced by the one
+/// inventory, opens, so the version gate is what refuses it.
+#[test]
+fn schema_27_snapshot_is_refused() {
+    let schema_27 =
+        include_str!("../../../testdata/fixtures/snapshot/schema-27-services-section.json");
+
+    let mut current: serde_json::Value = serde_json::from_str(schema_27).unwrap();
+    let object = current.as_object_mut().unwrap();
+    let mut section = object.remove("services").expect("fixture has `services`");
+    let lists = section.as_object_mut().unwrap();
+    for list in ["enabled_units", "disabled_units", "preset_matched_units"] {
+        lists.remove(list).expect("schema 27 has the list");
+    }
+    lists.insert(
+        "inventory".into(),
+        serde_json::json!([{"unit": "httpd.service", "state": "enabled", "preset": "disable"}]),
+    );
+    lists.insert("mount_findings".into(), serde_json::json!([]));
+    lists.insert("manual_links".into(), serde_json::json!([]));
+    lists.insert("undetermined_installs".into(), serde_json::json!([]));
+    let change = &mut lists.get_mut("state_changes").unwrap()[0];
+    let owner = change
+        .as_object_mut()
+        .unwrap()
+        .remove("owning_package")
+        .expect("schema 27 state change has an owner");
+    change["unit"] = serde_json::json!({
+        "name": "httpd.service", "fragment": "vendor", "file": "httpd.service",
+        "owning_package": owner
+    });
+    object.insert("units".into(), section);
+    object.insert(
+        "schema_version".into(),
+        inspectah_core::snapshot::SCHEMA_VERSION.into(),
+    );
+    let dir = tempdir().unwrap();
+    let tarball = write_flat_tarball(dir.path(), &current.to_string());
+    let session = inspectah_refine::tarball::from_tarball(&tarball)
+        .expect("the same section under `units` opens at the current version");
+    let units = session
+        .snapshot()
+        .units
+        .as_ref()
+        .expect("the `units` section is present");
+    assert_eq!(
+        units.state_changes[0].unit().name().as_str(),
+        "httpd.service"
+    );
+
+    let dir = tempdir().unwrap();
+    let tarball = write_flat_tarball(dir.path(), schema_27);
+    match inspectah_refine::tarball::from_tarball(&tarball) {
+        Err(RefineError::SnapshotLoad(msg)) => assert!(
+            msg.contains("unsupported schema version: 27"),
+            "expected the schema refusal, got: {msg}"
+        ),
+        Err(other) => panic!("expected SnapshotLoad, got: {other:?}"),
+        Ok(_) => panic!("a schema-27 snapshot must not open in refine"),
+    }
+}
+
 #[test]
 fn reject_missing_snapshot_json() {
     let dir = tempdir().unwrap();

@@ -2,6 +2,7 @@ use crate::types::{RefineError, RefinedConfig, RefinedPackage, TriageBucket, Tri
 use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
+use inspectah_core::types::units::UnitState;
 use inspectah_core::types::verified_upload::VerifiedUploads;
 use inspectah_pipeline::render::language_packages::is_language_env;
 use inspectah_pipeline::render::repoless::{PackageRoute, route_for};
@@ -236,11 +237,12 @@ pub fn normalize_merge_hostile_configs(snapshot: &mut InspectionSnapshot) {
 
 /// Exclude systemd services incompatible with immutable /usr.
 ///
-/// Walks `services.state_changes` and sets `include = false`, `locked = true`
+/// Walks `units.state_changes` and sets `include = false`, `locked = true`
 /// on units listed in `INCOMPATIBLE_SERVICES`. Also locks any drop-ins
-/// belonging to those units and removes the units from `services.enabled_units`.
+/// belonging to those units and removes their enabled entries from
+/// `units.inventory`.
 pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
-    let services = match snapshot.services.as_mut() {
+    let services = match snapshot.units.as_mut() {
         Some(s) => s,
         None => return,
     };
@@ -249,7 +251,7 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
 
     // Lock incompatible services
     for sc in &mut services.state_changes {
-        if incompatible_units.contains(&sc.unit.as_str()) {
+        if incompatible_units.contains(&sc.unit().name().as_str()) {
             sc.disposition = FindingKind::excluded();
             sc.locked = true;
             sc.attention_reason = Some("service-image-mode-incompatible".to_string());
@@ -265,9 +267,9 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
         }
     }
 
-    services
-        .enabled_units
-        .retain(|u| !incompatible_units.contains(&u.as_str()));
+    services.inventory.retain(|e| {
+        !(e.state == UnitState::Enabled && incompatible_units.contains(&e.unit.as_str()))
+    });
 }
 
 /// Exclude inspectah's own COPR repo file from the RPM repo files list.
@@ -398,38 +400,71 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
 
-    /// Helper: build a snapshot with a ServiceSection.
+    use super::*;
+    use inspectah_core::types::units::{
+        SystemdDropIn, UnitInventoryEntry, UnitSection, UnitStateChange,
+    };
+
+    /// Helper: build a snapshot with a UnitSection whose inventory holds
+    /// `enabled_units`, each enabled.
     fn snap_with_services(
-        state_changes: Vec<ServiceStateChange>,
+        state_changes: Vec<UnitStateChange>,
         enabled_units: Vec<String>,
     ) -> InspectionSnapshot {
+        let inventory = enabled_units
+            .into_iter()
+            .map(|unit| UnitInventoryEntry {
+                unit: unit.try_into().expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            })
+            .collect();
         InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes,
-                enabled_units,
+                inventory,
                 ..Default::default()
             }),
             ..Default::default()
         }
     }
 
-    fn sc(unit: &str, include: bool) -> ServiceStateChange {
-        use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
-        ServiceStateChange {
-            unit: unit.to_string(),
-            current_state: ServiceUnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::from_bool(include),
-            locked: false,
-            owning_package: None,
-            aggregate: None,
-            attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
+    /// Names of the enabled inventory entries, in order.
+    fn enabled_names(section: &UnitSection) -> Vec<&str> {
+        section
+            .inventory
+            .iter()
+            .filter(|e| e.state == UnitState::Enabled)
+            .map(|e| e.unit.as_str())
+            .collect()
+    }
+
+    fn sc(unit: &str, include: bool) -> UnitStateChange {
+        use inspectah_core::types::units::{PresetDefault, UnitState};
+        {
+            let mut change = UnitStateChange::new(
+                test_carried_unit(unit.to_string().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap();
+            change.disposition = FindingKind::from_bool(include);
+            change
         }
     }
 
@@ -471,7 +506,7 @@ mod tests {
     fn incompatible_service_flagged_include_false() {
         let mut snap = snap_with_services(vec![sc("dnf-makecache.service", true)], vec![]);
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
         assert!(!services.state_changes[0].disposition.is_included());
     }
 
@@ -479,12 +514,12 @@ mod tests {
     fn compatible_service_not_flagged() {
         let mut snap = snap_with_services(vec![sc("httpd.service", true)], vec![]);
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
         assert!(services.state_changes[0].disposition.is_included());
     }
 
     #[test]
-    fn incompatible_service_removed_from_enabled_units() {
+    fn incompatible_service_removed_from_enabled_inventory() {
         let mut snap = snap_with_services(
             vec![],
             vec![
@@ -494,8 +529,8 @@ mod tests {
             ],
         );
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
-        assert_eq!(services.enabled_units, vec!["httpd.service".to_string()]);
+        let services = snap.units.as_ref().unwrap();
+        assert_eq!(enabled_names(services), vec!["httpd.service"]);
     }
 
     #[test]
@@ -519,20 +554,27 @@ mod tests {
             ],
         );
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
 
         // state_changes: incompatible ones excluded, compatible ones untouched
         assert!(!services.state_changes[0].disposition.is_included()); // dnf-makecache.service
         assert!(!services.state_changes[1].disposition.is_included()); // dnf-makecache.timer
         assert!(!services.state_changes[2].disposition.is_included()); // packagekit.service
-        assert!(!services.state_changes[3].disposition.is_included()); // packagekit-offline-update.service
+        // A runtime updater is not locked here: the collector excludes it by
+        // default, and the operator can include it (§ 10.4).
+        assert!(services.state_changes[3].disposition.is_included()); // packagekit-offline-update.service
+        assert!(!services.state_changes[3].locked);
         assert!(services.state_changes[4].disposition.is_included()); // httpd.service
         assert!(services.state_changes[5].disposition.is_included()); // sshd.service
 
-        // enabled_units: only compatible ones remain
+        // inventory: only the locked units' enabled entries are removed
         assert_eq!(
-            services.enabled_units,
-            vec!["httpd.service".to_string(), "sshd.service".to_string()]
+            enabled_names(services),
+            vec![
+                "packagekit-offline-update.service",
+                "httpd.service",
+                "sshd.service"
+            ]
         );
     }
 
@@ -544,14 +586,14 @@ mod tests {
         };
         // Should not panic.
         normalize_incompatible_services(&mut snap);
-        assert!(snap.services.is_none());
+        assert!(snap.units.is_none());
     }
 
     #[test]
     fn already_excluded_service_stays_excluded() {
         let mut snap = snap_with_services(vec![sc("dnf-makecache.service", false)], vec![]);
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
         assert!(!services.state_changes[0].disposition.is_included());
     }
 
@@ -559,7 +601,7 @@ mod tests {
     fn incompatible_service_is_locked() {
         let mut snap = snap_with_services(vec![sc("dnf-makecache.service", true)], vec![]);
         normalize_incompatible_services(&mut snap);
-        let svc = &snap.services.as_ref().unwrap().state_changes[0];
+        let svc = &snap.units.as_ref().unwrap().state_changes[0];
         assert!(!svc.disposition.is_included());
         assert!(svc.locked);
         assert_eq!(
@@ -572,7 +614,7 @@ mod tests {
     fn incompatible_service_dropin_is_locked() {
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: vec![sc("dnf-makecache.service", true)],
                 drop_ins: vec![SystemdDropIn {
                     unit: "dnf-makecache.service".into(),
@@ -585,7 +627,7 @@ mod tests {
             ..Default::default()
         };
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
         // Service itself locked
         assert!(!services.state_changes[0].disposition.is_included());
         assert!(services.state_changes[0].locked);
@@ -602,7 +644,7 @@ mod tests {
     fn unrelated_dropin_not_locked() {
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: vec![sc("httpd.service", true)],
                 drop_ins: vec![SystemdDropIn {
                     unit: "httpd.service".into(),
@@ -615,7 +657,7 @@ mod tests {
             ..Default::default()
         };
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
         assert!(services.drop_ins[0].disposition.is_included());
         assert!(!services.drop_ins[0].locked);
         assert!(services.drop_ins[0].attention_reason.is_none());

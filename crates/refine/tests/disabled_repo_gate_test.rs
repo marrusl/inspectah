@@ -11,9 +11,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
-use inspectah_core::types::services::{
-    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
-};
+use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_refine::session::RefineSession;
@@ -221,26 +219,24 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         rpm.leaf_packages = Some(vec![format!("{LEAF}.x86_64")]);
         rpm.leaf_dep_tree = serde_json::json!({ "gst-openh264.x86_64": ["openh264.x86_64"] });
     }
-    let unit = |name: &str, owner: &str| ServiceStateChange {
-        unit: name.into(),
-        current_state: ServiceUnitState::Enabled,
-        default_state: Some(PresetDefault::Disable),
-        disposition: FindingKind::included(),
-        locked: false,
-        owning_package: Some(owner.into()),
-        aggregate: None,
-        attention_reason: None,
-        shadow_type: None,
-        shadow_rationale: None,
+    let unit = |name: &str, owner: &str| {
+        UnitStateChange::new(
+            test_carried_unit(name.to_owned().try_into().unwrap(), Some(owner.into())),
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )
+        .unwrap()
     };
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         // The dependency owns a unit too. dnf installs it with the leaf,
         // so its unit is enabled although refine excludes it by default.
         state_changes: vec![unit(UNIT, LEAF), unit(DEP_UNIT, "openh264")],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
+        mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
+        default_target: None,
     });
     let about_the_packages = |containerfile: &str| -> Vec<String> {
         containerfile
@@ -450,4 +446,18 @@ fn extract_containerfile(tarball: &std::path::Path) -> String {
         }
     }
     panic!("no Containerfile in the export tarball");
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

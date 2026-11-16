@@ -20,6 +20,7 @@ function makeItem(
 ): AggregateItem {
   return {
     include: true,
+    locked: false,
     triage: {
       bucket: "universal" as const,
       prevalence: { count: 1, total: 1 },

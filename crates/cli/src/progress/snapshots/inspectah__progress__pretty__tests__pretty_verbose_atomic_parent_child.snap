@@ -2,6 +2,6 @@
 source: crates/cli/src/progress/pretty.rs
 expression: text
 ---
-  ✓ Services                     42 units
+  ✓ Units                        42 units
       ✓ Querying installed packages done
   ✓ Network                      done
