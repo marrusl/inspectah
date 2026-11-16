@@ -165,7 +165,7 @@ describe("U25: every units row is a result under its row key (§ 6.12)", () => {
   it.each<[string, string, string, string]>([
     ["a unit_states row", "wg-quick@wg0", "wg-quick@wg0.service", unitKey("wg-quick@wg0.service")],
     ["a drop-in", "limits-demo", LIMITS_DROPIN, JSON.stringify(["dropin", LIMITS_DROPIN])],
-    ["the default target", "default target", "graphical.target", '["default_target"]'],
+    ["the default target", "default target", "graphical.target (default target)", '["default_target"]'],
     [
       "a manual link",
       "driftify-static",

@@ -518,7 +518,7 @@ function globalSearchTitle(record: UnitRecord): string {
     case "unit_state":
       return record.data.unit;
     case "default_target":
-      return record.data.target;
+      return `${record.data.target} (default target)`;
     case "dropin":
       return record.data.path;
     case "manual_link":

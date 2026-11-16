@@ -412,7 +412,7 @@ describe("U25: global search entries (§ 6.12)", () => {
   it("titles each entry with its identity, and every title word is in the entry's own text", () => {
     const titleOf = (key: string) => entries.find((e) => e.itemId === key)!.title;
     expect(titleOf(rowKey({ kind: "unit_state", data: planted.unit_states[0] }))).toBe(planted.unit_states[0].unit);
-    expect(titleOf('["default_target"]')).toBe("graphical.target");
+    expect(titleOf('["default_target"]')).toBe("graphical.target (default target)");
     expect(titleOf(JSON.stringify(["dropin", HTTPD_LIMITS]))).toBe(HTTPD_LIMITS);
     expect(titleOf(JSON.stringify(["manual_link", "wants", "graphical.target", "multi-link-demo.service"]))).toBe(
       "multi-link-demo.service (wants graphical.target)",
@@ -433,6 +433,19 @@ describe("U25: global search entries (§ 6.12)", () => {
       mount_findings: [{ ...FIELD_MOUNT, mount_point: null }],
     });
     expect(entry.title).toBe("data-demo.mount (fieldmountkind)");
+  });
+
+  it("default target and a unit row of the same unit get different titles", () => {
+    const target = planted.default_target!.target;
+    const sameUnit = unitSearchEntries({
+      ...planted,
+      unit_states: [...planted.unit_states, { ...planted.unit_states[0], unit: target }],
+    });
+    const targetEntry = sameUnit.find((e) => e.itemId === '["default_target"]')!;
+    const unitEntry = sameUnit.find((e) => e.itemId === rowKey({ kind: "unit_state", data: { ...planted.unit_states[0], unit: target } }))!;
+    expect(unitEntry.title).toBe(target);
+    expect(targetEntry.title).toBe(`${target} (default target)`);
+    expect(targetEntry.title).not.toBe(unitEntry.title);
   });
 });
 
