@@ -5884,6 +5884,156 @@ fn a_reset_in_a_drop_in_clears_what_the_unit_file_required() {
     }
 }
 
+/// § 7.5: a reset or replacement removes an earlier requirement only when
+/// systemd accepts the assignment (systemd 252 and 257, `load-fragment.c`
+/// and the section-qualified lookup of `conf-parser.c`). A replacement
+/// systemd refuses (a relative or unnormalized `WorkingDirectory=`, with or
+/// without `-`, a relative `RootDirectory=`), one whose acceptance
+/// inspectah cannot tell (a specifier it does not expand), a key in a
+/// section that does not take it (`EnvironmentFile=` under `[Unit]`, a
+/// condition under `[Service]`), a condition name systemd does not know,
+/// a section systemd ignores, and an assignment before any section keep
+/// the earlier path. Controls: each accepted form removes it.
+#[test]
+fn an_assignment_systemd_ignores_removes_nothing() {
+    const UNIT: &str = "worker@site.service";
+    for (label, template, drop_in, removed) in [
+        (
+            "WorkingDirectory=-relative",
+            "[Service]\nWorkingDirectory=/etc/w/%i\nExecStart=/usr/bin/worker\n",
+            "[Service]\nWorkingDirectory=-relative\n",
+            false,
+        ),
+        (
+            "WorkingDirectory=relative",
+            "[Service]\nWorkingDirectory=/etc/w/%i\nExecStart=/usr/bin/worker\n",
+            "[Service]\nWorkingDirectory=relative\n",
+            false,
+        ),
+        (
+            "WorkingDirectory= with a .. component",
+            "[Service]\nWorkingDirectory=/etc/w/%i\nExecStart=/usr/bin/worker\n",
+            "[Service]\nWorkingDirectory=-/srv/../srv/w\n",
+            false,
+        ),
+        (
+            "WorkingDirectory= with a specifier inspectah does not expand",
+            "[Service]\nWorkingDirectory=/etc/w/%i\nExecStart=/usr/bin/worker\n",
+            "[Service]\nWorkingDirectory=-%h/w\n",
+            false,
+        ),
+        (
+            "RootDirectory=relative",
+            "[Service]\nRootDirectory=/etc/w/%i\nExecStart=/usr/bin/worker\n",
+            "[Service]\nRootDirectory=relative\n",
+            false,
+        ),
+        (
+            "EnvironmentFile= under [Unit]",
+            "[Service]\nEnvironmentFile=/etc/w/%i.env\nExecStart=/usr/bin/worker\n",
+            "[Unit]\nEnvironmentFile=\n",
+            false,
+        ),
+        (
+            "ExecStart= under [Unit]",
+            "[Service]\nExecStart=/usr/bin/worker --config=/etc/w/%i.conf\n",
+            "[Unit]\nExecStart=\n",
+            false,
+        ),
+        (
+            "a condition under [Service]",
+            "[Unit]\nConditionPathExists=/etc/w/%i\n[Service]\nExecStart=/usr/bin/worker\n",
+            "[Service]\nConditionPathExists=\n",
+            false,
+        ),
+        (
+            "a condition name systemd does not know",
+            "[Unit]\nConditionPathExists=/etc/w/%i\n[Service]\nExecStart=/usr/bin/worker\n",
+            "[Unit]\nConditionPathExist=\n",
+            false,
+        ),
+        (
+            "a section systemd ignores",
+            "[Service]\nEnvironmentFile=/etc/w/%i.env\nExecStart=/usr/bin/worker\n",
+            "[X-Local]\nEnvironmentFile=\n",
+            false,
+        ),
+        (
+            "an assignment before any section",
+            "[Service]\nEnvironmentFile=/etc/w/%i.env\nExecStart=/usr/bin/worker\n",
+            "EnvironmentFile=\n[Service]\nNice=5\n",
+            false,
+        ),
+        (
+            "control: WorkingDirectory= absolute",
+            "[Service]\nWorkingDirectory=/etc/w/%i\nExecStart=/usr/bin/worker\n",
+            "[Service]\nWorkingDirectory=/srv/w\n",
+            true,
+        ),
+        (
+            "control: WorkingDirectory=- absolute",
+            "[Service]\nWorkingDirectory=/etc/w/%i\nExecStart=/usr/bin/worker\n",
+            "[Service]\nWorkingDirectory=-/srv/w\n",
+            true,
+        ),
+        (
+            "control: WorkingDirectory=~",
+            "[Service]\nWorkingDirectory=/etc/w/%i\nExecStart=/usr/bin/worker\n",
+            "[Service]\nWorkingDirectory=~\n",
+            true,
+        ),
+        (
+            "control: WorkingDirectory= empty",
+            "[Service]\nWorkingDirectory=/etc/w/%i\nExecStart=/usr/bin/worker\n",
+            "[Service]\nWorkingDirectory=\n",
+            true,
+        ),
+        (
+            "control: RootDirectory= absolute",
+            "[Service]\nRootDirectory=/etc/w/%i\nExecStart=/usr/bin/worker\n",
+            "[Service]\nRootDirectory=/srv/w\n",
+            true,
+        ),
+        (
+            "control: PIDFile= relative, made absolute under /run",
+            "[Service]\nPIDFile=/etc/w/%i.pid\nExecStart=/usr/bin/worker\n",
+            "[Service]\nPIDFile=w.pid\n",
+            true,
+        ),
+        (
+            "control: EnvironmentFile= under [Service]",
+            "[Service]\nEnvironmentFile=/etc/w/%i.env\nExecStart=/usr/bin/worker\n",
+            "[Service]\nEnvironmentFile=\n",
+            true,
+        ),
+        (
+            "control: ExecStart= under [Service]",
+            "[Service]\nExecStart=/usr/bin/worker --config=/etc/w/%i.conf\n",
+            "[Service]\nExecStart=\nExecStart=/usr/bin/worker\n",
+            true,
+        ),
+        (
+            "control: a condition under [Unit]",
+            "[Unit]\nConditionPathExists=/etc/w/%i\n[Service]\nExecStart=/usr/bin/worker\n",
+            "[Unit]\nConditionFileNotEmpty=\n",
+            true,
+        ),
+    ] {
+        let template = format!("{template}[Install]\nWantedBy=multi-user.target\n");
+        let exec = with_drop_in(
+            instance_host("worker@.service", &template, UNIT)
+                .with_dir_entry(ETC, "worker@site.service.d"),
+            &format!("{ETC}/worker@site.service.d"),
+            "10-override.conf",
+            drop_in,
+        );
+        let (section, warnings) = scan(&exec);
+        let required = needs_of(&section, UNIT).0;
+        let kept = required.iter().any(|p| p.starts_with("/etc/w/site"));
+        assert_eq!(kept, !removed, "{label}: {required:?} {warnings:?}");
+    }
+}
+
 /// § 7.5: an empty `StateDirectory=` clears the data directories before
 /// it. Control: without the reset the directory is data.
 #[test]

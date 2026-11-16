@@ -10165,6 +10165,78 @@ fn a_reset_drop_in_the_export_does_not_carry_omits_the_enable() {
     );
 }
 
+/// Rule 6 through the scan, with an override systemd ignores: a drop-in
+/// replacing `WorkingDirectory=/etc/t/%i` with the relative `-relative`,
+/// which systemd refuses and so keeps the earlier directory, and a drop-in
+/// resetting `EnvironmentFile=` under `[Unit]`, a section that does not
+/// take the key. For each, the requirement stands: the file missing omits
+/// the enable on both routes and in refine, present it is carried, and
+/// excluded through refine it is omitted naming it. Control: the override
+/// systemd accepts (an absolute directory, the reset under `[Service]`)
+/// removes the requirement, and the enable is carried with the file
+/// missing.
+#[test]
+fn an_override_systemd_ignores_keeps_the_requirement_through_the_scan() {
+    const UNIT: &str = "t@site.service";
+    const DROP_IN: &str = "/etc/systemd/system/t@site.service.d/10-override.conf";
+    for (label, service, ignored, accepted, path, file) in [
+        (
+            "an invalid WorkingDirectory= replacement",
+            "WorkingDirectory=/etc/t/%i\nExecStart=/usr/bin/t",
+            "[Service]\nWorkingDirectory=-relative\n",
+            "[Service]\nWorkingDirectory=/srv/t\n",
+            "/etc/t/site",
+            "/etc/t/site/app.conf",
+        ),
+        (
+            "an EnvironmentFile= reset under [Unit]",
+            "EnvironmentFile=/etc/t/%i.env\nExecStart=/usr/bin/t %i",
+            "[Unit]\nEnvironmentFile=\n",
+            "[Service]\nEnvironmentFile=\n",
+            "/etc/t/site.env",
+            "/etc/t/site.env",
+        ),
+    ] {
+        let missing = scan(t_reads_host(service, &[(DROP_IN, ignored)]));
+        assert_eq!(change(&missing, UNIT).required_config, [path], "{label}");
+        assert_instance_omitted(
+            &missing,
+            UNIT,
+            &config_omitted(UNIT, path, "is not in the export"),
+            "InstanceConfigNotStaged",
+        );
+
+        let present = scan(t_reads_host(
+            service,
+            &[(DROP_IN, ignored), (file, "A=1\n")],
+        ));
+        assert_instance_carried(&present, UNIT, label);
+        let excluded = [(config_item(file), false)];
+        let containerfile = containerfile_in(&exported_after(&present, &excluded));
+        assert_eq!(
+            omitted(&containerfile, UNIT),
+            Some(config_omitted(UNIT, file, "is excluded from the export").as_str()),
+            "{label}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, UNIT),
+            "{label}:\n{containerfile}"
+        );
+        assert_eq!(
+            declined_in(&session_after(&present, &excluded), UNIT).map(|d| d.reason),
+            Some("InstanceConfigNotStaged".into()),
+            "{label}"
+        );
+
+        let control = scan(t_reads_host(service, &[(DROP_IN, accepted)]));
+        assert!(
+            change(&control, UNIT).required_config.is_empty(),
+            "{label}: control"
+        );
+        assert_instance_carried(&control, UNIT, &format!("{label}: control"));
+    }
+}
+
 /// R4 through the scan: an instance's `EnvironmentFile=` set by a
 /// type-wide drop-in (`/etc/systemd/system/service.d`) or a dash-prefix one
 /// (`/etc/systemd/system/t-.service.d` for `t-job@site.service`) is

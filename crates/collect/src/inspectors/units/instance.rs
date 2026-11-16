@@ -72,7 +72,144 @@ const STATE_DIRECTORY_ROOT: &str = "/var/lib";
 const STATE_DIRECTORY_LINK_SEPARATOR: char = ':';
 
 /// The section of a unit file that names units, not paths.
-const INSTALL_SECTION_HEADER: &str = "[Install]";
+const INSTALL_SECTION: &str = "Install";
+
+/// The section systemd reads conditions and assertions from.
+const UNIT_SECTION: &str = "Unit";
+
+/// The conditions and assertions systemd knows, each read in
+/// [`UNIT_SECTION`] (systemd 252 and 257, `load-fragment-gperf.gperf.in`,
+/// the same list in both). An empty one resets every condition, or every
+/// assertion; a name not on the list is ignored, so it resets nothing.
+const CONDITION_KEYS: [&str; 65] = [
+    "ConditionPathExists",
+    "ConditionPathExistsGlob",
+    "ConditionPathIsDirectory",
+    "ConditionPathIsSymbolicLink",
+    "ConditionPathIsMountPoint",
+    "ConditionPathIsReadWrite",
+    "ConditionPathIsEncrypted",
+    "ConditionDirectoryNotEmpty",
+    "ConditionFileNotEmpty",
+    "ConditionFileIsExecutable",
+    "ConditionNeedsUpdate",
+    "ConditionFirstBoot",
+    "ConditionArchitecture",
+    "ConditionFirmware",
+    "ConditionVirtualization",
+    "ConditionHost",
+    "ConditionKernelCommandLine",
+    "ConditionKernelVersion",
+    "ConditionCredential",
+    "ConditionSecurity",
+    "ConditionCapability",
+    "ConditionACPower",
+    "ConditionMemory",
+    "ConditionCPUFeature",
+    "ConditionCPUs",
+    "ConditionEnvironment",
+    "ConditionUser",
+    "ConditionGroup",
+    "ConditionControlGroupController",
+    "ConditionOSRelease",
+    "ConditionMemoryPressure",
+    "ConditionCPUPressure",
+    "ConditionIOPressure",
+    "AssertPathExists",
+    "AssertPathExistsGlob",
+    "AssertPathIsDirectory",
+    "AssertPathIsSymbolicLink",
+    "AssertPathIsMountPoint",
+    "AssertPathIsReadWrite",
+    "AssertPathIsEncrypted",
+    "AssertDirectoryNotEmpty",
+    "AssertFileNotEmpty",
+    "AssertFileIsExecutable",
+    "AssertNeedsUpdate",
+    "AssertFirstBoot",
+    "AssertArchitecture",
+    "AssertVirtualization",
+    "AssertHost",
+    "AssertKernelCommandLine",
+    "AssertKernelVersion",
+    "AssertCredential",
+    "AssertSecurity",
+    "AssertCapability",
+    "AssertACPower",
+    "AssertMemory",
+    "AssertCPUFeature",
+    "AssertCPUs",
+    "AssertEnvironment",
+    "AssertUser",
+    "AssertGroup",
+    "AssertControlGroupController",
+    "AssertOSRelease",
+    "AssertMemoryPressure",
+    "AssertCPUPressure",
+    "AssertIOPressure",
+];
+
+/// The type suffix of a service unit.
+const SERVICE_SUFFIX: &str = "service";
+
+/// The type suffix of a socket unit.
+const SOCKET_SUFFIX: &str = "socket";
+
+/// The command keys a service takes in `[Service]` (systemd 252 and 257,
+/// `load-fragment-gperf.gperf.in`).
+const SERVICE_COMMAND_KEYS: [&str; 7] = [
+    "ExecCondition",
+    "ExecStartPre",
+    "ExecStart",
+    "ExecStartPost",
+    "ExecReload",
+    "ExecStop",
+    "ExecStopPost",
+];
+
+/// The command keys a socket takes in `[Socket]` (systemd 252 and 257).
+const SOCKET_COMMAND_KEYS: [&str; 4] = [
+    "ExecStartPre",
+    "ExecStartPost",
+    "ExecStopPre",
+    "ExecStopPost",
+];
+
+/// The unit types whose own section takes the execution settings
+/// (`EXEC_CONTEXT_CONFIG_ITEMS`: `EnvironmentFile=`, the path lists, the
+/// bind mounts, `StateDirectory=`, `WorkingDirectory=`, `RootDirectory=`
+/// and `RootImage=`), with that section (systemd 252 and 257).
+const EXEC_SECTIONS: [(&str, &str); 4] = [
+    (SERVICE_SUFFIX, "Service"),
+    (SOCKET_SUFFIX, "Socket"),
+    ("mount", "Mount"),
+    ("swap", "Swap"),
+];
+
+/// The key only a service takes, in `[Service]`, whose relative value is
+/// made absolute under [`PID_FILE_RUNTIME_DIR`].
+const PID_FILE_KEY: &str = "PIDFile";
+
+/// Where systemd places a relative `PIDFile=`.
+const PID_FILE_RUNTIME_DIR: &str = "/run";
+
+/// The key whose value `~` means the user's home directory.
+const WORKING_DIRECTORY_KEY: &str = "WorkingDirectory";
+
+/// `WorkingDirectory=`'s value for the user's home directory.
+const HOME_DIRECTORY: &str = "~";
+
+/// The API file systems systemd 257 refuses a `PIDFile=` under
+/// (`PATH_CHECK_NON_API_VFS`); 252 takes them, and treating them as
+/// refused there keeps an earlier path, toward omitting.
+const API_VFS_ROOTS: [&str; 3] = ["/proc", "/sys", "/dev"];
+
+/// The longest path systemd takes, its terminating NUL excluded
+/// (`PATH_MAX` less one, `path_is_valid`).
+const PATH_MAX_LENGTH: usize = 4095;
+
+/// The longest component systemd takes (`NAME_MAX`, `path_is_valid`).
+const NAME_MAX_LENGTH: usize = 255;
 
 /// The root an instance's configuration sits under.
 const CONFIG_ROOT: &str = "/etc";
@@ -213,7 +350,12 @@ pub(crate) fn instance_needs(
     };
     let keeps_data = |path: &str| is_instance_data_path(path) && exec.file_exists(Path::new(path));
 
-    let effective = effective_assignments(fragment, &drop_ins.chosen);
+    let (_, suffix) = name
+        .as_str()
+        .rsplit_once('.')
+        .expect("a unit name ends in its type suffix");
+    let raw_expand = |value: &str| expand_unit_specifiers(value, stem, SpecifierSet::Runtime);
+    let effective = effective_assignments(fragment, &drop_ins.chosen, suffix, &raw_expand);
     let mut required_config = BTreeSet::new();
     let mut data = BTreeSet::new();
     for assignment in &effective.kept {
@@ -256,7 +398,7 @@ pub(crate) fn instance_needs(
         let changes = match exec.read_file(Path::new(hidden)) {
             Ok(text) => assignments(&text)
                 .iter()
-                .any(|(key, value)| changes_lists(key, value)),
+                .any(|a| changes_lists(&a.key, &a.value)),
             Err(_) => true,
         };
         if changes {
@@ -480,25 +622,26 @@ fn table_rows<'t>(
         .map(|(_, path)| *path)
 }
 
-/// The assignments of one unit file text outside `[Install]`, as
-/// `(key, value)` by logical line, both trimmed.
-fn assignments(text: &str) -> Vec<(String, String)> {
+/// The assignments of one unit file text outside `[Install]`, by logical
+/// line, key and value trimmed, each with the section it is in.
+fn assignments(text: &str) -> Vec<Assignment> {
     let mut found = Vec::new();
-    let mut in_install = false;
+    let mut section: Option<String> = None;
     for line in logical_lines(text) {
         let line = line.trim_matches(UNIT_FILE_WHITESPACE);
         if line.starts_with('[') && line.ends_with(']') {
-            in_install = line == INSTALL_SECTION_HEADER;
+            section = Some(line[1..line.len() - 1].to_owned());
             continue;
         }
-        if in_install {
+        if section.as_deref() == Some(INSTALL_SECTION) {
             continue;
         }
         if let Some((key, value)) = line.split_once('=') {
-            found.push((
-                key.trim_matches(UNIT_FILE_WHITESPACE).to_owned(),
-                value.trim_matches(UNIT_FILE_WHITESPACE).to_owned(),
-            ));
+            found.push(Assignment {
+                section: section.clone(),
+                key: key.trim_matches(UNIT_FILE_WHITESPACE).to_owned(),
+                value: value.trim_matches(UNIT_FILE_WHITESPACE).to_owned(),
+            });
         }
     }
     found
@@ -507,6 +650,8 @@ fn assignments(text: &str) -> Vec<(String, String)> {
 /// One assignment outside `[Install]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Assignment {
+    /// The section it is in; `None` before the first section header.
+    section: Option<String>,
     key: String,
     value: String,
 }
@@ -523,13 +668,23 @@ struct Effective {
 
 /// The assignments that are in effect once `fragment`, the unit file's
 /// text, then each of `drop_ins` (path, text) in load order is applied
-/// with systemd's resets, in order. An empty value resets the values before
-/// it ([`Syntax::resets`]) and is not kept; a single-path setting keeps
-/// only its last value. A setting whose syntax is not modeled keeps every
-/// value, an empty one dropped: if systemd resets it, a path is required
-/// that the unit no longer reads, which omits an enable rather than carry
-/// one.
-fn effective_assignments(fragment: Option<&str>, drop_ins: &[(String, String)]) -> Effective {
+/// with systemd's resets, in order, for a unit of the type `suffix`
+/// (`service`) whose values `expand` expands. An empty value resets the
+/// values before it ([`Syntax::resets`]) and is not kept; a single-path
+/// setting keeps only its last value. A reset or a replacement removes
+/// anything only when systemd applies the assignment ([`applies`]): one
+/// in a section that does not take its key, or a replacement systemd
+/// refuses, leaves the earlier values in place, as systemd does. A setting
+/// whose syntax is not modeled keeps every value, an empty one dropped: if
+/// systemd resets it, a path is required that the unit no longer reads,
+/// which omits an enable rather than carry one. So does an assignment
+/// systemd ignores that adds a value.
+fn effective_assignments(
+    fragment: Option<&str>,
+    drop_ins: &[(String, String)],
+    suffix: &str,
+    expand: &dyn Fn(&str) -> Option<String>,
+) -> Effective {
     let texts = fragment.map(|text| (None, text)).into_iter().chain(
         drop_ins
             .iter()
@@ -538,13 +693,13 @@ fn effective_assignments(fragment: Option<&str>, drop_ins: &[(String, String)]) 
     );
     let mut effective = Effective::default();
     for (source, text) in texts {
-        for (key, value) in assignments(text) {
-            let syntax = Syntax::of(&key);
+        for assignment in assignments(text) {
+            let syntax = Syntax::of(&assignment.key);
             let replaces = syntax == Syntax::SinglePath;
-            if value.is_empty() || replaces {
+            if (assignment.value.is_empty() || replaces) && applies(&assignment, suffix, expand) {
                 let (removed, kept) = std::mem::take(&mut effective.kept)
                     .into_iter()
-                    .partition(|earlier: &Assignment| syntax.resets(&key, &earlier.key));
+                    .partition(|earlier: &Assignment| syntax.resets(&assignment.key, &earlier.key));
                 effective.kept = kept;
                 if let Some(remover) = source {
                     effective
@@ -552,12 +707,127 @@ fn effective_assignments(fragment: Option<&str>, drop_ins: &[(String, String)]) 
                         .extend(removed.into_iter().map(|earlier| (remover, earlier)));
                 }
             }
-            if !value.is_empty() {
-                effective.kept.push(Assignment { key, value });
+            if !assignment.value.is_empty() {
+                effective.kept.push(assignment);
             }
         }
     }
     effective
+}
+
+/// Whether systemd applies `assignment`, a reset or a replacement in a
+/// unit of the type `suffix`, so that it removes the values before it.
+/// systemd looks a setting up by its section and key together and ignores
+/// one its table does not hold (`conf-parser.c`, 252 and 257): so the
+/// assignment's section must take its key ([`section_takes`]). A
+/// replacement must then be one its parser accepts: each single-path
+/// parser checks the new value before it frees the old one
+/// (`load-fragment.c`, 252 and 257: `config_parse_working_directory`,
+/// `config_parse_unit_path_printf` with `config_parse_path`,
+/// `config_parse_pid_file`), and on a refusal keeps the old value, or
+/// fails the unit's load ([`single_path_accepted`]). Where acceptance
+/// cannot be told (a specifier `expand` does not expand) it is not
+/// applied, so the earlier path stays required.
+fn applies(assignment: &Assignment, suffix: &str, expand: &dyn Fn(&str) -> Option<String>) -> bool {
+    let Some(section) = assignment.section.as_deref() else {
+        return false;
+    };
+    if !section_takes(section, &assignment.key, suffix) {
+        return false;
+    }
+    assignment.value.is_empty() || single_path_accepted(&assignment.key, &assignment.value, expand)
+}
+
+/// Whether `section` of a unit of the type `suffix` takes the modeled
+/// setting `key` (systemd 252 and 257, `load-fragment-gperf.gperf.in`). A
+/// setting whose syntax is not modeled is taken nowhere: it resets nothing
+/// here.
+fn section_takes(section: &str, key: &str, suffix: &str) -> bool {
+    let own_section = EXEC_SECTIONS
+        .iter()
+        .any(|(kind, own)| *kind == suffix && *own == section);
+    match Syntax::of(key) {
+        Syntax::Condition => section == UNIT_SECTION && CONDITION_KEYS.contains(&key),
+        Syntax::Command => {
+            own_section
+                && match suffix {
+                    SERVICE_SUFFIX => SERVICE_COMMAND_KEYS.contains(&key),
+                    SOCKET_SUFFIX => SOCKET_COMMAND_KEYS.contains(&key),
+                    _ => false,
+                }
+        }
+        Syntax::SinglePath if key == PID_FILE_KEY => own_section && suffix == SERVICE_SUFFIX,
+        Syntax::EnvironmentFile
+        | Syntax::PathList
+        | Syntax::Bind
+        | Syntax::StateDirectory
+        | Syntax::SinglePath => own_section,
+        Syntax::Other => false,
+    }
+}
+
+/// Whether the parser of the single-path setting `key` accepts the
+/// non-empty `value`, so that it replaces the earlier value (systemd 252
+/// and 257): `WorkingDirectory=` takes `~`, or, after an optional `-`, a
+/// path that expands to an absolute, valid and normalized one;
+/// `RootDirectory=` and `RootImage=` take an absolute, valid and
+/// normalized path, with no `-`; `PIDFile=` takes any path, a relative one
+/// made absolute under `/run`, that is valid and normalized and, in 257,
+/// not under an API file system. A key that is no single-path setting is
+/// not checked here: only its empty value resets anything.
+fn single_path_accepted(key: &str, value: &str, expand: &dyn Fn(&str) -> Option<String>) -> bool {
+    if Syntax::of(key) != Syntax::SinglePath {
+        return true;
+    }
+    if key == PID_FILE_KEY {
+        return expand(value).is_some_and(|path| {
+            let path = if path.starts_with('/') {
+                path
+            } else {
+                format!("{PID_FILE_RUNTIME_DIR}/{path}")
+            };
+            systemd_accepts_path(&path)
+                && !API_VFS_ROOTS
+                    .iter()
+                    .any(|root| path_is_at_or_under(&simplify_path(&path), root))
+        });
+    }
+    let value = if key == WORKING_DIRECTORY_KEY {
+        let value = value
+            .strip_prefix(SINGLE_PATH_OPTIONAL_PREFIX)
+            .unwrap_or(value);
+        if value == HOME_DIRECTORY {
+            return true;
+        }
+        value
+    } else {
+        value
+    };
+    expand(value).is_some_and(|path| systemd_accepts_path(&path))
+}
+
+/// Whether systemd's `path_simplify_and_warn` with `PATH_CHECK_ABSOLUTE`
+/// accepts the expanded `path` (systemd 252 `src/shared/parse-helpers.c`,
+/// 257 the same file): absolute before it is simplified, then, simplified,
+/// no longer than `PATH_MAX` with no component longer than `NAME_MAX`
+/// (`path_is_valid`) and with no `..` component (`path_is_normalized`,
+/// which simplifying cannot satisfy otherwise).
+fn systemd_accepts_path(path: &str) -> bool {
+    if !path.starts_with('/') {
+        return false;
+    }
+    let simple = simplify_path(path);
+    simple.len() <= PATH_MAX_LENGTH
+        && simple
+            .split('/')
+            .all(|part| part.len() <= NAME_MAX_LENGTH && part != "..")
+}
+
+/// Whether the absolute, simplified `path` is `root` or under it, by whole
+/// components.
+fn path_is_at_or_under(path: &str, root: &str) -> bool {
+    path.strip_prefix(root)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
 /// How systemd reads one setting's value.
@@ -1008,7 +1278,7 @@ mod tests {
     fn named(text: &str) -> (Vec<String>, Vec<String>) {
         let mut paths = Vec::new();
         let mut state = Vec::new();
-        for (key, value) in assignments(text) {
+        for Assignment { key, value, .. } in assignments(text) {
             for operand in operands(&key, &value).expect("an interpretable value") {
                 match operand {
                     Operand::Path(p) if holds_instance_specifier(&p) => paths.push(p),
@@ -1232,6 +1502,68 @@ mod tests {
             named_drop_in_dirs(name, &mut dirs);
             assert_eq!(dirs, expected, "{name}");
         }
+    }
+
+    /// Which sections take which settings, and which replacements the
+    /// single-path parsers accept (systemd 252 and 257).
+    #[test]
+    fn a_reset_applies_only_where_systemd_takes_it() {
+        let expand = |value: &str| expand_unit_specifiers(value, "w@a", SpecifierSet::Runtime);
+        for (section, key, suffix, takes) in [
+            ("Service", "EnvironmentFile", "service", true),
+            ("Unit", "EnvironmentFile", "service", false),
+            ("Socket", "EnvironmentFile", "socket", true),
+            ("Service", "EnvironmentFile", "socket", false),
+            ("Service", "EnvironmentFile", "timer", false),
+            ("Unit", "ConditionPathExists", "service", true),
+            ("Unit", "AssertFileNotEmpty", "timer", true),
+            ("Service", "ConditionPathExists", "service", false),
+            ("Unit", "ConditionPathExist", "service", false),
+            ("Service", "ExecStart", "service", true),
+            ("Service", "ExecStopPre", "service", false),
+            ("Socket", "ExecStopPre", "socket", true),
+            ("Socket", "ExecStart", "socket", false),
+            ("Service", "PIDFile", "service", true),
+            ("Socket", "PIDFile", "socket", false),
+            ("Mount", "WorkingDirectory", "mount", true),
+            ("Service", "Description", "service", false),
+        ] {
+            assert_eq!(
+                section_takes(section, key, suffix),
+                takes,
+                "[{section}] {key}= in a {suffix}"
+            );
+        }
+        for (key, value, accepted) in [
+            ("WorkingDirectory", "/srv/w", true),
+            ("WorkingDirectory", "-/srv/w", true),
+            ("WorkingDirectory", "~", true),
+            ("WorkingDirectory", "-~", true),
+            ("WorkingDirectory", "/srv//./w/", true),
+            ("WorkingDirectory", "/srv/%i", true),
+            ("WorkingDirectory", "-relative", false),
+            ("WorkingDirectory", "relative", false),
+            ("WorkingDirectory", "/srv/../w", false),
+            ("WorkingDirectory", "-%h/w", false),
+            ("RootDirectory", "/srv/w", true),
+            ("RootDirectory", "-/srv/w", false),
+            ("RootImage", "relative.img", false),
+            ("PIDFile", "w.pid", true),
+            ("PIDFile", "/run/w/%i.pid", true),
+            ("PIDFile", "/proc/w.pid", false),
+            ("PIDFile", "/devices/w.pid", true),
+            ("PIDFile", "../w.pid", false),
+        ] {
+            assert_eq!(
+                single_path_accepted(key, value, &expand),
+                accepted,
+                "{key}={value}"
+            );
+        }
+        let long_component = format!("/srv/{}", "x".repeat(NAME_MAX_LENGTH + 1));
+        assert!(!systemd_accepts_path(&long_component));
+        let long_path = format!("/{}", ["x"; PATH_MAX_LENGTH / 2 + 1].join("/"));
+        assert!(!systemd_accepts_path(&long_path));
     }
 
     #[test]

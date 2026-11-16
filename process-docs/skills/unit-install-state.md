@@ -378,6 +378,26 @@ the fixed tables. Non-obvious points:
   whose syntax is not modeled keeps every value: a stale path then omits
   an enable, never carries one. A reset is not the `[Install]` reader's:
   that one has its own measured rules.
+- **A reset or replacement counts only where systemd applies it**
+  (`applies`, `section_takes`, `single_path_accepted`). systemd looks a
+  setting up by section and key together and ignores what its table does
+  not hold (`conf-parser.c`), so `assignments` keeps each line's section:
+  an `EnvironmentFile=` under `[Unit]`, a condition under `[Service]`, a
+  condition name systemd does not know (`CONDITION_KEYS`, the same 65 in
+  252 and 257), an `X-` section and a line before any section reset
+  nothing. The execution settings belong to the type's own section
+  (`EXEC_SECTIONS`: service, socket, mount, swap), the commands to the
+  service's or socket's list, `PIDFile=` to `[Service]`. A single-path
+  parser validates the new value before it frees the old one
+  (`load-fragment.c`), so a replacement counts only when it is accepted:
+  `WorkingDirectory=` `~` or an absolute path (after `-`), `RootDirectory=`
+  and `RootImage=` an absolute path (no `-`), `PIDFile=` any path, a
+  relative one under `/run`, none under `/proc`, `/sys` or `/dev` (257);
+  each simplified, within `PATH_MAX` and `NAME_MAX`, with no `..`. A value
+  inspectah cannot expand cannot be judged, so it replaces nothing. An
+  ignored assignment that adds a value still adds its path: toward
+  omitting. Never apply a reset before checking its section: the earlier
+  union kept the path, and a misplaced line would erase a live one.
 - **A drop-in that removes a requirement is evidence, never a
   requirement** (`InstanceNeeds::overriding_drop_ins`). Applying a reset
   is right only while the drop-in that holds it is in the image: excluded
