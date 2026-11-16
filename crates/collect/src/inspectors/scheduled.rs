@@ -112,7 +112,7 @@ impl Inspector for ScheduledTasksInspector {
         );
 
         // --- Existing systemd timers ---
-        scan_systemd_timers(
+        let local_listed = scan_systemd_timers(
             exec,
             &mut section,
             "etc/systemd/system",
@@ -126,6 +126,18 @@ impl Inspector for ScheduledTasksInspector {
             "vendor",
             &mut degraded_reasons,
         );
+        // A local timer file the listing left out loads over the vendor
+        // one, so a vendor description's trigger may not be the unit the
+        // timer starts.
+        if !local_listed {
+            for timer in section
+                .systemd_timers
+                .iter_mut()
+                .filter(|t| t.source == "vendor")
+            {
+                timer.trigger = TimerTrigger::Unresolved;
+            }
+        }
         scan_instance_timers(exec, &mut section);
 
         // --- At jobs ---
@@ -776,23 +788,30 @@ fn parse_unit_field(text: &str, field: &str) -> String {
 /// Scans a systemd unit directory for .timer files and their paired
 /// .service units, and describes each timer from the two files: its
 /// schedule, its command and its description. The files themselves are
-/// not copied: a local one is a config entry.
+/// not copied: a local one is a config entry. Returns whether the
+/// directory was listed in full: `false` when its listing failed, at once
+/// or part way, which is reported through `degraded_reasons`.
 fn scan_systemd_timers(
     exec: &dyn Executor,
     section: &mut ScheduledTaskSection,
     base_dir: &str,
     source_label: &str,
     degraded_reasons: &mut Vec<String>,
-) {
+) -> bool {
     let dir_path = format!("/{base_dir}");
-    let entries = match exec.read_dir(Path::new(&dir_path)) {
+    // Strict listing: a partial one may leave out a timer file, whose
+    // trigger is then not recorded.
+    let entries = match exec.read_dir_strict(Path::new(&dir_path)) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return true,
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             degraded_reasons.push(format!("permission denied reading {dir_path}"));
-            return;
+            return false;
         }
-        Err(_) => return,
+        Err(e) => {
+            degraded_reasons.push(format!("{dir_path}: {e}"));
+            return false;
+        }
     };
 
     for entry_name in &entries {
@@ -831,6 +850,7 @@ fn scan_systemd_timers(
             ..Default::default()
         });
     }
+    true
 }
 
 /// The unit directories a timer's drop-ins are read from, with the root

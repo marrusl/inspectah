@@ -1710,6 +1710,15 @@ impl Inspector for UnitsInspector {
                 "preset file read failures: {}",
                 preset_read_failures.join("; ")
             );
+            // The rules read are a subset, so every state change and every
+            // preset in the inventory may be wrong, either way. As when no
+            // preset can be read: no state change, and an inventory without
+            // presets. The gate already warned about any unparsed name.
+            let section = UnitSection {
+                state_changes: Vec::new(),
+                inventory: partial_inventory(&units, &mut Vec::new()),
+                ..section
+            };
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
                     section: SectionData::Units(section),
@@ -1877,7 +1886,10 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
     let mut preset_files: Vec<(String, String, String)> = Vec::new(); // (filename, path, content)
     let mut read_failures: Vec<String> = Vec::new();
 
-    let usr_ok = match exec.read_dir(usr_dir) {
+    // Strict listings: a listing that fails part way may leave out the file
+    // holding a unit's rule, and a state change derived from the rest
+    // could point either way.
+    let usr_ok = match exec.read_dir_strict(usr_dir) {
         Ok(entries) => {
             for entry in &entries {
                 if entry.ends_with(".preset") {
@@ -1908,7 +1920,7 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
         }
     };
 
-    let etc_ok = match exec.read_dir(etc_dir) {
+    let etc_ok = match exec.read_dir_strict(etc_dir) {
         Ok(entries) => {
             for entry in &entries {
                 if entry.ends_with(".preset") {

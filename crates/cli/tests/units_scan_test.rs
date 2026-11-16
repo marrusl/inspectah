@@ -6582,6 +6582,67 @@ fn t37_a_partly_listed_timer_drop_in_directory_leaves_the_trigger_unknown() {
     }
 }
 
+/// T37, a partial listing of the timer directories: when the listing of
+/// `/etc/systemd/system` fails part way after leaving out the local
+/// `report.timer`, which sets `Unit=other.service` over a vendor file of
+/// the same name, the vendor description must not stand in for it: its
+/// trigger is `Unresolved`, the scheduled tasks degrade naming the
+/// directory, and the enable is omitted on both routes. Healthy first:
+/// the local description is read and its trigger is `other.service`.
+#[test]
+fn t37_a_partly_listed_timer_directory_leaves_the_vendor_trigger_unknown() {
+    use inspectah_core::types::scheduled::TimerTrigger;
+    const DIR: &str = "/etc/systemd/system";
+    let host = || {
+        t37_host("Unit=other.service\n").vendor_unit(
+            "report.timer",
+            "[Timer]\nOnCalendar=weekly\n[Install]\nWantedBy=timers.target\n",
+            Some("glibc"),
+        )
+    };
+    let descriptions = |snap: &InspectionSnapshot| -> Vec<(String, TimerTrigger)> {
+        snap.scheduled_tasks
+            .iter()
+            .flat_map(|st| &st.systemd_timers)
+            .filter(|t| t.name == "report")
+            .map(|t| (t.source.clone(), t.trigger.clone()))
+            .collect()
+    };
+    let healthy = scan(host());
+    assert_eq!(
+        report_timer(&healthy).trigger,
+        trigger_unit("other.service")
+    );
+
+    let snap = scan(host().partial_listing(DIR, "report.timer"));
+    let scheduled_degraded: Vec<&str> = snap
+        .warnings
+        .iter()
+        .filter(|w| w.inspector == "scheduled_tasks" && w.message.starts_with("degraded: "))
+        .map(|w| w.message.as_str())
+        .collect();
+    assert!(
+        scheduled_degraded
+            .iter()
+            .any(|m| m.contains(&format!("{DIR}: "))),
+        "the scheduled tasks degrade naming {DIR}: {:?}",
+        snap.warnings
+    );
+    let described = descriptions(&snap);
+    assert!(
+        described
+            .iter()
+            .all(|(_, trigger)| *trigger == TimerTrigger::Unresolved),
+        "no description of report.timer has a trigger: {described:?}"
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(
+            in_no_systemctl_instruction(&containerfile, "report.timer"),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
 /// T37, hidden drop-ins: systemd skips a drop-in whose name starts with
 /// `.` (`systemd_reads_drop_in`), so a vendor `.override.conf` that sets
 /// `Unit=` to a unit the export stages is not trigger evidence. For a plain
@@ -8326,6 +8387,63 @@ fn a_partial_directory_listing_derives_no_command() {
             assert!(
                 in_no_systemctl_instruction(&containerfile, APP),
                 "{label}, {route}:\n{containerfile}"
+            );
+        }
+    }
+}
+
+/// A preset directory whose listing fails part way (`read_dir_strict`)
+/// may have left out the file holding a unit's rule, so the presets are
+/// incomplete and no state change is derived from them. Healthy first:
+/// with `enable app.service` read ahead of `disable *`, the enabled unit
+/// is at its preset and has no state change. With the file holding that
+/// rule left out of either directory's listing, a partial read would put
+/// the unit against `disable *` and carry an `enable` the presets never
+/// asked for; instead the scan degrades naming the directory, and the
+/// unit gets no state change and no `systemctl` line on either route.
+#[test]
+fn a_partial_preset_directory_listing_derives_no_state_change() {
+    const APP: &str = "app.service";
+    const USR_PRESETS: &str = "/usr/lib/systemd/system-preset";
+    const ETC_PRESETS: &str = "/etc/systemd/system-preset";
+    const RULE_FILE: &str = "50-app.preset";
+    let vendor = "[Service]\nExecStart=/usr/bin/app\n\n[Install]\nWantedBy=multi-user.target\n";
+    let host = |dir: &str| {
+        UnitHost::new()
+            .unit(APP, "enabled")
+            .preset("disable *")
+            .base_package("apppkg")
+            .vendor_unit(APP, vendor, Some("apppkg"))
+            .file(&format!("{dir}/{RULE_FILE}"), "enable app.service\n")
+    };
+    let degraded = |snap: &InspectionSnapshot| -> Vec<String> {
+        snap.warnings
+            .iter()
+            .filter(|w| w.inspector == "Units" && w.message.starts_with("degraded: "))
+            .map(|w| w.message.clone())
+            .collect()
+    };
+
+    for dir in [USR_PRESETS, ETC_PRESETS] {
+        let healthy = scan(host(dir));
+        assert!(
+            degraded(&healthy).is_empty(),
+            "{dir}: {:?}",
+            healthy.warnings
+        );
+        assert_eq!(changes_named(&healthy, APP), 0, "{dir}: at its preset");
+
+        let snap = scan(host(dir).partial_listing(dir, RULE_FILE));
+        let failures = degraded(&snap);
+        assert!(
+            failures.iter().any(|f| f.contains(&format!("{dir}: "))),
+            "the scan degrades naming {dir}: {failures:?}"
+        );
+        assert_eq!(changes_named(&snap, APP), 0, "{dir}");
+        for (route, containerfile) in both_routes(&snap) {
+            assert!(
+                in_no_systemctl_instruction(&containerfile, APP),
+                "{dir}, {route}:\n{containerfile}"
             );
         }
     }

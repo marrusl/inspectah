@@ -67,9 +67,16 @@ under `/etc/systemd/system`, and the links packages ship under
   (`read_dir_strict`): the unit roots and dependency directories in
   `read_links`, the drop-in directories in `resolve::conf_files`, the
   drop-in rows' listings in `collect_drop_ins`, the storage pass's root,
-  the runtime drop-in reader and the timer trigger reader. `read_dir`
-  drops an entry its iteration fails on and returns the rest, so a lost
-  link or `[Install]` drop-in would pass silently. A test makes a partial
+  the runtime drop-in reader, the timer trigger reader, both preset
+  directories in `read_preset_rules` and the scheduled inspector's timer
+  listings (`scan_systemd_timers`). `read_dir` drops an entry its
+  iteration fails on and returns the rest, so a lost link, `[Install]`
+  drop-in, preset file or local timer would pass silently. Any preset
+  read failure leaves the degraded section with no state change and the
+  `partial_inventory` inventory, as when no preset can be read: a rule
+  missing from the presets can turn a change either way. A failed `/etc`
+  timer listing leaves every vendor timer description's trigger
+  `Unresolved`, since a local file it hid would load over the vendor one. A test makes a partial
   listing with `UnitHost::partial_listing` (an iteration error after
   leaving entries out) or `MockExecutor::with_dir_iteration_error`.
 
