@@ -13920,6 +13920,193 @@ fn unreported_link_warnings<'s>(snap: &'s InspectionSnapshot, path: &str) -> Vec
         .collect()
 }
 
+/// The one warning whose `cause` is `cause`, as (message, links field).
+fn link_warning_of(snap: &InspectionSnapshot, cause: &str) -> (String, serde_json::Value) {
+    let found: Vec<_> = snap
+        .warnings
+        .iter()
+        .filter(|w| w.extra.get("cause") == Some(&serde_json::json!(cause)))
+        .collect();
+    assert_eq!(found.len(), 1, "{cause}: {:?}", snap.warnings);
+    (found[0].message.clone(), found[0].extra["links"].clone())
+}
+
+/// The branches of the unreported-link warnings beyond the § 7.3 cases:
+/// a template linked under a plain parent, against one under an instance
+/// or a template parent, which systemd fills in with an instance name; a
+/// mask or a search-path file for a name the listing does not print; a
+/// unit listed `masked` whose file is not a mask; `.requires` and
+/// `.upholds` paths; and the cap on a long list.
+#[test]
+fn units_unreported_link_warnings_cover_every_branch() {
+    let etc = |rest: &str| format!("/etc/systemd/system/{rest}");
+    let vendor = |unit: &str| format!("/usr/lib/systemd/system/{unit}");
+    let host = || {
+        UnitHost::new()
+            .preset("disable *")
+            .unit("other.service", "disabled")
+            .vendor_unit("other.service", WANTS_MULTI_USER, None)
+    };
+
+    // A template under a plain parent: the link has no effect.
+    let plain = scan(
+        host()
+            .unit("bar@.service", "indirect")
+            .vendor_unit("bar@.service", NO_INSTALL, None)
+            .link(
+                &etc("multi-user.target.wants/bar@.service"),
+                &vendor("bar@.service"),
+            ),
+    );
+    assert_eq!(
+        link_warning_of(&plain, "template").0,
+        format!(
+            "link {} (bar@.service) is not reported or carried: its unit is a template, and \
+             systemd starts no unit from a link to a template name without an instance, so the \
+             link has no effect",
+            etc("multi-user.target.wants/bar@.service")
+        )
+    );
+    assert!(
+        plain
+            .warnings
+            .iter()
+            .all(|w| w.extra.get("cause") != Some(&serde_json::json!("instance_filled"))),
+        "{:?}",
+        plain.warnings
+    );
+
+    // Under an instance parent and a template parent: the scan does not
+    // read the link, and the warning claims nothing about its effect.
+    let filled = scan(
+        host()
+            .unit("bar@.service", "indirect")
+            .vendor_unit("bar@.service", NO_INSTALL, None)
+            .link(
+                &etc("foo@a.target.wants/bar@.service"),
+                &vendor("bar@.service"),
+            )
+            .link(
+                &etc("foo@.target.wants/bar@.service"),
+                &vendor("bar@.service"),
+            ),
+    );
+    assert_eq!(
+        link_warning_of(&filled, "instance_filled").0,
+        format!(
+            "2 links are not reported or carried: for each, its unit is a template and its \
+             parent an instance or a template, and the scan does not read links that systemd \
+             fills in with an instance name. The links: {} (bar@.service); {} (bar@.service)",
+            etc("foo@.target.wants/bar@.service"),
+            etc("foo@a.target.wants/bar@.service")
+        )
+    );
+    assert!(
+        filled
+            .warnings
+            .iter()
+            .all(|w| w.extra.get("cause") != Some(&serde_json::json!("template"))),
+        "{:?}",
+        filled.warnings
+    );
+
+    // A mask for a name the listing does not print.
+    let masked = scan(host().mask("zz.service").link(
+        &etc("multi-user.target.wants/zz.service"),
+        &vendor("zz.service"),
+    ));
+    assert_eq!(
+        link_warning_of(&masked, "masked").1,
+        serde_json::json!([{"path": etc("multi-user.target.wants/zz.service"), "unit": "zz.service"}])
+    );
+
+    // A search-path file for a name the listing does not print.
+    let refused = scan(
+        host()
+            .file("/run/systemd/system/rr.service", WANTS_MULTI_USER)
+            .link(
+                &etc("multi-user.target.wants/rr.service"),
+                "/run/systemd/system/rr.service",
+            ),
+    );
+    assert_eq!(
+        link_warning_of(&refused, "refused").1,
+        serde_json::json!([{
+            "path": etc("multi-user.target.wants/rr.service"),
+            "unit": "rr.service",
+            "search_path": "/run/systemd/system/rr.service",
+        }])
+    );
+
+    // Listed `masked` whose file is a vendor unit file, not a mask, with a
+    // link of each dependency kind.
+    let listed_masked = scan(
+        host()
+            .unit("lm.service", "masked")
+            .vendor_unit("lm.service", WANTS_MULTI_USER, None)
+            .link(
+                &etc("multi-user.target.wants/lm.service"),
+                &vendor("lm.service"),
+            )
+            .link(
+                &etc("multi-user.target.requires/lm.service"),
+                &vendor("lm.service"),
+            )
+            .link(
+                &etc("multi-user.target.upholds/lm.service"),
+                &vendor("lm.service"),
+            ),
+    );
+    let paths: Vec<String> = link_warning_of(&listed_masked, "masked")
+        .1
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|link| link["path"].as_str().expect("a path").to_owned())
+        .collect();
+    let mut expected = vec![
+        etc("multi-user.target.requires/lm.service"),
+        etc("multi-user.target.upholds/lm.service"),
+        etc("multi-user.target.wants/lm.service"),
+    ];
+    let mut sorted = paths.clone();
+    sorted.sort();
+    expected.sort();
+    assert_eq!(sorted, expected, "{paths:?}");
+
+    // Seven masked links: the message names the first five and counts the
+    // rest; the field lists all seven.
+    let names: Vec<String> = (1..=7).map(|n| format!("m{n}.service")).collect();
+    let many = names.iter().fold(host(), |host, name| {
+        host.unit(name, "masked")
+            .vendor_unit(name, WANTS_MULTI_USER, None)
+            .mask(name)
+            .link(
+                &etc(&format!("multi-user.target.wants/{name}")),
+                &vendor(name),
+            )
+    });
+    let (message, links) = link_warning_of(&scan(many), "masked");
+    let shown: Vec<String> = names[..5]
+        .iter()
+        .map(|name| {
+            format!(
+                "{} ({name})",
+                etc(&format!("multi-user.target.wants/{name}"))
+            )
+        })
+        .collect();
+    assert_eq!(
+        message,
+        format!(
+            "7 links are not reported or carried: for each, its unit is masked, so the link has \
+             no effect. The links: {} and 2 more",
+            shown.join("; ")
+        )
+    );
+    assert_eq!(links.as_array().map(Vec::len), Some(7));
+}
+
 /// § 7.3's units that a link under `/etc` names and the listing does not
 /// print as a unit this scan reads, through the scan. None of these links
 /// is reported as a `ManualLink` or carried, and each that no other warning

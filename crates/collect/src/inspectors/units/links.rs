@@ -90,10 +90,10 @@ impl HostLinks {
         self.vendor.get(unit).map_or(&[], Vec::as_slice)
     }
 
-    /// The path under `/etc/systemd/system` of each link to `unit` whose
-    /// parent parses: the entry of the parent's dependency directory, or
+    /// Each link to `unit` whose parent parses under `/etc/systemd/system`,
+    /// with its path: the entry of the parent's dependency directory, or
     /// the alias itself.
-    pub(crate) fn admin_paths(&self, unit: &UnitName) -> Vec<String> {
+    pub(crate) fn admin_paths(&self, unit: &UnitName) -> Vec<(&Link, String)> {
         self.admin(unit)
             .iter()
             .map(|link| {
@@ -101,14 +101,15 @@ impl HostLinks {
                     .iter()
                     .find(|(_, relation)| *relation == link.relation)
                     .map(|(suffix, _)| *suffix);
-                match suffix {
+                let path = match suffix {
                     Some(suffix) => format!(
                         "{ETC_UNIT_DIR}/{}{suffix}/{}",
                         link.parent.as_str(),
                         unit.as_str()
                     ),
                     None => format!("{ETC_UNIT_DIR}/{}", link.parent.as_str()),
-                }
+                };
+                (link, path)
             })
             .collect()
     }

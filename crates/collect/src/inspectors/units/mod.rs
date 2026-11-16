@@ -1070,9 +1070,16 @@ enum UnreportedLinks {
     NotRead { listed: Option<String> },
     /// The unit is masked: its links have no effect.
     Masked,
-    /// The unit is a template, not masked: systemd starts nothing from a
-    /// link to a template name without an instance.
+    /// The unit is a template, not masked, linked under a plain parent:
+    /// systemd starts nothing from a link to a template name without an
+    /// instance. Under an instance or template parent the link is
+    /// [`UnreportedLinks::TemplateFilled`] instead ([`Self::for_parent`]).
     Template,
+    /// The unit is a template, not masked, linked under an instance or
+    /// template parent, whose instance name systemd fills in. The scan
+    /// does not read such a link, and the warning says nothing of its
+    /// effect.
+    TemplateFilled,
     /// A file at `path`, on the search path outside the two unit
     /// directories the scan reads, changes the unit (§ 7.1).
     Refused { path: String },
@@ -1091,9 +1098,10 @@ impl UnreportedLinks {
             Self::NotRead { .. } => (0, "not_read"),
             Self::Masked => (1, "masked"),
             Self::Template => (2, "template"),
-            Self::Refused { .. } => (3, "refused"),
-            Self::Alias { .. } => (4, "alias"),
-            Self::Dangling => (5, "dangling"),
+            Self::TemplateFilled => (3, "instance_filled"),
+            Self::Refused { .. } => (4, "refused"),
+            Self::Alias { .. } => (5, "alias"),
+            Self::Dangling => (6, "dangling"),
         }
     }
 
@@ -1108,6 +1116,10 @@ impl UnreportedLinks {
             Self::Template => {
                 "its unit is a template, and systemd starts no unit from a link to a template \
                  name without an instance, so the link has no effect"
+            }
+            Self::TemplateFilled => {
+                "its unit is a template and its parent an instance or a template, and the scan \
+                 does not read links that systemd fills in with an instance name"
             }
             Self::Refused { .. } => {
                 "a file on the systemd search path outside the two unit directories this scan \
@@ -1140,15 +1152,35 @@ impl UnreportedLinks {
                 format!("an alias of {}", of.as_str()),
                 of.as_str().to_owned(),
             )),
-            Self::NotRead { listed: None } | Self::Masked | Self::Template | Self::Dangling => None,
+            Self::NotRead { listed: None }
+            | Self::Masked
+            | Self::Template
+            | Self::TemplateFilled
+            | Self::Dangling => None,
+        }
+    }
+
+    /// The cause for one link under `parent`: a template's link under an
+    /// instance or a template parent is [`Self::TemplateFilled`].
+    fn for_parent(&self, parent: &UnitName) -> &Self {
+        match self {
+            Self::Template if parent.is_template() || parent.instance().is_some() => {
+                &Self::TemplateFilled
+            }
+            other => other,
         }
     }
 }
 
+/// How many links a grouped unreported-link warning names in its text; the
+/// rest are counted, and `links` holds them all.
+const UNREPORTED_LINKS_SHOWN: usize = 5;
+
 /// One warning per cause for the links under `/etc/systemd/system` the
 /// scan does not report (§ 7.3 of the units spec), in [`UnreportedLinks`]
-/// order, each naming every link's path and unit, with `cause` and `links`
-/// (each `path`, `unit` and the cause's detail) among its fields. A unit
+/// order, each naming the first [`UNREPORTED_LINKS_SHOWN`] links' paths and
+/// units and counting the rest, with `cause` and `links` (each `path`,
+/// `unit` and the cause's detail, every link) among its fields. A unit
 /// with no such link gives nothing.
 fn unreported_link_warnings(
     host_links: &HostLinks,
@@ -1158,7 +1190,8 @@ fn unreported_link_warnings(
     type Listed = (Vec<String>, Vec<serde_json::Value>);
     let mut by_cause: BTreeMap<(u8, &str, &str), Listed> = BTreeMap::new();
     for (unit, why) in unreported {
-        for path in host_links.admin_paths(unit) {
+        for (link, path) in host_links.admin_paths(unit) {
+            let why = why.for_parent(&link.parent);
             let (order, cause) = why.cause();
             let (texts, fields) = by_cause.entry((order, cause, why.reason())).or_default();
             let mut field = serde_json::json!({ "path": path, "unit": unit.as_str() });
@@ -1178,11 +1211,21 @@ fn unreported_link_warnings(
         .map(|((_, cause, reason), (texts, fields))| {
             let message = match texts.as_slice() {
                 [one] => format!("link {one} is not reported or carried: {reason}"),
-                many => format!(
-                    "{} links are not reported or carried: for each, {reason}. The links: {}",
-                    many.len(),
-                    many.join("; ")
-                ),
+                many => {
+                    let shown = &many[..many.len().min(UNREPORTED_LINKS_SHOWN)];
+                    let rest = many.len() - shown.len();
+                    let more = if rest > 0 {
+                        format!(" and {rest} more")
+                    } else {
+                        String::new()
+                    };
+                    format!(
+                        "{} links are not reported or carried: for each, {reason}. The links: \
+                         {}{more}",
+                        many.len(),
+                        shown.join("; ")
+                    )
+                }
             };
             Warning {
                 inspector: "units".into(),

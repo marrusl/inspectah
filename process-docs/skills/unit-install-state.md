@@ -139,6 +139,12 @@ measured. **Still needs a real-host run on RHEL 9 and RHEL 10:**
 
 - the order across the two directory names (instance `.d` before template
   `.d`), read from systemd's source (252 and 257);
+- the two template-link claims of the unreported-link warnings, recalled
+  from systemd's unit loading: a link to a template name under a plain
+  parent's `.wants` or `.requires` starts nothing (`template`), and one
+  under an instance or template parent is filled in with an instance name
+  (`instance_filled`: `foo@.target.wants/bar@.service` makes each
+  `foo@X.target` want `bar@X.service`);
 - the placement above `/etc`: a `system.control` drop-in (from
   `systemctl set-property`) hiding an `/etc` drop-in of its name, so that
   `systemctl enable` does not act on an `[Install]` in the hidden file,
@@ -237,20 +243,23 @@ skipped when `None`.
 
 A link under `/etc` that none of this reads gets a scan warning and
 nothing else (`UnreportedLinks`, `unreported_link_warnings`): a masked
-unit's link, a link to a template that is not masked, to a unit the
-search path refuses (beside the refusal warning), to an alias name, to
-a name with no unit file, or to a unit the listing does not print as one
-the scan reads. `build_state_changes` records the masked and refused
-units it reads; `unexamined_links` resolves every other name with an
-`/etc` link that never reached it, skipping a name the gate already
-warned about. One warning per cause lists every link, with `cause` and
-`links` (`path`, `unit`, and `listed_state`, `search_path` or
-`alias_of`) among its fields. They are never read failures: a resolve
-error falls back to the not-read cause, so the scan does not degrade.
-A dangling link to an instance or to a listed `static` name already
-gets the unit's "no unit file" warning and no other. A test host with an
-empty listing ends the section before any link is read, so a link case
-needs at least one listed unit.
+unit's link, a link to a template that is not masked (`template` under a
+plain parent; `instance_filled` under an instance or template parent,
+whose instance name systemd fills in, decided per link by `for_parent`),
+to a unit the search path refuses (beside the refusal warning), to an
+alias name, to a name with no unit file, or to a unit the listing does
+not print as one the scan reads. `build_state_changes` records the
+masked and refused units it reads; `unexamined_links` resolves every
+other name with an `/etc` link that never reached it, skipping a name
+the gate already warned about. One warning per cause names the first
+`UNREPORTED_LINKS_SHOWN` links and counts the rest ("and N more"), with
+`cause` and `links` (every link: `path`, `unit`, and `listed_state`,
+`search_path` or `alias_of`) among its fields. They are never read
+failures: a resolve error falls back to the not-read cause, so the scan
+does not degrade. A dangling link to an instance or to a listed `static`
+name already gets the unit's "no unit file" warning and no other. A test
+host with an empty listing ends the section before any link is read, so
+a link case needs at least one listed unit.
 
 ## A unit at its preset whose `/etc` files change `[Install]`
 
