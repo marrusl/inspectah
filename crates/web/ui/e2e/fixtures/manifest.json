@@ -8,6 +8,9 @@
     "single-host/sections.json": { "category": "body", "schema": "ContextSections" },
     "single-host/user-preview.json": { "category": "body", "schema": "UserPreviewResponse" },
     "single-host/user-preview-redacted.json": { "category": "body", "schema": "UserPreviewResponse" },
+    "single-host/view-units-kitchen-sink.json": { "category": "body", "schema": "ViewResponse" },
+    "single-host/view-units-stock10.json": { "category": "body", "schema": "ViewResponse" },
+    "single-host/sections-units-kitchen-sink.json": { "category": "body", "schema": "ContextSections" },
     "aggregate/health.json": { "category": "body", "schema": "HealthResponse" },
     "aggregate/aggregate-view.json": { "category": "body", "schema": "AggregateViewResponse" },
     "aggregate/sections.json": { "category": "body", "schema": "ContextSections" },
@@ -26,6 +29,7 @@
     "sequences/exclude-undo-redo/01-after-exclude.json": { "category": "body", "schema": "ViewResponse" },
     "sequences/exclude-undo-redo/02-after-undo.json": { "category": "body", "schema": "ViewResponse" },
     "sequences/exclude-undo-redo/03-after-redo.json": { "category": "body", "schema": "ViewResponse" },
+    "sequences/units-exclude-tmp-mount/01-after-exclude.json": { "category": "body", "schema": "ViewResponse" },
     "errors/server-500.json": { "category": "error-envelope" },
     "errors/malformed.txt": { "category": "excluded" }
   }

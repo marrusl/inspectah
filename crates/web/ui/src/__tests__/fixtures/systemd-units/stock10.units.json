@@ -1,0 +1,13 @@
+{
+  "unit_states": [],
+  "unit_dropins": [],
+  "default_target": {
+    "declined": null,
+    "include": true,
+    "locked": false,
+    "target": "multi-user.target"
+  },
+  "mount_findings": [],
+  "manual_links": [],
+  "undetermined_installs": []
+}

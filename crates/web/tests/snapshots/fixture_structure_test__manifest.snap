@@ -77,6 +77,10 @@ expression: value
       "category": "body",
       "schema": "ViewResponse"
     },
+    "sequences/units-exclude-tmp-mount/01-after-exclude.json": {
+      "category": "body",
+      "schema": "ViewResponse"
+    },
     "single-host/changes-empty.json": {
       "category": "body",
       "schema": "ChangesSummary"
@@ -89,6 +93,10 @@ expression: value
       "category": "body",
       "schema": "AnnotatedOps"
     },
+    "single-host/sections-units-kitchen-sink.json": {
+      "category": "body",
+      "schema": "ContextSections"
+    },
     "single-host/sections.json": {
       "category": "body",
       "schema": "ContextSections"
@@ -100,6 +108,14 @@ expression: value
     "single-host/user-preview.json": {
       "category": "body",
       "schema": "UserPreviewResponse"
+    },
+    "single-host/view-units-kitchen-sink.json": {
+      "category": "body",
+      "schema": "ViewResponse"
+    },
+    "single-host/view-units-stock10.json": {
+      "category": "body",
+      "schema": "ViewResponse"
     },
     "single-host/view.json": {
       "category": "body",

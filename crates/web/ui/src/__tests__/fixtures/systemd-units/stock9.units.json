@@ -1,0 +1,33 @@
+{
+  "unit_states": [
+    {
+      "current_state": "enabled",
+      "data_paths": [],
+      "default_state": "disable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "owning_package": "NetworkManager",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "NetworkManager-wait-online.service"
+    }
+  ],
+  "unit_dropins": [],
+  "default_target": {
+    "declined": null,
+    "include": true,
+    "locked": false,
+    "target": "multi-user.target"
+  },
+  "mount_findings": [],
+  "manual_links": [],
+  "undetermined_installs": []
+}

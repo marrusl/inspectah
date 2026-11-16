@@ -67,6 +67,30 @@ fn fixture_single_host_user_preview_redacted() {
     );
 }
 
+#[test]
+fn fixture_single_host_view_units_kitchen_sink() {
+    snapshot_fixture(
+        "single_host_view_units_kitchen_sink",
+        "single-host/view-units-kitchen-sink.json",
+    );
+}
+
+#[test]
+fn fixture_single_host_view_units_stock10() {
+    snapshot_fixture(
+        "single_host_view_units_stock10",
+        "single-host/view-units-stock10.json",
+    );
+}
+
+#[test]
+fn fixture_single_host_sections_units_kitchen_sink() {
+    snapshot_fixture(
+        "single_host_sections_units_kitchen_sink",
+        "single-host/sections-units-kitchen-sink.json",
+    );
+}
+
 // --- Body fixtures: aggregate (GET presets) ---
 
 #[test]
@@ -91,6 +115,14 @@ fn fixture_sequence_after_exclude() {
     snapshot_fixture(
         "seq_after_exclude",
         "sequences/exclude-undo-redo/01-after-exclude.json",
+    );
+}
+
+#[test]
+fn fixture_sequence_units_exclude_tmp_mount_01() {
+    snapshot_fixture(
+        "seq_units_exclude_tmp_mount_01",
+        "sequences/units-exclude-tmp-mount/01-after-exclude.json",
     );
 }
 

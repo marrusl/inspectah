@@ -1,0 +1,434 @@
+[
+  {
+    "id": "units",
+    "display_name": "Services",
+    "items": [
+      {
+        "id": "tmp.mount",
+        "title": "tmp.mount",
+        "subtitle": "masked (preset default: disable)",
+        "detail": null,
+        "searchable_text": "tmp.mount masked disable mask systemd"
+      },
+      {
+        "id": "bluetooth.service",
+        "title": "bluetooth.service",
+        "subtitle": "masked (preset default: enable)",
+        "detail": null,
+        "searchable_text": "bluetooth.service masked enable mask bluez"
+      },
+      {
+        "id": "cups.service",
+        "title": "cups.service",
+        "subtitle": "enabled (diverges from preset: enable)",
+        "detail": null,
+        "searchable_text": "cups.service enabled enable enable cups"
+      },
+      {
+        "id": "driftify-also-main.service",
+        "title": "driftify-also-main.service",
+        "subtitle": "enabled (diverges from preset: disable)",
+        "detail": null,
+        "searchable_text": "driftify-also-main.service enabled disable enable"
+      },
+      {
+        "id": "driftify-also-member.service",
+        "title": "driftify-also-member.service",
+        "subtitle": "enabled (diverges from preset: disable)",
+        "detail": null,
+        "searchable_text": "driftify-also-member.service enabled disable enable"
+      },
+      {
+        "id": "httpd.service",
+        "title": "httpd.service",
+        "subtitle": "enabled (diverges from preset: disable)",
+        "detail": "[Service]\nTimeoutStartSec=600\nLimitNOFILE=65535\n\n---\n[Service]\nLimitNOFILE=65535\nLimitNPROC=4096\n",
+        "searchable_text": "httpd.service enabled disable enable httpd"
+      },
+      {
+        "id": "iscsid.service",
+        "title": "iscsid.service",
+        "subtitle": "enabled (diverges from preset: disable)",
+        "detail": null,
+        "searchable_text": "iscsid.service enabled disable enable iscsi-initiator-utils"
+      },
+      {
+        "id": "kdump.service",
+        "title": "kdump.service",
+        "subtitle": "masked (preset default: enable)",
+        "detail": null,
+        "searchable_text": "kdump.service masked enable mask kdump-utils"
+      },
+      {
+        "id": "nginx.service",
+        "title": "nginx.service",
+        "subtitle": "enabled (diverges from preset: disable)",
+        "detail": "[Service]\nLimitNOFILE=131072\nExecStartPost=/usr/local/bin/notify-deploy.sh\n",
+        "searchable_text": "nginx.service enabled disable enable nginx"
+      },
+      {
+        "id": "virtnetworkd.service",
+        "title": "virtnetworkd.service",
+        "subtitle": "enabled (diverges from preset: disable)",
+        "detail": null,
+        "searchable_text": "virtnetworkd.service enabled disable enable libvirt-daemon-driver-network"
+      },
+      {
+        "id": "cockpit.socket",
+        "title": "cockpit.socket",
+        "subtitle": "disabled (diverges from preset: enable)",
+        "detail": null,
+        "searchable_text": "cockpit.socket disabled enable disable cockpit-ws"
+      },
+      {
+        "id": "cups.socket",
+        "title": "cups.socket",
+        "subtitle": "disabled (diverges from preset: enable)",
+        "detail": null,
+        "searchable_text": "cups.socket disabled enable disable cups"
+      },
+      {
+        "id": "iscsid.socket",
+        "title": "iscsid.socket",
+        "subtitle": "disabled (diverges from preset: enable)",
+        "detail": null,
+        "searchable_text": "iscsid.socket disabled enable disable iscsi-initiator-utils"
+      },
+      {
+        "id": "virtnetworkd-admin.socket",
+        "title": "virtnetworkd-admin.socket",
+        "subtitle": "disabled (diverges from preset: enable)",
+        "detail": null,
+        "searchable_text": "virtnetworkd-admin.socket disabled enable disable libvirt-daemon-driver-network"
+      },
+      {
+        "id": "virtnetworkd-ro.socket",
+        "title": "virtnetworkd-ro.socket",
+        "subtitle": "disabled (diverges from preset: enable)",
+        "detail": null,
+        "searchable_text": "virtnetworkd-ro.socket disabled enable disable libvirt-daemon-driver-network"
+      },
+      {
+        "id": "virtnetworkd.socket",
+        "title": "virtnetworkd.socket",
+        "subtitle": "disabled (diverges from preset: enable)",
+        "detail": null,
+        "searchable_text": "virtnetworkd.socket disabled enable disable libvirt-daemon-driver-network"
+      },
+      {
+        "id": "myapp-report.timer",
+        "title": "myapp-report.timer",
+        "subtitle": "enabled (diverges from preset: disable)",
+        "detail": null,
+        "searchable_text": "myapp-report.timer enabled disable enable"
+      },
+      {
+        "id": "getty@tty2.service",
+        "title": "getty@tty2.service",
+        "subtitle": "enabled (diverges from preset: disable)",
+        "detail": null,
+        "searchable_text": "getty@tty2.service enabled disable enable systemd"
+      },
+      {
+        "id": "wg-quick@wg0.service",
+        "title": "wg-quick@wg0.service",
+        "subtitle": "enabled (diverges from preset: disable)",
+        "detail": null,
+        "searchable_text": "wg-quick@wg0.service enabled disable enable wireguard-tools"
+      },
+      {
+        "id": "sshd.service",
+        "title": "sshd.service",
+        "subtitle": "enabled (matches preset, has drop-in override)",
+        "detail": "[Unit]\nDescription=OpenSSH server daemon\nDocumentation=man:sshd(8) man:sshd_config(5)\nAfter=network.target sshd-keygen.target\nWants=sshd-keygen.target\n# Migration for Fedora 38 change to remove group ownership for standard host keys\n# See https://fedoraproject.org/wiki/Changes/SSHKeySignSuidBit\nWants=ssh-host-keys-migration.service\n\n[Service]\nType=notify\nEnvironmentFile=-/etc/sysconfig/sshd\nExecStart=/usr/sbin/sshd -o LogLevel=VERBOSE -D $OPTIONS\nExecReload=/bin/kill -HUP $MAINPID\nKillMode=process\nRestart=on-failure\nRestartSec=42s\n\n[Install]\nWantedBy=multi-user.target\n",
+        "searchable_text": "sshd.service enabled drop-in override"
+      }
+    ],
+    "subsections": [
+      {
+        "id": "service_warnings",
+        "display_name": "Service Warnings",
+        "items": [
+          {
+            "id": "warning-systemd-remount-fs.service",
+            "title": "systemd-remount-fs.service",
+            "subtitle": "unit systemd-remount-fs.service has state 'enabled-runtime' - transient state is not migrated",
+            "detail": null,
+            "searchable_text": "warning unit systemd-remount-fs.service has state 'enabled-runtime' - transient state is not migrated"
+          },
+          {
+            "id": "warning-unknown",
+            "title": "unknown",
+            "subtitle": "2 links are not reported or carried: for each, its unit is masked, so the link has no effect. The links: /etc/systemd/system/dbus-org.bluez.service (bluetooth.service); /etc/systemd/system/bluetooth.target.wants/bluetooth.service (bluetooth.service)",
+            "detail": null,
+            "searchable_text": "warning 2 links are not reported or carried: for each, its unit is masked, so the link has no effect. The links: /etc/systemd/system/dbus-org.bluez.service (bluetooth.service); /etc/systemd/system/bluetooth.target.wants/bluetooth.service (bluetooth.service)"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "scheduled_tasks",
+    "display_name": "Scheduled Tasks",
+    "items": [
+      {
+        "id": "cron:etc/cron.d/0hourly",
+        "title": "0hourly",
+        "subtitle": "cron.d",
+        "detail": null,
+        "searchable_text": "0hourly cron.d cron etc/cron.d/0hourly"
+      },
+      {
+        "id": "cron:etc/cron.d/backup-daily",
+        "title": "backup-daily",
+        "subtitle": "cron.d",
+        "detail": null,
+        "searchable_text": "backup-daily cron.d cron etc/cron.d/backup-daily"
+      },
+      {
+        "id": "cron:etc/cron.d/complex-job",
+        "title": "complex-job",
+        "subtitle": "cron.d",
+        "detail": null,
+        "searchable_text": "complex-job cron.d cron etc/cron.d/complex-job"
+      },
+      {
+        "id": "cron:etc/crontab",
+        "title": "crontab",
+        "subtitle": "crontab",
+        "detail": null,
+        "searchable_text": "crontab crontab cron etc/crontab"
+      },
+      {
+        "id": "cron:etc/cron.hourly/0anacron",
+        "title": "0anacron",
+        "subtitle": "cron.hourly",
+        "detail": null,
+        "searchable_text": "0anacron cron.hourly cron etc/cron.hourly/0anacron"
+      },
+      {
+        "id": "cron:etc/cron.daily/cleanup.sh",
+        "title": "cleanup.sh",
+        "subtitle": "cron.daily",
+        "detail": null,
+        "searchable_text": "cleanup.sh cron.daily cron etc/cron.daily/cleanup.sh"
+      },
+      {
+        "id": "cron:var/spool/cron/appuser",
+        "title": "appuser",
+        "subtitle": "spool/cron (appuser)",
+        "detail": null,
+        "searchable_text": "appuser spool/cron (appuser) cron var/spool/cron/appuser"
+      },
+      {
+        "id": "timer:etc/systemd/system/driftify-backup.timer",
+        "title": "driftify-backup",
+        "subtitle": "*-*-* 03:00:00",
+        "detail": "Daily backup job\n/usr/local/bin/backup.sh",
+        "searchable_text": "driftify-backup *-*-* 03:00:00 Daily backup job\n/usr/local/bin/backup.sh timer",
+        "unit": "driftify-backup.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:etc/systemd/system/myapp-report.timer",
+        "title": "myapp-report",
+        "subtitle": "daily",
+        "detail": "MyApp Daily Report Timer\n/usr/local/bin/generate-report.sh",
+        "searchable_text": "myapp-report daily MyApp Daily Report Timer\n/usr/local/bin/generate-report.sh timer",
+        "unit": "myapp-report.timer",
+        "unit_row": true
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/fstrim.timer",
+        "title": "fstrim",
+        "subtitle": "weekly",
+        "detail": "Discard unused filesystem blocks once a week\n/usr/sbin/fstrim --listed-in /etc/fstab:/proc/self/mountinfo --verbose --quiet-unsupported",
+        "searchable_text": "fstrim weekly Discard unused filesystem blocks once a week\n/usr/sbin/fstrim --listed-in /etc/fstab:/proc/self/mountinfo --verbose --quiet-unsupported timer",
+        "unit": "fstrim.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/logrotate.timer",
+        "title": "logrotate",
+        "subtitle": "daily",
+        "detail": "Daily rotation of log files\n/usr/sbin/logrotate /etc/logrotate.conf",
+        "searchable_text": "logrotate daily Daily rotation of log files\n/usr/sbin/logrotate /etc/logrotate.conf timer",
+        "unit": "logrotate.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/systemd-sysupdate-reboot.timer",
+        "title": "systemd-sysupdate-reboot",
+        "subtitle": "4:10",
+        "detail": "Reboot Automatically After System Update\n/usr/lib/systemd/systemd-sysupdate reboot",
+        "searchable_text": "systemd-sysupdate-reboot 4:10 Reboot Automatically After System Update\n/usr/lib/systemd/systemd-sysupdate reboot timer",
+        "unit": "systemd-sysupdate-reboot.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/systemd-sysupdate.timer",
+        "title": "systemd-sysupdate",
+        "subtitle": "Sat",
+        "detail": "Automatic System Update\n/usr/lib/systemd/systemd-sysupdate update",
+        "searchable_text": "systemd-sysupdate Sat Automatic System Update\n/usr/lib/systemd/systemd-sysupdate update timer",
+        "unit": "systemd-sysupdate.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/systemd-tmpfiles-clean.timer",
+        "title": "systemd-tmpfiles-clean",
+        "subtitle": null,
+        "detail": "Daily Cleanup of Temporary Directories\nsystemd-tmpfiles --clean",
+        "searchable_text": "systemd-tmpfiles-clean Daily Cleanup of Temporary Directories\nsystemd-tmpfiles --clean timer",
+        "unit": "systemd-tmpfiles-clean.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/mdcheck_start.timer",
+        "title": "mdcheck_start",
+        "subtitle": "Sun *-*-1..7 1:05:00",
+        "detail": "MD array scrubbing\n/usr/share/mdadm/mdcheck --duration ${MDADM_CHECK_DURATION}",
+        "searchable_text": "mdcheck_start Sun *-*-1..7 1:05:00 MD array scrubbing\n/usr/share/mdadm/mdcheck --duration ${MDADM_CHECK_DURATION} timer",
+        "unit": "mdcheck_start.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/mdadm-last-resort@.timer",
+        "title": "mdadm-last-resort@",
+        "subtitle": null,
+        "detail": "Timer to wait for more drives before activating degraded array %I.\n/usr/sbin/mdadm --run /dev/%i",
+        "searchable_text": "mdadm-last-resort@ Timer to wait for more drives before activating degraded array %I.\n/usr/sbin/mdadm --run /dev/%i timer",
+        "unit": "mdadm-last-resort@.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/mdcheck_continue.timer",
+        "title": "mdcheck_continue",
+        "subtitle": "1:00:00",
+        "detail": "MD array scrubbing - continuation\n/usr/share/mdadm/mdcheck --continue --duration ${MDADM_CHECK_DURATION}",
+        "searchable_text": "mdcheck_continue 1:00:00 MD array scrubbing - continuation\n/usr/share/mdadm/mdcheck --continue --duration ${MDADM_CHECK_DURATION} timer",
+        "unit": "mdcheck_continue.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/mdmonitor-oneshot.timer",
+        "title": "mdmonitor-oneshot",
+        "subtitle": "2:00:00",
+        "detail": "Reminder for degraded MD arrays\n/usr/sbin/mdadm --monitor --oneshot $MDADM_MONITOR_ARGS",
+        "searchable_text": "mdmonitor-oneshot 2:00:00 Reminder for degraded MD arrays\n/usr/sbin/mdadm --monitor --oneshot $MDADM_MONITOR_ARGS timer",
+        "unit": "mdmonitor-oneshot.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/raid-check.timer",
+        "title": "raid-check",
+        "subtitle": "Sun *-*-* 01:00:00",
+        "detail": "Weekly RAID setup health check\n/usr/sbin/raid-check",
+        "searchable_text": "raid-check Sun *-*-* 01:00:00 Weekly RAID setup health check\n/usr/sbin/raid-check timer",
+        "unit": "raid-check.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/insights-client.timer",
+        "title": "insights-client",
+        "subtitle": "daily",
+        "detail": "Insights Client Timer Task\n/usr/bin/insights-client",
+        "searchable_text": "insights-client daily Insights Client Timer Task\n/usr/bin/insights-client timer",
+        "unit": "insights-client.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/rhc-canonical-facts.timer",
+        "title": "rhc-canonical-facts",
+        "subtitle": "daily",
+        "detail": "yggdrasil canonical-facts service timer\ntouch /var/lib/yggdrasil/canonical-facts.json",
+        "searchable_text": "rhc-canonical-facts daily yggdrasil canonical-facts service timer\ntouch /var/lib/yggdrasil/canonical-facts.json timer",
+        "unit": "rhc-canonical-facts.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/fwupd-refresh.timer",
+        "title": "fwupd-refresh",
+        "subtitle": "*-*-* *:00:00",
+        "detail": "Refresh fwupd metadata regularly\n/usr/bin/fwupdmgr refresh",
+        "searchable_text": "fwupd-refresh *-*-* *:00:00 Refresh fwupd metadata regularly\n/usr/bin/fwupdmgr refresh timer",
+        "unit": "fwupd-refresh.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/dnf-makecache.timer",
+        "title": "dnf-makecache",
+        "subtitle": null,
+        "detail": "dnf makecache --timer\n/usr/bin/dnf makecache --timer",
+        "searchable_text": "dnf-makecache dnf makecache --timer\n/usr/bin/dnf makecache --timer timer",
+        "unit": "dnf-makecache.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/podman-auto-update.timer",
+        "title": "podman-auto-update",
+        "subtitle": "daily",
+        "detail": "Podman auto-update timer\n/usr/bin/podman auto-update",
+        "searchable_text": "podman-auto-update daily Podman auto-update timer\n/usr/bin/podman auto-update timer",
+        "unit": "podman-auto-update.timer",
+        "unit_row": false
+      },
+      {
+        "id": "timer:usr/lib/systemd/system/aide-check.timer",
+        "title": "aide-check",
+        "subtitle": "daily",
+        "detail": "Daily AIDE file integrity check\n/usr/sbin/aide --check",
+        "searchable_text": "aide-check daily Daily AIDE file integrity check\n/usr/sbin/aide --check timer",
+        "unit": "aide-check.timer",
+        "unit_row": false
+      },
+      {
+        "id": "at:var/spool/at/spool",
+        "title": "var/spool/at/spool",
+        "subtitle": ": ",
+        "detail": null,
+        "searchable_text": "var/spool/at/spool :  at"
+      },
+      {
+        "id": "generated:0:cron-backup-daily",
+        "title": "cron-backup-daily",
+        "subtitle": "0 2 * * *",
+        "detail": "etc/cron.d/backup-daily\n/usr/local/bin/backup.sh >> /var/log/myapp/backup.log 2>&1",
+        "searchable_text": "cron-backup-daily 0 2 * * * etc/cron.d/backup-daily\n/usr/local/bin/backup.sh >> /var/log/myapp/backup.log 2>&1 generated-timer",
+        "generated_timer": "cron-backup-daily"
+      },
+      {
+        "id": "generated:1:cron-complex-job",
+        "title": "cron-complex-job",
+        "subtitle": "30 6 * * 1-5",
+        "detail": "etc/cron.d/complex-job\n/opt/myapp/scripts/weekday-report.sh",
+        "searchable_text": "cron-complex-job 30 6 * * 1-5 etc/cron.d/complex-job\n/opt/myapp/scripts/weekday-report.sh generated-timer",
+        "generated_timer": "cron-complex-job"
+      },
+      {
+        "id": "generated:2:cron-crontab",
+        "title": "cron-crontab",
+        "subtitle": "30 2 * * *",
+        "detail": "etc/crontab\n/usr/bin/logrotate /etc/logrotate.conf",
+        "searchable_text": "cron-crontab 30 2 * * * etc/crontab\n/usr/bin/logrotate /etc/logrotate.conf generated-timer",
+        "generated_timer": "cron-crontab"
+      },
+      {
+        "id": "generated:3:cron-daily-cleanup-sh",
+        "title": "cron-daily-cleanup-sh",
+        "subtitle": "@daily",
+        "detail": "etc/cron.daily/cleanup.sh\n/etc/cron.daily/cleanup.sh",
+        "searchable_text": "cron-daily-cleanup-sh @daily etc/cron.daily/cleanup.sh\n/etc/cron.daily/cleanup.sh generated-timer",
+        "generated_timer": "cron-daily-cleanup-sh"
+      },
+      {
+        "id": "generated:4:cron-appuser",
+        "title": "cron-appuser",
+        "subtitle": "*/15 * * * *",
+        "detail": "var/spool/cron/appuser\n/opt/myapp/scripts/health-check.sh >> /var/log/myapp/health.log 2>&1",
+        "searchable_text": "cron-appuser */15 * * * * var/spool/cron/appuser\n/opt/myapp/scripts/health-check.sh >> /var/log/myapp/health.log 2>&1 generated-timer",
+        "generated_timer": "cron-appuser"
+      }
+    ]
+  }
+]

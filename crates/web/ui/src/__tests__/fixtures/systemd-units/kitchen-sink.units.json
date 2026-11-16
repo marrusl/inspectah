@@ -1,0 +1,577 @@
+{
+  "unit_states": [
+    {
+      "attention_reason": "tmp.mount is masked on the source host, where /tmp is then a directory on the root filesystem. Not carried: the bootc base image mounts /tmp from this unit, and without it /tmp is read-only.",
+      "current_state": "masked",
+      "data_paths": [],
+      "declined": {
+        "reason": "TargetNeedsUnit",
+        "renders": "fixme",
+        "text": "tmp.mount is masked on the source host, where /tmp is then a directory on the root filesystem. Not carried: the bootc base image mounts /tmp from this unit, and without it /tmp is read-only."
+      },
+      "default_state": "disable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "mount",
+      "locked": false,
+      "owning_package": "systemd",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "tmp.mount"
+    },
+    {
+      "current_state": "masked",
+      "data_paths": [],
+      "default_state": "enable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "owning_package": "bluez",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "bluetooth.service"
+    },
+    {
+      "also": [
+        {
+          "links": "unlinked",
+          "unit": "cups.socket"
+        },
+        {
+          "links": "installed",
+          "unit": "cups.path"
+        }
+      ],
+      "attention_reason": "A unit it enables through Also= is not enabled alongside it.",
+      "current_state": "enabled",
+      "data_paths": [],
+      "declined": {
+        "reason": "AlsoMember",
+        "renders": "advisory",
+        "text": "cups.service is enabled on the source host. Not carried: systemctl enable on it also enables cups.socket (named by Also=), which is not enabled there."
+      },
+      "default_state": "enable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "owning_package": "cups",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "cups.service"
+    },
+    {
+      "also": [
+        {
+          "links": "installed",
+          "unit": "driftify-also-member.service"
+        }
+      ],
+      "current_state": "enabled",
+      "data_paths": [],
+      "declined": {
+        "reason": "AlsoMember",
+        "renders": "advisory",
+        "text": "driftify-also-main.service is enabled on the source host. Not carried: /etc/systemd/system/driftify-also-main.service sets [Install] for driftify-also-main.service, so the units systemctl enable reaches through Also= in the image may not be the ones recorded."
+      },
+      "default_state": "disable",
+      "fragment": "local",
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_unknown_origin",
+        "triage": {
+          "investigate": null,
+          "mode": "single_host"
+        }
+      },
+      "unit": "driftify-also-main.service",
+      "unit_file_path": "/etc/systemd/system/driftify-also-main.service"
+    },
+    {
+      "current_state": "enabled",
+      "data_paths": [],
+      "default_state": "disable",
+      "fragment": "local",
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_unknown_origin",
+        "triage": {
+          "investigate": null,
+          "mode": "single_host"
+        }
+      },
+      "unit": "driftify-also-member.service",
+      "unit_file_path": "/etc/systemd/system/driftify-also-member.service"
+    },
+    {
+      "current_state": "enabled",
+      "data_paths": [],
+      "default_state": "disable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "owning_package": "httpd",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "httpd.service"
+    },
+    {
+      "also": [
+        {
+          "links": "unlinked",
+          "unit": "iscsid.socket"
+        }
+      ],
+      "current_state": "enabled",
+      "data_paths": [],
+      "declined": {
+        "reason": "AlsoMember",
+        "renders": "advisory",
+        "text": "iscsid.service is enabled on the source host. Not carried: systemctl enable on it also enables iscsid.socket (named by Also=), which is not enabled there."
+      },
+      "default_state": "disable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "owning_package": "iscsi-initiator-utils",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "iscsid.service"
+    },
+    {
+      "current_state": "masked",
+      "data_paths": [],
+      "default_state": "enable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "owning_package": "kdump-utils",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "kdump.service"
+    },
+    {
+      "current_state": "enabled",
+      "data_paths": [],
+      "default_state": "disable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "owning_package": "nginx",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "nginx.service"
+    },
+    {
+      "also": [
+        {
+          "links": "unlinked",
+          "unit": "virtnetworkd.socket"
+        },
+        {
+          "links": "unlinked",
+          "unit": "virtnetworkd-ro.socket"
+        },
+        {
+          "links": "unlinked",
+          "unit": "virtnetworkd-admin.socket"
+        }
+      ],
+      "current_state": "enabled",
+      "data_paths": [],
+      "declined": {
+        "reason": "AlsoMember",
+        "renders": "advisory",
+        "text": "virtnetworkd.service is enabled on the source host. Not carried: systemctl enable on it also enables virtnetworkd.socket, virtnetworkd-ro.socket and virtnetworkd-admin.socket (named by Also=), which are not enabled there."
+      },
+      "default_state": "disable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "owning_package": "libvirt-daemon-driver-network",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "virtnetworkd.service"
+    },
+    {
+      "current_state": "disabled",
+      "data_paths": [],
+      "default_state": "enable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "socket",
+      "locked": false,
+      "owning_package": "cockpit-ws",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "cockpit.socket"
+    },
+    {
+      "current_state": "disabled",
+      "data_paths": [],
+      "default_state": "enable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "socket",
+      "locked": false,
+      "owning_package": "cups",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "cups.socket"
+    },
+    {
+      "current_state": "disabled",
+      "data_paths": [],
+      "default_state": "enable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "socket",
+      "locked": false,
+      "owning_package": "iscsi-initiator-utils",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "iscsid.socket"
+    },
+    {
+      "also": [
+        {
+          "links": "unlinked",
+          "unit": "virtnetworkd.socket"
+        },
+        {
+          "links": "unlinked",
+          "unit": "virtnetworkd-ro.socket"
+        }
+      ],
+      "current_state": "disabled",
+      "data_paths": [],
+      "default_state": "enable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "socket",
+      "locked": false,
+      "owning_package": "libvirt-daemon-driver-network",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "virtnetworkd-admin.socket"
+    },
+    {
+      "also": [
+        {
+          "links": "unlinked",
+          "unit": "virtnetworkd.socket"
+        },
+        {
+          "links": "unlinked",
+          "unit": "virtnetworkd-admin.socket"
+        }
+      ],
+      "current_state": "disabled",
+      "data_paths": [],
+      "default_state": "enable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "socket",
+      "locked": false,
+      "owning_package": "libvirt-daemon-driver-network",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "virtnetworkd-ro.socket"
+    },
+    {
+      "also": [
+        {
+          "links": "unlinked",
+          "unit": "virtnetworkd-ro.socket"
+        },
+        {
+          "links": "unlinked",
+          "unit": "virtnetworkd-admin.socket"
+        }
+      ],
+      "current_state": "disabled",
+      "data_paths": [],
+      "default_state": "enable",
+      "fragment": "vendor",
+      "include": true,
+      "kind": "socket",
+      "locked": false,
+      "owning_package": "libvirt-daemon-driver-network",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "virtnetworkd.socket"
+    },
+    {
+      "current_state": "enabled",
+      "data_paths": [],
+      "default_state": "disable",
+      "fragment": "local",
+      "include": true,
+      "kind": "timer",
+      "locked": false,
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_unknown_origin",
+        "triage": {
+          "investigate": null,
+          "mode": "single_host"
+        }
+      },
+      "unit": "myapp-report.timer",
+      "unit_file_path": "/etc/systemd/system/myapp-report.timer"
+    },
+    {
+      "attention_reason": "inspectah does not know what this instance reads: its template is on no list, and its unit file names no path under /etc or /var for it. It is carried on its unit file alone.",
+      "current_state": "enabled",
+      "data_paths": [],
+      "default_state": "disable",
+      "fragment": "vendor",
+      "include": true,
+      "instance_of": "getty@.service",
+      "kind": "service",
+      "locked": false,
+      "owning_package": "systemd",
+      "required_config": [],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "getty@tty2.service"
+    },
+    {
+      "current_state": "enabled",
+      "data_paths": [],
+      "declined": {
+        "reason": "InstanceConfigNotStaged",
+        "renders": "omitted",
+        "text": "wg-quick@wg0.service (its configuration /etc/wireguard/wg0.conf holds a redacted value; provision the secret on the deployed host and enable the unit there)"
+      },
+      "default_state": "disable",
+      "fragment": "vendor",
+      "include": true,
+      "instance_of": "wg-quick@.service",
+      "kind": "service",
+      "locked": false,
+      "owning_package": "wireguard-tools",
+      "required_config": [
+        "/etc/wireguard/wg0.conf"
+      ],
+      "triage": {
+        "primary_reason": "service_non_default_state",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "wg-quick@wg0.service"
+    }
+  ],
+  "unit_dropins": [
+    {
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "path": "/etc/systemd/system/nginx.service.d/override.conf",
+      "shadow_type": "drop_in",
+      "triage": {
+        "primary_reason": "service_drop_in_present",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "nginx.service"
+    },
+    {
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "path": "/etc/systemd/system/httpd.service.d/override.conf",
+      "shadow_type": "drop_in",
+      "triage": {
+        "primary_reason": "service_drop_in_present",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "httpd.service"
+    },
+    {
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "path": "/etc/systemd/system/httpd.service.d/limits.conf",
+      "shadow_type": "drop_in",
+      "triage": {
+        "primary_reason": "service_drop_in_present",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "httpd.service"
+    },
+    {
+      "include": true,
+      "kind": "service",
+      "locked": false,
+      "path": "/etc/systemd/system/sshd.service",
+      "shadow_rationale": "Full shadow: this unit file in /etc/systemd/system/ overrides the vendor unit in /usr/lib/systemd/system/. Base image updates to this unit will be silently ignored.",
+      "shadow_type": "full_shadow",
+      "triage": {
+        "primary_reason": "service_drop_in_present",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      },
+      "unit": "sshd.service"
+    }
+  ],
+  "default_target": {
+    "declined": null,
+    "include": true,
+    "locked": false,
+    "target": "graphical.target"
+  },
+  "mount_findings": [],
+  "manual_links": [
+    {
+      "advisories": [
+        "# Advisory: multi-user.target.wants/driftify-static.service is a link on the source host that driftify-static.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
+        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'driftify-static.service'"
+      ],
+      "cause": "static_unit",
+      "parent": "multi-user.target",
+      "relation": "wants",
+      "unit": "driftify-static.service"
+    },
+    {
+      "advisories": [
+        "# Advisory: multi-user.target.upholds/driftify-upheld.service is not carried: the unit's [Install] section cannot be relied on (enabling the unit would also make an .upholds link).",
+        "#   An .upholds link starts driftify-upheld.service while multi-user.target is active and restarts it whenever it stops, so adding it for a unit that becomes inactive after it exits, such as a oneshot service without RemainAfterExit=yes, produces a restart loop. A RHEL 9 target does not honor it. To add it, put Upholds=driftify-upheld.service in a drop-in for multi-user.target."
+      ],
+      "cause": {
+        "undetermined": {
+          "reason": "upheld_by"
+        }
+      },
+      "parent": "multi-user.target",
+      "relation": "upholds",
+      "unit": "driftify-upheld.service"
+    }
+  ],
+  "undetermined_installs": [
+    {
+      "advisories": [
+        "# Advisory: driftify-upheld.service is not carried: its [Install] section on the source host cannot be relied on (enabling the unit would also make an .upholds link), and these files under /etc/systemd/system change it: /etc/systemd/system/driftify-upheld.service.",
+        "#   The image's links for driftify-upheld.service can differ from the source host's, including links its package install made before these files are copied. Check them with systemctl is-enabled in the image."
+      ],
+      "install_files": [
+        "/etc/systemd/system/driftify-upheld.service"
+      ],
+      "reason": "upheld_by",
+      "unit": "driftify-upheld.service"
+    }
+  ]
+}
