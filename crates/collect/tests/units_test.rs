@@ -6143,6 +6143,7 @@ fn an_assignment_systemd_ignores_removes_nothing() {
     }
 }
 
+/// T44: a directory specifier replacement, and one the reader does not expand.
 /// § 7.5: a single-path replacement whose value holds a directory
 /// specifier the reader expands (`WorkingDirectory=%S/w`, which is
 /// `/var/lib/w`) is one systemd accepts. It replaces the template's
@@ -6188,6 +6189,7 @@ fn a_directory_specifier_replacement_overrides_the_earlier_path() {
     );
 }
 
+/// T44: `%E/w/%i.conf` requires `/etc/w/site.conf`.
 /// § 7.5: a path written with the system manager's `%E` (`/etc`) and `%i`
 /// is a `required_config` entry like one written out, so it gates the
 /// instance's enable (rule 6). Control: the same path written as
@@ -6211,6 +6213,7 @@ fn a_configuration_path_under_e_is_required() {
     }
 }
 
+/// T44: a `StateDirectory=` reset.
 /// § 7.5: an empty `StateDirectory=` clears the data directories before
 /// it. Control: without the reset the directory is data.
 #[test]
@@ -6263,6 +6266,7 @@ fn scan_maybe_degraded(exec: &MockExecutor) -> (UnitSection, Vec<String>, Option
     (section, warnings, reason)
 }
 
+/// T44: the type-wide and dash-prefix drop-ins apply.
 /// § 7.5, R4: an instance's settings come from every drop-in directory
 /// systemd reads for it, not only the own and template `.d` the
 /// `[Install]` reader uses: the type-wide `service.d`, the dash-prefix
@@ -6298,6 +6302,7 @@ fn an_instance_reads_its_type_wide_and_dash_prefix_drop_ins() {
     }
 }
 
+/// T44: a named drop-in hides a type-wide one of its name.
 /// § 7.5, R4: of drop-ins sharing a file name, the one systemd reads wins
 /// (systemd's `unit_file_find_dropin_paths`: every directory of the unit's
 /// names on the whole search path before any type-wide directory, the
@@ -6331,6 +6336,7 @@ fn a_named_drop_in_hides_a_type_wide_one_of_its_name() {
     );
 }
 
+/// T44: a runtime drop-in that cannot be read.
 /// § 7.5, R4: a runtime drop-in directory that cannot be listed in full,
 /// and a drop-in there that is not text, leave what the instance reads
 /// unknown: the instance keeps its state change with `needs_unknown`

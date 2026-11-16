@@ -3876,6 +3876,7 @@ fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
     }
 }
 
+/// T44: a reset drop-in holding `[Install]` keeps `InstallEvidenceChanged`.
 /// Rule 5 for what an instance reads: the collector records among a row's
 /// `install_drop_ins` a runtime drop-in whose reset, replacement or hiding
 /// changed a path the instance reads. One the export does not stage is
@@ -4239,6 +4240,7 @@ fn rule_6_needs_each_instance_configuration_in_the_export() {
     }
 }
 
+/// T44, in the plan alone: each cause omits an `enable`, and a `disable` is carried.
 /// § 7.5 and § 10.2 rule 6, on the plan: an instance row whose
 /// `needs_unknown` is set has its `enable` omitted as
 /// `InstanceNeedsUnknown`, in either form, even with a `required_config`

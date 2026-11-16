@@ -10207,6 +10207,7 @@ fn t_reads_host(service: &str, files: &[(&str, &str)]) -> UnitHost {
     host
 }
 
+/// T44: a quoted path holding a space is one path.
 /// Rule 6 through the scan, with a command line read as systemd reads it:
 /// the quoted and unquoted forms of one configuration argument record the
 /// same path, and so do a quoted path holding a space and a path holding
@@ -10371,6 +10372,7 @@ fn needs_evidence_omitted(unit: &str, path: &str) -> String {
     )
 }
 
+/// T44: a reset drop-in in `install_drop_ins`, excluded or under `/run`.
 /// Rule 5 for what an instance reads, through the scan: the template
 /// requires `/etc/t/old/%i.env` and a drop-in resets `EnvironmentFile=`.
 /// With the reset drop-in under `/etc` and included, nothing is required
@@ -10518,6 +10520,7 @@ fn an_override_systemd_ignores_keeps_the_requirement_through_the_scan() {
     }
 }
 
+/// T44: the type-wide and dash-prefix `EnvironmentFile=`.
 /// R4 through the scan: an instance's `EnvironmentFile=` set by a
 /// type-wide drop-in (`/etc/systemd/system/service.d`) or a dash-prefix one
 /// (`/etc/systemd/system/t-.service.d` for `t-job@site.service`) is
@@ -10641,6 +10644,7 @@ fn t25_c_a_member_whose_configuration_argument_is_quoted() {
     }
 }
 
+/// T44: an `Also=` naming an instance whose needs are unknown.
 /// T25 (c) with the member's needs unknown: an unbalanced quote in the
 /// argument that names its configuration. The member keeps its row and its
 /// enable is omitted as `InstanceNeedsUnknown`, so the owner, whose `Also=`
@@ -10704,6 +10708,7 @@ fn t25_c_a_member_whose_needs_are_unknown() {
     }
 }
 
+/// T44: an unbalanced quote, and its control.
 /// § 7.5 through the scan: a command argument that names a path for the
 /// instance and that systemd's parser refuses (an unbalanced quote) makes
 /// what the instance reads unknown. The instance keeps its state change,
@@ -10795,6 +10800,7 @@ fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files
 }
 
+/// T44: a `%E` path is required.
 /// § 7.5 and rule 6 through the scan: a configuration path written with
 /// `%E` (`/etc`) is required and gates the enable: carried while the file
 /// is in the export, omitted naming the file when it is excluded.
@@ -10820,6 +10826,7 @@ fn a_configuration_path_under_e_gates_the_enable() {
     );
 }
 
+/// T44: a specifier the reader does not expand, and the value nowhere.
 /// The unknown-needs warning names the unit, the setting and the file it
 /// is in, with its line, and never the value, which can hold a credential
 /// the redaction pass never sees in a warning. A command line holding a
@@ -12226,6 +12233,7 @@ const OPENVPN_SERVER_EL10: &str = "[Unit]\nDescription=OpenVPN service for %i\n\
      ProtectSystem=true\nProtectHome=true\nKillMode=process\nRestartSec=5s\n\
      Restart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n";
 
+/// T44: a `%t` path requires nothing.
 /// `openvpn-server@` from the shipped unit, through the real inspectors,
 /// for each release's text: the `%t` status path expands under `/run` and
 /// is no requirement, so `required_config` is the fixed table's
@@ -14379,6 +14387,8 @@ fn link_warning_of(snap: &InspectionSnapshot, cause: &str) -> (String, serde_jso
 /// A target unit file, for a parent a link test needs to load.
 const TARGET_UNIT: &str = "[Unit]\nDescription=Test target\n";
 
+/// T43: the template link with `starts`, `instance_filled`, `template_alias`, `.requires` and
+/// `.upholds` links, and seven masked units.
 /// The branches of the unreported-link warnings beyond the § 7.3 cases:
 /// a template linked under a plain parent with a unit file of its own
 /// name, which starts the instance named for the parent, against one
@@ -14621,6 +14631,8 @@ fn units_unreported_link_warnings_cover_every_branch() {
     assert_eq!(links.as_array().map(Vec::len), Some(7));
 }
 
+/// T43: `not_read`, `masked`, `refused`, `alias` and `dangling`, the dangling instance and `static`
+/// links, two masked units, and the `StaticUnit` control.
 /// § 7.3's units that a link under `/etc` names and the listing does not
 /// print as a unit this scan reads, through the scan. None of these links
 /// is reported as a `ManualLink` or carried, and each that no other warning
@@ -14833,4 +14845,75 @@ fn units_an_etc_link_names_that_the_listing_does_not_print() {
         "{:?}",
         control.warnings
     );
+}
+
+/// T43's detail fields: a link to a unit the listing prints under a word
+/// the scan does not read (`generated`) is `not_read` with `listed_state`,
+/// in its text and among its link's fields, and a link by an alias name is
+/// `alias` with `alias_of`. Neither is a `ManualLink`, and the scan is not
+/// degraded.
+#[test]
+fn t43_a_link_warning_carries_its_detail_field() {
+    let wants = |unit: &str| format!("/etc/systemd/system/multi-user.target.wants/{unit}");
+    let vendor = |unit: &str| format!("/usr/lib/systemd/system/{unit}");
+    let host = || {
+        UnitHost::new()
+            .preset("disable *")
+            .unit("other.service", "disabled")
+            .vendor_unit("other.service", WANTS_MULTI_USER, None)
+    };
+
+    let generated = scan(
+        host()
+            .unit("gen.service", "generated")
+            .vendor_unit("gen.service", WANTS_MULTI_USER, None)
+            .link(&wants("gen.service"), &vendor("gen.service")),
+    );
+    assert_eq!(
+        link_warning_of(&generated, "not_read"),
+        (
+            format!(
+                "link {} (gen.service, listed 'generated') is not reported or carried: \
+                 systemctl list-unit-files does not list its unit as one this scan reads, so \
+                 the scan does not read the unit or its links",
+                wants("gen.service")
+            ),
+            serde_json::json!([{
+                "path": wants("gen.service"),
+                "unit": "gen.service",
+                "listed_state": "generated",
+            }])
+        )
+    );
+
+    let alias_unit = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n\
+                      Alias=al.service\n";
+    let aliased = scan(
+        host()
+            .unit("real.service", "disabled")
+            .unit("al.service", "alias")
+            .vendor_unit("real.service", alias_unit, None)
+            .link(&vendor("al.service"), &vendor("real.service"))
+            .link(&wants("al.service"), &vendor("real.service")),
+    );
+    assert_eq!(
+        link_warning_of(&aliased, "alias").1,
+        serde_json::json!([{
+            "path": wants("al.service"),
+            "unit": "al.service",
+            "alias_of": "real.service",
+        }])
+    );
+
+    for (label, snap, unit) in [
+        ("generated", &generated, "gen.service"),
+        ("alias", &aliased, "al.service"),
+    ] {
+        assert!(
+            links_of(snap).iter().all(|l| l.unit.as_str() != unit),
+            "{label}: {:?}",
+            links_of(snap)
+        );
+        assert_eq!(snap.completeness, Completeness::Complete, "{label}");
+    }
 }

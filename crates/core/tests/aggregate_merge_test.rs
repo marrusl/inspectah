@@ -3602,6 +3602,7 @@ fn instance_change(required_config: &[&str], data_paths: &[&str]) -> UnitStateCh
     change
 }
 
+/// T44: two hosts' `needs_unknown` merge, in either host order.
 /// § 12: an instance whose needs one host could not read keeps that
 /// host's `needs_unknown` on the merged row, whichever host's row the
 /// merge keeps, so the plan omits the fleet's enable. Control: with no
