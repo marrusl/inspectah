@@ -243,8 +243,10 @@ describe("U27: the units section resets on remount (§ 6.11 Routes)", () => {
       expect(header(title)).toHaveAttribute("aria-expanded", "false");
     }
     const bar = screen.getByRole("group", { name: "Show" });
-    await userEvent.click(within(bar).getByRole("button", { name: /^Needs follow-up \d+$/ }));
-    expect(screen.queryByTestId(`service-item-${TIMER_UNIT}`)).toBeNull();
+    // "Carried" keeps the timer row, so a filter that survived the remount
+    // would still read "Carried" after the reveal: nothing hides the row.
+    await userEvent.click(within(bar).getByRole("button", { name: /^Carried \d+$/ }));
+    expect(screen.getByTestId(`service-item-${TIMER_UNIT}`)).toBeInTheDocument();
 
     await userEvent.click(
       await within(nav).findByRole("link", { name: /^Scheduled Tasks/ }),

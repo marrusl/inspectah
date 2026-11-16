@@ -166,7 +166,8 @@ describe("U6: when the bar is drawn", () => {
     expect(screen.queryByText(HINT)).not.toBeInTheDocument();
   });
 
-  it("sits between the heading and the first group", () => {
+  // The heading is MainContent's: MainContent.unit-links.test.tsx checks heading, bar, group.
+  it("sits before the first group", () => {
     renderUnits(loadUnitFields("kitchen-sink"));
     const firstHeader = header("Default target");
     expect(bar()!.compareDocumentPosition(firstHeader) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

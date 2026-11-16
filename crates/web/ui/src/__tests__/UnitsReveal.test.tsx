@@ -205,6 +205,16 @@ describe("reveal step 2: the outcome filter (§ 6.11)", () => {
     await expectFocused("service-item-cups.socket");
     expect(selectedFilter()).toBe("All");
   });
+
+  it("keeps the filter when it already shows the destination", async () => {
+    await openUnits(kitchenSink);
+    await selectFilter("Needs follow-up");
+    // cups.service is declined, so "Needs follow-up" shows it.
+    expect(isShown(screen.queryByTestId("service-item-cups.service"))).toBe(true);
+    navigate("cups.service");
+    await expectFocused("service-item-cups.service");
+    expect(selectedFilter()).toBe("Needs follow-up");
+  });
 });
 
 describe("reveal step 3: collapse (§ 6.11, § 6.2)", () => {
@@ -215,6 +225,16 @@ describe("reveal step 3: collapse (§ 6.11, § 6.2)", () => {
     navigate("cups.socket");
     await expectFocused("service-item-cups.socket");
     expect(groupHeader("Sockets")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("opens only the destination's group", async () => {
+    await openUnits(kitchenSink);
+    await collapse("Timers");
+    await collapse("Sockets");
+    navigate("cups.socket");
+    await expectFocused("service-item-cups.socket");
+    expect(groupHeader("Sockets")).toHaveAttribute("aria-expanded", "true");
+    expect(groupHeader("Timers")).toHaveAttribute("aria-expanded", "false");
   });
 });
 

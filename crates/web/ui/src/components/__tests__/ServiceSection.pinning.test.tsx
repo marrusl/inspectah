@@ -229,6 +229,26 @@ describe("U8 (b): including a parent's [Install] drop-in under a filter", () => 
   });
 });
 
+describe("pins accumulate while the operator works (§ 6.4)", () => {
+  it("keeps the first toggled row shown after a second toggle", async () => {
+    await toggleCupsUnderFollowUp();
+    // The second toggle excludes iscsid.service too; cups.service stays excluded.
+    respondWith(
+      withUnit(cupsExcluded(), "iscsid.service", (r) => {
+        delete r.declined;
+        r.include = false;
+      }),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "Toggle iscsid.service" }));
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "Toggle iscsid.service" })).not.toBeChecked(),
+    );
+    expect(count("Excluded")).toBe(2);
+    expect(unitRows("Services")).toContain("cups.service");
+    expect(unitRows("Services")).toContain("iscsid.service");
+  });
+});
+
 describe("U8 (d): a row changed by an Undo follows the filter", () => {
   it("leaves Needs follow-up when its declined clears with no toggle on its branch", async () => {
     await toggleCupsUnderFollowUp();

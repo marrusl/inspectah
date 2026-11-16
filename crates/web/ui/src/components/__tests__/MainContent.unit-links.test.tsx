@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MainContent } from "../MainContent";
 import { emptyView } from "../../test-utils/emptyView";
+import { loadUnitFields } from "../../__tests__/fixtures/systemd-units/load";
 
 // The units section reads the view's links, records and default target
 // (spec § 11.1) and hands them to the list.
@@ -65,6 +66,17 @@ describe("MainContent: units section links, records and default target", () => {
     ).toBeInTheDocument();
     expect(screen.getByTestId("undetermined-install-need.service")).toBeInTheDocument();
     expect(screen.getByTestId("default-target")).toBeInTheDocument();
+  });
+
+  it("draws the heading, then the filter bar, then the first group (§ 6.4)", () => {
+    render(<MainContent {...props} viewData={emptyView({ ...loadUnitFields("kitchen-sink") })} />);
+    const heading = screen.getByRole("heading", { level: 2, name: "Systemd units" });
+    const bar = screen.getByRole("group", { name: "Show" });
+    const firstGroup = screen.getByRole("button", { name: /^Default target\b/ });
+    const follows = (a: Node, b: Node) =>
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(follows(heading, bar)).toBe(true);
+    expect(follows(bar, firstGroup)).toBe(true);
   });
 
   it("renders no default target row for a view without one", () => {
