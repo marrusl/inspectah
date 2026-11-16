@@ -921,14 +921,17 @@ later step takes its result.
 
 ```rust
 /// What systemd has for a name on the source host.
-pub enum Resolved {
-    /// A unit file loads.
-    File { fragment: UnitFragment, install: InstallRead },
-    /// A link to `/dev/null`, or a zero-length regular file, is at the
-    /// `/etc/systemd/system` path. `hidden` is the unit file under the
-    /// mask: `Vendor` or `Absent`.
+pub(super) enum Resolved {
+    /// A unit file loads. Its `[Install]` section is read separately,
+    /// from the unit file and its drop-ins, as an `InstallRead`.
+    File { fragment: UnitFragment },
+    /// A zero-length regular file, or a link whose chain ends at
+    /// `/dev/null` or at a zero-length file, is at the unit's path, in
+    /// either unit directory. `hidden` is the unit file under the mask:
+    /// `Vendor` or `Absent`.
     Masked { hidden: UnitFragment },
-    /// A link under `/etc/systemd/system` to another unit's file.
+    /// A link whose chain ends at another unit's non-empty file in one of
+    /// the two unit directories, wherever the link itself is in them.
     AliasOf(UnitName),
     /// No file in the two directories this collector reads.
     NotFound,
@@ -936,15 +939,15 @@ pub enum Resolved {
     Unsupported { path: String },
 }
 
-pub struct InstallSection {
-    pub wanted_by: Vec<UnitName>,
-    pub required_by: Vec<UnitName>,
-    pub alias: Vec<UnitName>,
-    pub also: Vec<UnitName>,
-    pub default_instance: Option<String>,
+pub(crate) struct InstallSection {
+    pub(crate) wanted_by: Vec<UnitName>,
+    pub(crate) required_by: Vec<UnitName>,
+    pub(crate) alias: Vec<UnitName>,
+    pub(crate) also: Vec<UnitName>,
+    pub(crate) default_instance: Option<String>,
 }
 
-pub enum InstallRead {
+pub(crate) enum InstallRead {
     /// The unit has no `[Install]` section.
     Absent,
     Known(InstallSection),
@@ -1052,9 +1055,13 @@ Resolution, for a name `N`:
    not hide the instance's `/etc` file; and without the hiding file every
    case linked. A drop-in above `/etc`
    that holds `[Install]` or has a vendor drop-in's file name has already
-   refused the unit (§ 7.1), so one read here only hides; the file it
-   hides is not read, though it stays an install file (§ 10.2), since the
-   image reads it whenever the hiding file is not there.
+   refused the unit (§ 7.1), so one read here only hides. The file it
+   hides adds nothing to the section, though it stays an install file
+   (§ 10.2), since the image reads it whenever the hiding file is not
+   there. Every candidate drop-in is read as text, hidden or not, and one
+   that cannot be read, a hidden one included, makes the section
+   `Undetermined(Unreadable)`, as an unreadable unit file does, so the
+   scan declines rather than guess.
 
 **The reader applies the reset systemd performs: an empty assignment of
 `WantedBy=` or `Alias=` clears every value of that key assigned before it
@@ -2046,7 +2053,7 @@ What changes in scheduled:
   (`crates/web/src/aggregate_handlers.rs:1158-1166`). The silent no-op is
   closed by removing the control, not by wiring it up.
 
-The cron-to-timer conversion (`make_timer_service`, `scheduled.rs:676`) is
+The cron-to-timer conversion (`make_timer_service`, `scheduled.rs:693`) is
 untouched. A generated unit does not exist on the host, so it has no host
 state to collect, and the scheduled section stays its single control.
 
@@ -2521,7 +2528,7 @@ the Containerfile comes from anywhere else.
 2. The default target.
 3. Each unit inspectah writes from its own template and enables: the
    timers and `@reboot` services the scheduled section generates from cron
-   entries (`make_timer_service`, `scheduled.rs:676`), and
+   entries (`make_timer_service`, `scheduled.rs:693`), and
    `flatpak-provision.service`. Their files are in `staged_writes` at their
    image destinations. Each is copied and enabled in its own section, in
    that order, with the line the shared helper produces. A generated unit
@@ -4781,8 +4788,9 @@ Other objections worth weighing:
   and no measured host says. The rule also costs a second read of
   `[Install]` for every shadowed unit, two more causes and a relation that
   is not a link, to carry what one more verb (`reenable`) would carry
-  whole. That verb was not measured at build time and is not one of the
-  two the Containerfile renders. Two smaller costs: a shadow that drops an
+  whole. That verb was not measured at build time and is not among the
+  ones the Containerfile renders: `set-default`, `enable`, `disable` and
+  `mask`. Two smaller costs: a shadow that drops an
   `Also=` name is advised with text and no line, because the collector
   knows what the host's files name and not what state the dropped member
   should have; and the line that removes a `VendorInstallOnly` link is an
@@ -4817,10 +4825,9 @@ Other objections worth weighing:
   over, the timer's own name skipped) was read from the source of systemd
   252 and 257 and not measured on a host; § 13 lists the check, and a
   measurement that differs changes the reader. The directory specifiers
-  the instance reader expands, and the alias-parent and masked-parent
-  cases of a link to a template name, are read from the same source,
-  though the measured `openvpn-server@` and template-link cases agree
-  with it.
+  the instance reader expands are read from the same source, though the
+  measured `openvpn-server@` case agrees with it. Every parent of a link
+  to a template name in § 7.3 was measured on both releases.
 - **Two systemd behaviors are modeled from two releases.** The reader
   applies the reset of an empty `WantedBy=`, `RequiredBy=` or `Alias=`
   and ignores an empty `Also=`, as measured on systemd 252 and 257; a
