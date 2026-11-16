@@ -27,10 +27,13 @@ import {
   outcomeCounts,
   pinsInView,
   revealPlan,
+  rovingTabStop,
   rowKey,
+  rowMoveTarget,
   sectionSearchText,
   showGroups,
   shownRowCount,
+  shownRowOrder,
   unitSearchEntries,
   type FilterValue,
   type GroupId,
@@ -699,17 +702,18 @@ describe("filterBarPresentation (§ 6.4 values, counts, disabled values and the 
   });
 });
 
-describe("firstShownRow: the first shown row in section order (§ 6.12, § 6.13)", () => {
-  const OPEN: Record<GroupId, boolean> = {
-    default_target: false,
-    services: false,
-    sockets: false,
-    timers: false,
-    paths: false,
-    other_units: false,
-    reported: false,
-  };
+/** Every group open. */
+const OPEN: Record<GroupId, boolean> = {
+  default_target: false,
+  services: false,
+  sockets: false,
+  timers: false,
+  paths: false,
+  other_units: false,
+  reported: false,
+};
 
+describe("firstShownRow: the first shown row in section order (§ 6.12, § 6.13)", () => {
   it("is the target under All", () => {
     expect(firstShownRow(showGroups(ksGroups, state()), OPEN)).toBe(ksKeyed.defaultTarget!.occurrenceKey);
   });
@@ -731,6 +735,148 @@ describe("firstShownRow: the first shown row in section order (§ 6.12, § 6.13)
     expect(firstShownRow([], OPEN)).toBeNull();
     const shown = showGroups(ksGroups, state({ query: "restart loop" }));
     expect(firstShownRow(shown, { ...OPEN, reported: true })).toBeNull();
+  });
+
+  it("is the first element of shownRowOrder", () => {
+    for (const shown of [showGroups(ksGroups, state()), showGroups(plantedGroups, state({ filter: "excluded" }))]) {
+      expect(firstShownRow(shown, OPEN)).toBe(shownRowOrder(shown, OPEN)[0]);
+    }
+  });
+});
+
+describe("shownRowOrder: the shown rows in section order (§ 6.13)", () => {
+  const all = () => showGroups(ksGroups, state());
+  const branchOf = (unit: string) => {
+    for (const g of ksGroups) {
+      const branch = g.branches.find((b) => b.head.record.data.unit === unit);
+      if (branch) return branch;
+    }
+    throw new Error(`no branch for ${unit}`);
+  };
+
+  it("starts at the target and ends with the reported rows", () => {
+    const order = shownRowOrder(all(), OPEN);
+    expect(order[0]).toBe(ksKeyed.defaultTarget!.occurrenceKey);
+    const reported = shownGroup(all(), "reported")
+      .reported.flatMap((b) => b.rows)
+      .map((r) => r.occurrenceKey);
+    expect(reported.length).toBeGreaterThan(0);
+    expect(order.slice(-reported.length)).toEqual(reported);
+  });
+
+  it("puts each unit row's drop-ins right after it, before the next unit row", () => {
+    const order = shownRowOrder(all(), OPEN);
+    const httpd = branchOf("httpd.service");
+    expect(httpd.dropins).toHaveLength(2);
+    const at = order.indexOf(httpd.head.occurrenceKey);
+    expect(order.slice(at, at + 4)).toEqual([
+      httpd.head.occurrenceKey,
+      ...httpd.dropins.map((d) => d.occurrenceKey),
+      branchOf("iscsid.service").head.occurrenceKey,
+    ]);
+  });
+
+  it("puts a group's orphan drop-ins after its unit rows and before the next group", () => {
+    const shown = all();
+    const order = shownRowOrder(shown, OPEN);
+    const services = shownGroup(shown, "services");
+    const last = services.branches[services.branches.length - 1];
+    const lastKey =
+      last.dropins.length > 0 ? last.dropins[last.dropins.length - 1].occurrenceKey : last.head.occurrenceKey;
+    const at = order.indexOf(lastKey);
+    expect(order[at + 1]).toBe(sshdOrphan().occurrenceKey);
+    expect(order[at + 2]).toBe(shownGroup(shown, "sockets").branches[0].head.occurrenceKey);
+  });
+
+  it("holds every shown row once, nested drop-ins included", () => {
+    const shown = all();
+    const order = shownRowOrder(shown, OPEN);
+    const nested = shown.reduce((n, g) => n + g.branches.reduce((m, b) => m + b.dropins.length, 0), 0);
+    expect(nested).toBeGreaterThan(0);
+    expect(order).toHaveLength(shownRowCount(shown) + nested);
+    expect(new Set(order).size).toBe(order.length);
+  });
+
+  it("gives each occurrence of a true duplicate its own place", () => {
+    const shown = showGroups(plantedGroups, state());
+    const order = shownRowOrder(shown, OPEN);
+    const dupHeads = shownGroup(shown, "services").branches.filter(
+      (b) => b.head.record.data.unit === "dup-state-demo.service",
+    );
+    expect(dupHeads).toHaveLength(2);
+    const at = order.indexOf(dupHeads[0].head.occurrenceKey);
+    const expected = [
+      dupHeads[0].head.occurrenceKey,
+      ...dupHeads[0].dropins.map((d) => d.occurrenceKey),
+      dupHeads[1].head.occurrenceKey,
+    ];
+    expect(expected).toHaveLength(4);
+    expect(order.slice(at, at + expected.length)).toEqual(expected);
+  });
+
+  it("leaves out a collapsed group's rows and keeps the others in order", () => {
+    const shown = all();
+    const open = shownRowOrder(shown, OPEN);
+    const order = shownRowOrder(shown, { ...OPEN, services: true });
+    const services = shownGroup(shown, "services");
+    const servicesKeys = new Set([
+      ...services.branches.flatMap((b) => [b.head.occurrenceKey, ...b.dropins.map((d) => d.occurrenceKey)]),
+      ...services.orphans.flatMap((o) => o.dropins.map((d) => d.occurrenceKey)),
+    ]);
+    expect(order).toEqual(open.filter((k) => !servicesKeys.has(k)));
+    expect(order.length).toBeLessThan(open.length);
+  });
+
+  it("is empty with no row shown", () => {
+    expect(shownRowOrder([], OPEN)).toEqual([]);
+  });
+});
+
+describe("rovingTabStop: the row holding the section's one tab stop (§ 6.13)", () => {
+  const order = ["a", "b", "c"];
+
+  it("stays on the row that holds it while that row is shown", () => {
+    expect(rovingTabStop(order, "b")).toBe("b");
+  });
+
+  it("moves to the first shown row when the row holding it is not shown", () => {
+    expect(rovingTabStop(order, "gone")).toBe("a");
+  });
+
+  it("goes to the first shown row when no row holds it", () => {
+    expect(rovingTabStop(order, null)).toBe("a");
+  });
+
+  it("is null when no row is shown", () => {
+    expect(rovingTabStop([], "b")).toBeNull();
+    expect(rovingTabStop([], null)).toBeNull();
+  });
+});
+
+describe("rowMoveTarget: row movement keys, as DecisionList's (§ 6.13)", () => {
+  const order = ["a", "b", "c"];
+
+  it.each<[string, string, string]>([
+    ["ArrowDown", "a", "b"],
+    ["j", "b", "c"],
+    ["ArrowUp", "c", "b"],
+    ["k", "b", "a"],
+    ["g", "c", "a"],
+    ["G", "a", "c"],
+  ])("%s from %s goes to %s", (key, from, to) => {
+    expect(rowMoveTarget(order, from, key)).toBe(to);
+  });
+
+  it("wraps at either end, as DecisionList does", () => {
+    expect(rowMoveTarget(order, "c", "j")).toBe("a");
+    expect(rowMoveTarget(order, "a", "k")).toBe("c");
+  });
+
+  it("is null for any other key, and with no row shown", () => {
+    for (const key of [" ", "x", "Enter", "Tab", "J", "K", "h"]) {
+      expect(rowMoveTarget(order, "b", key)).toBeNull();
+    }
+    expect(rowMoveTarget([], "a", "j")).toBeNull();
   });
 });
 

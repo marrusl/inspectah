@@ -850,24 +850,80 @@ export function filterBarPresentation(counts: OutcomeCounts, selected: FilterVal
 }
 
 /**
- * The first shown row in section order, skipping collapsed groups: the
- * target, then unit rows, orphan drop-ins and reported rows (§ 6.12,
- * § 6.13). `null` when no row is shown.
+ * The shown rows in section order, skipping collapsed groups (§ 6.13): in
+ * each group the target, each unit row followed by its drop-ins, the
+ * orphan drop-ins, then the reported rows. One stop per record, so the two
+ * occurrences of a true duplicate are two. The tab stop, the movement keys
+ * and ArrowDown from the search box all read this order.
  */
+export function shownRowOrder(
+  shown: ShownGroup[],
+  collapsed: Readonly<Record<GroupId, boolean>>,
+): OccurrenceKey[] {
+  const order: OccurrenceKey[] = [];
+  for (const group of shown) {
+    if (collapsed[group.id]) continue;
+    if (group.target) order.push(group.target.occurrenceKey);
+    for (const branch of group.branches) {
+      order.push(branch.head.occurrenceKey, ...branch.dropins.map((d) => d.occurrenceKey));
+    }
+    for (const block of group.orphans) order.push(...block.dropins.map((d) => d.occurrenceKey));
+    for (const block of group.reported) order.push(...block.rows.map((r) => r.occurrenceKey));
+  }
+  return order;
+}
+
+/** The first shown row in section order (§ 6.12, § 6.13); `null` when no row is shown. */
 export function firstShownRow(
   shown: ShownGroup[],
   collapsed: Readonly<Record<GroupId, boolean>>,
 ): OccurrenceKey | null {
-  for (const group of shown) {
-    if (collapsed[group.id]) continue;
-    const first =
-      group.target ??
-      group.branches[0]?.head ??
-      group.orphans[0]?.dropins[0] ??
-      group.reported[0]?.rows[0];
-    if (first) return first.occurrenceKey;
+  return shownRowOrder(shown, collapsed)[0] ?? null;
+}
+
+/**
+ * The row holding the section's one tab stop (§ 6.13): the row that holds
+ * it while that row is shown, else the first shown row; `null` when no row
+ * is shown.
+ */
+export function rovingTabStop(order: readonly OccurrenceKey[], held: OccurrenceKey | null): OccurrenceKey | null {
+  if (held !== null && order.includes(held)) return held;
+  return order[0] ?? null;
+}
+
+/** § 6.13 row movement, `DecisionList`'s keys: a step of one, or an end. */
+const ROW_MOVES: Record<string, "next" | "previous" | "first" | "last"> = {
+  ArrowDown: "next",
+  j: "next",
+  ArrowUp: "previous",
+  k: "previous",
+  g: "first",
+  G: "last",
+};
+
+/**
+ * The row a movement key on the row `from` goes to (§ 6.13), wrapping at
+ * either end as `DecisionList` does. `null` for any other key, or with no
+ * row shown.
+ */
+export function rowMoveTarget(
+  order: readonly OccurrenceKey[],
+  from: OccurrenceKey,
+  key: string,
+): OccurrenceKey | null {
+  if (!Object.prototype.hasOwnProperty.call(ROW_MOVES, key) || order.length === 0) return null;
+  const at = order.indexOf(from);
+  const n = order.length;
+  switch (ROW_MOVES[key]) {
+    case "next":
+      return order[(at + 1) % n];
+    case "previous":
+      return order[at < 0 ? n - 1 : (at - 1 + n) % n];
+    case "first":
+      return order[0];
+    case "last":
+      return order[n - 1];
   }
-  return null;
 }
 
 /** § 7 strings 19 to 22, by filter value: [one row, n rows]. */
