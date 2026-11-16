@@ -509,7 +509,8 @@ pub enum UnitState { Enabled, Disabled, Masked }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemberLinks {
-    /// Every link its `[Install]` names is present, and it names at least
+    /// Every link its `[Install]` names is present, under `/etc` or
+    /// shipped, at least one of them under `/etc`, and it names at least
     /// one. `enable` would add nothing. Links made by hand may sit beside
     /// them.
     Installed,
@@ -551,8 +552,11 @@ pub struct UnitStateChange {
     pub also: Vec<AlsoMember>,
     /// Drop-ins under `/etc/systemd/system` that apply to the unit and
     /// are install files (§ 10.2): they hold an `[Install]` section or
-    /// carry a vendor drop-in's file name. Each is checked as a
-    /// `Destination` when the plan reads it (§ 10.2 rule 5).
+    /// carry a vendor drop-in's file name. Beside them, a drop-in in a
+    /// directory systemd ranks above `/etc/systemd/system` that hides one
+    /// of them (§ 7.2), since the image reads the hidden one whenever the
+    /// hiding one is not there. Each is checked as a `Destination` when
+    /// the plan reads it (§ 10.2 rule 5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub install_drop_ins: Vec<String>,
     /// File names of the vendor drop-ins that apply to the unit (§ 7.2).
@@ -670,6 +674,12 @@ classifies as `Advisory`:
 - a mask on a name with no unit file (`MaskOnly`), with `state_change`
   holding `Masked` and no `mount_point`.
 
+A unit whose effective `[Install]` is `Undetermined` (§ 7.2), or that has
+an `UndeterminedInstall` record from the comparison of § 7.4, gets no
+finding. Its state is not known, so nothing says it is not enabled, and
+its record's advisory (§ 10.9) is what the export says about it. It loses
+the whole mount advisory of § 10.6, not only the fact line.
+
 A package-owned vendor unit of these kinds never produces a finding. When
 its state differs from preset, or it is masked, it is a `UnitStateChange`
 like a service.
@@ -731,9 +741,11 @@ pub struct ManualLink {
 
 /// A unit whose `[Install]` on the source host is `Undetermined` and
 /// whose `/etc` install files change it, or that assigns `Also=`, so its
-/// members cannot be listed or checked (§ 7.3). One per unit,
-/// whether or not the unit has a link, since the image's links can differ
-/// from the host's with no link on either side to report.
+/// members cannot be listed or checked (§ 7.3); or a unit whose package's
+/// `[Install]` is `Undetermined` and whose `/etc` install files change it
+/// (§ 7.4). One per unit, whether or not the unit has a link, since the
+/// image's links can differ from the host's with no link on either side
+/// to report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UndeterminedInstall {
     pub unit: UnitName,
@@ -767,7 +779,7 @@ read from a host file has one of three answers:
 | `MountUnitFinding.nofail` | `Options=` | A boolean. Nothing to scrub. |
 | `required_config`, `data_paths` | Paths in the template's unit file, expanded | Stored only when the expanded value is an absolute path under `/etc` or `/var`. Classified as identifiers. |
 | `ManualLink.install_files`, `UndeterminedInstall.install_files` | A directory listing | Paths under `/etc/systemd/system` of the files of the unit whose `[Install]` was compared (`unit` for a link, `parent` for relation `Also`). Not validated on load: each is read through `Destination` when the plan uses it, and one that does not parse counts as not staged, so the advisory gives way to its omission line (§ 10.9). Classified as identifiers. |
-| `install_drop_ins` | A directory listing | Paths of `.conf` files under `/etc/systemd/system`, read through `Destination` before use. Classified as identifiers. |
+| `install_drop_ins` | A directory listing | Paths of `.conf` files under `/etc/systemd/system`, and of a hiding drop-in in a directory ranked above it (§ 7.2), read through `Destination` before use. Classified as identifiers. |
 | `vendor_drop_ins`, on a state change and on an `AlsoMember` | A directory listing under `/usr/lib/systemd/system` | File names only, each one path component ending in `.conf`; a value that is not fails to load. No content is read into the snapshot. Classified as identifiers. |
 | `AlsoMember.unit`, `UnitFragment::file`, `ManualLink.parent`, `ManualLink.unit`, `UndeterminedInstall.unit`, `DefaultTarget.target` | `[Install]` values, link names and a directory listing | Proved `UnitName`s. |
 | `SystemdTimer.exec_start`, `description` | The timer and service files | Scrubbed by the existing scheduled pass, unchanged. |
@@ -796,10 +808,15 @@ what the image would have; where its file lives; and which package owns it.
 1. `systemctl list-unit-files --no-pager`, with no `--type`. The state column
    goes through `parse_unit_state` unchanged. It supplies the list of names
    and the `masked`, `generated` and runtime states. Its words `enabled`,
-   `disabled` and `indirect` are not used: § 7.3 derives enablement from the
-   links.
+   `disabled` and `indirect` decide no state: § 7.3 derives enablement
+   from the links, and a unit whose `[Install]` files cannot be read as
+   text is undetermined, not taken on the word (§ 7.2). The one place the
+   word is recorded is the degraded scan in which no preset rule could be
+   read: that scan reads no links, makes no state change, and records
+   each unit's listed word in `inventory` with no preset.
 2. The host's preset files, read as today, with the instance list of an
-   `enable` line kept (§ 7.4).
+   `enable` line kept (§ 7.4). A line that starts with `#` or `;` is a
+   comment (`;` read from systemd's source, not measured).
 3. A direct read of `/etc/systemd/system`: regular unit files, zero-length
    unit files and symlinks to `/dev/null` (masks), other symlinks directly
    under it (aliases, and `default.target`), and the `*.wants/`,
@@ -849,7 +866,10 @@ path. It refuses the observation where the search path would change it:
   has the file name of a vendor drop-in, changes what `enable` does. These
   are the only drop-in directories `enable` reads `[Install]` from (§ 7.2
   step 4). That was measured under `/etc` and `/usr/lib`; the test applies
-  the same rule to the directories on the list.
+  the same rule to the directories on the list. A drop-in in one of the
+  four directories above `/etc/systemd/system` that does neither, such as
+  the `[Service]` file `systemctl set-property` writes, does not refuse
+  the unit; it hides a lower drop-in of its file name (§ 7.2, load order).
 
 Either finding makes the unit `Unsupported` (§ 7.2): a structured warning
 that names the unit and the path, and no state for it. Any other drop-in
@@ -900,16 +920,18 @@ pub enum InstallRead {
     Known(InstallSection),
     /// The section cannot be relied on. The cause is kept for the warning
     /// and travels with every finding the section produces (§ 6.6).
-    /// `assigns_also` says whether any line assigns `Also=`, which decides
-    /// whether a `disable` may be carried for it (§ 7.3). Written
-    /// `Undetermined(<reason>)` in this spec.
+    /// `assigns_also` says whether any line assigns `Also=`, an empty
+    /// assignment included, which decides whether a `disable` may be
+    /// carried for it (§ 7.3). For `Unreadable` it is taken as true.
+    /// Written `Undetermined(<reason>)` in this spec.
     Undetermined { reason: InstallUnknown, assigns_also: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallUnknown {
-    /// A value holds a specifier other than `%i`, `%I`, `%p` or `%N`.
+    /// A value holds a specifier other than `%i`, `%p`, `%N` or `%%`.
+    /// `systemctl enable` does not expand `%I`.
     Specifier,
     /// An empty `RequiredBy=` follows a `RequiredBy=` value in load
     /// order. Whether it clears the value was not measured.
@@ -919,6 +941,10 @@ pub enum InstallUnknown {
     /// The section assigns `UpheldBy=`, an empty assignment included
     /// (§ 7.3).
     UpheldBy,
+    /// The unit file, or a drop-in it reads `[Install]` from, could not
+    /// be read as text, so whether the section assigns `Also=` is not
+    /// known either.
+    Unreadable,
 }
 ```
 
@@ -944,10 +970,18 @@ Resolution, for a name `N`:
    measured). So the test is size zero and nothing looser. For a mask, the
    vendor directory is then read for the file the mask hides.
 4. **Its `[Install]` section**, read once from the fragment and the
-   drop-ins that apply, with `%i`, `%I`, `%p` and `%N` expanded. For
-   `[Install]`, the drop-ins that apply to `N` are the `.conf` files in
-   `N.d` and, for an instance, in its template's `.d`, under both
-   directories, and no others. `systemctl enable` honors `[Install]` keys
+   drop-ins that apply, with `%i`, `%p`, `%N` and `%%` expanded. **`%I`
+   in `[Install]` is declined: a value holding it is
+   `Undetermined(Specifier)`. (Mark Russell, 2026-11-15)** systemd's
+   install-time expansion has no `%I` (read from the source of systemd
+   252 and 257, not measured), so `enable` does not expand it as the
+   loaded unit would. The scheduled inspector's `Unit=` expansion keeps
+   `%I` (§ 8). For `[Install]`, the drop-ins that apply to `N` are the
+   `.conf` files in `N.d` and, for an instance, in its template's `.d`,
+   under both directories, and no others. A file whose name starts with
+   `.` is not a drop-in and is skipped, here and wherever this spec names
+   an install file (read from systemd's source, not measured on either
+   release). `systemctl enable` honors `[Install]` keys
    from those drop-ins, under `/etc` and under `/usr/lib` (measured, for an
    added `WantedBy=`). It ignores `[Install]` in the type-wide directory
    (`service.d`) and in the dash-prefix directories (`a-.service.d` for
@@ -961,20 +995,32 @@ Resolution, for a name `N`:
 
    **Load order.** The main unit file first. Then the selected drop-ins,
    one per file name, in file-name order across every directory that
-   applies, not one root at a time. Within one directory name, a file
-   under `/etc` replaces a file of the same name under `/run`, which
-   replaces one under `/usr/lib`; that replacement was measured between
-   `/etc` and `/usr/lib`, within the unit's own `.d` and within the
-   template's `.d` (§ 13 R5). Between the unit's own `.d` and the
-   template's `.d` the spec assumes one file name is one key: the file in
-   the higher-priority root is selected, and within one root the unit's
-   own `.d` wins over the template's. So an `/etc` drop-in in the
-   instance's own `.d` hides a vendor drop-in of the same name in the
-   template's `.d`, which is what systemd's drop-in handling is expected
-   to do. That hiding across the two directories was not measured in
-   either placement, an `/etc` file in the instance's `.d` over a vendor
-   file in the template's, or an `/etc` file in the template's `.d` over a
-   vendor file in the instance's; both are open items of § 13 R5.
+   applies, not one root at a time. **The drop-in read for a file name
+   follows systemd's source: every directory of the instance's own name
+   is searched before every directory of its template's, with root
+   priority within each, and the first file of that name wins. (Mark
+   Russell, 2026-11-15)** The roots, in priority order, are the four
+   directories systemd ranks above `/etc/systemd/system`
+   (`/etc/systemd/system.control`, `/run/systemd/system.control`,
+   `/run/systemd/transient`, `/run/systemd/generator.early`, in that
+   order), then `/etc/systemd/system`, then `/usr/lib/systemd/system`.
+   **A drop-in in one of the four directories above `/etc` hides a
+   same-named drop-in lower in that ranking. (Mark Russell, 2026-11-15)**
+   So there is one order: directory first (the instance's `.d` before the
+   template's), then root. Within one directory name, a file under `/etc`
+   replaces a file of the same name under `/usr/lib`; that was measured
+   within the unit's own `.d` and within the template's `.d` (§ 13 R5).
+   Across the two directories, a vendor file in the instance's `.d` hides
+   an `/etc` file of its name in the template's `.d`, and an `/etc` file
+   in the instance's `.d` hides a vendor file of its name in the
+   template's. Both placements, and the hiding from above `/etc`, are read
+   from the source of systemd 252 and 257 (the search order in
+   `install.c`, the first file of a name kept in `conf-files.c`) and not
+   measured; all three are open items of § 13 R5. A drop-in above `/etc`
+   that holds `[Install]` or has a vendor drop-in's file name has already
+   refused the unit (§ 7.1), so one read here only hides; the file it
+   hides is not read, though it stays an install file (§ 10.2), since the
+   image reads it whenever the hiding file is not there.
 
 **The reader applies the reset systemd performs: an empty assignment of
 `WantedBy=` or `Alias=` clears every value of that key assigned before it
@@ -1004,6 +1050,30 @@ assignment of it, an empty one included, makes the section
 `Undetermined(UpheldBy)` (§ 7.3). Both resets are open items of § 13 run
 R5.
 
+A reason, once found, stands: an empty assignment that later clears the
+value that caused it does not make the section `Known` again. **An empty
+`Also=` counts as assigning `Also=`, so an undetermined section that holds
+one goes to the advisory rather than to a `disable` row (§ 7.3). (Mark
+Russell, 2026-11-15)**
+
+**A unit file or drop-in that cannot be read as text makes the section
+undetermined from the links, with `assigns_also` taken as true and a
+warning naming the file. systemctl's listing word decides nothing. (Mark
+Russell, 2026-11-15)** That covers the unit file and every drop-in that
+applies for `[Install]` (step 4), in any root, over the size cap or not
+UTF-8: the section is `Undetermined(Unreadable)`. § 7.3's table then
+gives no state, each `/etc` link is a `ManualLink` with cause
+`Undetermined(Unreadable)`, and the unit always gets an
+`UndeterminedInstall` record, listing its `/etc` install files. The
+structured warning reads:
+
+```
+unit <unit> has state '<word>' - <path>, <path> cannot be read as text, so its [Install] section is undetermined and its state is read from its links alone
+```
+
+with `unit`, `raw_state` and `paths` among its fields. A mask over such a
+file is still a mask: a mask reads no `[Install]`.
+
 The reader is a pure function over text. Only the collector calls it. The
 render-time plan reads no `[Install]` key; it tests only whether a file
 holds an `[Install]` section (§ 10.2).
@@ -1031,7 +1101,12 @@ fragment that has an install file under `/etc` (a shadow, or a non-empty
 alone provides: the vendor fragment and the vendor drop-ins, with nothing
 from `/etc`. The result is the `[Install]` the image's package install
 acts on, before any `COPY`. It is not stored. § 7.4 compares it with the
-effective section.
+effective section. A vendor drop-in that cannot be read as text makes the
+effective section `Unreadable` too, so § 7.4's test does not apply. The
+one file only this read opens is the package's unit file under a shadow:
+when that cannot be read as text, there is no vendor-side read, no
+comparison is made, nothing is said, and the unit is judged by its
+effective section alone.
 
 ### 7.3 Enablement is read from the links
 
@@ -1045,7 +1120,10 @@ nothing. So `enabled` is not admitted on that word.
 
 For each unit `U` that source 1 lists, the states § 3 excludes aside, or
 that a link under `/etc/systemd/system` names, the collector compares
-three sets:
+three sets. A unit listed `static` or `indirect` is read only when it has
+a link, a unit file or a drop-in directory under `/etc/systemd/system`;
+reading every listed one would turn units a stock RHEL 9 host links
+through `UpheldBy=` into `disable` rows.
 
 - **expected:** the links `systemctl enable U` would make, from the
   effective `[Install]` section: one per `WantedBy=` and `RequiredBy=`
@@ -1058,10 +1136,11 @@ three sets:
 |---|---|---|---|
 | `Known`, expected not empty | Every expected link is in admin or vendor, and at least one is in admin | `Enabled` | One outside expected is a `ManualLink`, cause `NotInInstall`. The rest are enable-made and produce nothing of their own. |
 | `Known`, expected not empty | No expected link is in admin | `Disabled` | A `ManualLink`, cause `NotInInstall`. |
-| `Known`, expected not empty | Some expected links are in admin, and one is in neither admin nor vendor | None. No state change is recorded. | A `ManualLink`, cause `PartialInstall`. |
+| `Known`, expected not empty | Some expected links are in admin, and one is in neither admin nor vendor | None. No state change is recorded. | One the section names: a `ManualLink`, cause `PartialInstall`. **Any other `/etc` link of the unit, an alias included, is a `ManualLink` with cause `NotInInstall`; only the links the section names keep `PartialInstall`. (Mark Russell, 2026-11-15)** |
 | `Known` with nothing expected (only `Also=`, or lists a drop-in reset to empty), or `Absent` | (nothing is expected) | None. The unit has no enablement of its own. § 7.4 still compares a vendor unit's section with the package's. | A `ManualLink`, cause `StaticUnit`, except a link § 7.4 finds the package install makes in the image too, which produces nothing. |
-| `Undetermined`, not assigning `Also=` | No link to `U` under `/etc/systemd/system` | `Disabled`. `disable` removes every link to `U` under `/etc` and does not need the expected set, so an absent set of links is `Disabled` whatever the section would expect. | (none) |
-| `Undetermined`, assigning `Also=` | No link to `U` under `/etc/systemd/system` | None. A `disable` would also act on members the collector could not list. One `UndeterminedInstall` record (§ 6.6), with or without an `/etc` install file. | (none) |
+| `Undetermined`, not assigning `Also=` | No link to `U` under `/etc/systemd/system`, and no install file under `/etc` | `Disabled`. `disable` removes every link to `U` under `/etc` and does not need the expected set, so an absent set of links is `Disabled` whatever the section would expect. | (none) |
+| `Undetermined`, not assigning `Also=` | No link to `U` under `/etc/systemd/system`, and an install file under `/etc` (§ 10.2) | None, and no inventory entry. One `UndeterminedInstall` record (§ 6.6). A `disable` would reproduce a host with no link, but the image's package install links the unit by the package's section before the `/etc` files are copied, and the record is what says so. | (none) |
+| `Undetermined`, assigning `Also=` (`Unreadable` included) | No link to `U` under `/etc/systemd/system` | None. A `disable` would also act on members the collector could not list. One `UndeterminedInstall` record (§ 6.6), with or without an `/etc` install file. | (none) |
 | `Undetermined` | Some link to `U` under `/etc/systemd/system` | None. No state change is recorded. When the unit has an install file under `/etc` (§ 10.2), or assigns `Also=`, one `UndeterminedInstall` record (§ 6.6). | A `ManualLink`, cause `Undetermined` with its reason. |
 
 The install state, not systemd's word, is what § 7.4 compares with the
@@ -1110,18 +1189,34 @@ unit whose `Alias=` does not name it, is a `ManualLink` with relation
 `Alias` and the alias name as `parent`. `default.target` is not an alias;
 § 7.6 owns it.
 
+An alias belongs to the unit its whole chain ends at. The collector
+follows the link through every hop: a link to `/dev/null` or to a
+zero-length file is a mask; a chain that ends at a file with content
+directly in one of the two unit directories is an alias of that unit,
+keyed by it, so a relay link in a chain is its own alias of the end unit
+and is reported as `NotInInstall` when `[Install]` does not name it. A
+link to a file outside both unit directories, a dangling chain, one that
+runs through a file where a directory should be, and a loop end
+elsewhere, and are no alias. A chain that cannot be followed because a
+link on the way cannot be read (permission, I/O) is a failed read under
+`/etc`: the scan degrades with `unit file read failures:`, and no unit
+that is not masked gets an install state from the incomplete links.
+
 **`Also=` members.** `enable` and `disable` also act on every unit
 `Also=` reaches (§ 10.2 rule 7). For a unit that gets a state change, the
 collector follows `Also=` through the effective unit of each name until no
 new name appears and records every name reached, the unit itself left out,
-as an `AlsoMember` with its `MemberLinks`. § 6.3 defines the four values;
+as an `AlsoMember` with its `MemberLinks`, in the order the walk reaches
+them: breadth first, each `Also=` list in the order it names its units.
+§ 6.3 defines the four values;
 "every link its `[Install]` names" is judged as in the table above, with
 vendor links completing an install. `Unlinked` and `Inert` count every
 link, not only expected ones, because `disable` removes every link to a
 member under `/etc`, hand-made links and links in other targets' `.wants`
 included (measured). A member with no `[Install]` and one hand-made link
-is therefore `Other`, as is a member that is masked, `Unsupported`, or
-whose section is `Undetermined`.
+is therefore `Other`, as is a member that is masked, `Unsupported`, an
+alias, or whose section is `Undetermined`, and every member of a scan
+whose read under `/etc` failed.
 
 A template named in `Also=` stands for its `DefaultInstance=`; with none,
 the member is recorded under the template name as `Other`. The walk does
@@ -1184,9 +1279,21 @@ exactly like any other:
 | The sets | Result |
 |---|---|
 | Both pairs equal | Nothing. No row and no advisory. |
-| Every vendor link is an effective link, at least one effective link is not a vendor link, and the `Also=` names are equal | **Additive.** A `UnitStateChange` of `Enabled`, whatever the preset says, with the fragment as resolved (`Shadowed`, or `Vendor` with its `install_drop_ins`) and an `attention_reason` saying its `/etc` files add links the package's unit does not make. |
+| Every vendor link is an effective link, at least one effective link is not a vendor link, and the `Also=` names are equal | **Additive.** A `UnitStateChange` of `Enabled`, whatever the preset says, with the fragment as resolved (`Shadowed`, or `Vendor` with its `install_drop_ins`) and the `attention_reason` `Its /etc files add links the package's unit does not make.` |
 | Anything else | **Not additive.** No state change. One `ManualLink` per difference: cause `HostInstallOnly` for an effective link that is not a vendor link, `VendorInstallOnly` for a vendor link that is not an effective link and is not on the host, and relation `Also` with the same two causes for a name only one side assigns. |
-| The vendor-side section is `Undetermined` | No state change. Each of the unit's links is a `ManualLink` with cause `Undetermined`. |
+| The vendor-side section is `Undetermined` | **No state change and no inventory entry. The unit gets the `UndeterminedInstall` record, with the package section's reason and its `/etc` install files, and the unit-level block of § 10.9, with or without a link, and keeps its per-link findings: each `/etc` link is a `ManualLink` with cause `Undetermined` and that reason. (Mark Russell, 2026-11-15)** |
+
+The vendor-side record reaches only as far as this comparison runs: a
+`Vendor` or `Shadowed` fragment, an `/etc` install file, an `enable`
+preset, and `Enabled` or no install state as above. A `Disabled` unit at
+its `enable` preset whose package section is `Undetermined` still gets
+its ordinary `disable` row and no record (§ 17). The record's block uses
+the effective side's words (§ 10.9), since the snapshot has no field that
+says which side's section is undetermined; for the vendor side the
+section that cannot be relied on is the package's, which is also on the
+source host and is what the `/etc` files change. The `Also=` names are
+compared with a template standing for its `DefaultInstance=` on both
+sides.
 
 An additive row is planned like any other (§ 10.2). The image already has
 the vendor links, and `enable` after the `COPY` lines adds the ones the
@@ -1332,13 +1439,24 @@ open item of § 13 R5.
 skips a line whose verb it does not accept and goes on to later rules;
 inspectah stops with no preset, which is a deliberate, conservative
 difference: inspectah cannot tell whether the line is a verb a newer
-systemd reads, so it does not guess what a later rule would mean. The
-collector raises one structured warning per such line that decides at
-least one unit, naming the line, its file and the units it decided, and
-saying their state was not compared with a preset. Each of those units is
+systemd reads, so it does not guess what a later rule would mean. **The
+line decides, and the warning names, only `Vendor`, `Shadowed` and
+`PackagedStorage` units that are not masked. An enabled `Local` unit and
+a mask keep their state changes. (Mark Russell, 2026-11-15)** Neither is
+compared with a preset in the first place (the rules above), so the line
+has nothing to decide for them. The collector raises one structured
+warning per such line that decides at least one unit:
+
+```
+preset line <line> of <file> starts with a verb this scan does not read and is the first rule matching <unit>, <unit>; their state was not compared with a preset
+```
+
+with `file`, `line` and `units` among its fields. Each unit it decides is
 in the inventory with no preset and gets no state change. This holds for
-every unit, not only instances. The warning is in the scan's diagnostics;
-the Containerfile does not name those units (§ 17).
+every such unit, not only instances. A vendor storage unit whose owner
+lookup fails is still named, though it ends as a mount finding. The
+warning is in the scan's diagnostics; the Containerfile does not name
+those units (§ 17).
 
 **The named cases.**
 
@@ -1417,9 +1535,13 @@ of its own to check. The image's package install enables it, and through its
 collector walks `Also=` from such a unit as § 7.3 walks it for a state
 change, and when the walk records any member with `MemberLinks`
 `Unlinked` or `Other`, the owner becomes an `Enabled` state change
-whatever the preset says, with its `also` list and an `attention_reason`
-saying that a unit it enables through `Also=` is not enabled on the
-source host. Rule 7 of § 10.2 then finds a member that does not match
+whatever the preset says, with its `also` list and the `attention_reason`
+`A unit it enables through Also= is not enabled on the source host.` The
+note keeps those words on a fleet aggregate row. **The check runs
+whether or not the install comparison above finds a difference, so an
+owner whose comparison is not additive, or whose package section is
+`Undetermined`, can be an `Enabled` row that rule 7 advises beside its
+per-link findings. (Mark Russell, 2026-11-15)** Rule 7 of § 10.2 then finds a member that does not match
 `enable` and makes the command an advisory, `AlsoWhy::LinksDiffer`, so
 the row never carries a line of its own: the operator gets the owner's
 `enable`, which the image already has, and the member's `disable`, which
@@ -1452,9 +1574,10 @@ survey names no such owner: it records that every member of the 60
 `Also=` units is installable, and the two members it names enabled
 through `Also=` (`NetworkManager-wait-online.service`,
 `multipathd.socket`) are linked in stock state, so their owners have no
-row. The survey did not list every member's links on a stock host, so
-this is not shown to be the only answer; run R4 lists every advisory the
-check produces on a stock host of each release.
+row. The survey did not inventory every stock member's links, so this
+is not shown to be the only answer. Run R4, still open, lists every
+advisory the check produces on a stock host of each release and
+classifies each one that recurs.
 
 The name gate becomes: the name parses as a `UnitName` and is not a D-Bus
 activation alias. The alias test narrows to the `dbus-org.` prefix, which
@@ -1476,8 +1599,13 @@ two parents is one state change. Cleanup of an instance the image linked
 and the host no longer has, after a changed `DefaultInstance=`, is not
 carried (§ 7.4).
 
-A masked instance needs nothing new: its mask under `/etc/systemd/system`
-is found by form and its name parses.
+An enabled instance backed by its template is found from its links under
+`/etc/systemd/system`; one with its own unit file, and a masked one, are
+listed by source 1. A masked instance needs nothing new to be found: its
+mask under `/etc/systemd/system` is found by form and its name parses.
+**A masked instance is carried as `systemctl mask` once instances are
+carried; until then the phase 4 placeholder omits it with every other
+instance (§ 15). (Mark Russell, 2026-11-15)**
 
 **A disabled instance is found from the presets.** An instance with its
 own unit file is listed by `list-unit-files` and gets its install state
@@ -1580,8 +1708,23 @@ pub struct DefaultTarget {
 ```
 
 `TargetUnit` (§ 6.2) is a carried unit proved to be a target, with its
-fragment kept for the file check. A link to anything else produces a
-structured warning and no record. This is its own check and render line:
+fragment kept for the file check. The target is named by the last path
+component of the link's text, and its file is resolved by that name as
+§ 7.2 resolves any unit, with its owner looked up (§ 7.8). So a link
+whose own target path is dangling still records the target when a unit
+file of that name loads. A link to anything else produces a structured
+warning and no record: a name that is not a `.target`, and a target the
+resolver finds masked, as an alias, refused by the search path or with no
+file, which reads `<name> has no unit file this scan reads`. The warning
+is
+
+```
+/etc/systemd/system/default.target links to <link> - <detail>; the default target is not carried
+```
+
+and, when the link itself cannot be read,
+`/etc/systemd/system/default.target - could not be read as a link (<error>); the default target is not carried`,
+with `path`, and `target` when it was read, among its fields. This is its own check and render line:
 not an enable, not compared with a preset, and recorded as included
 whatever the target is (§ 10.5).
 
@@ -1776,17 +1919,24 @@ staged. The plan does not read unit files to find the trigger again.
   drop-in assigns `Unit=`, the list is empty. A vendor drop-in arrives
   with its package and is not listed.
 - **Specifiers.** In a `Unit=` value the inspector expands `%i`, `%I`,
-  `%p` and `%N`, the set the `[Install]` reader expands (§ 7.2), for a
-  concrete instance timer and for a plain one. Any other specifier, or a
+  `%p`, `%N` and `%%`, as systemd does when it loads the timer, for a
+  concrete instance timer and for a plain one. This is the `[Install]`
+  reader's set (§ 7.2) plus `%I`, which `enable` does not expand and a
+  loaded unit does. Any other specifier, or a
   result that is not a unit name this model admits, makes the trigger
   `Unresolved`. A value that cannot be resolved is never read as "no
   local trigger".
 - **Where `Unit=` is read.** The timer's own file, then the `.conf` files
-  in `<name>.timer.d` under `/etc/systemd/system` and
+  in `<name>.timer.d` and, for an instance timer, in its template's
+  `<prefix>@.timer.d`, under `/etc/systemd/system` and
   `/usr/lib/systemd/system`, in file-name order, an `/etc` file
   overriding a vendor file of the same name. The last assignment in
   `[Timer]` wins and an empty one resets to the default. No other drop-in
-  directory is read (§ 17).
+  directory is read (§ 17). An instance timer has no timer file of its
+  own, so its description is recorded from its template's file; that and
+  the template's directory come with carried instances (§ 15). Until
+  then an instance timer has no description, and its `enable` would be
+  omitted as `TimerTriggerUnresolved`.
 - **An unrecorded trigger.** A timer with no description, or a
   description from a snapshot written before the field, has trigger
   `Unresolved`, so its `enable` is omitted as `TimerTriggerUnresolved`
@@ -1892,9 +2042,10 @@ RUN systemctl mask -- \
   line break, so `single_quote` (`safety.rs:162`) is total on it. Quoting
   replaces the refusal: a name with `\x2d` is legal and now renders, and
   `-.slice` is safe after `--`. Both forms work in a build (measured).
-- **`systemctl_lines` takes `&[PlannedUnit]` and nothing else.** A
-  `PlannedUnit` is built only by the check in § 10.2, so no line can name a
-  unit that check did not pass.
+- **`systemctl_lines` takes the planned default target and
+  `&[PlannedUnit]`, and nothing else.** A `PlannedTarget` and a
+  `PlannedUnit` are built only by the check in § 10.2, so no line can name
+  a unit that check did not pass.
 - The same function emits the comment-only blocks: `Also=` advisories
   (§ 10.2 rule 7), mount advisories (§ 10.6), instance data advisories
   (§ 10.8) and hand-made link advisories (§ 10.9). None is an instruction.
@@ -1990,15 +2141,27 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_>;
 /// private to the planning module, the only place a value is built.
 pub struct PlannedUnit { name: UnitName, action: UnitAction }
 
+/// The default target the plan sets (§ 10.5), built only after rule 5.
+pub struct PlannedTarget { name: TargetUnitName }
+
 pub struct UnitPlan {
     pub planned: Vec<PlannedUnit>,
-    pub default_target: Option<PlannedUnit>,
+    /// The included default target, when it passed rule 5.
+    pub default_target: Option<PlannedTarget>,
+    /// The included default target, when rule 5 declined it, and why.
+    pub default_target_declined: Option<(TargetUnitName, OmissionReason)>,
     /// Every command the plan did not write, and why.
     pub declined: Vec<(UnitName, UnitAction, OmissionReason)>,
 }
 
 pub fn plan_units(snap: &InspectionSnapshot, writes: &StagedWrites<'_>) -> UnitPlan;
+pub fn systemctl_lines(default_target: Option<&PlannedTarget>, units: &[PlannedUnit]) -> Vec<String>;
 ```
+
+**The default target has its own planned type and its own declined
+field, and `systemctl_lines` takes the target first. (Mark Russell,
+2026-11-15)** So `set-default` is not a `UnitAction`, and no `enable`,
+`disable` or `mask` can name the target.
 
 **`staged_writes` is the stager's decision, and what it lists is what
 lands on disk.**
@@ -2064,12 +2227,20 @@ lands on disk.**
   reason reads: `the image keeps the base image's empty /etc/machine-id,
   which is what makes first boot keep the rendered unit states; the source
   host's machine identity is not copied`. The README written with a scan
-  export says it in two sentences; a refine export writes no README, by
-  its existing contract:
-  rendered unit state survives first boot with the base image's empty
-  `/etc/machine-id`; a later layer or installer script that removes that
-  file or writes `uninitialized` to it makes first boot apply the
-  presets, which undoes rendered `enable` and `disable` lines.
+  export says it in its unit state paragraph; a refine export writes no
+  README, by its existing contract. The paragraph reads:
+  `The unit states in the Containerfile's Systemd Unit State section
+  survive first boot with the base image's empty /etc/machine-id. A
+  later layer or installer script that removes that file or writes
+  uninitialized to it makes first boot apply the presets, which can undo
+  the rendered enable and disable lines (measured: RHEL 9 kept an enable
+  and undid a disable, RHEL 10 undid both). A rendered mask is kept. A
+  later systemctl preset-all returns enabled and disabled units to their
+  presets and leaves masks in place.` (in the README, the path, the word
+  `uninitialized` and each verb are in backticks). The paragraph, with
+  § 10.1's sentence on `disable`, is written when the plan carries at
+  least one `enable`, `disable` or `mask`. A plan whose only line is
+  `set-default`, or that declines every command, gets neither.
 
 **What the plan takes.** Three kinds of request. No `systemctl` line in
 the Containerfile comes from anywhere else.
@@ -2160,7 +2331,8 @@ name `N`. They are:
   holds an `[Install]` section, or that has the file name of a vendor
   drop-in in one of those directories.
 
-Nothing else is an install file. The type-wide directory (`service.d`)
+A file whose name starts with `.` is never an install file (§ 7.2 step
+4). Nothing else is an install file. The type-wide directory (`service.d`)
 and the dash-prefix directories (`a-.service.d`) still apply to `N` for
 its other sections, and their files are carried as configuration (§ 7.7),
 but `enable` does not read `[Install]` from them (measured, § 7.2 step 4),
@@ -2207,6 +2379,23 @@ its template, a unit file staged at the instance's own name fails it as
 well. All of these are `InstallEvidenceChanged`, reading `the [Install]
 section in the image would not be the one recorded on the source host
 (<path>)`.
+
+**A hiding drop-in is install evidence.** A drop-in in a directory ranked
+above `/etc` that hides one of the unit's `/etc` install drop-ins (§ 7.2,
+load order) is in the row's `install_drop_ins` beside the files it
+hides, since an image without it reads the hidden file. So rule 5
+carries the command only when the export stages the hiding file too. A
+file under `/run` is never staged, so its unit's `enable` or `disable` is
+always omitted. A file under `/etc/systemd/system.control` is staged, and
+so counts, only while its configuration entry is included. The omission
+is `InstallEvidenceChanged` naming the hiding file, for example
+`# Omitted: app.service (the [Install] section in the image would not be the one recorded on the source host (/run/systemd/system.control/app.service.d/50-CPUQuota.conf))`.
+Of several above-`/etc` files of one name, only the one systemd reads is
+recorded: the lowest directory rank, then the first in search-path order.
+The hiding file is not added to a link finding's or an undetermined
+record's `install_files`, nor to the § 7.4 comparison. On a fleet, the
+union of `install_drop_ins` holds every host's hiding file, so the merged
+row needs every one staged.
 
 So a unit recorded `Shadowed` whose shadow is excluded gets no `enable`
 and no `disable`: the vendor file's `[Install]` is not the row's install
@@ -2381,7 +2570,22 @@ MaskPathOccupied { path: String },
 /// A unit inspectah generates has a collected unit's name. A FIXME.
 GeneratedNameCollision { name: UnitName, reserved_by: Reservation },
 /// The command would also act on `member` (rule 7). An advisory.
-AlsoMember { member: UnitName, why: AlsoWhy },
+/// `member` is the first member in `also` order that fails the first
+/// failing condition; for `InstallFile` on the unit's own file and for
+/// `FleetAggregate`, the first member. `named` is what the first line
+/// names first: every member failing as `member` does, the unit whose
+/// install file it is, or every member on a fleet aggregate. `further`
+/// holds the members failing the same condition the other way it can
+/// fail, with that reason. `add` is the members given a line of the
+/// opposite verb.
+AlsoMember {
+    member: UnitName,
+    why: AlsoWhy,
+    verb: UnitAction,
+    named: Vec<UnitName>,
+    further: Option<Box<(AlsoWhy, Vec<UnitName>)>>,
+    add: Vec<UnitName>,
+},
 
 /// Where a name that blocks a generated unit came from.
 pub enum Reservation { Row, Inventory }
@@ -2414,14 +2618,60 @@ advisory, for a links mismatch:
 The lines are `U`'s own command, then the opposite verb for each member
 recorded on the other side: `Unlinked` under an `enable`, `Installed`
 under a `disable`. That pair reproduced the host exactly for
-`cups.service` and `cups.socket` (measured). An `InstallFile` advisory
-names the file and gives `U`'s command alone, to be added after reading
-that file. A `FleetAggregate` advisory gives `U`'s command and names
-every recorded member, and its text says that fleet evidence may omit
-install metadata, so before adding the command after the configuration
-`COPY` lines the operator should check the unit's effective `[Install]`
-and `Also=` in the image and the intended state of each member. For the
-other two reasons the block names the member and gives no line.
+`cups.service` and `cups.socket` (measured).
+
+**Rule 7's first line, its clauses and its lines to add read as below.
+(Mark Russell, 2026-11-15)** The first line is `# Advisory: <unit> is
+<enabled|disabled> on the source host. Not carried: ` and the reason's
+text. **It names every member that fails the first failing condition, one
+clause group per link value or condition 2 cause. (Mark Russell,
+2026-11-15)** The groups, each with `which is` or `which are` by number:
+
+| `why` | Clause after `<members> (named by Also=), ` |
+|---|---|
+| `LinksDiffer(Unlinked)` | `which is not enabled there` / `which are not enabled there` |
+| `LinksDiffer(Installed)` | `which is enabled there` / `which are enabled there` |
+| `LinksDiffer(Other)` or `(Inert)` | `whose links there neither command reproduces` |
+| `RowNotCarried` | `whose own row is not carried with this command` / `whose own rows are not carried with this command` |
+| `NeedsOwnRow` under `enable` | `an instance with no row here to check its configuration` / `instances with no row here to check their configuration` |
+| `NeedsOwnRow` under `disable` | `which the image needs` |
+| `FleetAggregate` | `and fleet evidence may omit install metadata` |
+
+A second group, for `further`, follows as `, and <members>, <clause>`. An
+`InstallFile` reason reads `<path> sets [Install] for <unit>, so the
+units systemctl <verb> reaches through Also= in the image may not be the
+ones recorded.`, and is followed by `#   After reading that file, add
+after the configuration COPY:` and `U`'s command alone. **A
+`FleetAggregate` advisory says `on the source hosts` in its first line,
+names every recorded member, and is followed by `#   Before adding this
+after the configuration COPY, check the effective [Install] and Also= of
+<unit> in the image, and the intended state of each member:` and `U`'s
+command. (Mark Russell, 2026-11-15)** The plural holds even when one host
+recorded the unit. For `RowNotCarried` and `NeedsOwnRow` the block names
+the members and gives no line. A links mismatch whose `add` is empty, all
+its failing members `Other`, also gives no line. Each line to add reads
+`#     RUN systemctl <verb> -- '<unit>'`.
+
+**Rule 7's recipe never suggests disabling a protected unit (§ 10.3): it
+names the unit and says the image needs it. The "To reproduce the source
+host" header and the footer are dropped when any member is `Other` or a
+suggestion is withheld. (Mark Russell, 2026-11-15)** This is the one
+exception to the opposite-verb rule above. A member in `add` that § 10.3
+refuses for the opposite verb gets no line; after the suggested lines it
+gets `#   No <verb> line for <unit>: the image needs this unit.` When a
+line is withheld, or `why` or `further` is `LinksDiffer(Other)`, the
+header is `#   These lines do not reproduce the source host. Check each
+unit, then add after the configuration COPY:` and no footer follows. A
+block in which every member can be reproduced keeps the header and footer
+quoted above.
+
+**The suggested `disable` follows the member's own `Also=`.** `systemctl
+disable <member>` acts on every unit the member's own `Also=` reaches, in
+its turn. Where that walk comes back to `U` or to a sibling that should
+stay on, the suggested line unlinks it again. The recipe does not guard
+against this: before keeping the lines, the reader checks every unit in
+the closure with `systemctl is-enabled` (§ 17). The footer's "Each
+command follows Also= in its turn" is the reminder.
 
 **The no-RPM path runs every rule.** `render_service_intent` returns early
 into `render_without_rpm` when the snapshot has no package section
@@ -2480,7 +2730,8 @@ unit off:
   offers it. The test is on the `Destination`, not on the row's `unit`
   field or the path as spelled.
 - **Another unit's `Also=`.** Rule 7: a `disable` with a protected member
-  is not carried, with or without a row for the member.
+  is not carried, with or without a row for the member, and rule 7's
+  recipe never suggests a `disable` for a protected member (§ 10.2).
 
 What the guard does not cover: a carried drop-in or full shadow for one of
 these units that changes what the unit does (an emptied `ExecStart=`, a
@@ -2533,10 +2784,18 @@ host set a default target, with no test of what the target is and no
 comment beside it. (Mark Russell, 2026-11-13)** A host that boots to
 `graphical.target` produces an image that does. `default_target` is
 recorded as included and has a toggle like any other row. Rule 5 of § 10.2
-applies as it does to any row, since `set-default` on a target whose file
-is not in the image cannot succeed: a `Local` target whose file is
-excluded is omitted with the `UnitFileNotStaged` reason. The operand is a
-`TargetUnit`, so no other kind can reach the line.
+applies, since `set-default` on a target whose file is not in the image
+cannot succeed, in its file and package halves; `set-default` reads no
+`[Install]`, so the drop-in half does not apply. The file half: a `Local`
+target whose file is excluded is omitted with `UnitFileNotStaged`; a
+`Shadowed` target whose shadow is excluded, and a `Vendor` target with a
+unit file staged at its name, are omitted with `InstallEvidenceChanged`
+and its standard text, which speaks of the `[Install]` section. The
+package half: a packaged target whose package is not in the image is
+omitted with the presence tiers' reason. A declined target is one
+`# Omitted: <target> (<reason>)` line, written after the other declined
+commands. The operand is a `TargetUnit`, so no other kind can reach the
+line.
 
 ### 10.6 Mount, automount and swap advisories
 
@@ -2684,13 +2943,18 @@ the install differences of a unit at its preset (§ 7.4) are here too:
 | `StaticUnit` | `# Advisory: <parent>.<relation>/<unit> is a link on the source host that <unit>'s [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.` The link may have been made by hand or by an `enable` before the section changed; the text does not guess which. |
 | `NotInInstall` | `# Advisory: <parent>.<relation>/<unit> is a link made by hand on the source host (the unit's [Install] section does not name <parent>). Not carried.` |
 | `PartialInstall` | `# Advisory: <unit> has some of the links its [Install] section names and not others, so neither enable nor disable reproduces the source host. Not carried. Present: <parent>.<relation>/<unit>.` |
-| `Undetermined` | `# Advisory: <parent>.<relation>/<unit> is not carried: the unit's [Install] section cannot be relied on (<cause>).` The cause is the link's recorded `InstallUnknown` reason in words: for `Specifier`, a specifier inspectah does not expand; for `RequiredByReset`, an empty `RequiredBy=` whose effect was not measured; for `ForeignName`, a name this model does not admit; for `UpheldBy=`, that enabling the unit would also make an `.upholds` link. |
+| `Undetermined` | `# Advisory: <parent>.<relation>/<unit> is not carried: the unit's [Install] section cannot be relied on (<cause>).` The cause is the link's recorded `InstallUnknown` reason in words: for `Specifier`, `a specifier inspectah does not expand`; for `RequiredByReset`, `an empty RequiredBy= whose effect was not measured`; for `ForeignName`, `a name this model does not admit`; for `UpheldBy`, `enabling the unit would also make an .upholds link`; for `Unreadable`, `a file of it inspectah could not read as text`. |
 | `HostDevice` | `# Advisory: <unit> is tied to a device of the source host. Not carried.` |
 | `HostInstallOnly` | `# Advisory: <parent>.<relation>/<unit> is on the source host because <unit>'s files under /etc/systemd/system name it, and the package's unit does not. The image was linked from the package's unit, so it lacks this link. Not carried.` |
-| `VendorInstallOnly` | `# Advisory: <parent>.<relation>/<unit> is not on the source host: <unit>'s files under /etc/systemd/system do not name it, and the package's unit does. The image was linked from the package's unit, so it has this link.` Then: `#   To remove it, add after the configuration COPY: RUN rm -- '/etc/systemd/system/<parent>.<relation>/<unit>'` |
+| `VendorInstallOnly` | `# Advisory: <parent>.<relation>/<unit> is not on the source host: <unit>'s files under /etc/systemd/system do not name it, and the package's unit does. The image was linked from the package's unit, so it has this link.` Then the removal line, `#   To remove it, add after the configuration COPY: RUN test -L '<path>' && rm -- '<path>'`, where `<path>` is `/etc/systemd/system/<parent>.<relation>/<unit>`. |
 
-For a link with relation `Alias` the first words are `<parent> is a link to
-<unit>` in place of the directory path.
+**Alias forms. (Mark Russell, 2026-11-15)** For a link with relation
+`Alias`, the texts that open with the link's path open instead with
+`<parent> is a link to <unit>` in place of `<parent>.<relation>/<unit>
+is a link`. The texts that use the link as a subject without saying it is
+a link (`Undetermined`, `HostInstallOnly`, `VendorInstallOnly`) use
+`<parent>, a link to <unit>,` in its place, and `PartialInstall` ends
+`Present: <parent>, a link to <unit>.`
 
 For the first four causes and `HostInstallOnly`, with relation `Wants` or
 `Requires`, one more line gives the command:
@@ -2700,21 +2964,45 @@ For the first four causes and `HostInstallOnly`, with relation `Wants` or
 ```
 
 with `add-requires` for a `.requires` link. An `Upholds` link gets no
-command line, since `systemctl` has no verb that makes one. Its text says
-that the link starts the unit as soon as it exists and restarts it
-whenever it stops, that adding it for a unit that exits produces a restart
-loop, that a RHEL 9 target does not honor it, and that the way to add it
-is `Upholds=` in a drop-in for the parent. An `Alias` link gets no command
-line either, since no verb but `enable` makes one (measured); the text
-says to add `Alias=` in a drop-in or make the link in the Containerfile.
+command line, since `systemctl` has no verb that makes one. Its second
+line is:
+
+```
+#   An .upholds link starts <unit> while <parent> is active and restarts it whenever it stops, so adding it for a unit that becomes inactive after it exits, such as a oneshot service without RemainAfterExit=yes, produces a restart loop. A RHEL 9 target does not honor it. To add it, put Upholds=<unit> in a drop-in for <parent>.
+```
+
+An `Alias` link gets no command line either, since no verb but `enable`
+makes one (measured). Its second line, for every cause that gets one, is:
+
+```
+#   No systemctl verb but enable makes an alias link. To carry it, make the link in the Containerfile after the configuration COPY, or add Alias=<parent> in a drop-in for <unit> and run systemctl enable on <unit> after that COPY, which also makes every other link its [Install] section and Also= name: check those first.
+```
+
 A `HostDevice` link gets no command at all, and both operands are quoted
-like every other. The removal line's path is single-quoted after `--` for
-the same reason: an escaped unit name holds backslashes the shell would
-otherwise take. For a `VendorInstallOnly` alias it names
-`'/etc/systemd/system/<alias>'`. With relation `Also` there is no link and
-no command: the text says which side names `<unit>` in `Also=`, that the
-package install in the image acted on the package's list, and to check
-`<unit>` with `systemctl is-enabled` in the image.
+like every other.
+
+**The removal line never deletes a file.** It tests that the path is a
+link before it removes it, so a destination that is not a link fails the
+build where the operator sees it. When the export itself stages a file at
+the link's path, the copied file replaces the link in the image, and the
+removal line gives way to `#   The export copies a file to <path>, which
+replaces this link in the image, so no line removes it.` The path is
+single-quoted after `--` for the same reason the operands are: an escaped
+unit name holds backslashes the shell would otherwise take. `test` takes
+no `--`; the path always starts with `/etc`. For a `VendorInstallOnly`
+alias the path is `'/etc/systemd/system/<alias>'`.
+
+**Relation `Also`. (Mark Russell, 2026-11-15)** There is no link and no
+command. The two texts are:
+
+```
+# Advisory: <owner>'s files under /etc/systemd/system name <unit> in Also=, and the package's unit does not. The package install in the image acted on the package's list.
+# Advisory: <owner>'s package unit names <unit> in Also=, and its files under /etc/systemd/system do not. The package install in the image acted on the package's list.
+```
+
+for `HostInstallOnly` and `VendorInstallOnly`, each followed by `#   Check
+<unit> with systemctl is-enabled in the image.` `<owner>` is the link's
+`parent`.
 
 **An undetermined section with `/etc` files gets a unit-level
 advisory.** Each `UndeterminedInstall` record renders one block, whether
@@ -2726,9 +3014,12 @@ or not the unit has a link, beside any per-link `Undetermined` advisories:
 ```
 
 `<cause>` is the record's reason in the words above. A record with no
-install file ends the first line at `(<cause>)`, and adds `It assigns
+install file ends the first line at `(<cause>).` and adds `It assigns
 Also=, so the units it names are enabled or disabled with it in the
-image, and inspectah could not list them to check.` A preset-enabled
+image, and inspectah could not list them to check.`, or, for
+`Unreadable`, `It may assign Also=, so units it names may be enabled or
+disabled with it in the image, and inspectah could not read it to
+check.` Its second line is the same as above. A preset-enabled
 packaged unit whose only relation is `RequiredBy=`, reset by a drop-in,
 has no link on the host and so no per-link advisory; this block is what
 tells the operator that the image's package install linked it anyway.
@@ -2763,11 +3054,11 @@ view only; the fleet view is left as it is. (Mark Russell, 2026-11-14)**
 
 | Field | Content |
 |---|---|
-| `unit_states[]` | One per `UnitStateChange`, package-owned mount units, template instances and masked templates included: `unit`, `kind` (derived, lowercase), `instance_of` (the template name, derived, when the unit is an instance), `current_state`, `default_state`, `fragment` (`vendor`, `local`, `shadowed`, `absent`), `unit_file_path` when not vendor, `owning_package`, `also[]` (each `unit` and `links`), `install_drop_ins[]`, `required_config[]`, `data_paths[]`, `include`, `locked`, `triage`, `attention_reason`, and `declined` when the plan of § 10.2 does not write the unit's command: how it renders (`omitted`, `fixme` or `advisory`), the `OmissionReason` variant, and its `describe` text. A runtime package updater (§ 10.4) is an ordinary row with `include: false`. |
-| `unit_dropins[]` | As `service_dropins` today, with `kind` of the parent. A drop-in whose parent has no state change is still listed, since a unit at its preset has a drop-in and no parent row. A full shadow carries its `shadow_type` and rationale here, which is where the "base image updates to this unit are ignored" explanation is shown. |
+| `unit_states[]` | One per `UnitStateChange`, package-owned mount units, template instances and masked templates included: `unit`, `kind` (derived, lowercase), `instance_of` (the template name, derived, when the unit is an instance), `current_state`, `default_state`, `fragment` (`vendor`, `local`, `shadowed`, `absent`), `unit_file_path` when not vendor, `owning_package`, `also[]` (each `unit` and `links`) and `install_drop_ins[]` (each absent when empty), `required_config[]`, `data_paths[]`, `include`, `locked`, `triage`, `attention_reason`, and `declined` when the plan of § 10.2 does not write the unit's command: how it renders (`omitted`, `fixme` or `advisory`), the `OmissionReason` variant, and its `describe` text. A runtime package updater (§ 10.4) is an ordinary row with `include: false`. |
+| `unit_dropins[]` | As `service_dropins` today, with `kind` of the parent. A drop-in whose parent has no state change is still listed, since a unit at its preset has a drop-in and no parent row; the list shows such drop-ins under "Other drop-in overrides", with the note `These overrides have no unit-state decision row.` A full shadow carries its `shadow_type` and rationale here, which is where the "base image updates to this unit are ignored" explanation is shown. |
 | `default_target` | `target`, `include`, `locked`, `declined`, or absent. |
 | `mount_findings[]` | `unit`, `kind`, `state`, `mount_point`, `fragment` (`local`, `shadowed`, `vendor` for an unowned one, or `absent` for a mask with no unit file), `unit_file_path` (the config row that holds the unit file and its toggle), and `advisories[]`, the same strings § 10.6 renders. No `include`: these rows have no toggle. No mount source: the row links to the config entry, which holds the scrubbed file (§ 6.5). |
-| `manual_links[]` | `relation` (`also` included), `parent`, `unit`, `cause` (`host_install_only` and `vendor_install_only` included), and `advisories[]`, the same strings § 10.9 renders. No `include`. An install-difference row whose `install_files` are not all staged stays in the list, as a withheld file's row does, with `not_applied` holding the excluded paths and `advisories[]` holding the unit's `# Omitted:` line of § 10.9 in place of the advisory, so the operator sees why the advisory left the Containerfile, what was not reproduced, and that re-including the file brings it back. `cause` for `undetermined` carries its `reason`. |
+| `manual_links[]` | `relation` (`also` included), `parent`, `unit`, `cause` (`host_install_only` and `vendor_install_only` included), and `advisories[]`, the same strings § 10.9 renders. No `include`. An install-difference row whose `install_files` are not all staged stays in the list, as a withheld file's row does, with `not_applied` holding the excluded paths and `advisories[]` holding the unit's `# Omitted:` line of § 10.9 in place of the advisory, so the operator sees why the advisory left the Containerfile, what was not reproduced, and that re-including the file brings it back. `cause` for `undetermined` carries its `reason`, as its wire word (`unreadable` included). The flat list shows the rows through `advisories[]`; words of its own for a cause or a reason are the section design's (§ 11.2). |
 | `undetermined_installs[]` | One per `UndeterminedInstall`: `unit`, `reason`, `install_files[]`, and `advisories[]`, the block of § 10.9. No `include`. While one of its `install_files` is excluded, `not_applied` holds the excluded paths and `advisories[]` the unit's `# Omitted:` line, as for `manual_links[]`. |
 | `scheduled_tasks` timers | Each collected timer row gains `unit` (`<name>.timer`) and `unit_row` (whether `unit_states` holds it), so the row can link to its control. No `include`: the timer's state is its unit row's. |
 | `generated_timers[]` | One per generated-timer name, always present: `name` (the `generated_timer_units` name, the key of `ItemId::GeneratedTimer`), `include`, `locked`, and `cron_job_excluded`, present only while an excluded cron job generates a unit of that name, holding that cron job's path. A generated scheduled row joins to its entry through the row's `generated_timer` field, the same join `declined_generated[]` uses. `include` is true while any record of the name is included (§ 8). `cron_job_excluded` is computed on the projected snapshot with the test the session uses to refuse `SetInclude(true)` on the row, so a row that is excluded and carries it is one the server will not include: the row says which cron job to include instead of offering a toggle that would be refused. |
@@ -2822,7 +3113,13 @@ excluded, since toggling it does not bring the command back.
 Operations: `ItemId::Service { unit }` becomes `ItemId::Unit { unit }` and
 keeps its cascade to drop-ins and its membership check before it applies.
 `ItemId::DefaultTarget` is added; it toggles the recorded target and takes
-no target name of its own. `ItemId::SystemdTimer` is removed. `SetInclude`
+no target name of its own. **The services bulk toggle does not send
+`DefaultTarget`; the target has its own toggle. (Mark Russell,
+2026-11-15)** While the view holds a default target, the units bulk menu
+reads `Include all except the default target` and `Exclude all except
+the default target`, and its announcement names the exception; the
+section's decision count includes the target. `ItemId::SystemdTimer` is
+removed. `SetInclude`
 on a mount finding or a hand-made link does not exist, so there is nothing
 to refuse. What the server does with each scheduled operation is § 8's
 contract; what single-host refine offers is narrower. A generated-timer
@@ -2898,8 +3195,11 @@ narrowing are unchanged.
 - `mount_findings` merge by unit name, and `manual_links` by relation,
   parent and unit. Neither has an include flag to narrow. The two
   install-difference causes of § 7.4 merge the same way, with
-  `install_files` the union, so an aggregate shows the advisory with its
-  prevalence. The cause is not part of the identity. When two hosts record
+  `install_files` the union, so an aggregate keeps the advisory and the
+  merged row carries its prevalence in `aggregate`. The aggregate's
+  Containerfile renders the advisory; no view shows the prevalence, since
+  the fleet view shows no link or record rows. The cause is not part of
+  the identity. When two hosts record
   opposing causes for one relation, parent and unit, the merged row keeps
   the cause of the first host in hostname order, and its prevalence
   counts every host that recorded either. The advisory is then wrong for
@@ -3215,13 +3515,24 @@ Phase 4 (the `/etc/systemd/system` scan):
   `disable *` in the presets and `DefaultInstance=tty1`: no state change;
   `getty@tty2.service`: `Enabled`. `remote-cryptsetup.target` disabled
   against an `enable` preset: an inventory entry and no state change. The
-  first four cases repeat for an instance.
+  first three cases repeat for an instance backed by its template, found
+  by its links; the fourth, only vendor links, for an instance with its
+  own unit file, since a template-backed instance with no `/etc` link is
+  not listed. A partial unit with a third `/etc` link its section does
+  not name, and an alias it does not name: those two are `NotInInstall`,
+  and only the named link is listed as present in the `PartialInstall`
+  advisory.
 - **T23. Hand-made links.** A `multi-user.target.wants/backup.service`
   link to a unit with no `[Install]`: the `StaticUnit` link and its refine
   row exist; then the advisory holds the `add-wants` line, no `RUN` names
   the unit, and the row has no include field. Table cases for
   `.requires`, an unexpanded specifier, `systemd-fsck@` (no command line)
-  and a hand-made alias. A unit with `UpheldBy=multi-user.target` and its
+  and a hand-made alias, whose second line is the alias line of § 10.9.
+  Alias chains, through the scan and both exports: a relay link in a
+  chain is a `NotInInstall` alias of the unit the chain ends at, which
+  reads `Enabled` and is not disabled; a link to a file outside both unit
+  directories is no alias; a chain whose relay cannot be read degrades the
+  scan naming the link, and no state and no `disable` follow. A unit with `UpheldBy=multi-user.target` and its
   `.upholds` link, through the units and the config inspectors: no state
   change, no enable, the restart-loop text, and the link's path absent
   from `config.files` and the staged tree.
@@ -3257,8 +3568,25 @@ Phase 4 (the `/etc/systemd/system` scan):
   that reason, and one `UndeterminedInstall` naming the drop-in; an empty
   `RequiredBy=` with no value before it is ignored. An `/etc` drop-in in
   `t@x.service.d` named like a vendor drop-in in `t@.service.d`: the
-  vendor one's `[Install]` is not read, as the assumed one-key rule says
-  (§ 7.2). A concrete
+  vendor one's `[Install]` is not read; a vendor drop-in in
+  `t@x.service.d` named like an `/etc` drop-in in `t@.service.d`: the
+  `/etc` one is not read; an `/etc` file replaces a vendor file of its
+  name in the template's `.d` (§ 7.2). `%I` in `WantedBy=`, in an `Alias=`
+  drop-in and in `DefaultInstance=`: `Undetermined(Specifier)`, while `%i`,
+  `%p` and `%N` expand on the same instance. A drop-in whose name starts
+  with `.` and holds `[Install]`: not recorded, staged as configuration,
+  and the enable carried on both routes, with the file excluded too; the
+  same file under a visible name: recorded, and excluding it gives
+  `InstallEvidenceChanged`. A drop-in in
+  `/etc/systemd/system.control/<unit>.d/` or
+  `/run/systemd/system.control/<unit>.d/` with the file name of an `/etc`
+  install drop-in: the `/etc` file's `[Install]` is not read, and the
+  row's `install_drop_ins` holds both paths; with the hiding file under
+  `/run`, the command is omitted as `InstallEvidenceChanged` naming it on
+  both routes; under `/etc/systemd/system.control`, carried while its
+  configuration entry is included and omitted, naming it, while excluded;
+  on a fleet with one host of each, omitted naming the `/run` file. In the
+  template's `.d` it does not hide an `/etc` file in the instance's. A concrete
   instance file under `/run/systemd/system`, a copy under
   `/usr/local/lib/systemd/system`, and a drop-in with `[Install]` in the
   unit's own `.d` under `/run/systemd/system`: each yields the warning
@@ -3307,14 +3635,23 @@ Phase 4 (the `/etc/systemd/system` scan):
   bundle row included: an advisory with `FleetAggregate` in the plan and
   in the Containerfile. Host A alone: the enable is carried. (k) A vendor
   `bundle.service.d/10-members.conf` with `[Install]` and
-  `Also=helper.service`, and an `/etc` drop-in of the same file name that
+  `Also=helper.service`, `bundle.service`'s unit file having its own
+  `WantedBy=`, and an `/etc` drop-in of the same file name that
   holds only `[Service]`, so the recorded list is empty: with the `/etc`
   file included the enable is carried and the file is in
   `install_drop_ins`; with it excluded, `InstallEvidenceChanged` and no
   enable. The same `/etc` file on a member of a unit with `Also=`:
   `InstallFile`. (l) `Also=` naming a template is
   recorded as its `DefaultInstance=`, and as `Other` under the template
-  name when there is none.
+  name when there is none. (m) Protected members, through the real
+  inspectors and both routes: an enabled packaged unit whose unlinked
+  members are `bootc-fetch-apply-updates.timer` and `helper.socket`: the
+  partial header, the owner's `enable`, `disable` for `helper.socket`, the
+  `No disable line for bootc-fetch-apply-updates.timer: the image needs
+  this unit.` line, no footer, and no `disable` naming the timer anywhere;
+  `helper.socket` alone gets the header and the footer. A member `Other`
+  beside one `Unlinked`, in either order: the partial header and no
+  footer.
 - **T26. Default target.** A `default.target` link to `graphical.target`
   yields `RUN systemctl set-default -- 'graphical.target'` with no
   comment beside it; no link, no line. The row's toggle removes and
@@ -3346,8 +3683,14 @@ Phase 4 (the `/etc/systemd/system` scan):
   relation `Also` and cause `VendorInstallOnly`. (h) The same shadows
   under a `disable` preset: the ordinary row and no advisory. (i) A vendor
   unit whose own `[Install]` holds a specifier the reader does not expand,
-  shadowed by a file with a plain `WantedBy=`: no state change, and each
-  of the unit's links is a `ManualLink` with cause `Undetermined`. (j) The
+  shadowed by a file with a plain `WantedBy=`: no state change, each of
+  the unit's links is a `ManualLink` with cause `Undetermined`, and one
+  `UndeterminedInstall` naming the shadow. The package's section with
+  `UpheldBy=` under a shadow with no `[Install]` and no link, and under a
+  shadow naming `multi-user.target` with that link: no state change, no
+  inventory entry, the record with the shadow, its block on both routes
+  and on refine's row, and the per-link finding exactly when linked; a
+  storage unit in that case gets no mount finding. (j) The
   replacing shadow of (d) on a host that also has a hand-made
   `multi-user.target.wants/` link: the `NotInInstall` link of § 7.3 and
   no `VendorInstallOnly` link for it. Resets, each over a vendor
@@ -3378,12 +3721,14 @@ Phase 4 (the `/etc/systemd/system` scan):
   no `systemctl` line.
 - **T32. The advisories, rendered.** For T30 (d): the `HostInstallOnly`
   block with its `add-wants` line, the `VendorInstallOnly` block with
-  `RUN rm -- '<path>'`, a unit named with `\x2d` keeping its backslashes
+  `RUN test -L '<path>' && rm -- '<path>'`, a unit named with `\x2d` keeping its backslashes
   inside the quotes, no `systemctl` instruction naming the unit, and two refine
   rows with no include field. For (f) and the first case of (k): the
   removal line, and no `systemctl` instruction naming the unit. For (g):
   the `Also` text and no command line. A `VendorInstallOnly` alias names
-  `'/etc/systemd/system/<alias>'`. With the replacing shadow of (d)
+  `'/etc/systemd/system/<alias>'`. A `VendorInstallOnly` alias whose path
+  the export stages as a regular file: the line saying the copied file
+  replaces the link, and no `rm` anywhere. With the replacing shadow of (d)
   excluded: no `rm` line, no `add-wants` line, no command for the unit,
   and the two refine rows marked `not_applied` with the shadow's path;
   included again, both blocks return.
@@ -3503,6 +3848,27 @@ Phase 4 (the `/etc/systemd/system` scan):
   `20-add.conf`, and both refine rows `not_applied` with that path and the
   same line in `advisories[]`. Included again, both blocks return and the
   line goes.
+- **T42. A file that cannot be read as text.** Through the real
+  inspectors: an `/etc` unit file and a vendor unit file that are not
+  text, each listed `enabled` with its links: no state change, an
+  `Unreadable` record each (the `/etc` one listing its file), each link
+  `Undetermined(Unreadable)`, and one warning per unit naming the file in
+  its message and `paths`; a mask over a non-text vendor file is still a
+  masked state change. An `/etc` install drop-in that is not text, listed
+  `enabled` under `disable *` and listed `disabled` with no link under
+  `enable *`: no row either way, one record listing the drop-in, and the
+  warning; the readable drop-in gives the `enable` row and the `disable`
+  row. A vendor unit file that is not text, listed `enabled` against
+  `disable`, through both exports: the block with the `Unreadable` words
+  and the `It may assign Also=` sentence, and no `systemctl` line; the
+  readable file is enabled on both routes. A full shadow that is not text:
+  one record listing the shadow and no state change; the export does not
+  stage the shadow, so it renders the unit's `# Omitted:` line in place
+  of the block. A storage unit with an
+  undetermined section (`Unreadable`, `Specifier` or `UpheldBy`) and an
+  `/etc` link: the record, its block, and no mount finding or "is not
+  enabled" text; the same unit with a readable section and no link is
+  still recorded as not enabled.
 
 Phase 5 (carried instances):
 
@@ -3597,8 +3963,10 @@ not use the CentOS9 or fedora44 VMs for them.**
   and the rows a package install makes through `Also=` (§ 7.4). List
   every advisory the owner check of § 7.4 ("An owner at its preset whose
   member is off") produces on the stock host of each release, each with
-  its owner and member. Keep the classified rows and their reasons as
-  the evidence.
+  its owner and member, and classify each one that recurs: the 2026-11-13
+  survey did not inventory every stock member's links, so this run is
+  where a stock owner advisory is found. Keep the classified rows and
+  their reasons as the evidence.
 - **R5. Small systemd facts, no inspectah build.** Run on 2026-11-14 on
   both releases, and each answer is written where the spec relies on it:
   the reset of an empty `[Install]` key (§ 7.2), the drop-in directories
@@ -3624,9 +3992,24 @@ not use the CentOS9 or fedora44 VMs for them.**
   - Hiding across the unit's own and the template's `.d`, both
     placements: an `/etc` drop-in with no `[Install]` in `t@x.service.d`
     named like a vendor drop-in with `WantedBy=multi-user.target` in
-    `t@.service.d`, then `enable t@x.service`; and an `/etc` drop-in in
-    `t@.service.d` named like a vendor one in `t@x.service.d`. § 7.2
-    assumes the first hides and the second does not.
+    `t@.service.d`, then `enable t@x.service`; and a vendor drop-in with
+    no `[Install]` in `t@x.service.d` named like an `/etc` one with
+    `WantedBy=multi-user.target` in `t@.service.d`. § 7.2, read from
+    systemd's source, says the instance's file hides the template's in
+    both.
+  - A drop-in above `/etc` hiding an `/etc` drop-in: a `system.control`
+    file from `systemctl set-property` with the file name of an `/etc`
+    drop-in that holds `WantedBy=`, then `enable`, which § 7.2 says links
+    nothing from the hidden file; the same against a vendor drop-in, and
+    across the instance's and the template's `.d`. Then `enable` in an
+    image without the `system.control` file, which reads the hidden
+    `[Install]`.
+  - `%I` in an `[Install]` value, such as `WantedBy=%I.target` on an
+    instance whose name holds an escape, and what `enable` links; § 7.2
+    declines it because systemd's install-time expansion has no `%I`.
+  - A preset line that starts with `;`, and a drop-in whose name starts
+    with `.` holding `[Install]`: that the first is a comment and the
+    second is not read by `enable`.
   - For an instance with its own unit file (§ 7.4, first case), whether a
     rule that does not count for it lets the lookup go on: with a unit
     file `t@three.service`, `enable t@.service two`, then `enable
@@ -3732,13 +4115,13 @@ preset whose member is off, for every member (§ 7.4); `ManualLink` and
 its advisories (§ 10.9); the vendor-side read and the install comparison for a unit at
 its preset (§ 7.2, § 7.4); the `.upholds` exclusion in the config walk;
 the default target (§ 7.6, § 10.5); and the overlap contract text. Enabled
-instances are collected as state changes and every one is omitted at
-render with a placeholder reason, `template instances are not carried
-yet`, on an `# Omitted:` line and a refine row. Two rules that do not
+and masked instances are collected as state changes and every one is
+omitted at render with a placeholder reason, `template instances are not
+carried yet`, on an `# Omitted:` line and a refine row. Two rules that do not
 depend on the scan land here as well, since the earlier phases are done:
 the machine-id guard in `staged_writes` and its README sentences (§ 10.2,
 § 10.1), and the package check on `mask` (§ 10.2 rule 5). Tests T22 to
-T27, T30 to T34 and T39 to T41.
+T27, T30 to T34 and T39 to T42.
 
 **Phase 5: carried instances. Size S to M.**
 `required_config` and `data_paths` with their derivation and fixed tables
@@ -3747,11 +4130,16 @@ T27, T30 to T34 and T39 to T41.
 6, § 7.5); rule 6 of
 § 10.2 and `InstanceConfigNotStaged`; the attention
 notes for unredacted and flagged configuration; and the data advisory
-(§ 10.8). The placeholder omission from phase 4 is removed. Tests T28,
-T29, and T39's derived instances and carried commands.
+(§ 10.8). Before instances are carried, the scheduled inspector records
+an instance timer's description and reads the template's
+`<prefix>@.timer.d`, so an enabled instance timer's trigger is known and
+rule 5 does not omit it as `TimerTriggerUnresolved` (§ 8). The
+placeholder omission from phase 4 is removed, and a masked instance is
+carried as `systemctl mask` (§ 7.5). Tests T28, T29, and T39's derived
+instances and carried commands.
 
-**The floor for instances** is the end of phase 4: every enabled instance
-named in an `# Omitted:` line, none carried. A disabled instance backed
+**The floor for instances** is the end of phase 4: every enabled or
+masked instance named in an `# Omitted:` line, none carried. A disabled instance backed
 only by its template is not found until phase 5 derives it from the
 presets, so at the floor it is silent: nothing names it, and the image's
 package install links it again. It is a state of the branch
@@ -3846,6 +4234,26 @@ Other objections worth weighing:
   old instance linked in the image (all § 7.4). And on a fleet, two hosts
   that record opposing causes for one link merge to the first host's, so
   the advisory is wrong for the others (§ 12).
+- **An undetermined package section is said only inside the
+  comparison.** The vendor-side record of § 7.4 reaches only the units
+  the install comparison runs on. A `Disabled` unit at its `enable`
+  preset whose package section is `Undetermined` still gets `disable`
+  with no record, so the operator is not told that the package's
+  `[Install]` could not be read.
+- **Rule 7's recipe can switch off what it means to keep.** A suggested
+  `disable` for a member follows that member's own `Also=` in its turn.
+  Through a return edge it can unlink the owner, or a sibling that should
+  stay on, after the owner's `enable` linked it. The recipe does not
+  guard against it; the reader has to check every unit in the closure
+  with `systemctl is-enabled` before keeping the lines (§ 10.2).
+- **A hiding drop-in withholds commands.** A unit with a `set-property`
+  drop-in under `/run/systemd/system.control` that hides an `/etc`
+  install drop-in never gets its `enable` or `disable`, since a `/run`
+  file is never staged, even where the image would read the same
+  `[Install]` (§ 10.2). Where a `/run` file in the instance's `.d` wins
+  over a persistent file in the template's `.d` that would still hide the
+  `/etc` file in the image, the command is withheld though the image
+  would match.
 - **The type split costs ergonomics.** `CarriedUnit` is an enum over two
   name types and a fragment, where one struct and a render `match` would
   do, and it still needs § 10.2 behind it. The types earn their place only
@@ -3882,6 +4290,12 @@ Other objections worth weighing:
   a runtime copy that would be gone at the next boot, and the instance
   gate omits an enable whose configuration is a package's untouched file
   while carrying, ungated, any template it does not know.
+- **Some systemd behaviors are read from its source, not measured.** The
+  drop-in order across an instance's and its template's `.d`, the hiding
+  from the four directories above `/etc`, `%I` in `[Install]`, `;` preset
+  comments and hidden drop-in names were read from the source of systemd
+  252 and 257. Each is on § 13 R5's open list for the RHEL hosts; a
+  measurement that differs changes the reader.
 - **Two systemd behaviors are modeled from two releases.** The reader
   applies the reset of an empty `WantedBy=` or `Alias=` and ignores an
   empty `Also=`, as measured on systemd 252 and 257; a release that
@@ -3940,12 +4354,11 @@ Other objections worth weighing:
   sets `Unit=` omits the timer's `enable` even when a later drop-in
   overrides it and the effective trigger is unchanged, and that omission
   carries its comment. The inspector reads `Unit=` only from
-  `<name>.timer.d` under `/etc/systemd/system` and
-  `/usr/lib/systemd/system`, not from `/run`, `/usr/local/lib`, a
-  template's `<prefix>@.timer.d` or the type-wide `timer.d`, so a
-  `Unit=` set only there is not seen and the recorded trigger is the
-  timer file's or the default; the template directory matters once
-  instance timers are recorded. And a timer with no recorded trigger is
+  `<name>.timer.d` and, for an instance timer, its template's
+  `<prefix>@.timer.d` (from phase 5, § 15), under `/etc/systemd/system`
+  and `/usr/lib/systemd/system`, not from `/run`, `/usr/local/lib` or the
+  type-wide `timer.d`, so a `Unit=` set only there is not seen and the
+  recorded trigger is the timer file's or the default. And a timer with no recorded trigger is
   declined, so an older snapshot omits every timer `enable` until it is
   rescanned, where reading the missing field as passing would have kept
   them. Excluding a generated timer does not exclude the cron entry
