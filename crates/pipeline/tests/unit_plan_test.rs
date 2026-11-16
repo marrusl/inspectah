@@ -4046,6 +4046,26 @@ fn rule_6_needs_each_instance_configuration_in_the_export() {
         ("/etc/w/a.d/badname.conf", "y"),
     ]);
     assert_eq!(rule_5_outcome(&renamed, "w@a.service"), Ok(()), "renamed");
+    // A path with a `..` component cannot be verified: its own reason,
+    // although the file it reads as is staged. Control: the plain path.
+    let parent = units_snapshot(
+        vec![instance(&["/etc/w/../w/a.conf"], UnitState::Enabled)],
+        vec![(CONF, "x")],
+    );
+    assert_eq!(
+        rule_5_outcome(&parent, "w@a.service"),
+        gap("/etc/w/../w/a.conf", ConfigGap::Unverifiable),
+        "a .. component"
+    );
+    let plain_path = units_snapshot(
+        vec![instance(&[CONF], UnitState::Enabled)],
+        vec![(CONF, "x")],
+    );
+    assert_eq!(
+        rule_5_outcome(&plain_path, "w@a.service"),
+        Ok(()),
+        "plain path"
+    );
     let refused_elsewhere = under(vec![
         ("/etc/w/a.d/good.conf", "x"),
         ("/etc/w/other/bad\nname.conf", "y"),
@@ -4087,6 +4107,11 @@ fn rule_6_needs_each_instance_configuration_in_the_export() {
         (
             ConfigGap::NotInSnapshot,
             "its configuration /etc/w/a.conf is not in the export",
+        ),
+        (
+            ConfigGap::Unverifiable,
+            "its configuration path /etc/w/a.conf holds a .. component, so inspectah cannot \
+             tell which file it reads",
         ),
     ] {
         let reason = OmissionReason::InstanceConfigNotStaged {

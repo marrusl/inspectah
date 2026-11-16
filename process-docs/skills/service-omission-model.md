@@ -99,8 +99,11 @@ path whose own path `Destination` refuses (a line break in a file name)
 is never staged: it is `Excluded` naming its path as written, found by
 `lexically_under`, never filtered out, or the other members of a
 required directory would pass it. A `required_config`
-path with a `..` component is kept by the collector and fails as
-`NotInSnapshot`, since `Destination` refuses it.
+path with a `..` component is kept by the collector and fails first, as
+`Unverifiable` naming it ("inspectah cannot tell which file it reads"),
+whatever the export holds, since `Destination` refuses `..` (a
+provisional ruling for the owner; it said "is not in the export" until
+2026-11-15, which misdiagnosed a clean, staged file).
 Package ownership is never evidence: a package-owned file the
 administrator did not change has no config entry and fails, by design
 (§ 10.8 "Only a file the export carries passes"). Not captured is checked
@@ -357,9 +360,9 @@ showed, and the build failed with no warning anywhere.
   one file's name. A FIXME, with exclude advice for `Reservation::Row`
   and rename advice for `Reservation::Inventory`.
 - `InstanceConfigNotStaged { path, gap }`: rule 6, with `ConfigGap`
-  `Excluded`, `NotCaptured`, `Redacted`, `NotInSnapshot` or
-  `FleetVariants`. The first four texts are § 10.8's table; the fleet
-  text is the plan's own. All are written only by
+  `Excluded`, `NotCaptured`, `Redacted`, `NotInSnapshot`, `FleetVariants`
+  or `Unverifiable`. The first four texts are § 10.8's table; the fleet
+  and `..` texts are the plan's own. All are written only by
   `OmissionReason::describe`.
 - `AlsoMember { member, why, verb, named, further, add }`: rule 7. Not an
   `# Omitted:` line but an advisory block (`also_advisory_lines`); refine

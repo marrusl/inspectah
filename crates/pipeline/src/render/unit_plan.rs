@@ -306,6 +306,10 @@ pub enum ConfigGap {
     /// content variant, so the staged copy may not be the one an instance
     /// reads ([`holds_variants`]).
     FleetVariants,
+    /// The path holds a `..` component, so which file it reads cannot be
+    /// told from the export (`Destination` refuses it). Declined whatever
+    /// the export holds.
+    Unverifiable,
 }
 
 /// Why rule 7 of § 10.2 makes a command an advisory.
@@ -386,6 +390,10 @@ impl OmissionReason {
                 ConfigGap::FleetVariants => format!(
                     "its configuration {path} differs between hosts in the fleet, so the staged \
                      copy may not be the one this instance reads"
+                ),
+                ConfigGap::Unverifiable => format!(
+                    "its configuration path {path} holds a .. component, so inspectah cannot \
+                     tell which file it reads"
                 ),
             },
             Self::GeneratedNameCollision {
@@ -2238,6 +2246,8 @@ pub fn data_advisory(unit: &UnitName, paths: &[String]) -> Option<String> {
 /// For each path, in order, the config entries at it or under it decide,
 /// in path order:
 ///
+/// - a path with a `..` component: [`ConfigGap::Unverifiable`], naming
+///   it, before anything is looked up;
 /// - none: [`ConfigGap::NotInSnapshot`], naming the path. Package
 ///   ownership is no evidence (§ 10.8, "Only a file the export carries
 ///   passes");
@@ -2268,8 +2278,10 @@ fn rule_6_instance_config(
         gap,
     };
     for required in &change.required_config {
-        let Ok(at) = Destination::new(required) else {
-            return Err(gap(required, ConfigGap::NotInSnapshot));
+        let at = match Destination::new(required) {
+            Ok(at) => at,
+            Err(PathError::Traversal) => return Err(gap(required, ConfigGap::Unverifiable)),
+            Err(_) => return Err(gap(required, ConfigGap::NotInSnapshot)),
         };
         let under = format!("{}/", at.as_str());
         // Each entry at or under the path, by its destination, or by its

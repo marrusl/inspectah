@@ -386,8 +386,8 @@ the fixed tables. Non-obvious points:
   stays strict. Dropping a `required_config` path would leave an enable
   unchecked by rule 6, so every value under `/etc` is kept: a
   configuration path with a `..` component passes the form check as
-  written, and rule 6 declines its enable as `NotInSnapshot` naming it,
-  since `Destination` refuses `..` and no export entry can sit there.
+  written, and rule 6 declines its enable as `Unverifiable` naming it,
+  since `Destination` refuses `..` and which file it reads cannot be told.
   A data path with `..` is still dropped: it gives only an advisory.
 - Existence is `Executor::file_exists`, true for a directory on both
   executors (`MockExecutor` counts a registered directory).

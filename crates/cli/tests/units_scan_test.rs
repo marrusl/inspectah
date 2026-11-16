@@ -9703,8 +9703,10 @@ fn t27_an_enabled_instance_found_by_its_link_is_carried() {
 
 /// Rule 6 (§ 10.8): a configuration path the template names with a `..`
 /// component is kept as written, so its enable is never carried with the
-/// path unchecked. The export holds no entry at such a path, so the enable
-/// is omitted naming it, even with the file it reads as present and clean.
+/// path unchecked. inspectah cannot tell which file such a path reads, so
+/// the enable is omitted with that reason, naming the path, on both routes
+/// and in refine, although the file it reads as is present, clean and
+/// staged. Control: the same template naming the plain path carries it.
 #[test]
 fn an_instance_configuration_path_with_a_parent_component_omits_the_enable() {
     const UNIT: &str = "t@site.service";
@@ -9730,10 +9732,22 @@ fn an_instance_configuration_path_with_a_parent_component_omits_the_enable() {
     assert_instance_omitted(
         &snap,
         UNIT,
-        "# Omitted: t@site.service (its configuration /etc/t/../t/site.conf is not in the \
-         export)",
+        "# Omitted: t@site.service (its configuration path /etc/t/../t/site.conf holds a .. \
+         component, so inspectah cannot tell which file it reads)",
         "InstanceConfigNotStaged",
     );
+    for (route, tree) in both_exports(&snap) {
+        assert!(
+            staged_at(&tree, "/etc/t/site.conf"),
+            "{route}: the file it reads as is staged"
+        );
+    }
+
+    let plain = scan(t_reads_host(
+        "EnvironmentFile=/etc/t/%i.conf\nExecStart=/usr/bin/t %i",
+        &[("/etc/t/site.conf", "PORT=1\n")],
+    ));
+    assert_instance_carried(&plain, UNIT, "the plain path");
 }
 
 /// The host of `t@site.service`, linked under `/etc` and enabled against
