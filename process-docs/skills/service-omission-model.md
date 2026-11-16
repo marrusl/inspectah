@@ -338,9 +338,10 @@ showed, and the build failed with no warning anywhere.
   `/etc/systemd/system` with no vendor file (`local_trigger_missing`); a
   staged file at its path, a generated one included, or a package in the
   image that owns it, provides it. On the collector side
-  (`scheduled.rs`, `timer_trigger`), drop-ins are selected with the
-  `[Install]` reader's `selected_drop_ins`, so `Unit=` and `[Install]`
-  cannot disagree on load order; for an instance timer that includes the
+  (`scheduled.rs`, `timer_trigger`), drop-ins are listed with
+  `systemd_reads_drop_in` (a hidden `.override.conf` is no evidence) and
+  selected with the `[Install]` reader's `selected_drop_ins`, so `Unit=`
+  and `[Install]` cannot disagree on load order; for an instance timer that includes the
   template's `<prefix>@.timer.d`. An instance timer has no timer file, so
   `scan_instance_timers` describes each instance linked under `/etc`
   (the units inspector's `read_host_links`, the links instances are found

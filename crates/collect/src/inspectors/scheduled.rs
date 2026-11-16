@@ -12,7 +12,7 @@ use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::scheduled::{
     AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer, TimerTrigger,
 };
-use inspectah_core::types::units::UnitName;
+use inspectah_core::types::units::{UnitName, systemd_reads_drop_in};
 use inspectah_core::types::warnings::Warning;
 use std::collections::HashMap;
 use std::path::Path;
@@ -937,7 +937,8 @@ fn timer_unit_assignments(content: &str) -> Vec<String> {
 /// an instance timer, its template's file), and the `/etc` drop-ins that
 /// assign its `Unit=` (§ 8). Drop-ins are the `.conf` files of
 /// `<name>.timer.d` and, for an instance timer, of its template's
-/// `<prefix>@.timer.d`, under each of [`TIMER_DROP_IN_ROOTS`], applied
+/// `<prefix>@.timer.d`, under each of [`TIMER_DROP_IN_ROOTS`], a hidden
+/// name skipped ([`systemd_reads_drop_in`]), applied
 /// after the file in the order `[Install]` is read in
 /// ([`selected_drop_ins`]): file-name order across every directory, and of
 /// the files of one name the first in the instance's own directory before
@@ -960,7 +961,9 @@ fn timer_trigger(exec: &dyn Executor, name: &str, timer_text: &str) -> (TimerTri
             let Ok(entries) = exec.read_dir(Path::new(&dir_path)) else {
                 continue;
             };
-            for entry in entries.into_iter().filter(|e| e.ends_with(".conf")) {
+            // A hidden name is skipped, as systemd skips it: the units
+            // inspector's listing uses the same rule.
+            for entry in entries.into_iter().filter(|e| systemd_reads_drop_in(e)) {
                 let path = format!("{dir_path}/{entry}");
                 let source = DropInSource {
                     root,

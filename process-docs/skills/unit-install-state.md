@@ -154,7 +154,8 @@ measured. **Still needs a real-host run on RHEL 9 and RHEL 10:**
   `.`, as systemd does when it lists drop-ins, so an editor's
   `.#override.conf` is never read. That was read from systemd's source,
   not measured. The rule is `systemd_reads_drop_in` in core, and the
-  plan's rule 5 and rule 7 install-file checks use the same function: a
+  plan's rule 5 and rule 7 install-file checks, the timer trigger reader
+  and the runtime drop-in reader use the same function: a
   hidden file can still be collected and staged as a drop-in row, and a
   check that counted it would decline a command over a file systemd never
   reads.

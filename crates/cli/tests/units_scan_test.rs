@@ -6557,6 +6557,73 @@ fn t37_an_instance_timers_trigger_is_recorded_from_its_template() {
     );
 }
 
+/// T37, hidden drop-ins: systemd skips a drop-in whose name starts with
+/// `.` (`systemd_reads_drop_in`), so a vendor `.override.conf` that sets
+/// `Unit=` to a unit the export stages is not trigger evidence. For a plain
+/// timer and an instance timer, the trigger recorded is the real one, the
+/// evidence list is empty, and with the real trigger's file excluded the
+/// enable is omitted as `TimerTriggerNotStaged` naming it. Control: the
+/// same file visible changes the recorded trigger.
+#[test]
+fn t37_a_hidden_drop_in_is_not_trigger_evidence() {
+    let plain = (
+        t37_host(""),
+        t37_host(""),
+        "report.timer",
+        "/usr/lib/systemd/system/report.timer.d",
+        "[Timer]\nUnit=other.service\n",
+        "report.service",
+        "report.service",
+        "other.service",
+    );
+    let instance = (
+        t37_instance_host(""),
+        t37_instance_host(""),
+        WORKER_INSTANCE_TIMER,
+        "/usr/lib/systemd/system/worker@.timer.d",
+        "[Timer]\nUnit=other@%i.service\n",
+        "worker@a.service",
+        "worker@.service",
+        "other@a.service",
+    );
+    for (hidden_host, visible_host, timer, dir, text, real, real_file, other) in [plain, instance] {
+        let name = timer.strip_suffix(".timer").expect("a timer");
+        let described = |snap: &InspectionSnapshot| {
+            snap.scheduled_tasks
+                .as_ref()
+                .and_then(|st| st.systemd_timers.iter().find(|t| t.name == name))
+                .cloned()
+                .expect("presence: the timer's description")
+        };
+        let hidden = scan(hidden_host.file(&format!("{dir}/.override.conf"), text));
+        let description = described(&hidden);
+        assert_eq!(description.trigger, trigger_unit(real), "{timer}");
+        assert!(description.trigger_drop_ins.is_empty(), "{timer}");
+        let excluded = [(config_item(&etc_path(real_file)), false)];
+        let cf = containerfile_in(&exported_after(&hidden, &excluded));
+        assert_eq!(
+            omitted(&cf, timer),
+            Some(
+                format!(
+                    "# Omitted: {timer} (its unit {real} is not in the export, and a timer \
+                     whose unit is missing does not start)"
+                )
+                .as_str()
+            ),
+            "{timer}:\n{cf}"
+        );
+        assert!(in_no_systemctl_instruction(&cf, timer), "{timer}:\n{cf}");
+        assert_eq!(
+            declined_in(&session_after(&hidden, &excluded), timer).map(|d| d.reason),
+            Some("TimerTriggerNotStaged".to_owned()),
+            "{timer}"
+        );
+
+        let visible = scan(visible_host.file(&format!("{dir}/override.conf"), text));
+        assert_eq!(described(&visible).trigger, trigger_unit(other), "{timer}");
+    }
+}
+
 // ---------------------------------------------------------------------
 // § 10.2 "Never the machine-id" (T33).
 // ---------------------------------------------------------------------
