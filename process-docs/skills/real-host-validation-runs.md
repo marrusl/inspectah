@@ -1570,6 +1570,355 @@ ahead of `99-default-disable.preset: disable *`.
 - A `podman pull` of a base image can die mid-blob with `unexpected EOF`
   from the CDN. `podman pull --retry 5` completed it on the second try.
 
+### Measured, 2026-11-16: stock hosts at the units branch tip
+
+Part of run R4 of the units spec. Branch build `f9ddc7de` and, for
+comparison, `main` at `f6fe8333` (`inspectah version` printed each
+commit on the guest). RHEL 9.8 and RHEL 10.2, both aarch64, each reverted
+to its clean snapshot and scanned as root with no drift, branch first.
+Both builds' snapshots are `complete` on both hosts.
+
+| | RHEL 9.8 | RHEL 10.2 |
+|---|---|---|
+| state changes | `NetworkManager-wait-online.service` `enabled`, preset `disable` | none |
+| inventory | 91 units; two away from preset: that one and `remote-cryptsetup.target` (`disabled`, preset `enable`) | 107 units, none away from preset |
+| `remote-cryptsetup.target` | inventory only, no row | `enabled` at its preset |
+| default target | `multi-user.target` | `multi-user.target` |
+| manual links, undetermined installs, mount findings | none | none |
+| link warnings (all seven causes) | none | none |
+| `Also=` owner advisories | none | none |
+
+Every row is explained. `remote-cryptsetup.target` is held back by the
+stock-state constant. `NetworkManager-wait-online.service` is the known
+`Also=` class (a package install enables it in the image too).
+`getty@tty1.service` is the only enabled instance, at its `enable`
+preset, so it has no row.
+
+**The default target is a stock line on both releases.** Both clean
+guests have `/etc/systemd/system/default.target ->
+/usr/lib/systemd/system/multi-user.target`, owned by no package and
+dated the install, and both base images default to `graphical.target`
+(2026-11-14). So every stock scan now renders
+`RUN systemctl set-default -- 'multi-user.target'`, which moves the image
+to the host's target. That is what § 10.5 asks for. `main` renders
+nothing for it.
+
+**Degraded and warning lists, `main` against the branch.** No section is
+degraded on either build. RHEL 9.8: one warning on each, `unit
+systemd-remount-fs.service has state 'enabled-runtime'`, from inspector
+`services` on `main` and `units` on the branch. RHEL 10.2: the same
+warning plus the skipped ELF scan (`readelf` absent), identical on both.
+The widened `Also=` walk added no warning and no degraded reason on a
+stock host. The `main` Containerfile's `Service Enablement` section
+enables `NetworkManager-wait-online.service` on RHEL 9 and holds
+nothing on RHEL 10.
+
+Scan time on the clean guests: 41 s to 90 s for the branch build, 17 s
+to 55 s for `main`, the first scan on each guest including the base
+image pull.
+
+### Measured, 2026-11-16: a link to a template name starts an instance
+
+Throwaway units on the clean guests of the section above, then
+`daemon-reload`, a branch scan, and a reboot. `tl-bar@.service` is a
+`Type=oneshot` unit with `RemainAfterExit=yes` and `ExecStart=/bin/echo
+tl-bar-started %i`. `tl-fooi@.target` and `tl-foot@.target` are template
+targets, and links in `multi-user.target.wants` pull in `tl-fooi@a.target`
+and `tl-foot@b.target`. Three links name the template:
+
+```
+/etc/systemd/system/multi-user.target.wants/tl-bar@.service   plain parent
+/etc/systemd/system/tl-fooi@a.target.wants/tl-bar@.service    instance parent
+/etc/systemd/system/tl-foot@.target.wants/tl-bar@.service     template parent
+```
+
+Same result on systemd 252 and 257, after `daemon-reload` and after a
+reboot:
+
+- **Plain parent: systemd fills in the parent's name as the instance.**
+  `systemctl show -p Wants multi-user.target` lists
+  `tl-bar@multi-user.service`, and after the reboot it ran
+  (`tl-bar-started multi-user`, `active (exited)`). The journal's only
+  line about the link, at each load, is `multi-user.target: Wants
+  dependency dropin /etc/systemd/system/multi-user.target.wants/tl-bar@.service
+  target /etc/systemd/system/tl-bar@.service has different name`.
+  `is-enabled tl-bar@.service` reads `enabled`.
+- **Instance parent:** `tl-fooi@a.target` wants `tl-bar@a.service`.
+- **Template parent:** every instance of the parent wants the matching
+  instance: `tl-foot@b.target` wants `tl-bar@b.service`, and
+  `tl-foot@c.target`, never started, wants `tl-bar@c.service`.
+- After the reboot `tl-bar@a.service` and `tl-bar@b.service` ran too.
+
+So a link to a template name is never inert under a `.wants` directory.
+The branch scan names the plain-parent link with cause `template` and the
+text "systemd starts no unit from a link to a template name without an
+instance, so the link has no effect", which this measurement contradicts.
+The two other links get cause `instance_filled`, whose text claims
+nothing about the effect, and that holds. The scan made `enable` rows for
+`tl-fooi@a.target` and `tl-foot@b.target` with the attention reason for an
+instance on no list.
+
+### Measured, 2026-11-16: cockpit.socket at the branch tip, both directions
+
+Run R1 of the units spec at `f9ddc7de`, on guests reverted to their clean
+snapshots: `dnf install -y cockpit`, a standard drift run, a scan as
+root, and `podman build --layers=true --network=host` of the unmodified
+scan tarball under the proxy workaround, with the COPY-source check
+clean. On RHEL 10, where the profile disables the socket, `systemctl
+enable podman.socket` (preset `disable` on the host and `disabled` in
+the base image) was added by hand before the scan, so that release has
+a socket moved off its preset in each direction.
+
+| | RHEL 9.8 | RHEL 10.2 |
+|---|---|---|
+| `cockpit.socket` before drift: state, preset | `disabled disabled` | `enabled enabled` |
+| host after drift and plant | `cockpit.socket enabled`; `podman.socket disabled` | `cockpit.socket disabled`; `podman.socket enabled` |
+| base image `is-enabled` | `cockpit.socket`: no such file | `cockpit.socket`: `not-found`; `podman.socket`: `disabled` |
+| rendered | `enable -- ... 'cockpit.socket' 'multipathd.socket' ...` | `enable -- ... 'podman.socket' ...` and `disable -- 'cockpit.socket'` |
+| build output for those lines | `Created symlink .../sockets.target.wants/cockpit.socket` | `Created symlink .../podman.socket`, then `Removed '.../cockpit.socket'` (the link the package install made in the same build) |
+| built image `list-unit-files` | `cockpit.socket enabled disabled` | `cockpit.socket disabled enabled`, `podman.socket enabled disabled` |
+
+**The built image reads the host's state on both releases, enabled
+against preset and disabled against preset.** Builds took 511 s (RHEL 9)
+and 394 s (RHEL 10).
+
+The rest of the unit section, the same on both apart from the RHEL 9
+rows below: `set-default -- 'multi-user.target'`; `enable` for
+`driftify-also-member`, `getty@tty2`, `httpd`, `nginx` and
+`myapp-report.timer`; `mask` for `bluetooth` and `kdump`; the
+`tmp.mount` FIXME; an `Also=` advisory for the local
+`driftify-also-main.service` (its own unit file under `/etc` is an
+install file, so rule 7 declines it, as § 17 says it will); and an
+`add-wants` advisory for the hand-made `driftify-static.service` link.
+RHEL 9 adds `NetworkManager-wait-online.service`, `iscsi-starter.service`
+and `multipathd.socket`, each enabled against a `disable` preset with no
+driftify `systemctl` step naming it: the known `Also=` class
+(`iscsi-starter.service` is the only `Also=` of `iscsi.service`, which
+has an `enable` preset; read on the kitchen-sink host below). One
+link warning on each host, cause `masked`:
+`dbus-org.bluez.service` and `bluetooth.target.wants/bluetooth.service`,
+links of the masked `bluetooth.service`. Expected.
+
+### Measured, 2026-11-16: kitchen-sink at the branch tip, scan to build
+
+Runs R2 and R4 of the units spec at `f9ddc7de`, with `main` at
+`f6fe8333` for comparison. RHEL 9.8 and RHEL 10.2, each reverted to its
+clean snapshot and given a kitchen-sink drift run (driftify `294d8b1`,
+545 s on RHEL 9 and 382 s on RHEL 10). One case was planted by hand
+before the scans, since the profile has no instance whose configuration
+is clean:
+`/etc/systemd/system/ci@.service` (`ExecStart=/bin/cat /etc/ci/%i.conf`,
+`Type=oneshot`, `RemainAfterExit=yes`, `WantedBy=multi-user.target`),
+`/etc/ci/site.conf`, and `systemctl enable ci@site.service`. Both builds
+then scanned as root, branch first.
+
+**WireGuard (R2 observation 3).** On both hosts `config.files` holds
+`/etc/wireguard/wg0.conf` (`unowned`, mode 0600 on the host), its
+`PrivateKey =` line replaced by `REDACTED_WIREGUARDKEY_1`, and
+`redactions` holds an `inline` finding for it (`wireguard_key`, line 3).
+The row has `required_config: ["/etc/wireguard/wg0.conf"]`, and the
+Containerfile has `# Omitted: wg-quick@wg0.service (its configuration
+/etc/wireguard/wg0.conf holds a redacted value; provision the secret on
+the deployed host and enable the unit there)` and no `enable` for it.
+So the config walk does record the file, which § 10.8 had left open.
+
+**A clean instance (observation 4, scan side).** `ci@site.service` has
+`required_config: ["/etc/ci/site.conf"]`, the file is in `config.files`
+with its content, and the unit is in the `enable` list.
+
+**The package that would own `/etc/systemd/system/service.d/*.conf`
+(observation 6).** None exists in the enabled repositories, so the
+snapshot question does not arise. Searched with `dnf repoquery --file
+'/etc/systemd/system/service.d/*'`: on the clean guests (BaseOS and
+AppStream of each release) and again after the drift run with EPEL
+enabled (EPEL 9 and `epel-cisco-openh264` on RHEL 9, EPEL 10 on RHEL 10).
+Every search printed nothing. Neither clean guest has the directory
+under `/etc` or `/usr/lib`. For scale, the wider pattern
+`/etc/systemd/system/*.d/*` does match per-unit drop-ins in `cloud-init`
+and `ipa-server-common` (RHEL 9) and `ipa-server-common`, `php-fpm` and
+`php8.4-fpm` (RHEL 10), which are not type-wide.
+
+**A local service with no paired timer (observation 1).** Both scan
+tarballs were built unmodified, with `--layers=true --network=host` under
+the proxy workaround and the COPY-source check clean.
+
+- `main`: the `Service Enablement` block comes before every `COPY` of
+  `/etc` and names `driftify-also-main.service`, whose file is only in
+  the config tree. The build stops there on both releases: `Failed to
+  enable unit, unit driftify-also-main.service does not exist.` (RHEL 9)
+  and `Failed to enable unit: Unit driftify-also-main.service does not
+  exist` (RHEL 10), exit status 1.
+- Branch: `# === Systemd Unit State ===` follows `COPY config/etc/ /etc/`,
+  and both builds passed (761 s on RHEL 9, 539 s on RHEL 10). The local
+  units it enables (`driftify-also-member.service`, `ci@site.service`)
+  are in the image by then. `driftify-also-main.service` itself is an
+  `Also=` advisory, as in the standard run.
+
+**The libvirt advisory against the host (observation 5).** On both hosts
+`virtnetworkd.service` is `enabled` with
+`multi-user.target.wants/virtnetworkd.service`, and the three sockets are
+`disabled`, with no `virtnetworkd*` link in `sockets.target.wants`. The
+scan carries a `disable` row for each socket (each against an `enable`
+preset) and makes the service an advisory naming all three sockets as
+`not enabled there`, with the lines `enable -- 'virtnetworkd.service'`
+then `disable --` for each socket. The `cups.service` and
+`iscsid.service` advisories have the same form for one socket each. Built
+from the branch image as it is, `virtnetworkd.service` and
+`iscsid.service` read `disabled`. With the three advisories' eight lines
+appended, in their order, every unit reads as on the host, and the
+`.wants` directories hold the same `virtnetworkd`, `cups` and `iscsid`
+links as the host's. The first `disable` of a socket removes all three
+socket links, through the sockets' own `Also=`, and the two after it
+print nothing. On both releases `cups.service` was already `enabled`, and
+`cups.socket` `disabled`, without the lines: `cups.service` has an
+`enable` preset, the package install enabled it, and the socket's own
+`disable` row is carried. That advisory is the owner check of § 7.4; its
+lines are redundant here and harmless.
+
+**The booted image (observations 2 and 4).** The branch image, with one
+layer added for the probe (`/etc/ssh/sshd_config.d/00-a-probe.conf`
+allowing root key login, and a probe unit), installed with `bootc
+install to-existing-root` (deployed `/etc/machine-id` size 0 on both)
+and booted. Same on both releases, read over root ssh:
+
+- The full shadow: `sshd.service` `FragmentPath=/etc/systemd/system/sshd.service`,
+  `ExecStart` with the shadow's `-o LogLevel=VERBOSE`, `active`.
+- `ci@site.service`: `enabled`, `active`, `FragmentPath` the `/etc`
+  template, and its journal shows `greeting = hello` read from
+  `/etc/ci/site.conf`. `getty@tty2.service` is `active` too.
+- `wg-quick@wg0.service`: `disabled`, `inactive`.
+- `virtnetworkd.service` and `iscsid.service` `disabled`, their sockets
+  `disabled`, as in the build above without the advisory lines.
+- First boot logged `First Boot Complete was skipped`, as in R3.
+- `is-system-running` read `degraded`. The failed units are drift content
+  the export does not supply, not unit state: `nginx.service` (`Unable to
+  locate executable '/usr/local/bin/notify-deploy.sh'`, which the
+  kitchen-sink drop-in names in `ExecStartPost=`), `sssd.service`, the
+  quadlet units `webapp.service` and `dev-tools.service` (image pulls
+  from registries the guest cannot reach), and on RHEL 10
+  `audit-rules.service`.
+
+**Every row, classified (R4, kitchen-sink).** No row is unexplained.
+
+| Row | RHEL 9 | RHEL 10 | Reason |
+|---|---|---|---|
+| `tmp.mount` masked | FIXME, not carried | same | driftify minimal; § 10.3 |
+| `bluetooth`, `kdump` masked | `mask` | same | driftify |
+| `httpd`, `nginx`, `driftify-also-member`, `myapp-report.timer`, `getty@tty2` enabled | `enable` | same | driftify |
+| `ci@site` enabled | `enable` | same | planted, configuration staged |
+| `wg-quick@wg0` enabled | `# Omitted:` redacted | same | driftify; § 10.8 |
+| `driftify-also-main` enabled (local, `Also=`) | advisory, install file | same | § 17: a local unit with `Also=` is never carried |
+| `virtnetworkd`, `iscsid` enabled, `Also=` sockets off | advisory | same | driftify pairs; rule 7 |
+| `cups.service` enabled at its `enable` preset, `cups.socket` off | advisory (owner check) | same | driftify pair; § 7.4 |
+| `cups.socket`, `iscsid.socket`, three `virtnetworkd` sockets disabled | `disable` | same | driftify pairs, against `enable` presets |
+| `cockpit.socket` | `enable` | `disable` | driftify, against preset |
+| `NetworkManager-wait-online`, `multipathd.socket`, `iscsi-starter` enabled against `disable` | `enable` | no row: `NetworkManager-wait-online` and `iscsi-starter` at an `enable` preset, `multipathd.socket` `static` | the known `Also=` class: `iscsi-starter` is the only `Also=` of `iscsi.service` (preset `enable`, `indirect` on the host) |
+| `driftify-static` hand-made link | `add-wants` advisory | same | driftify; `StaticUnit` |
+| `driftify-upheld` | n/a (RHEL 9 makes no `.upholds` link) | link advisory and `UndeterminedInstall` | driftify; § 7.3 |
+| default target | `set-default -- 'graphical.target'` | same | driftify |
+| `remote-cryptsetup.target` disabled against `enable` | inventory, no row | at preset | stock-state constant |
+
+**How often the link warnings fire.** Every warning with a link `cause`,
+per host and run. Both hosts gave the same counts in every run.
+
+| Run | `masked` | `template` | `instance_filled` | `not_read`, `refused`, `alias`, `dangling` |
+|---|---|---|---|---|
+| stock | 0 | 0 | 0 | 0 |
+| stock plus the template-link plants | 0 | 1 (planted) | 2 (planted) | 0 |
+| standard (R1) | 2 | 0 | 0 | 0 |
+| kitchen-sink | 2 | 0 | 0 | 0 |
+| kitchen-sink plus the hand plants below | 2 | 0 | 0 | 0 |
+
+The two `masked` links are `/etc/systemd/system/dbus-org.bluez.service`
+(the alias) and `bluetooth.target.wants/bluetooth.service`, both of the
+masked `bluetooth.service`: expected, and true, since a masked unit
+starts from neither. The planted ones are in
+[§ a link to a template name starts an instance](#measured-2026-11-16-a-link-to-a-template-name-starts-an-instance):
+the `instance_filled` text holds, and the `template` text does not. No
+run produced a `not_read`, `refused`, `alias` or `dangling` warning.
+
+### Measured, 2026-11-16: what an instance reads, systemd against the scan
+
+On each kitchen-sink guest of the section above, after its scans and
+builds, more cases were planted by hand, `daemon-reload` was run, each
+instance was enabled, `systemctl show` was read for every one, and the
+branch build scanned again. Every result below is the same on RHEL 9.8
+and RHEL 10.2.
+
+**Shipped templates.** `wireguard-tools`, `389-ds-base` (AppStream) and
+`openvpn` (EPEL) installed on both: `wireguard-tools-1.0.20210914-3.el9`,
+`389-ds-base-2.9.0-5.el9_9`, `openvpn-2.5.11-2.el9`;
+`wireguard-tools-1.0.20250521-1.el10`, `389-ds-base-3.3.0-5.el10_3`,
+`openvpn-2.7.9-1.el10_3`. Instances `openvpn-client@c1`,
+`openvpn-server@s1` and `dirsrv@example`, each with a small unowned file
+where the unit reads it (`/etc/openvpn/client/c1.conf`,
+`/etc/openvpn/server/s1.conf`, `/etc/dirsrv/slapd-example/dse.ldif`) and
+`/var/lib/dirsrv/slapd-example/marker`.
+
+| Instance | What the unit reads (`systemctl show`) | `required_config` | `data_paths` | Rendered |
+|---|---|---|---|---|
+| `wg-quick@wg0` | `wg-quick up wg0` | `/etc/wireguard/wg0.conf` | none | `# Omitted:` redacted value |
+| `openvpn-client@c1` | `--config c1.conf` in `WorkingDirectory=/etc/openvpn/client` | `/etc/openvpn/client/c1.conf` | none | `enable` |
+| `openvpn-server@s1` | `--status /run/openvpn-server/status-s1.log ... --config s1.conf` in `WorkingDirectory=/etc/openvpn/server` | **no row** | **no row** | **nothing** |
+| `dirsrv@example` | `ns-slapd -D /etc/dirsrv/slapd-example`, `ExecStartPre=` on `.../dse.ldif`, `EnvironmentFile=-/etc/sysconfig/dirsrv-example` | `/etc/dirsrv/slapd-example`, `/etc/dirsrv/slapd-example/dse.ldif` | `/var/lib/dirsrv/slapd-example` | `enable`, and the data advisory |
+
+(Each `required_config` also held the type-wide plant below, as systemd
+did.)
+
+**`openvpn-server@` is never carried.** The shipped unit on both
+releases has `ExecStart=/usr/sbin/openvpn --status
+%t/openvpn-server/status-%i.log ...`. The reader expands only `%i`, `%I`,
+`%p`, `%N` and `%%` (`specifiers.rs`), so the operand holding `%t` and
+`%i` is uninterpretable, and the instance gets no state change. The scan
+says so only as a snapshot warning: `unit openvpn-server@s1.service has
+state 'enabled' - its ExecStart= setting in
+/usr/lib/systemd/system/openvpn-server@.service (line 13) names a path
+for the instance that inspectah cannot read as systemd does, so what
+the instance reads is unknown and its enable is not carried`. The
+Containerfile names the unit nowhere. systemd expands `%t` to `/run`.
+
+**`dirsrv@` names its directory.** The derivation finds both the
+directory and `dse.ldif` from the unit's own lines, and the fixed table
+adds the data path. Rule 6 passed with the directory holding one staged
+unowned file. The `-` prefixed `EnvironmentFile=` is left out, as
+systemd treats it as optional. A real instance directory holds more
+(certificate databases, a PIN file), which this run did not plant.
+
+**Reader cases.** Each template is a `Type=oneshot` unit under `/etc` with
+`WantedBy=multi-user.target`.
+
+| Case | systemd (`systemctl show`, journal) | Scan | Rendered |
+|---|---|---|---|
+| `ExecStart=/usr/bin/true --config "/etc/w x/%i.conf"` | argv `--config /etc/w x/a.conf` | `/etc/w x/a.conf` | `enable` (file planted) |
+| `/etc/systemd/system/service.d/50-rq-env.conf`: `EnvironmentFile=/etc/rqenv/%i.env` | every service gets it; `rt@b`: `/etc/rqenv/b.env` | `/etc/rqenv/b.env`, and on every enabled instance | `enable` (files planted) |
+| `w-.service.d/50-wq.conf` for `w-q@a`: `EnvironmentFile=/etc/wq/%i.env` | `/etc/wq/a.env` | `/etc/wq/a.env` | `enable` |
+| `rr@`: `EnvironmentFile=/etc/rr/%i.env`, then `rr@.service.d/10-reset.conf`: `EnvironmentFile=` | `/etc/rr/a.env` gone | gone; `10-reset.conf` in `install_drop_ins` | `enable` |
+| `rs@`: the same value, then `[Unit] EnvironmentFile=` in a drop-in | `Unknown key ... in section [Unit], ignoring`; `/etc/rs/a.env` kept | kept | `# Omitted:` not in the export (file absent) |
+| `rw@`: `[Unit] EnvironmentFile=/etc/rw/%i.env` | `Unknown key ...`, ignoring; nothing added | `/etc/rw/a.env` added | `# Omitted:` not in the export |
+| `rl@`: `WorkingDirectory=/etc/rl/%i`, then `WorkingDirectory=-/` + 2048 `./` + `srv` | `Failed to resolve unit specifiers in working directory path ...`; stays `/etc/rl/site` | `/etc/rl/site` kept | `# Omitted:` not in the export |
+| `rlc@`: the same, then `WorkingDirectory=-/srv/t` | `!/srv/t` | cleared; drop-in in `install_drop_ins` | `enable` |
+
+Only `rw@` differs from systemd: an assignment systemd ignores still
+adds its path, as built on purpose, which omits an enable systemd would
+start without the file. The journal line wording differs by release (RHEL
+9: `Unknown key name 'EnvironmentFile' in section 'Unit', ignoring.`).
+
+**Instance timers.** `/etc/systemd/system/tt@.timer` with
+`OnCalendar=*-*-* 04:00:00`, `tt@.service` and `tu@.service`, and
+`tt@.timer.d/.hidden.conf` holding `[Timer]` `Unit=tu@%i.service`.
+`tt@one.timer` and `tt@two.timer` enabled. systemd ignores the hidden
+file: `Triggers=tt@one.service`, `DropInPaths=` empty. The scan records
+the same triggers, `tt@one.service` and `tt@two.service`, and both
+instances get `enable` rows. The hidden file is in `units.drop_ins`, and
+in `config.files` as inventory. Refine's scheduled section has three rows
+with distinct ids: `timer:etc/systemd/system/tt@.timer` (the template,
+titled `tt@`), `timer-instance:["etc/systemd/system/tt@.timer","tt@one"]`
+and `timer-instance:["etc/systemd/system/tt@.timer","tt@two"]`. Each
+instance's `searchable_text` starts with its own name, so a search for
+`tt@two` finds one scheduled row; `tt@` finds all three. The description
+and command are not expanded per instance (`instance timer %i`,
+`/usr/bin/echo tt %i`).
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a
