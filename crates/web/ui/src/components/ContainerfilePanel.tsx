@@ -10,7 +10,19 @@ export interface ContainerfilePanelProps {
   loading: boolean;
   /** When true, redact crypt(3) hashes in chpasswd lines. */
   sessionIsSensitive?: boolean;
+  /**
+   * True in the fleet view: the footer keeps its fleet text. Single-host
+   * mode shows that every decision reaches the preview (spec § 9.5, § 6.15).
+   */
+  isAggregateMode?: boolean;
 }
+
+/** § 7 string 25: the footer in single-host mode. */
+const SINGLE_HOST_FOOTER = "Preview reflects every include and exclude decision you make in refine.";
+
+/** The fleet view's footer, unchanged (spec § 2 item 8). */
+const FLEET_FOOTER =
+  "Preview reflects package and config decisions. Context sections are included as-is.";
 
 const DEFAULT_WIDTH = 340;
 const MIN_WIDTH = 200;
@@ -28,6 +40,7 @@ export function ContainerfilePanel({
   onToggle,
   loading,
   sessionIsSensitive = false,
+  isAggregateMode = false,
 }: ContainerfilePanelProps) {
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [hashesRevealed, setHashesRevealed] = useState(false);
@@ -446,8 +459,7 @@ export function ContainerfilePanel({
             </button>
           )}
         <Content component="small" className="inspectah-cf-panel__footer-note">
-          Preview reflects package and config decisions. Context sections are
-          included as-is.
+          {isAggregateMode ? FLEET_FOOTER : SINGLE_HOST_FOOTER}
         </Content>
       </div>
     </div>

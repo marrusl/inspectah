@@ -112,10 +112,11 @@ export interface AppShellProps {
   /** Aggregate-mode one-line summary for StatsBar. */
   aggregateSummary?: AggregateSummary;
   /**
-   * True in the fleet view, false in single-host mode. Two uses: the
-   * Containerfile panel defaults to open regardless of viewport width, and
+   * True in the fleet view, false in single-host mode. Three uses: the
+   * Containerfile panel defaults to open regardless of viewport width;
    * GlobalSearch indexes the fleet view's `units` section as before instead
-   * of the single-host units rows (spec § 6.15).
+   * of the single-host units rows; and the Containerfile panel's footer
+   * keeps its fleet text instead of the single-host one (spec § 6.15).
    */
   isAggregateMode?: boolean;
   /** Override section IDs for 1-9 keyboard navigation (aggregate mode). */
@@ -302,6 +303,7 @@ export function AppShell({
           onToggle={togglePanel}
           loading={containerfileLoading}
           sessionIsSensitive={sessionIsSensitive}
+          isAggregateMode={isAggregateMode}
         />
       </div>
       <ShortcutOverlay

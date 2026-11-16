@@ -251,6 +251,16 @@ describe("AppShell", () => {
     ).toBeInTheDocument();
   });
 
+  // U30 (spec § 9.5, § 6.15): single-host mode passes its mode to the panel.
+  it("shows the single-host Containerfile footer when not in aggregate mode", () => {
+    const { container } = renderAppShell({ containerfilePreview: "FROM ubi9\n" });
+    const footer = container.querySelector(".inspectah-cf-panel__footer-note");
+    expect(footer).not.toBeNull();
+    expect(footer!.textContent!.replace(/\s+/g, " ").trim()).toBe(
+      "Preview reflects every include and exclude decision you make in refine.",
+    );
+  });
+
   it("toggles ContainerfilePanel on Ctrl+E", async () => {
     renderAppShell({
       containerfilePreview: "FROM ubi9\nRUN echo hello",

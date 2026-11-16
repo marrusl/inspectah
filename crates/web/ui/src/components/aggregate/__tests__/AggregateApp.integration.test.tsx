@@ -764,6 +764,23 @@ describe("AggregateApp integration", () => {
   });
 
   // -------------------------------------------------------------------------
+  // U34, footer half: the fleet view's Containerfile footer is unchanged by
+  // the single-host footer (spec § 9.5, § 6.15).
+  // -------------------------------------------------------------------------
+  describe("fleet Containerfile footer (§ 6.15)", () => {
+    it("reads today's text, not the single-host one", async () => {
+      mockFetchAggregateView.mockResolvedValue(mockAggregateViewResponse());
+      const { container } = renderAggregateApp();
+      await waitForContent();
+      const footer = container.querySelector(".inspectah-cf-panel__footer-note");
+      expect(footer).not.toBeNull();
+      expect(footer!.textContent!.replace(/\s+/g, " ").trim()).toBe(
+        "Preview reflects package and config decisions. Context sections are included as-is.",
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // 11. Aggregate conflict dismiss/restore flow (RepoBar ↔ PackageList)
   // -------------------------------------------------------------------------
   describe("aggregate conflict dismiss/restore flow", () => {

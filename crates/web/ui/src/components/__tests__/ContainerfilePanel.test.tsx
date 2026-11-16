@@ -156,19 +156,40 @@ describe("ContainerfilePanel", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows context-sections footer note", () => {
+  it("shows the fleet panel's context-sections footer note", () => {
     render(
       <ContainerfilePanel
         content={"FROM ubi9\n"}
         isOpen={true}
         onToggle={vi.fn()}
         loading={false}
+        isAggregateMode={true}
       />,
     );
 
     expect(
       screen.getByText(/Context sections are included as-is/),
     ).toBeInTheDocument();
+  });
+
+  // U30 (spec § 9.5, § 6.15, § 7 string 25): the footer says what the
+  // preview reflects, by mode.
+  it.each<[boolean, string]>([
+    [false, "Preview reflects every include and exclude decision you make in refine."],
+    [true, "Preview reflects package and config decisions. Context sections are included as-is."],
+  ])("with isAggregateMode %s, the footer reads %j", (isAggregateMode, text) => {
+    const { container } = render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+        isAggregateMode={isAggregateMode}
+      />,
+    );
+    const footer = container.querySelector(".inspectah-cf-panel__footer-note");
+    expect(footer).not.toBeNull();
+    expect(footer!.textContent!.replace(/\s+/g, " ").trim()).toBe(text);
   });
 
   it("shows skeletons when loading", () => {
