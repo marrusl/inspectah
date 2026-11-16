@@ -551,6 +551,11 @@ pub struct UnitPlan {
     /// a value the redaction pass flagged and did not change. Not a
     /// Containerfile line: refine shows each on its row.
     pub instance_notes: Vec<(UnitName, String)>,
+    /// § 10.8 "Data under `/var`": one sentence per carried instance
+    /// enable whose `data_paths` is not empty ([`data_advisory`]). Written
+    /// as an `# Advisory:` line before the `RUN` lines, and refine shows
+    /// the same sentence on the row.
+    pub data_advisories: Vec<(UnitName, String)>,
     /// The enables of the units the scheduled section generates from cron
     /// entries, which that section copies and enables (§ 10.2 item 3,
     /// § 10.7).
@@ -876,7 +881,8 @@ pub fn excluded_updater_line(name: &UnitName) -> DeclinedLine {
 
 /// The unit state section's lines for `plan`, in § 10.1's order: a line per
 /// declined command ([`declined_line`]) other than rule 7's, a line per
-/// excluded runtime updater ([`excluded_updater_line`]), then
+/// excluded runtime updater ([`excluded_updater_line`]), a data advisory
+/// per carried instance with data under `/var` ([`data_advisory`]), then
 /// [`systemctl_lines`], then the comment-only blocks one after another:
 /// rule 7's ([`also_advisory_lines`]), the mount advisories
 /// ([`UnitPlan::mount_advisories`]), the hand-made link advisories
@@ -905,6 +911,11 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
             .iter()
             .map(|name| escape_comment_text(&excluded_updater_line(name).comment())),
     );
+    // § 10.8: a carried instance's data advisory precedes the `RUN` lines.
+    // Its paths come from the snapshot, so each line is escaped.
+    lines.extend(plan.data_advisories.iter().map(|(_, sentence)| {
+        escape_comment_text(&format!("{}{sentence}", DeclinedMarker::Advisory.prefix()))
+    }));
     lines.extend(systemctl_lines(plan.default_target.as_ref(), &plan.planned));
     // Rule 7's blocks (§ 10.1's order). An install file's path comes from
     // the snapshot, so each line is escaped.
@@ -2198,6 +2209,28 @@ const CONFIG_UNREDACTED_REST: &str = "is staged as the source host had it: the s
 const CONFIG_FLAGGED_REST: &str = "holds a value the redaction pass flagged and did not \
      change. Check it before the image is used.";
 
+/// § 10.8's data sentence, after the unit and its paths.
+const DATA_ADVISORY_REST: &str = "The image does not carry it, and the carried enable starts \
+     the unit on first boot. Put the data in place before that boot, or the unit starts without \
+     it.";
+
+/// § 10.8 "Data under `/var`": the sentence for a carried instance enable
+/// whose data sits at `paths`, which the image does not carry. Several
+/// paths are named in one sentence (`a, b and c`). Written as an
+/// `# Advisory:` line before the `RUN` lines ([`unit_state_lines`]) and,
+/// unchanged, on the refine row's `attention_reason`.
+pub fn data_advisory(unit: &UnitName, paths: &[String]) -> String {
+    let named = match paths {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    format!(
+        "{} keeps data under {named}. {DATA_ADVISORY_REST}",
+        unit.as_str()
+    )
+}
+
 /// Rule 6 (§ 10.2, § 10.8), for an `enable` on a template instance: every
 /// path in `required_config` is in the export as the source host had it.
 /// For each path, in order, the config entries at it or under it decide,
@@ -2644,6 +2677,15 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
                         .iter()
                         .map(|note| (planned.name.clone(), note.clone())),
                 );
+                if planned.action == UnitAction::Enable
+                    && planned.name.instance().is_some()
+                    && !sc.data_paths.is_empty()
+                {
+                    plan.data_advisories.push((
+                        planned.name.clone(),
+                        data_advisory(&planned.name, &sc.data_paths),
+                    ));
+                }
                 plan.planned.push(PlannedUnit {
                     name: planned.name.clone(),
                     action: planned.action,

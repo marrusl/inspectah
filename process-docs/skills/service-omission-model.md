@@ -112,6 +112,16 @@ empty `required_config` passes; when its template is on no § 7.5 list and
 `data_paths` is empty too, the collector gives the row
 `INSTANCE_READS_UNKNOWN` as its note.
 
+**Data under `/var` (§ 10.8).** A carried instance `enable` (after rule
+7) whose row has a non-empty `data_paths` gets one sentence in
+`UnitPlan.data_advisories` (`data_advisory`, every path in one sentence,
+`a, b and c`). `unit_state_lines` writes it as an `# Advisory:` line
+after the `# Omitted:` lines and before the `RUN` lines, escaped, and
+refine appends the same sentence to the row's `attention_reason` after
+the instance notes. A declined enable, a `disable` or `mask`, and a row
+with no `data_paths` get none; the collector records `data_paths` only
+for an `Enabled` instance anyway.
+
 **A mask follows the package check.** `mask` reads no `[Install]`, so
 rule 5's file and drop-in halves (orders 4 and 5) do not apply to it, but
 the package half (order 6) does, through the same presence tiers, unchanged: a mask of a

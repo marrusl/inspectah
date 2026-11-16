@@ -3102,6 +3102,39 @@ mod unit_rows {
         assert!(plain_row.also.is_empty() && plain_row.install_drop_ins.is_empty());
     }
 
+    /// § 11.1: a unit row carries `required_config[]` and `data_paths[]`
+    /// from its state change. A row with neither has two empty lists.
+    #[test]
+    fn a_unit_row_carries_its_required_config_and_data_paths() {
+        let mut wg = change(
+            "wg-quick@wg0.service",
+            vendor("wg-quick@.service", Some("wireguard-tools")),
+            UnitState::Enabled,
+        );
+        wg.required_config = vec!["/etc/wireguard/wg0.conf".into()];
+        let mut dirsrv = change(
+            "dirsrv@example.service",
+            vendor("dirsrv@.service", Some("389-ds-base")),
+            UnitState::Enabled,
+        );
+        dirsrv.required_config = vec!["/etc/dirsrv/slapd-example".into()];
+        dirsrv.data_paths = vec!["/var/lib/dirsrv/slapd-example".into()];
+        let plain = change(
+            "plain.service",
+            vendor("plain.service", Some("plain")),
+            UnitState::Enabled,
+        );
+        let session = RefineSession::new(snapshot(vec![wg, dirsrv, plain], vec![], vec![]));
+        let wg_row = row(&session, "wg-quick@wg0.service");
+        assert_eq!(wg_row.required_config, ["/etc/wireguard/wg0.conf"]);
+        assert!(wg_row.data_paths.is_empty());
+        let dirsrv_row = row(&session, "dirsrv@example.service");
+        assert_eq!(dirsrv_row.required_config, ["/etc/dirsrv/slapd-example"]);
+        assert_eq!(dirsrv_row.data_paths, ["/var/lib/dirsrv/slapd-example"]);
+        let plain_row = row(&session, "plain.service");
+        assert!(plain_row.required_config.is_empty() && plain_row.data_paths.is_empty());
+    }
+
     /// A mount finding row: no `include` key at all, its fields, the config
     /// row that holds its file, and § 10.6's lines, which the preview
     /// carries too. A finding with no recorded state has `state: null`.

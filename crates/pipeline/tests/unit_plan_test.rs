@@ -4072,6 +4072,79 @@ fn rule_6_needs_each_instance_configuration_in_the_export() {
     }
 }
 
+/// § 10.8 "Data under `/var`", on the plan: a carried instance enable
+/// with `data_paths` gets one data advisory naming every path, written as
+/// one `# Advisory:` line before the `RUN` lines. No advisory for an
+/// instance whose enable is declined, for a `disable`, or for an enable
+/// with no `data_paths`.
+#[test]
+fn a_carried_instance_with_data_paths_has_one_data_advisory() {
+    use inspectah_pipeline::render::unit_plan::unit_state_lines;
+    const CONF: &str = "/etc/w/a.conf";
+    let instance = |data: &[&str], state| {
+        let mut change = change_with("w@a.service", vendor("w@.service"), state);
+        change.required_config = vec![CONF.to_owned()];
+        change.data_paths = data.iter().map(|p| (*p).to_owned()).collect();
+        change
+    };
+    let plan_of = |snap: &InspectionSnapshot| plan_units(snap, &staged_writes(snap));
+    let sentence = "w@a.service keeps data under /var/lib/w/a and /var/lib/w/b. The image does \
+                    not carry it, and the carried enable starts the unit on first boot. Put the \
+                    data in place before that boot, or the unit starts without it.";
+
+    let carried = units_snapshot(
+        vec![instance(
+            &["/var/lib/w/a", "/var/lib/w/b"],
+            UnitState::Enabled,
+        )],
+        vec![(CONF, "x")],
+    );
+    let plan = plan_of(&carried);
+    assert_eq!(
+        plan.data_advisories,
+        [(
+            UnitName::try_from("w@a.service".to_owned()).unwrap(),
+            sentence.to_owned()
+        )]
+    );
+    let lines = unit_state_lines(&plan);
+    let advisory = format!("# Advisory: {sentence}");
+    let at = lines
+        .iter()
+        .position(|l| *l == advisory)
+        .unwrap_or_else(|| panic!("no data advisory: {lines:#?}"));
+    let run = lines
+        .iter()
+        .position(|l| l.starts_with("RUN systemctl enable"))
+        .unwrap_or_else(|| panic!("no RUN line: {lines:#?}"));
+    assert!(at < run, "{lines:#?}");
+
+    let one = units_snapshot(
+        vec![instance(&["/var/lib/w/a"], UnitState::Enabled)],
+        vec![(CONF, "x")],
+    );
+    assert!(
+        plan_of(&one).data_advisories[0]
+            .1
+            .starts_with("w@a.service keeps data under /var/lib/w/a. The image"),
+        "{:?}",
+        plan_of(&one).data_advisories
+    );
+
+    let declined = units_snapshot(
+        vec![instance(&["/var/lib/w/a"], UnitState::Enabled)],
+        vec![],
+    );
+    assert!(plan_of(&declined).data_advisories.is_empty(), "declined");
+    let disabled = units_snapshot(
+        vec![instance(&["/var/lib/w/a"], UnitState::Disabled)],
+        vec![],
+    );
+    assert!(plan_of(&disabled).data_advisories.is_empty(), "disable");
+    let no_data = units_snapshot(vec![instance(&[], UnitState::Enabled)], vec![(CONF, "x")]);
+    assert!(plan_of(&no_data).data_advisories.is_empty(), "no data");
+}
+
 /// § 10.2 rule 6 on a fleet aggregate: an instance's configuration whose
 /// path holds more than one content variant declines the enable,
 /// whichever variant is staged, since no one host's file is the one every

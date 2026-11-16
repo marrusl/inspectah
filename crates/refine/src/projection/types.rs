@@ -207,6 +207,12 @@ pub struct UnitStateView {
     pub also: Vec<AlsoView>,
     /// The row's install drop-ins under `/etc/systemd/system` (§ 11.1).
     pub install_drop_ins: Vec<String>,
+    /// The paths under `/etc` a template instance's enable needs in the
+    /// export (§ 7.5, § 10.8).
+    pub required_config: Vec<String>,
+    /// The paths under `/var` that hold a template instance's data, which
+    /// the image does not carry (§ 7.5, § 10.8).
+    pub data_paths: Vec<String>,
     pub include: bool,
     pub locked: bool,
     pub triage: TriageTag,

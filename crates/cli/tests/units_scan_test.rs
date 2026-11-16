@@ -10696,6 +10696,95 @@ fn t28_a_carried_instance() {
     assert_eq!(unit_row(&snap, OPENVPN_SITE).attention_reason, None);
 }
 
+/// The 389 Directory Server template, cut to what § 7.5 reads: its unit
+/// file names the instance's `/etc/dirsrv/slapd-%i` directory, and § 7.5's
+/// table gives `/var/lib/dirsrv/slapd-%i` as its data.
+const DIRSRV: &str = "[Unit]\nDescription=389 Directory Server %i.\n\n[Service]\nType=notify\n\
+     ExecStart=/usr/sbin/ns-slapd -D /etc/dirsrv/slapd-%i -i /run/dirsrv/slapd-%i.pid\n\n\
+     [Install]\nWantedBy=multi-user.target\n";
+const DIRSRV_EXAMPLE: &str = "dirsrv@example.service";
+const DIRSRV_DATA: &str = "/var/lib/dirsrv/slapd-example";
+
+/// § 10.8's data sentence for `dirsrv@example.service`.
+const DIRSRV_DATA_SENTENCE: &str = "dirsrv@example.service keeps data under \
+     /var/lib/dirsrv/slapd-example. The image does not carry it, and the carried enable starts \
+     the unit on first boot. Put the data in place before that boot, or the unit starts without \
+     it.";
+
+/// T28's data case (§ 10.8 "Data under `/var`"), through the real
+/// inspectors: `dirsrv@example.service` with its configuration in the
+/// export and an existing data directory has `data_paths`, its enable
+/// carried, one `# Advisory:` line before the `RUN` lines on both routes,
+/// and the same sentence as its refine row's `attention_reason`; the row
+/// shows `required_config` and `data_paths`. With the configuration
+/// missing, the enable is omitted and there is no data advisory. The
+/// WireGuard row shows its `required_config` too.
+#[test]
+fn t28_a_carried_instance_with_data_has_the_data_advisory() {
+    let host = |with_config: bool| {
+        let host = instance_host("389-ds-base", "dirsrv@.service", DIRSRV, DIRSRV_EXAMPLE)
+            .dir(DIRSRV_DATA);
+        if with_config {
+            host.file("/etc/dirsrv/slapd-example/dse.ldif", "dn: cn=config\n")
+        } else {
+            host
+        }
+    };
+    let advisory = format!("# Advisory: {DIRSRV_DATA_SENTENCE}");
+
+    let snap = scan(host(true));
+    let row = change(&snap, DIRSRV_EXAMPLE);
+    assert_eq!(row.required_config, ["/etc/dirsrv/slapd-example"]);
+    assert_eq!(row.data_paths, [DIRSRV_DATA]);
+    assert_instance_carried(&snap, DIRSRV_EXAMPLE, "data");
+    for (route, containerfile) in both_routes(&snap) {
+        let lines: Vec<&str> = containerfile.lines().collect();
+        let at = lines
+            .iter()
+            .position(|l| *l == advisory)
+            .unwrap_or_else(|| panic!("{route}: no data advisory:\n{containerfile}"));
+        let run = lines
+            .iter()
+            .position(|l| l.starts_with("RUN systemctl "))
+            .unwrap_or_else(|| panic!("{route}: no RUN line:\n{containerfile}"));
+        assert!(at < run, "{route}: the advisory precedes the RUN lines");
+        assert_eq!(
+            count_lines(&containerfile, &advisory),
+            1,
+            "{route}:\n{containerfile}"
+        );
+    }
+    let view = unit_row(&snap, DIRSRV_EXAMPLE);
+    assert_eq!(view.attention_reason.as_deref(), Some(DIRSRV_DATA_SENTENCE));
+    assert_eq!(view.required_config, ["/etc/dirsrv/slapd-example"]);
+    assert_eq!(view.data_paths, [DIRSRV_DATA]);
+
+    let omitted = scan(host(false));
+    assert_eq!(change(&omitted, DIRSRV_EXAMPLE).data_paths, [DIRSRV_DATA]);
+    assert_instance_omitted(
+        &omitted,
+        DIRSRV_EXAMPLE,
+        "# Omitted: dirsrv@example.service (its configuration /etc/dirsrv/slapd-example is not \
+         in the export)",
+        "InstanceConfigNotStaged",
+    );
+    for (route, containerfile) in both_routes(&omitted) {
+        assert!(
+            !containerfile.contains("keeps data under"),
+            "{route}:\n{containerfile}"
+        );
+    }
+    assert_eq!(unit_row(&omitted, DIRSRV_EXAMPLE).attention_reason, None);
+
+    let wg = scan(
+        instance_host("wireguard-tools", "wg-quick@.service", WG_QUICK, WG0)
+            .file(WG0_CONF, "[Interface]\nAddress = 10.0.0.1/24\n"),
+    );
+    let wg_row = unit_row(&wg, WG0);
+    assert_eq!(wg_row.required_config, [WG0_CONF]);
+    assert!(wg_row.data_paths.is_empty());
+}
+
 /// T29 through the real inspectors: each case where the instance's
 /// configuration is not in the export as the host had it gives its
 /// `# Omitted:` line and no enable, on both routes and on the refine row.

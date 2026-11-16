@@ -135,6 +135,13 @@ wrong:
   the host records none. `DefaultTargetView.declined` is `null`, not
   absent, when the target is carried. A unit row's `also` and
   `install_drop_ins` are absent when empty.
+- **A unit row's `required_config` and `data_paths`.** The projection's
+  `UnitStateView` carries both as plain lists (empty, never absent), from
+  the state change. Unit rows reach `/api/view` through
+  `ServiceDecisionDto` in `crates/web/src/adapter.rs`, which copies fields
+  one by one, so a projection field reaches the browser only once the DTO
+  names it. A carried instance's § 10.8 data sentence needs no new field:
+  it is already in `attention_reason`.
 - **Link rows and undetermined records have no toggle.** They carry no
   `include`; their state follows the unit's install files, and
   `not_applied` lists the files the export leaves out, absent while the
