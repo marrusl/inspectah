@@ -1,7 +1,8 @@
 /**
  * The units section's rules, decided without React: row keys and
  * occurrence keys (spec § 6.11; nothing else spells a key), outcomes and
- * counts (§ 6.1, § 6.4), groups (§ 6.2, § 6.8) and labels (§ 7).
+ * counts (§ 6.1, § 6.4), groups (§ 6.2, § 6.8), labels (§ 7), and what
+ * the filter, search and pins show (§ 6.4, § 6.11, § 6.12).
  */
 import type {
   DeclinedView,
@@ -385,4 +386,266 @@ export function causeLabel(cause: ManualLinkCause): string {
 export function followUpFlagText(n: number): string | null {
   if (n === 0) return null;
   return n === 1 ? `${n} needs follow-up` : `${n} need follow-up`;
+}
+
+// --- Filter, search and pins (§ 6.3 item 3, § 6.4, § 6.11, § 6.12) ---
+
+export type FilterValue = "all" | Outcome;
+
+export interface ShowState {
+  filter: FilterValue;
+  query: string;
+  pins: ReadonlySet<OccurrenceKey>;
+}
+
+export interface ShownGroup {
+  id: GroupId;
+  target?: Keyed<RecordOf<"default_target">>;
+  branches: UnitBranch[];
+  orphans: OrphanBlock[];
+  reported: ReportedBlock[];
+  /** § 6.3 item 3: shown unit rows and reported rows; 0 for the default target. */
+  count: number;
+  /** § 6.3 item 4: `null` unless the filter is "All" and N > 0. */
+  followUp: number | null;
+}
+
+/** Joins a row's search fields; a newline keeps a match inside one field. */
+const SEARCH_FIELD_SEPARATOR = "\n";
+
+function searchText(fields: (string | null | undefined)[]): string {
+  return fields
+    .filter((f): f is string => typeof f === "string")
+    .join(SEARCH_FIELD_SEPARATOR)
+    .toLowerCase();
+}
+
+/** A unit row's fields of § 6.12, without its drop-ins' paths. */
+function unitStateFields(row: ServiceDecisionDto): (string | null | undefined)[] {
+  return [
+    row.unit,
+    row.kind,
+    row.owning_package ?? row.fragment,
+    row.current_state,
+    row.default_state,
+    row.instance_of,
+    row.declined?.text,
+    row.attention_reason,
+  ];
+}
+
+/** An undetermined install's reason as its row shows it: `_` as a space. */
+function reasonWords(reason: string): string {
+  return reason.replace(/_/g, " ");
+}
+
+function isBranch(value: UnitBranch | Keyed): value is UnitBranch {
+  return "head" in value;
+}
+
+/** Section search text (§ 6.12) of a branch or one row, lowercased. */
+export function sectionSearchText(branchOrRow: UnitBranch | Keyed): string {
+  if (isBranch(branchOrRow)) {
+    const { head, dropins } = branchOrRow;
+    return searchText([...unitStateFields(head.record.data), ...dropins.map((d) => d.record.data.path)]);
+  }
+  const record = branchOrRow.record;
+  switch (record.kind) {
+    case "unit_state":
+      return searchText(unitStateFields(record.data));
+    case "default_target":
+      return searchText([record.data.target]);
+    case "dropin":
+      return searchText([record.data.path, record.data.unit]);
+    case "manual_link":
+      return searchText([record.data.unit, record.data.parent, record.data.relation, ...record.data.advisories]);
+    case "undetermined_install":
+      return searchText([record.data.unit, ...record.data.install_files, ...record.data.advisories]);
+    case "mount_finding":
+      return searchText([record.data.unit, ...record.data.advisories]);
+  }
+}
+
+/** Global search text of one record (§ 6.12's table), lowercased. */
+export function globalSearchText(record: UnitRecord): string {
+  switch (record.kind) {
+    case "unit_state":
+      return searchText(unitStateFields(record.data));
+    case "default_target":
+      return searchText([record.data.target, "default target"]);
+    case "dropin":
+      return searchText([record.data.path, record.data.unit]);
+    case "manual_link":
+      return searchText([record.data.unit, record.data.parent, record.data.relation, ...record.data.advisories]);
+    case "undetermined_install":
+      return searchText([
+        record.data.unit,
+        reasonWords(record.data.reason),
+        ...record.data.install_files,
+        ...record.data.advisories,
+      ]);
+    case "mount_finding":
+      return searchText([
+        record.data.unit,
+        record.data.kind,
+        record.data.mount_point,
+        ...record.data.advisories,
+      ]);
+  }
+}
+
+/**
+ * One unit of visibility: a unit row with its drop-ins, the default
+ * target, one orphan drop-in, or one reported row. `outcome` is `null` for
+ * an orphan, which only "All" shows.
+ */
+interface VisibilityBranch {
+  groupId: GroupId;
+  head: OccurrenceKey;
+  outcome: Outcome | null;
+  text: string;
+  /** The branch's rows in section order, head first. */
+  rows: Keyed[];
+}
+
+/** A group's branches in section order: target, unit branches, orphans, reported. */
+function visibilityBranches(group: UnitGroupModel): VisibilityBranch[] {
+  const out: VisibilityBranch[] = [];
+  const single = (row: Keyed, outcome: Outcome | null) =>
+    out.push({ groupId: group.id, head: row.occurrenceKey, outcome, text: sectionSearchText(row), rows: [row] });
+  if (group.target) single(group.target, outcomeOf(group.target.record));
+  for (const branch of group.branches) {
+    out.push({
+      groupId: group.id,
+      head: branch.head.occurrenceKey,
+      outcome: outcomeOf(branch.head.record),
+      text: sectionSearchText(branch),
+      rows: [branch.head, ...branch.dropins],
+    });
+  }
+  for (const block of group.orphans) for (const dropin of block.dropins) single(dropin, null);
+  for (const block of group.reported) for (const row of block.rows) single(row, outcomeOf(row.record));
+  return out;
+}
+
+/** A blank query searches nothing, as in the other sections. */
+function failsQuery(branch: VisibilityBranch, query: string): boolean {
+  if (query.trim() === "") return false;
+  return !branch.text.includes(query.toLowerCase());
+}
+
+function failsFilter(branch: VisibilityBranch, filter: FilterValue): boolean {
+  if (filter === "all") return false;
+  return branch.outcome !== filter;
+}
+
+function isShown(branch: VisibilityBranch, state: ShowState): boolean {
+  if (state.pins.has(branch.head)) return true;
+  return !failsFilter(branch, state.filter) && !failsQuery(branch, state.query);
+}
+
+/**
+ * The groups drawn under the filter, the query and the pins, each holding
+ * only its shown rows, in place (§ 6.2, § 6.4). Undrawn groups are omitted.
+ */
+export function showGroups(groups: UnitGroupModel[], state: ShowState): ShownGroup[] {
+  const out: ShownGroup[] = [];
+  for (const group of groups) {
+    const shown = new Set(
+      visibilityBranches(group)
+        .filter((b) => isShown(b, state))
+        .map((b) => b.head),
+    );
+    const target = group.target && shown.has(group.target.occurrenceKey) ? group.target : undefined;
+    const branches = group.branches.filter((b) => shown.has(b.head.occurrenceKey));
+    const orphans = group.orphans
+      .map((block) => ({ unit: block.unit, dropins: block.dropins.filter((d) => shown.has(d.occurrenceKey)) }))
+      .filter((block) => block.dropins.length > 0);
+    const reported = group.reported
+      .map((block) => ({ unit: block.unit, rows: block.rows.filter((r) => shown.has(r.occurrenceKey)) }))
+      .filter((block) => block.rows.length > 0);
+    if (!target && branches.length === 0 && orphans.length === 0 && reported.length === 0) continue;
+    out.push({
+      id: group.id,
+      ...(target ? { target } : {}),
+      branches,
+      orphans,
+      reported,
+      count: branches.length + reported.reduce((n, block) => n + block.rows.length, 0),
+      followUp: state.filter === "all" && group.followUpTotal > 0 ? group.followUpTotal : null,
+    });
+  }
+  return out;
+}
+
+/** `resultCount` (§ 6.12): unit rows, the target, orphan drop-ins, reported rows. */
+export function shownRowCount(shown: ShownGroup[]): number {
+  let n = 0;
+  for (const group of shown) {
+    if (group.target) n += 1;
+    n += group.branches.length;
+    for (const block of group.orphans) n += block.dropins.length;
+    for (const block of group.reported) n += block.rows.length;
+  }
+  return n;
+}
+
+/** The pin a toggle makes: a nested drop-in pins its parent's branch (§ 6.4). */
+export function branchHeadOf(groups: UnitGroupModel[], toggled: OccurrenceKey): OccurrenceKey {
+  for (const group of groups) {
+    for (const branch of group.branches) {
+      if (branch.dropins.some((d) => d.occurrenceKey === toggled)) return branch.head.occurrenceKey;
+    }
+  }
+  return toggled;
+}
+
+export interface RowLocation {
+  groupId: GroupId;
+  branchHead: OccurrenceKey;
+  occurrenceKey: OccurrenceKey;
+}
+
+/** The first row in section order carrying the row key (§ 6.11's reveal lookup). */
+export function locateRow(groups: UnitGroupModel[], key: RowKey): RowLocation | null {
+  for (const group of groups) {
+    for (const branch of visibilityBranches(group)) {
+      const row = branch.rows.find((r) => r.rowKey === key);
+      if (row) return { groupId: group.id, branchHead: branch.head, occurrenceKey: row.occurrenceKey };
+    }
+  }
+  return null;
+}
+
+function branchAt(groups: UnitGroupModel[], loc: RowLocation): VisibilityBranch | undefined {
+  const group = groups.find((g) => g.id === loc.groupId);
+  return group ? visibilityBranches(group).find((b) => b.head === loc.branchHead) : undefined;
+}
+
+/** Reveal step 1 (§ 6.11): the query hides the row's branch, and it is not pinned. */
+export function hiddenByQuery(groups: UnitGroupModel[], loc: RowLocation, state: ShowState): boolean {
+  const branch = branchAt(groups, loc);
+  if (!branch || state.pins.has(branch.head)) return false;
+  return failsQuery(branch, state.query);
+}
+
+/** Reveal step 2 (§ 6.11): the filter hides the row's branch, and it is not pinned. */
+export function hiddenByFilter(groups: UnitGroupModel[], loc: RowLocation, state: ShowState): boolean {
+  const branch = branchAt(groups, loc);
+  if (!branch || state.pins.has(branch.head)) return false;
+  return failsFilter(branch, state.filter);
+}
+
+/** § 7 strings 19 to 22, by filter value: [one row, n rows]. */
+const LIVE_REGION_TEMPLATES: Record<FilterValue, [string, (n: number) => string]> = {
+  all: ["Showing all 1 row.", (n) => `Showing all ${n} rows.`],
+  needs_follow_up: ["Showing 1 row that needs follow-up.", (n) => `Showing ${n} rows that need follow-up.`],
+  carried: ["Showing 1 carried row.", (n) => `Showing ${n} carried rows.`],
+  excluded: ["Showing 1 excluded row.", (n) => `Showing ${n} excluded rows.`],
+};
+
+/** The live region's text after a filter change (§ 6.4). */
+export function liveRegionText(filter: FilterValue, n: number): string {
+  const [one, many] = LIVE_REGION_TEMPLATES[filter];
+  return n === 1 ? one : many(n);
 }
