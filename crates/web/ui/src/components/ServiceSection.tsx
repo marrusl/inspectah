@@ -169,7 +169,10 @@ const OUTCOME_COLORS: Record<DeclinedView["renders"], "orange" | "blue" | "grey"
   omitted: "grey",
 };
 
-/** Subtle text for the preset beside a row's state (§ 6.6 item 1). */
+/**
+ * Subtle text for the preset beside a row's state (§ 6.6 item 1), an
+ * Also= member's links and a mount finding's state.
+ */
 const SUBTLE_TEXT_COLOR = "var(--pf-t--global--text--color--subtle)";
 
 /** § 7 string 14: a filter value that shows no row, and its link button. */
@@ -529,6 +532,7 @@ function MountFindingRow({
             <span
               className="inspectah-unit-state"
               data-testid={`mount-finding-state-${f.unit}`}
+              style={{ color: SUBTLE_TEXT_COLOR }}
             >
               {f.state}
             </span>
@@ -1084,7 +1088,11 @@ function UnitBranchView({
                   ) : (
                     <code data-testid="also-member-unit">{m.unit}</code>
                   )}{" "}
-                  <span className="inspectah-unit-state" data-testid="also-member-links">
+                  <span
+                    className="inspectah-unit-state"
+                    data-testid="also-member-links"
+                    style={{ color: SUBTLE_TEXT_COLOR }}
+                  >
                     {m.links}
                   </span>
                 </span>

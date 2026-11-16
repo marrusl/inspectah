@@ -735,7 +735,6 @@ body,
   margin-left: var(--pf-t--global--spacer--sm);
   font-size: var(--pf-t--global--font--size--xs);
   font-style: italic;
-  opacity: 0.55;
 }
 
 /* A reason the server wrote, under its row. `renders` only picks the

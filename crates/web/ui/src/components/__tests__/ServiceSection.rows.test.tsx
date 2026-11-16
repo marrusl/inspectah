@@ -85,6 +85,24 @@ function linkRows(link: ManualLinkView): HTMLElement[] {
   );
 }
 
+describe("subtle unit state text keeps its contrast (§ 6.13 Themes)", () => {
+  // An Also= member's links and a mount finding's state are small italic
+  // text. Dimmed by opacity they fell below 4.5:1; the subtle text token
+  // holds its contrast in both themes.
+  it("colours an Also= member's links and a mount finding's state with the subtle token", () => {
+    renderUnits(planted);
+    const mount = planted.mount_findings.find((f) => f.state !== null)!;
+    const els = [
+      ...screen.getAllByTestId("also-member-links"),
+      screen.getByTestId(`mount-finding-state-${mount.unit}`),
+    ];
+    expect(els.length).toBeGreaterThan(1);
+    for (const el of els) {
+      expect(el.getAttribute("style") ?? "", el.textContent ?? "").toContain(SUBTLE_TEXT);
+    }
+  });
+});
+
 describe("U11: state against preset (§ 6.6 item 1, string 16)", () => {
   it("shows the state, then preset in subtle text, with no parentheses, italic or opacity", () => {
     renderUnits(kitchenSink);
