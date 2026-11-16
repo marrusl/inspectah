@@ -1,6 +1,6 @@
 ---
 name: unit-install-state
-description: How the units inspector reads enablement. Install state comes from the links a unit's effective [Install] names, never from systemctl's word; vendor links complete an install and never start one; the [Install] reader, its load order and resets; one line model in core; hidden drop-ins skipped; the search-path refusal; link findings and undetermined records; the Also= walk; the install comparison for a unit at its preset; template instances found from links; the default target; test hosts must carry the enable links; the fleet merge of the new lists.
+description: How the units inspector reads enablement. Install state comes from the links a unit's effective [Install] names, never from systemctl's word; vendor links complete an install and never start one; the [Install] reader, its load order and resets; one line model in core; hidden drop-ins skipped; the search-path refusal; link findings and undetermined records; the Also= walk; the install comparison for a unit at its preset; template instances found from links, and disabled ones derived from the presets and Also=; the default target; test hosts must carry the enable links; the fleet merge of the new lists.
 ---
 
 # Unit install state
@@ -261,10 +261,39 @@ their links under `/etc`. It takes every name the listing gave, before the
 gate: **a link-found instance must never re-admit a name the gate
 refused** (`bad`, `transient`, a runtime state). A listed instance, a
 concrete instance file or a masked one, goes through the gate like any
-unit. In phase 4 every instance is recorded and then declined by the
-`InstanceNotCarriedYet` placeholder in `plan_units`, which runs before
-every rule; Task 5.2 removes it. Preset lines that list instances
-(`enable t@.service a b`) apply only to those instances.
+unit. Preset lines that list instances (`enable t@.service a b`) apply
+only to those instances.
+
+**A disabled instance is derived** (§ 7.1 source 6, § 7.5): it leaves no
+link and no listing row, yet the image's package install links it again.
+Two kinds of candidate are read like any unit, as `Listed` with no
+listing word (`DERIVED_INSTANCE_STATE`):
+
+- From the presets (`preset_instances`, before `build_state_changes`):
+  for each listed template whose first matching rule is a bare `enable`,
+  its `DefaultInstance=` (read through `also::also_name`); for the list
+  form, each listed instance. A `disable` rule, an unknown verb, no rule,
+  or a masked template derives none.
+- From `Also=` (inside `build_state_changes`): every instance the `Also=`
+  walk reaches from a unit whose install state is `Enabled` and whose
+  section is `Known`, whether or not that unit is a row. They are read
+  after every listed unit, from a worklist, so they are never read twice.
+  An `Undetermined` owner has no readable `Also=` and derives none.
+
+Each candidate must pass `derivable`: not a name the listing gave (that is
+the own-unit-file case, and also how a name the gate refused stays
+refused), not already found by its links, no link under `/etc` at all
+(`any_admin_link`), not a `HOST_DEVICE_TEMPLATES` instance. With no link
+it is `Disabled`: a `disable` row against the `enable` its template's rule
+gives it, or only an inventory entry under its own `disable` preset (the
+owner's `Also=` check reports it). An instance with its own unit file is
+read by its own name, so a bare template rule does not match it.
+
+**The unknown-template note.** An `Enabled` instance of a template on no
+§ 7.5 list (`instance::on_a_list`: the config and data tables and the
+device templates) with both lists empty gets `INSTANCE_READS_UNKNOWN` as
+its `attention_reason` (appended to any earlier note): it is carried on
+its unit file alone.
 
 **What an enabled instance needs** (`instance.rs`). An `Enabled` instance
 row records `required_config` (paths under `/etc`, kept whether or not
@@ -288,8 +317,11 @@ reads (`InstallEvidence::unit_texts`, the same selection as
   any other value: `..` or `.` components, control characters, the root
   itself. A path with a line break would otherwise reach a Containerfile
   comment. The collector first simplifies an expanded value as systemd
-  does (`simplify_path`: runs of `/` made one, a trailing `/` dropped), so
-  `/var/lib/x/%i/` is kept, not refused; the loader stays strict.
+  does (`simplify_path`: runs of `/` made one, `.` components and a
+  trailing `/` dropped, `..` kept so the check still refuses it), so
+  `/var/lib/x/%i/` and `/etc/x/./%i` are kept, not refused; the loader
+  stays strict. Dropping a `required_config` path would leave an enable
+  unchecked by rule 6, so the collector errs toward keeping it.
 - The type-wide (`service.d`) and dash-prefix drop-in directories are not
   read here, as for `[Install]`.
 - Existence is `Executor::file_exists`, true for a directory on both

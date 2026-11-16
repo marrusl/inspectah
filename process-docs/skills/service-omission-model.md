@@ -69,18 +69,43 @@ each included state change. The first that fails declines the command.
 
 | Order | Rule | Verbs | Declines with |
 |---|---|---|---|
-| 0 | The instance placeholder: a template instance is collected and not carried yet. It decides before every rule, and Task 5.2 removes it. | all | `InstanceNotCarriedYet` |
 | 1 | Rule 2: a package-owned storage unit (`PackagedStorage`) acts only on its package's file. Any file staged at `/etc/systemd/system/<name>` is what the image would load. | all | `StorageFileStaged` |
 | 2 | Rule 3: no `disable` or `mask` of a unit on `TARGET_NEEDED_UNITS` (`bootc-*`, `ostree-*`, `systemd-remount-fs.service`), and no `mask` of `TMP_MOUNT` (`tmp.mount`). Both constants are in `crates/core/src/baseline.rs`. | `disable`, `mask` | `TargetNeedsUnit` (a FIXME) |
 | 3 | Rule 4: `systemctl mask` makes a link at `/etc/systemd/system/<name>` after every `COPY` and exits 1 on a regular file there, so the path must be free of any staged file. | `mask` | `MaskPathOccupied` |
-| 4 | Rule 5, the row's own file (`rule_5_file`): `Local` needs its unit file staged; `Shadowed` needs its shadow staged; `Vendor` and `PackagedStorage` need no unit file staged at the unit's name. On a fleet aggregate, a staged `Local` or `Shadowed` file whose path holds more than one content variant fails too. | `enable`, `disable` | `UnitFileNotStaged` (`Local`), `InstallEvidenceChanged` (the rest) |
+| 4 | Rule 5, the row's own file (`rule_5_file`): `Local` needs its unit file staged; `Shadowed` needs its shadow staged; `Vendor` and `PackagedStorage` need no unit file staged at the unit's name, nor, for an instance recorded from its vendor template, at the template's. An instance recorded from a template under `/etc` needs that file staged and none at its own name. On a fleet aggregate, a staged `Local` or `Shadowed` file whose path holds more than one content variant fails too. | `enable`, `disable` | `UnitFileNotStaged` (`Local`), `InstallEvidenceChanged` (the rest) |
 | 5 | Rule 5, the install drop-ins (`rule_5_drop_ins`): the install drop-ins the export stages for the unit are exactly the row's `install_drop_ins`, none missing and none added. The list includes a drop-in ranked above `/etc` that hides one of them. | `enable`, `disable` | `InstallEvidenceChanged` |
 | 6 | Rule 5, the package (`needs_its_package`): the presence tiers below, for `Vendor` and `PackagedStorage` only. | all, `mask` included | `PackageExcluded`, `NotCarried`, `NotInTargetImage` |
 | 7 | Rule 5 asked of a timer's trigger (`timer_trigger_check`), below. | `enable` of a timer | the three `TimerTrigger` reasons |
-| 8 | Rule 7, `Also=` members (`rule_7_also`), once every row has passed or failed the rules above. | `enable`, `disable` with a non-empty `also` | `AlsoMember`, an advisory |
+| 8 | Rule 6, an instance's configuration (`rule_6_instance_config`), below. | `enable` of a template instance | `InstanceConfigNotStaged` |
+| 9 | Rule 7, `Also=` members (`rule_7_also`), once every row has passed or failed the rules above. | `enable`, `disable` with a non-empty `also` | `AlsoMember`, an advisory |
 
-Rule 6, an instance's configuration, is phase 5's and is not built; the
-placeholder at order 0 stands in its place.
+**Instances are planned like any row.** There is no instance step before
+the rules: an instance's `disable` and `mask` meet the same rules as any
+unit's (a masked instance is carried as `systemctl mask`, under rules 3
+and 4 and rule 5's package half, the package being the template's), and
+its `enable` meets rule 6 as well.
+
+**Rule 6** reads the row's `required_config` and nothing else. For each
+path, the config entries at it or under it (a directory) decide, by
+`Destination`: none is `NotInSnapshot` naming the path; then, per entry in
+path order, content not captured is `NotCaptured`, an entry
+`staged_writes` does not write (excluded, left out or withheld) is
+`Excluded`, and an `Inline` or `Excluded` finding in
+`snapshot.redactions` at the entry is `Redacted`, each naming the entry.
+Package ownership is never evidence: a package-owned file the
+administrator did not change has no config entry and fails, by design
+(§ 10.8 "Only a file the export carries passes"). Not captured is checked
+before not staged, since an uncaptured entry is never staged either.
+Rule 6 has no secret detection of its own: "redacted" is whatever the
+redaction pass recorded, so the WireGuard key comes out right. A passing
+instance can carry notes: one per entry when `redaction_state` is `Raw`
+(a `--no-redaction` scan), one per entry with a `Flagged` finding. They go
+to `UnitPlan.instance_notes` only once the enable is planned (after rule
+7), and refine's `unit_state_views` appends them to the row's own
+`attention_reason`; they are not Containerfile lines. An instance with an
+empty `required_config` passes; when its template is on no § 7.5 list and
+`data_paths` is empty too, the collector gives the row
+`INSTANCE_READS_UNKNOWN` as its note.
 
 **A mask follows the package check.** `mask` reads no `[Install]`, so
 rule 5's file and drop-in halves (orders 4 and 5) do not apply to it, but
@@ -284,7 +309,13 @@ showed, and the build failed with no warning anywhere.
   inspector recorded on the timer's description (`SystemdTimer.trigger`,
   `trigger_drop_ins`) and parses no unit file: a recorded drop-in that is
   not staged means the recorded trigger may not be the image's, so the
-  check declines rather than re-resolve it. A timer with no description,
+  check declines rather than re-resolve it. **An instance trigger loads
+  from its template's file** (`trigger_file`): `worker@a.service` has no
+  file of its own, so `local_trigger_missing` looks at
+  `/etc/systemd/system/worker@.service` unless the snapshot holds
+  something at the instance's own name. Looking at the instance's path
+  finds nothing and reads the trigger as provided, which carries the
+  timer with its unit excluded. A timer with no description,
   or an `unresolved` trigger, declines too: an unknown trigger is never
   read as no local trigger. A local trigger is a unit file under
   `/etc/systemd/system` with no vendor file (`local_trigger_missing`); a
@@ -303,8 +334,9 @@ showed, and the build failed with no warning anywhere.
   whose files the stager withheld because a collected unit, `name`, has
   one file's name. A FIXME, with exclude advice for `Reservation::Row`
   and rename advice for `Reservation::Inventory`.
-- `InstanceNotCarriedYet`: the phase 4 placeholder for every template
-  instance.
+- `InstanceConfigNotStaged { path, gap }`: rule 6, with `ConfigGap`
+  `Excluded`, `NotCaptured`, `Redacted` or `NotInSnapshot`. The texts are
+  § 10.8's table, written only by `OmissionReason::describe`.
 - `AlsoMember { member, why, verb, named, further, add }`: rule 7. Not an
   `# Omitted:` line but an advisory block (`also_advisory_lines`); refine
   marks it `DeclinedMarker::Advisory`.
