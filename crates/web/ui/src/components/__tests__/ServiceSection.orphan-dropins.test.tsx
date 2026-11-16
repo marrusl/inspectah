@@ -96,7 +96,9 @@ describe("ServiceSection drop-ins without a parent service row", () => {
   it("renders orphan drop-ins when there are no services at all", () => {
     render(<ServiceSection {...defaultProps} dropins={[makeDropin()]} />);
     expect(screen.getByTestId(`dropin-item-${ORPHAN_PATH}`)).toBeInTheDocument();
-    expect(screen.queryByText(/no service state changes/i)).toBeNull();
+    expect(
+      screen.queryByText("No unit differs from its preset, and no drop-in was found."),
+    ).toBeNull();
   });
 
   it("keeps the empty state when there are neither services nor drop-ins", () => {

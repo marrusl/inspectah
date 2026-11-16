@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within, cleanup } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ServiceSection } from "../ServiceSection";
 import { MainContent } from "../MainContent";
 import type { PendingGuard } from "../../hooks/usePendingGuard";
@@ -119,6 +120,23 @@ describe("ServiceSection groups (U3)", () => {
       expect(groupGrid(title).hidden).toBe(false);
     }
   });
+
+  it("collapses one group alone, and opens it again on a remount", async () => {
+    const user = userEvent.setup();
+    const ks = loadUnitFields("kitchen-sink");
+    const { unmount } = renderUnits(ks);
+    await user.click(header("Sockets"));
+    expect(header("Sockets")).toHaveAttribute("aria-expanded", "false");
+    expect(groupGrid("Sockets").hidden).toBe(true);
+    for (const title of groupTitles().filter((t) => t !== "Sockets")) {
+      expect(header(title)).toHaveAttribute("aria-expanded", "true");
+      expect(groupGrid(title).hidden).toBe(false);
+    }
+    unmount();
+    renderUnits(ks);
+    expect(header("Sockets")).toHaveAttribute("aria-expanded", "true");
+    expect(groupGrid("Sockets").hidden).toBe(false);
+  });
 });
 
 describe("ServiceSection sort and templates (U4)", () => {
@@ -177,6 +195,7 @@ describe("ServiceSection default target group (U10)", () => {
     const stock10 = loadUnitFields("stock10");
     renderUnits({ ...stock10, default_target: { ...stock10.default_target!, include: false } });
     expect(within(targetRow()).getByText(STRING_11)).toBeInTheDocument();
+    expect(targetRow().querySelector(".inspectah-unit-kind")).toBeNull();
   });
 
   it("shows the explanation and the declined text on a declined target", () => {
@@ -255,6 +274,7 @@ describe("ServiceSection empty states (U23 rows)", () => {
       undetermined_installs: [],
     });
     expect(screen.getByText(STRING_13)).toBeInTheDocument();
+    expect(screen.queryByText(STRING_12)).toBeNull();
     expect(screen.queryByText(OLD_EMPTY)).toBeNull();
     expect(groupTitles()).toEqual([]);
   });
