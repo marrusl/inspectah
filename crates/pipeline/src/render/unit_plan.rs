@@ -1979,7 +1979,11 @@ fn install_drop_in_dirs(name: &UnitName) -> Vec<String> {
 ///
 /// - Each recorded path is read through [`Destination`]; one that does not
 ///   parse, or is not staged, fails. In a fleet aggregate, one whose path
-///   holds more than one content variant fails too ([`one_variant`]).
+///   holds more than one content variant fails too ([`one_variant`]). The
+///   recorded paths include a drop-in ranked above `/etc` that hides one
+///   of the `/etc` ones, which the configuration export stages when it is
+///   under `/etc/systemd/system.control` and included, and never when it
+///   is under `/run`.
 /// - A staged drop-in systemd reads ([`systemd_reads_drop_in`]: a `.conf`
 ///   name that is not hidden) directly in one of [`install_drop_in_dirs`]
 ///   that the row does not record fails when it is an install file: it

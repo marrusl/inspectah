@@ -7265,6 +7265,207 @@ fn a_drop_in_ranked_above_etc_hides_an_etc_drop_in_of_its_name() {
     );
 }
 
+/// The `/etc` drop-in of the hiding cases, adding `graphical.target`.
+const HIDDEN_DROP_IN: &str = "/etc/systemd/system/app.service.d/50-CPUQuota.conf";
+
+/// The drop-in of [`HIDDEN_DROP_IN`]'s file name under `dir`, a directory
+/// systemd ranks above `/etc/systemd/system`.
+fn hiding_path(dir: &str) -> String {
+    format!("{dir}/app.service.d/50-CPUQuota.conf")
+}
+
+/// The worked case of a drop-in ranked above `/etc` that hides an `/etc`
+/// install drop-in: `app.service` from its package, `WantedBy=
+/// multi-user.target` and linked, under a `disable` preset, with
+/// [`HIDDEN_DROP_IN`] adding `WantedBy=graphical.target` and a drop-in of
+/// its name under `dir` hiding it. The host reads `Enabled`, so the scan
+/// writes a row whose `enable` in an image without the hiding file would
+/// make a `graphical.target` link the host does not have.
+fn hiding_host(dir: &str) -> UnitHost {
+    wants_link(
+        UnitHost::new()
+            .base_package("glibc")
+            .package(INSTALL_PACKAGE)
+            .unit(DIFF_UNIT, "enabled")
+            .preset(&format!("disable {DIFF_UNIT}"))
+            .vendor_unit(
+                DIFF_UNIT,
+                "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n",
+                Some(INSTALL_PACKAGE),
+            ),
+        "multi-user.target",
+        DIFF_UNIT,
+    )
+    .file(HIDDEN_DROP_IN, "[Install]\nWantedBy=graphical.target\n")
+    .file(&hiding_path(dir), "[Service]\nCPUQuota=20%\n")
+}
+
+/// `snap` with every config entry at `path` given `disposition`, as the
+/// scan route renders an operator's decision.
+fn with_config_disposition(
+    snap: &InspectionSnapshot,
+    path: &str,
+    disposition: FindingKind,
+) -> InspectionSnapshot {
+    let mut decided = snap.clone();
+    let entries: Vec<_> = decided
+        .config
+        .as_mut()
+        .expect("a config section")
+        .files
+        .iter_mut()
+        .filter(|f| f.path == path)
+        .collect();
+    assert!(!entries.is_empty(), "no config entry at {path}");
+    for entry in entries {
+        entry.disposition = disposition.clone();
+    }
+    decided
+}
+
+/// `app.service`'s command is withheld on both routes and in refine's
+/// view, with rule 5's `InstallEvidenceChanged` naming `path`. The scan
+/// route renders `snap`; the refine route applies `refine_ops` to a
+/// session over it.
+fn assert_hiding_withholds(snap: &InspectionSnapshot, refine_ops: &[(ItemId, bool)], path: &str) {
+    assert_eq!(
+        declined_in(&session_after(snap, refine_ops), DIFF_UNIT),
+        Some(evidence_declined(DIFF_UNIT, path)),
+        "the refine row"
+    );
+    for (route, containerfile) in [
+        ("scan", containerfile_in(&render_export(snap))),
+        (
+            "refine",
+            containerfile_in(&exported_after(snap, refine_ops)),
+        ),
+    ] {
+        assert!(
+            in_no_systemctl_instruction(&containerfile, DIFF_UNIT),
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            omitted(&containerfile, DIFF_UNIT)
+                .is_some_and(|l| l.ends_with(&evidence_changed(path))),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
+/// A drop-in under `/run/systemd/system.control` hides an `/etc` drop-in
+/// holding `[Install]`, and the unit's `enable` depends on that: the
+/// hiding file is install evidence beside the hidden one, and since a
+/// `/run` file is never staged, rule 5 withholds the `enable` with
+/// `InstallEvidenceChanged` naming it, on both routes and in refine's
+/// view.
+#[test]
+fn a_runtime_drop_in_hiding_an_etc_install_drop_in_withholds_the_command() {
+    let hiding = hiding_path("/run/systemd/system.control");
+    let snap = scan(hiding_host("/run/systemd/system.control"));
+    let row = change(&snap, DIFF_UNIT);
+    assert_eq!(row.current_state(), UnitState::Enabled);
+    assert_eq!(row.default_state, Some(PresetDefault::Disable));
+    assert_hiding_withholds(&snap, &[], &hiding);
+    assert_eq!(
+        row.install_drop_ins,
+        [HIDDEN_DROP_IN.to_owned(), hiding.clone()],
+        "the hiding file is recorded beside the hidden one"
+    );
+}
+
+/// The same with the hiding drop-in under the persistent
+/// `/etc/systemd/system.control`: the configuration export carries it as a
+/// config entry. Excluded, on either route, the `enable` is withheld with
+/// `InstallEvidenceChanged` naming it. Included (the control), it is
+/// staged and the `enable` is carried.
+#[test]
+fn a_persistent_drop_in_hiding_an_etc_install_drop_in_is_carried_only_when_staged() {
+    let hiding = hiding_path("/etc/systemd/system.control");
+    let snap = scan(hiding_host("/etc/systemd/system.control"));
+    assert_hiding_withholds(
+        &with_config_disposition(&snap, &hiding, FindingKind::excluded()),
+        &[(config_item(&hiding), false)],
+        &hiding,
+    );
+    assert_eq!(
+        change(&snap, DIFF_UNIT).install_drop_ins,
+        [hiding.clone(), HIDDEN_DROP_IN.to_owned()],
+        "the hiding file is recorded beside the hidden one"
+    );
+
+    assert_eq!(declined_in(&session(&snap), DIFF_UNIT), None);
+    for (route, tree) in [
+        ("scan", render_export(&snap)),
+        ("refine", export_session(&session(&snap))),
+    ] {
+        assert!(staged_at(&tree, &hiding), "{route}: the hiding file");
+        assert!(staged_at(&tree, HIDDEN_DROP_IN), "{route}: the hidden file");
+        let containerfile = containerfile_in(&tree);
+        assert!(
+            acts(&containerfile, "enable", DIFF_UNIT),
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            omitted(&containerfile, DIFF_UNIT).is_none(),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
+/// The fleet merge unions a row's `install_drop_ins` across hosts (§ 12),
+/// so a hiding drop-in any host recorded has to be staged. One host with
+/// the persistent hiding file and one with the `/run` one: the merged row
+/// records all three files, and with the persistent file's config entry
+/// included (the merge leaves a one-host entry excluded) the `enable` is
+/// withheld naming the `/run` file. Control: both hosts with the
+/// persistent one, which the export stages: the `enable` is carried.
+#[test]
+fn a_fleet_row_needs_every_hosts_hiding_drop_in_staged() {
+    let persistent = hiding_path("/etc/systemd/system.control");
+    let runtime = hiding_path("/run/systemd/system.control");
+    let mixed = merged(
+        named(hiding_host("/etc/systemd/system.control"), "host-a"),
+        named(hiding_host("/run/systemd/system.control"), "host-b"),
+    );
+    let included = with_config_disposition(&mixed, &persistent, FindingKind::included());
+    let tree = render_export(&included);
+    assert!(
+        staged_at(&tree, &persistent),
+        "the persistent file is staged"
+    );
+    let containerfile = containerfile_in(&tree);
+    assert!(
+        in_no_systemctl_instruction(&containerfile, DIFF_UNIT),
+        "{containerfile}"
+    );
+    assert!(
+        omitted(&containerfile, DIFF_UNIT)
+            .is_some_and(|l| l.ends_with(&evidence_changed(&runtime))),
+        "{containerfile}"
+    );
+    assert_eq!(
+        change(&mixed, DIFF_UNIT).install_drop_ins,
+        [
+            persistent.clone(),
+            HIDDEN_DROP_IN.to_owned(),
+            runtime.clone()
+        ]
+    );
+
+    let same = merged(
+        named(hiding_host("/etc/systemd/system.control"), "host-a"),
+        named(hiding_host("/etc/systemd/system.control"), "host-b"),
+    );
+    let tree = render_export(&same);
+    assert!(staged_at(&tree, &persistent), "the hiding file is staged");
+    let containerfile = containerfile_in(&tree);
+    assert!(acts(&containerfile, "enable", DIFF_UNIT), "{containerfile}");
+    assert!(
+        omitted(&containerfile, DIFF_UNIT).is_none(),
+        "{containerfile}"
+    );
+}
+
 /// A unit with some of the links its `[Install]` names and not others,
 /// and two links under `/etc` its section does not name, a `.wants` link
 /// and an alias (Mark Russell, 2026-11-15): the named link is

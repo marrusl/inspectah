@@ -74,7 +74,7 @@ each included state change. The first that fails declines the command.
 | 2 | Rule 3: no `disable` or `mask` of a unit on `TARGET_NEEDED_UNITS` (`bootc-*`, `ostree-*`, `systemd-remount-fs.service`), and no `mask` of `TMP_MOUNT` (`tmp.mount`). Both constants are in `crates/core/src/baseline.rs`. | `disable`, `mask` | `TargetNeedsUnit` (a FIXME) |
 | 3 | Rule 4: `systemctl mask` makes a link at `/etc/systemd/system/<name>` after every `COPY` and exits 1 on a regular file there, so the path must be free of any staged file. | `mask` | `MaskPathOccupied` |
 | 4 | Rule 5, the row's own file (`rule_5_file`): `Local` needs its unit file staged; `Shadowed` needs its shadow staged; `Vendor` and `PackagedStorage` need no unit file staged at the unit's name. On a fleet aggregate, a staged `Local` or `Shadowed` file whose path holds more than one content variant fails too. | `enable`, `disable` | `UnitFileNotStaged` (`Local`), `InstallEvidenceChanged` (the rest) |
-| 5 | Rule 5, the install drop-ins (`rule_5_drop_ins`): the install drop-ins the export stages for the unit are exactly the row's `install_drop_ins`, none missing and none added. | `enable`, `disable` | `InstallEvidenceChanged` |
+| 5 | Rule 5, the install drop-ins (`rule_5_drop_ins`): the install drop-ins the export stages for the unit are exactly the row's `install_drop_ins`, none missing and none added. The list includes a drop-in ranked above `/etc` that hides one of them. | `enable`, `disable` | `InstallEvidenceChanged` |
 | 6 | Rule 5, the package (`needs_its_package`): the presence tiers below, for `Vendor` and `PackagedStorage` only. | all, `mask` included | `PackageExcluded`, `NotCarried`, `NotInTargetImage` |
 | 7 | Rule 5 asked of a timer's trigger (`timer_trigger_check`), below. | `enable` of a timer | the three `TimerTrigger` reasons |
 | 8 | Rule 7, `Also=` members (`rule_7_also`), once every row has passed or failed the rules above. | `enable`, `disable` with a non-empty `also` | `AlsoMember`, an advisory |
@@ -131,6 +131,27 @@ and dash-prefix directories are never install files (`install_drop_in_dirs`).
   that does not parse fails), then scans the staged writes under each
   install directory by a `BTreeMap` range from the directory's
   destination, so a staged install file the row did not record fails too.
+- **A drop-in that hides an install drop-in is recorded with it.** A
+  drop-in in a directory systemd ranks above `/etc/systemd/system`
+  (`/etc/systemd/system.control`, `/run/systemd/system.control`,
+  `/run/systemd/transient`, `/run/systemd/generator.early`) hides an
+  `/etc` drop-in of its file name, so the collector reads the unit without
+  the hidden `[Install]`. The image reads the hidden file whenever the
+  hiding one is not copied, so the collector puts the hiding path in the
+  row's `install_drop_ins` beside the hidden one, and the first loop
+  checks it like any other: a `/run` file is never staged, so the row is
+  omitted with `InstallEvidenceChanged` naming it; an
+  `/etc/systemd/system.control` file is a config entry, staged when
+  included. The plan reads no new field and no new reason; the existing
+  text ("the [Install] section in the image would not be the one recorded
+  on the source host (<path>)") names the hiding file. The second loop
+  scans only the `/etc` install directories, so an unrecorded staged file
+  above `/etc` is not checked: one holding `[Install]` refuses its unit in
+  the collector, and one that hides nothing changes nothing. Link findings
+  and undetermined records keep the `/etc` files only, so
+  `excluded_install_files` is unchanged. On a fleet aggregate the merge
+  unions `install_drop_ins`, so any host's hiding file has to be staged,
+  and `one_variant` applies to it as to the rest.
   In a fleet aggregate, a recorded file whose path holds more than one
   content variant fails (`one_variant`).
 - § 10.2 says a file whose content was not captured counts as an install

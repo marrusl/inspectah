@@ -920,8 +920,10 @@ pub struct UnitStateChange {
     pub also: Vec<AlsoMember>,
     /// Drop-ins under `/etc/systemd/system` that apply to the unit and are
     /// install files: they hold an `[Install]` section or carry a vendor
-    /// drop-in's file name. Each is checked as a destination when the plan
-    /// reads it.
+    /// drop-in's file name. Beside them, a drop-in in a directory systemd
+    /// ranks above `/etc/systemd/system` that hides one of them, since the
+    /// image reads the hidden one whenever the hiding one is not there.
+    /// Each is checked as a destination when the plan reads it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub install_drop_ins: Vec<String>,
     /// File names of the vendor drop-ins that apply to the unit for

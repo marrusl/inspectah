@@ -734,7 +734,7 @@ fn build_state_changes(
                 }
                 // § 10.4: a runtime package updater starts excluded.
                 apply_runtime_updater_default(&mut change);
-                change.install_drop_ins = evidence.install_drop_ins;
+                change.install_drop_ins = evidence.row_install_drop_ins();
                 change.vendor_drop_ins = evidence.vendor_drop_ins;
                 state_changes.push(change);
             }
@@ -916,8 +916,31 @@ struct InstallEvidence {
     /// Paths of the drop-ins under `/etc/systemd/system` that are install
     /// files, sorted.
     install_drop_ins: Vec<String>,
+    /// Paths of the drop-ins in a directory ranked above `/etc` that hide
+    /// one of `install_drop_ins`, sorted: the image reads the hidden file
+    /// whenever the hiding one is not there, so the row's command needs it
+    /// staged too (§ 10.2 rule 5). Kept apart from `install_drop_ins`
+    /// because neither is under `/etc/systemd/system`'s own tree, which the
+    /// § 7.4 comparison and the findings' install files are about.
+    hiding_drop_ins: Vec<String>,
     /// File names of the vendor drop-ins that apply, sorted.
     vendor_drop_ins: Vec<String>,
+}
+
+impl InstallEvidence {
+    /// The row's `install_drop_ins`: the `/etc` install drop-ins and the
+    /// drop-ins ranked above `/etc` that hide one of them, sorted, so rule
+    /// 5 checks that the export stages every one.
+    fn row_install_drop_ins(&self) -> Vec<String> {
+        let mut paths: Vec<String> = self
+            .install_drop_ins
+            .iter()
+            .chain(&self.hiding_drop_ins)
+            .cloned()
+            .collect();
+        paths.sort();
+        paths
+    }
 }
 
 /// Read the install evidence of `name`, whose unit file is `fragment`:
@@ -929,7 +952,8 @@ struct InstallEvidence {
 /// one when it holds an `[Install]` section, or a vendor drop-in of its
 /// file name exists in one of those directories (§ 10.2, "Install files").
 /// One that cannot be read as text counts, since its `[Install]` cannot be
-/// ruled out. When the unit file or a drop-in that applies cannot be read
+/// ruled out. A drop-in ranked above `/etc` that hides one of them is
+/// recorded in `hiding_drop_ins`. When the unit file or a drop-in that applies cannot be read
 /// as text, the section is `Undetermined(Unreadable)` with `Also=` taken as
 /// assigned, and the state is read from the links alone (Mark Russell,
 /// 2026-11-15). An `Err` names a file or directory that could not be read.
@@ -953,6 +977,12 @@ fn install_evidence(
     let mut drop_ins = Vec::new();
     let mut unreadable = Vec::new();
     let mut install_drop_ins = Vec::new();
+    // Per file name, the drop-in ranked above `/etc` systemd reads, with
+    // the rank of its directory in `dirs`: the lowest rank wins, and of
+    // equal ranks the first in search-path order, the order `roots` gives.
+    let mut above_etc: BTreeMap<String, (usize, String)> = BTreeMap::new();
+    // The `/etc` install drop-ins by directory rank and file name.
+    let mut etc_install = Vec::new();
     let roots = resolve::above_etc_dirs()
         .map(|base| (DropInRoot::AboveEtc, base))
         .chain([
@@ -960,7 +990,7 @@ fn install_evidence(
             (DropInRoot::Vendor, VENDOR_UNIT_DIR),
         ]);
     for (root, base) in roots {
-        for dir in &dirs {
+        for (rank, dir) in dirs.iter().enumerate() {
             for file_name in resolve::conf_files(exec, &format!("{base}/{dir}")).map_err(failure)? {
                 let path = format!("{base}/{dir}/{file_name}");
                 let text = unit_text(exec, &path)?;
@@ -969,6 +999,17 @@ fn install_evidence(
                         || text.as_deref().is_none_or(holds_install_section))
                 {
                     install_drop_ins.push(path.clone());
+                    etc_install.push((rank, file_name.clone()));
+                }
+                if root == DropInRoot::AboveEtc {
+                    above_etc
+                        .entry(file_name.clone())
+                        .and_modify(|read| {
+                            if rank < read.0 {
+                                *read = (rank, path.clone());
+                            }
+                        })
+                        .or_insert_with(|| (rank, path.clone()));
                 }
                 match text {
                     Some(text) => drop_ins.push((
@@ -1026,11 +1067,24 @@ fn install_evidence(
         None => None,
     };
     install_drop_ins.sort();
+    // A drop-in ranked above `/etc` hides an `/etc` drop-in of its file
+    // name in a directory of its rank or after it (instance `.d` before
+    // template `.d`, `read_install`'s order).
+    let hiding_drop_ins: BTreeSet<String> = etc_install
+        .iter()
+        .filter_map(|(rank, file_name)| {
+            above_etc
+                .get(file_name)
+                .filter(|(above_rank, _)| above_rank <= rank)
+                .map(|(_, path)| path.clone())
+        })
+        .collect();
     Ok(InstallEvidence {
         read,
         unreadable,
         vendor_read,
         install_drop_ins,
+        hiding_drop_ins: hiding_drop_ins.into_iter().collect(),
         vendor_drop_ins: vendor_names.into_iter().collect(),
     })
 }
@@ -4126,5 +4180,111 @@ mod tests {
             "{}",
             warning.message
         );
+    }
+
+    /// A drop-in ranked above `/etc` that hides an `/etc` install drop-in
+    /// is recorded beside it (§ 10.2 rule 5), in `read_install`'s order:
+    /// a directory of the instance's own name before its template's, and
+    /// of equal rank the first in search-path order. One that hides
+    /// nothing, or hides an `/etc` drop-in that is no install file, is not
+    /// recorded, and the `/etc` list itself is unchanged.
+    #[test]
+    fn a_drop_in_ranked_above_etc_hiding_an_install_drop_in_is_recorded() {
+        const INSTALL: &str = "[Install]\nWantedBy=graphical.target\n";
+        const OTHER: &str = "[Service]\nCPUQuota=20%\n";
+        const OWN_D: &str = "t@a.service.d";
+        const TEMPLATE_D: &str = "t@.service.d";
+        const CONTROL: &str = "/etc/systemd/system.control";
+        const RUN_CONTROL: &str = "/run/systemd/system.control";
+        let at = |base: &str, dir: &str, file: &str| format!("{base}/{dir}/{file}");
+        let etc_own = at(ETC_UNIT_DIR, OWN_D, "50-x.conf");
+        let etc_template = at(ETC_UNIT_DIR, TEMPLATE_D, "50-x.conf");
+        let run_own = at(RUN_CONTROL, OWN_D, "50-x.conf");
+        let run_template = at(RUN_CONTROL, TEMPLATE_D, "50-x.conf");
+        let control_own = at(CONTROL, OWN_D, "50-x.conf");
+        let control_template = at(CONTROL, TEMPLATE_D, "50-x.conf");
+        let run_other = at(RUN_CONTROL, OWN_D, "50-y.conf");
+        // (label, files and their content, the `/etc` install drop-ins,
+        // the hiding drop-ins)
+        type Case<'a> = (&'a str, Vec<(&'a str, &'a str)>, Vec<&'a str>, Vec<&'a str>);
+        let cases: Vec<Case> = vec![
+            (
+                "the same .d, the same name",
+                vec![(&etc_own, INSTALL), (&run_own, OTHER)],
+                vec![&etc_own],
+                vec![&run_own],
+            ),
+            (
+                "another name hides nothing",
+                vec![(&etc_own, INSTALL), (&run_other, OTHER)],
+                vec![&etc_own],
+                vec![],
+            ),
+            (
+                "the hidden file holds no [Install]",
+                vec![(&etc_own, OTHER), (&run_own, OTHER)],
+                vec![],
+                vec![],
+            ),
+            (
+                "the instance's .d hides the template's",
+                vec![(&etc_template, INSTALL), (&run_own, OTHER)],
+                vec![&etc_template],
+                vec![&run_own],
+            ),
+            (
+                "the template's .d does not hide the instance's",
+                vec![(&etc_own, INSTALL), (&run_template, OTHER)],
+                vec![&etc_own],
+                vec![],
+            ),
+            (
+                "of equal rank, the first in search-path order",
+                vec![
+                    (&etc_own, INSTALL),
+                    (&control_own, OTHER),
+                    (&run_own, OTHER),
+                ],
+                vec![&etc_own],
+                vec![&control_own],
+            ),
+            (
+                "the directory's rank before search-path order",
+                vec![
+                    (&etc_template, INSTALL),
+                    (&control_template, OTHER),
+                    (&run_own, OTHER),
+                ],
+                vec![&etc_template],
+                vec![&run_own],
+            ),
+        ];
+        let name = UnitName::try_from("t@a.service".to_owned()).unwrap();
+        let template = UnitName::try_from("t@.service".to_owned()).unwrap();
+        let fragment = UnitFragment::Vendor {
+            file: template.clone(),
+            owning_package: None,
+        };
+        for (label, files, install, hiding) in cases {
+            let mut dirs: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+            let mut exec = MockExecutor::new().with_file(
+                &format!("{VENDOR_UNIT_DIR}/{}", template.as_str()),
+                "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n",
+            );
+            for (path, content) in &files {
+                let (dir, file) = path.rsplit_once('/').unwrap();
+                dirs.entry(dir.to_owned()).or_default().push(file);
+                exec = exec.with_file(path, content);
+            }
+            for (dir, entries) in dirs {
+                exec = exec.with_dir(&dir, entries);
+            }
+            let evidence = install_evidence(&exec, &name, &fragment).unwrap();
+            assert_eq!(evidence.install_drop_ins, install, "{label}");
+            assert_eq!(evidence.hiding_drop_ins, hiding, "{label}");
+            let mut row: Vec<&str> = install.iter().chain(&hiding).copied().collect();
+            row.sort_unstable();
+            assert_eq!(evidence.row_install_drop_ins(), row, "{label}");
+        }
     }
 }

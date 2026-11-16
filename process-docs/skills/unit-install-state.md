@@ -102,7 +102,22 @@ not read (Mark Russell, 2026-11-15). `install_evidence` reads the
 vendor drop-in's name or cannot be decoded has already refused the unit in
 `resolve`, so one that reaches the reader changes nothing but what it
 hides. A hidden `/etc` file stays in `install_drop_ins`, since the image
-reads it if the higher file is not there.
+reads it if the higher file is not there. **The hiding file is install
+evidence too**: when it hides an `/etc` install drop-in, `install_evidence`
+records it in `hiding_drop_ins`, and the row's `install_drop_ins` carries
+both (`row_install_drop_ins`), so rule 5 withholds the command unless the
+export stages the hiding file as well: never for one under `/run`, and for
+an `/etc/systemd/system.control` one only while its config entry is
+included. Without that, the scan reads the unit
+as the host does and the image does not: a `disable`-preset unit whose
+hidden drop-in adds `WantedBy=graphical.target` gets an `enable` that
+makes a link the host never had. Which file hides is computed by the
+reader's order: per file name, the above-`/etc` drop-in with the lowest
+directory rank, the first in search-path order among equals, hides an
+`/etc` drop-in of its name in a directory of that rank or after it. Only
+the row gets the hiding file: the § 7.4 gate, the vendor-side read and the
+findings' and records' `install_files` keep the `/etc` list, whose block
+says "these files under /etc/systemd/system".
 
 Within one directory name the `/etc` file winning over the vendor one was
 measured. **Still needs a real-host run on RHEL 9 and RHEL 10:**
