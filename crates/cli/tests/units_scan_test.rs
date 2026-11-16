@@ -9557,6 +9557,190 @@ fn an_instance_configuration_path_with_a_parent_component_omits_the_enable() {
     );
 }
 
+/// The host of `t@site.service`, linked under `/etc` and enabled against
+/// `disable *`, whose vendor template's `[Service]` holds `service`, with
+/// each of `files` (path, content) on the host.
+fn t_reads_host(service: &str, files: &[(&str, &str)]) -> UnitHost {
+    let text = format!("[Service]\n{service}\n\n[Install]\nWantedBy=multi-user.target\n");
+    let mut host = instance_link(
+        UnitHost::new()
+            .unit(T_TEMPLATE, "indirect")
+            .preset("disable *")
+            .vendor_unit(T_TEMPLATE, &text, None),
+        "/etc/systemd/system",
+        "multi-user.target",
+        "t@site.service",
+        T_TEMPLATE_PATH,
+    );
+    for (path, content) in files {
+        host = host.file(path, content);
+    }
+    host
+}
+
+/// Rule 6 through the scan, with a command line read as systemd reads it:
+/// the quoted and unquoted forms of one configuration argument record the
+/// same path, and so do a quoted path holding a space and a path holding
+/// `:`. For each form, the configuration missing omits the enable on both
+/// routes and in refine, the configuration excluded through refine omits
+/// it and including it again restores it, and the configuration clean and
+/// present carries it.
+#[test]
+fn a_quoted_configuration_argument_is_checked_through_the_scan() {
+    const UNIT: &str = "t@site.service";
+    for (service, path) in [
+        (
+            "ExecStart=/usr/bin/t --config=/etc/t/%i.conf",
+            "/etc/t/site.conf",
+        ),
+        (
+            "ExecStart=/usr/bin/t --config=\"/etc/t/%i.conf\"",
+            "/etc/t/site.conf",
+        ),
+        (
+            "ExecStart=/usr/bin/t --config \"/etc/t sites/%i.conf\"",
+            "/etc/t sites/site.conf",
+        ),
+        (
+            "ExecStart=/usr/bin/t /etc/t:secrets/%i.conf",
+            "/etc/t:secrets/site.conf",
+        ),
+    ] {
+        let missing = scan(t_reads_host(service, &[]));
+        assert_eq!(change(&missing, UNIT).required_config, [path], "{service}");
+        assert_instance_omitted(
+            &missing,
+            UNIT,
+            &config_omitted(UNIT, path, "is not in the export"),
+            "InstanceConfigNotStaged",
+        );
+
+        let clean = scan(t_reads_host(service, &[(path, "PORT=1\n")]));
+        assert_eq!(change(&clean, UNIT).required_config, [path], "{service}");
+        assert_instance_carried(&clean, UNIT, service);
+
+        let excluded = (config_item(path), false);
+        let containerfile =
+            containerfile_in(&exported_after(&clean, std::slice::from_ref(&excluded)));
+        let line = config_omitted(UNIT, path, "is excluded from the export");
+        assert_eq!(
+            omitted(&containerfile, UNIT),
+            Some(line.as_str()),
+            "{service}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, UNIT),
+            "{service}:\n{containerfile}"
+        );
+        let declined = declined_in(
+            &session_after(&clean, std::slice::from_ref(&excluded)),
+            UNIT,
+        )
+        .expect("a declined row");
+        assert_eq!(format!("# Omitted: {}", declined.text), line);
+        let restored = containerfile_in(&exported_after(
+            &clean,
+            &[excluded.clone(), (excluded.0, true)],
+        ));
+        assert!(acts(&restored, "enable", UNIT), "{service}:\n{restored}");
+    }
+}
+
+/// T25 (c) with the member's configuration named by a quoted argument:
+/// carried with the owner while the configuration is in the export, and
+/// with it excluded, the member omitted naming the whole path and the
+/// owner `RowNotCarried`.
+#[test]
+fn t25_c_a_member_whose_configuration_argument_is_quoted() {
+    const MEMBER: &str = "t@two.service";
+    const CONF: &str = "/etc/t sites/two.conf";
+    let reads = "[Service]\nExecStart=/usr/bin/t --config=\"/etc/t sites/%i.conf\"\n\n\
+                 [Install]\nWantedBy=multi-user.target\n";
+    let host = rule7_host(
+        &[],
+        &[(BUNDLE, "enabled"), (T_TEMPLATE, "indirect")],
+        &[
+            (BUNDLE, &wanted_with(&format!("Also={MEMBER}\n"))),
+            (T_TEMPLATE, reads),
+        ],
+    )
+    .file(CONF, "PORT=2\n");
+    let snap = scan(instance_link(
+        host,
+        "/etc/systemd/system",
+        "multi-user.target",
+        MEMBER,
+        T_TEMPLATE_PATH,
+    ));
+    assert_eq!(change(&snap, MEMBER).required_config, [CONF]);
+    assert_also_carried(&snap, MEMBER, "enable", "member");
+    assert_also_carried(&snap, BUNDLE, "enable", "owner");
+
+    let head = also_head(BUNDLE, "enable", MEMBER, ROW_NOT_CARRIED);
+    let excluded = [(config_item(CONF), false)];
+    let containerfile = containerfile_in(&exported_after(&snap, &excluded));
+    assert_eq!(
+        advisory_for(&containerfile, BUNDLE),
+        std::slice::from_ref(&head),
+        "{containerfile}"
+    );
+    assert_eq!(
+        omitted(&containerfile, MEMBER),
+        Some(config_omitted(MEMBER, CONF, "is excluded from the export").as_str()),
+        "{containerfile}"
+    );
+    for unit in [BUNDLE, MEMBER] {
+        assert!(
+            in_no_systemctl_instruction(&containerfile, unit),
+            "{unit}:\n{containerfile}"
+        );
+    }
+}
+
+/// § 7.5 through the scan: a command argument that names a path for the
+/// instance and that systemd's parser refuses (an unbalanced quote) makes
+/// what the instance reads unknown. The instance has no state change and
+/// no refine row, no `systemctl` line names it on either route, and the
+/// snapshot's warning names the unit and the value. Control: the quote
+/// closed, the instance is carried.
+#[test]
+fn an_uninterpretable_instance_argument_declines_the_enable_through_the_scan() {
+    const UNIT: &str = "t@site.service";
+    let broken = "ExecStart=/usr/bin/t --config=\"/etc/t/%i.conf";
+    let snap = scan(t_reads_host(broken, &[("/etc/t/site.conf", "PORT=1\n")]));
+    assert_eq!(changes_named(&snap, UNIT), 0);
+    assert!(
+        session(&snap)
+            .decisions()
+            .unit_states
+            .iter()
+            .all(|r| r.unit.as_str() != UNIT),
+        "no refine row"
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(
+            in_no_systemctl_instruction(&containerfile, UNIT),
+            "{route}:\n{containerfile}"
+        );
+    }
+    assert!(
+        snap.warnings.iter().any(|w| {
+            let message = &w.message;
+            message.contains(UNIT)
+                && message.contains("ExecStart= value /usr/bin/t --config=\"/etc/t/%i.conf")
+                && message.contains("its enable is not carried")
+        }),
+        "{:?}",
+        snap.warnings
+    );
+
+    let control = scan(t_reads_host(
+        "ExecStart=/usr/bin/t --config=\"/etc/t/%i.conf\"",
+        &[("/etc/t/site.conf", "PORT=1\n")],
+    ));
+    assert_instance_carried(&control, UNIT, "the quote closed");
+}
+
 /// T27: an instance linked only under `/run` is not found: no state
 /// change, no inventory entry, no line. Control: the same link under
 /// `/etc` is found.

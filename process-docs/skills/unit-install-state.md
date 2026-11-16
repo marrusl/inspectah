@@ -303,13 +303,37 @@ file and the drop-ins of its own and its template's `.d` that systemd
 reads (`InstallEvidence::unit_texts`, the same selection as
 `read_install`), plus the fixed tables. Non-obvious points:
 
+- **Each setting is read with its own syntax** (`Syntax`), as systemd's
+  parser for it reads it (252 and 257, `load-fragment.c`): a command line
+  (`Exec*=`) is split into words with quotes and C escapes removed before
+  any path is looked for (`extract_first_word`, `cunescape_one`, ports of
+  systemd's own), so `--config="/etc/a b/%i.conf"` is one word and one
+  path; `EnvironmentFile=`, a condition and `WorkingDirectory=` are one
+  path, spaces and quotes included; `ReadWritePaths=` and its kin are
+  quoted words; `BindPaths=` takes the source before `:`. A quote opens
+  anywhere in a word, as in systemd. Never split a value on whitespace
+  before removing quotes: the path goes missing and rule 6 passes.
+- **`=`, `:` and `,` split a word only where the syntax calls for it.**
+  In a command argument or a setting whose syntax is not modeled, a word
+  that starts with a path is that path whole (`/etc/a:b/%i.conf` is one
+  path); otherwise the operand is the rest of the word after the first
+  `=`, `:` or `,` that a path follows (`operand_in_word`). A path start is
+  `/` or a directory specifier and `/` (`%E/x`).
+- **A value that cannot be interpreted declines the enable, never drops
+  the path.** A modeled setting whose value holds `%i` or `%I` and that
+  systemd's parser refuses (unbalanced quote, unknown escape), a path
+  operand holding a specifier `expand_unit_specifiers` does not know, and
+  a configuration path the form check refuses are `NeedsUnknown`: the
+  instance gets no state change and a warning (`needs_unknown_warning`)
+  names the unit and the value. A setting whose syntax is not modeled
+  (`Description=` and the rest) is read leniently and never declines.
+  The plan cannot decline it by name without a snapshot field, so the
+  row is left out (schema 28 has none).
 - Values are expanded with `SpecifierSet::Runtime`, so `%I` is
-  unescaped; `[Install]` never is (`%I` is not expanded there). A value
-  with any specifier `expand_unit_specifiers` does not know is dropped.
+  unescaped; `[Install]` never is (`%I` is not expanded there).
 - A path counts only when the value itself holds `%i` or `%I`. An
   `EnvironmentFile=` with the `-` prefix and a negated condition (`!`) are
-  left out; a path inside a word (`--config=/etc/x/%i.conf`, `src:dst`)
-  is found. A triggering condition (`|`) is recorded as required although
+  left out. A triggering condition (`|`) is recorded as required although
   it is one of several alternatives: the spec says every path in the file,
   and the error is toward omitting an enable, never carrying one unchecked.
 - The form check (`is_instance_config_path`, `is_instance_data_path` in

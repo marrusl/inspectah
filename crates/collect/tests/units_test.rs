@@ -5662,14 +5662,13 @@ fn a_state_directory_for_the_instance_is_data() {
 }
 
 /// § 6.7: a value is stored only when it expands to an absolute path under
-/// `/etc` or `/var`. A path elsewhere, one that climbs out with `..`
-/// through `%I`, and one holding a specifier inspectah does not expand are
-/// dropped; a path after `--option=` is read.
+/// `/etc` or `/var`. A path elsewhere and a data path that climbs out with
+/// `..` through `%I` are dropped; a path after `--option=` is read.
 #[test]
 fn a_value_outside_etc_or_var_is_dropped() {
     let text = template_with(
         "ExecStart=/usr/bin/worker --dir /srv/%i --conf=/etc/worker/%i.conf\n\
-         ReadWritePaths=/var/lib/w/%I /etc/w/%h/%i\n",
+         ReadWritePaths=/var/lib/w/%I\n",
     );
     let (section, _) = scan(
         &instance_host("worker@.service", &text, "worker@..-..-usr.service")
@@ -5699,6 +5698,109 @@ fn an_instance_drop_in_adds_what_it_names() {
         needs_of(&section, "worker@site.service"),
         (vec!["/etc/z/site.env".to_owned()], vec![])
     );
+}
+
+/// § 7.5: a command line is read as systemd reads it, quotes and escapes
+/// removed before the paths are found, so a quoted path with a space, a
+/// path quoted after `--option=`, an escaped space and a path holding `:`
+/// each record the whole path. The quoted and unquoted forms of one path
+/// record the same path. An `EnvironmentFile=` value is one path, spaces
+/// and all.
+#[test]
+fn a_quoted_or_punctuated_command_argument_records_the_whole_path() {
+    for (service, expected) in [
+        (
+            "ExecStart=/usr/bin/worker --config \"/etc/worker sites/%i.conf\"",
+            "/etc/worker sites/site.conf",
+        ),
+        (
+            "ExecStart=/usr/bin/worker '/etc/worker sites/%i.conf'",
+            "/etc/worker sites/site.conf",
+        ),
+        (
+            "ExecStart=/usr/bin/worker --config=\"/etc/worker/%i.conf\"",
+            "/etc/worker/site.conf",
+        ),
+        (
+            "ExecStart=/usr/bin/worker --config=/etc/worker/%i.conf",
+            "/etc/worker/site.conf",
+        ),
+        (
+            "ExecStart=/usr/bin/worker /etc/worker:secrets/%i.conf",
+            "/etc/worker:secrets/site.conf",
+        ),
+        (
+            "ExecStart=/usr/bin/worker --config=/etc/worker:secrets/%i.conf",
+            "/etc/worker:secrets/site.conf",
+        ),
+        (
+            "ExecStart=/usr/bin/worker /etc/worker\\x20sites/%i.conf",
+            "/etc/worker sites/site.conf",
+        ),
+        (
+            "ExecStart=/usr/bin/worker /etc/worker\\ssites/%i.conf",
+            "/etc/worker sites/site.conf",
+        ),
+        (
+            "EnvironmentFile=/etc/worker sites/%i.env\nExecStart=/usr/bin/worker",
+            "/etc/worker sites/site.env",
+        ),
+    ] {
+        let text = template_with(&format!("{service}\n"));
+        let (section, warnings) = scan(&instance_host(
+            "worker@.service",
+            &text,
+            "worker@site.service",
+        ));
+        assert_eq!(
+            needs_of(&section, "worker@site.service"),
+            (vec![expected.to_owned()], vec![]),
+            "{service}: {warnings:?}"
+        );
+    }
+}
+
+/// § 7.5: a value that names a path for the instance and cannot be
+/// interpreted (an unbalanced quote, an escape systemd refuses, a
+/// specifier inspectah does not expand) declines the enable: the instance
+/// has no state change, and a warning names the unit and the value. A
+/// value that holds no `%i` or `%I` declines nothing. Control: the same
+/// template with the value written well is a state change.
+#[test]
+fn an_instance_path_that_cannot_be_interpreted_declines_the_enable() {
+    for value in [
+        "ExecStart=/usr/bin/worker \"/etc/worker/%i.conf",
+        "ExecStart=/usr/bin/worker /etc/worker\\q/%i.conf",
+        "EnvironmentFile=/etc/worker/%H/%i.env",
+        "ExecStart=/usr/bin/worker %E/worker/%i.conf",
+        "ReadOnlyPaths=\"/etc/worker/%i",
+    ] {
+        let text = template_with(&format!("{value}\n"));
+        let (row, warnings) = row_and_warnings(
+            &instance_host("worker@.service", &text, "worker@site.service"),
+            "worker@site.service",
+        );
+        assert!(!row, "{value}: no state change");
+        let (key, rest) = value.split_once('=').expect("a key");
+        assert!(
+            warnings.iter().any(|w| w.contains("worker@site.service")
+                && w.contains(&format!("{key}= value {rest}"))
+                && w.contains("its enable is not carried")),
+            "{value}: {warnings:?}"
+        );
+    }
+    for harmless in [
+        "ExecStart=/usr/bin/worker \"--name=%H\"",
+        "Description=%I's worker on %H",
+        "ExecStart=/usr/bin/worker --name=%H-%i",
+    ] {
+        let text = template_with(&format!("{harmless}\n"));
+        let (row, warnings) = row_and_warnings(
+            &instance_host("worker@.service", &text, "worker@site.service"),
+            "worker@site.service",
+        );
+        assert!(row, "{harmless}: {warnings:?}");
+    }
 }
 
 /// Control: a unit that is not an instance records neither list, though

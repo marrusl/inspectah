@@ -32,6 +32,7 @@ use install::{
     DropInRoot, DropInSource, InstallRead, InstallSection, drop_in_dirs, read_install,
     read_vendor_install, selected_drop_ins,
 };
+use instance::NeedsUnknown;
 use links::{HostLinks, InstallDifference};
 use resolve::{ETC_UNIT_DIR, Entry, ResolveError, Resolved, VENDOR_UNIT_DIR};
 
@@ -857,8 +858,19 @@ fn build_state_changes(
                 // § 7.5: what an enabled instance reads and keeps. Its
                 // enable is the command that needs them (§ 10.8).
                 if change.current_state() == UnitState::Enabled {
-                    let needs =
-                        instance::instance_needs(exec, change.unit().name(), &evidence.unit_texts);
+                    let needs = match instance::instance_needs(
+                        exec,
+                        change.unit().name(),
+                        &evidence.unit_texts,
+                    ) {
+                        Ok(needs) => needs,
+                        // What it reads is unknown, so rule 6 could not
+                        // check its enable: it is not carried.
+                        Err(unknown) => {
+                            warnings.push(needs_unknown_warning(warn, &unknown));
+                            continue;
+                        }
+                    };
                     change.required_config = needs.required_config;
                     change.data_paths = needs.data_paths;
                     // § 7.5: an instance of a template on no list that
@@ -1363,6 +1375,26 @@ fn unreadable_install_warning(warn: impl FnOnce(&str) -> Warning, paths: &[Strin
         .extra
         .insert("paths".into(), serde_json::json!(paths));
     warning
+}
+
+/// The warning for an enabled instance whose needs are unknown (§ 7.5),
+/// built by `warn`: it names the value or the file, and says the enable is
+/// not carried. The value or path is among its fields.
+fn needs_unknown_warning(warn: impl FnOnce(&str) -> Warning, unknown: &NeedsUnknown) -> Warning {
+    match unknown {
+        NeedsUnknown::Uninterpretable { key, value } => {
+            let mut warning = warn(&format!(
+                "its {key}= value {value} names a path for the instance that inspectah cannot \
+                 read as systemd does, so what the instance reads is unknown and its enable is \
+                 not carried"
+            ));
+            warning.extra.insert("key".into(), serde_json::json!(key));
+            warning
+                .extra
+                .insert("value".into(), serde_json::json!(value));
+            warning
+        }
+    }
 }
 
 /// The closing clause of the search-path warning from the state-change
