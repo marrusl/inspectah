@@ -97,6 +97,7 @@ function decisionCount(
   id: string,
   userDecisionCount?: number,
   viewData?: ViewResponse | null,
+  sections?: ReferenceSection[] | null,
 ): string | undefined {
   if (id === "users_groups") {
     return userDecisionCount != null ? String(userDecisionCount) : "...";
@@ -110,6 +111,25 @@ function decisionCount(
     // `default_target` is the one the server leaves out when there is none.
     const target = viewData.default_target ? 1 : 0;
     return String(viewData.unit_states.length + viewData.unit_dropins.length + target);
+  }
+  // Every generated-timer toggle the section renders (§ 9.4): a row whose
+  // generated timer the view holds, less one excluded with its cron job,
+  // which shows a reason in place of a toggle.
+  if (id === "scheduled_tasks") {
+    if (!sections || !viewData) return "...";
+    const timers = new Map(viewData.generated_timers.map((t) => [t.name, t]));
+    const sec = sections.find((s) => s.id === id);
+    const items = [
+      ...(sec?.items ?? []),
+      ...(sec?.subsections ?? []).flatMap((sub) => sub.items),
+    ];
+    return String(
+      items.filter((item) => {
+        const timer =
+          item.generated_timer === undefined ? undefined : timers.get(item.generated_timer);
+        return timer !== undefined && !(!timer.include && timer.cron_job_excluded);
+      }).length,
+    );
   }
   // Tuned rows only: the sysctl panel holds no decisions.
   if (id === "system_tuning") {
@@ -411,7 +431,7 @@ export function Sidebar({
   const badge = useCallback(
     (sectionId: string, isTriage: boolean): string | undefined => {
       if (isTriage) {
-        return decisionCount(stats, sectionId, userDecisionCount, viewData);
+        return decisionCount(stats, sectionId, userDecisionCount, viewData, sections);
       }
       return sectionCount(sections, sectionId);
     },
@@ -425,14 +445,14 @@ export function Sidebar({
     groups.forEach((group) => {
       group.sections.forEach((sec) => {
         if (sec.is_triage) {
-          const count = decisionCount(stats, sec.id, userDecisionCount, viewData);
+          const count = decisionCount(stats, sec.id, userDecisionCount, viewData, sections);
           const isCleared = count === "0";
           newClearedState[sec.id] = isCleared;
         }
       });
     });
     setClearedState(newClearedState);
-  }, [groups, stats, userDecisionCount, viewData]);
+  }, [groups, stats, userDecisionCount, viewData, sections]);
 
   const renderNavContent = () => {
     if (!groups) {

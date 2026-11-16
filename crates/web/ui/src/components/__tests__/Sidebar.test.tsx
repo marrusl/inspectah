@@ -515,6 +515,102 @@ describe("Sidebar", () => {
     });
   });
 
+  describe("Scheduled Tasks count (U29, spec § 9.4)", () => {
+    /** The groups as the server sends them: Scheduled Tasks is a triage section. */
+    const TRIAGE_GROUPS: SectionGroupMeta[] = MOCK_GROUPS.map((g) => ({
+      ...g,
+      sections: g.sections.map((s) =>
+        s.id === "scheduled_tasks" ? { ...s, is_triage: true } : s,
+      ),
+    }));
+
+    function item(id: string, generatedTimer?: string) {
+      return {
+        id,
+        title: id,
+        subtitle: null,
+        detail: null,
+        searchable_text: id,
+        ...(generatedTimer === undefined ? {} : { generated_timer: generatedTimer }),
+      };
+    }
+
+    /** Three generated-timer rows, one of them in a subsection, and a cron row without one. */
+    const SCHEDULED: ReferenceSection = {
+      id: "scheduled_tasks",
+      display_name: "Scheduled Tasks",
+      items: [item("timer-a", "cron-a"), item("timer-b", "cron-b"), item("cron-plain")],
+      subsections: [
+        { id: "user", display_name: "User", items: [item("timer-c", "cron-c")] },
+      ],
+    };
+    const SECTIONS = MOCK_SECTIONS.map((s) => (s.id === "scheduled_tasks" ? SCHEDULED : s));
+
+    const TIMERS = ["cron-a", "cron-b", "cron-c"].map((name) => ({
+      name,
+      include: true,
+      locked: false,
+    }));
+
+    function renderScheduled(
+      sections: ReferenceSection[] | null,
+      viewData: ViewResponse | null,
+    ) {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={sections}
+          health={MOCK_HEALTH}
+          viewData={viewData}
+          groups={TRIAGE_GROUPS}
+        />,
+      );
+      return screen.getByRole("link", { name: /^Scheduled Tasks / });
+    }
+
+    it("counts each row whose generated timer the view holds", () => {
+      const entry = renderScheduled(SECTIONS, { ...MOCK_VIEW_DATA, generated_timers: TIMERS });
+      expect(within(entry).getByLabelText("3 decisions")).toBeInTheDocument();
+    });
+
+    it("leaves out a row excluded with its cron job, which shows a reason in place of a toggle", () => {
+      const timers = TIMERS.map((t) =>
+        t.name === "cron-b" ? { ...t, include: false, cron_job_excluded: "cron-b-job" } : t,
+      );
+      const entry = renderScheduled(SECTIONS, { ...MOCK_VIEW_DATA, generated_timers: timers });
+      expect(within(entry).getByLabelText("2 decisions")).toBeInTheDocument();
+    });
+
+    it("counts an excluded row with no cron job excluded, which keeps its toggle", () => {
+      const timers = TIMERS.map((t) => (t.name === "cron-b" ? { ...t, include: false } : t));
+      const entry = renderScheduled(SECTIONS, { ...MOCK_VIEW_DATA, generated_timers: timers });
+      expect(within(entry).getByLabelText("3 decisions")).toBeInTheDocument();
+    });
+
+    it("does not count a row whose generated timer the view does not hold", () => {
+      const entry = renderScheduled(SECTIONS, {
+        ...MOCK_VIEW_DATA,
+        generated_timers: TIMERS.filter((t) => t.name !== "cron-c"),
+      });
+      expect(within(entry).getByLabelText("2 decisions")).toBeInTheDocument();
+    });
+
+    it.each<[string, ReferenceSection[] | null, ViewResponse | null]>([
+      ["the sections", null, { ...MOCK_VIEW_DATA, generated_timers: TIMERS }],
+      ["the view", SECTIONS, null],
+    ])("reads ... before %s load", (_name, sections, viewData) => {
+      const entry = renderScheduled(sections, viewData);
+      expect(within(entry).getByLabelText("... decisions")).toBeInTheDocument();
+    });
+
+    it("reads 0 with no generated-timer row", () => {
+      const entry = renderScheduled(MOCK_SECTIONS, { ...MOCK_VIEW_DATA, generated_timers: TIMERS });
+      expect(within(entry).getByLabelText("0 decisions")).toBeInTheDocument();
+    });
+  });
+
   it("shows skeleton placeholders when groups are loading", () => {
     render(
       <Sidebar
