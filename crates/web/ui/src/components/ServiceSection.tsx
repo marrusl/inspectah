@@ -32,10 +32,13 @@ import {
   filterBarDrawn,
   followUpFlagText,
   groupUnits,
+  hiddenByFilter,
   keyFields,
   liveRegionText,
+  locateRow,
   outcomeCounts,
   pinsInView,
+  rowKeyForItemId,
   showGroups,
   shownOutcomeRowCount,
   type FilterValue,
@@ -44,6 +47,7 @@ import {
   type ReportedRow,
   type RowKey,
   type UnitBranch,
+  type UnitGroupModel,
 } from "./unitOutcome";
 import { UnitGroup } from "./UnitGroup";
 import { UnitOutcomeFilter } from "./UnitOutcomeFilter";
@@ -64,6 +68,13 @@ export interface ServiceSectionProps {
   defaultTarget?: DefaultTargetView;
   /** Opens the config row at a path (a finding's unit file). */
   onNavigateToConfig?: (path: string) => void;
+  /**
+   * The item a navigation is revealing (§ 6.11): a row key, or a bare unit
+   * name for a unit row. The section shows its row before `App` looks it up.
+   */
+  revealItemId?: string;
+  /** Navigates to an item, as `App`'s `handleNavigateFromSearch` does. */
+  onNavigateToItem?: (sectionId: string, itemId: string) => void;
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
   /**
@@ -1038,6 +1049,7 @@ export function ServiceSection({
   undeterminedInstalls,
   defaultTarget,
   onNavigateToConfig,
+  revealItemId,
   onViewUpdate,
   onMutationError,
   pendingGuard,
@@ -1130,6 +1142,33 @@ export function ServiceSection({
     (id: GroupId) => setCollapsed((prev) => ({ ...prev, [id]: !prev[id] })),
     [],
   );
+
+  // The reveal (§ 6.11): undo whatever hides the destination, adjusted
+  // during render so the row is shown before App's reveal effect looks it
+  // up. Step 1, a section query that hides it, is MainContent's and runs
+  // before this. Rechecked when the view changes, so a reveal sent before
+  // the view loaded still lands.
+  const [revealChecked, setRevealChecked] = useState<{
+    itemId: string | undefined;
+    groups: UnitGroupModel[];
+  }>({ itemId: undefined, groups });
+  if (revealChecked.itemId !== revealItemId || revealChecked.groups !== groups) {
+    setRevealChecked({ itemId: revealItemId, groups });
+    const key = revealItemId === undefined ? null : rowKeyForItemId(revealItemId);
+    const loc = key === null ? null : locateRow(groups, key);
+    if (loc) {
+      // Step 2: the outcome filter.
+      if (hiddenByFilter(groups, loc, { filter, query: NO_QUERY, pins })) {
+        setFilter("all");
+        const all = showGroups(groups, { filter: "all", query: NO_QUERY, pins });
+        setAnnouncement(liveRegionText("all", shownOutcomeRowCount(all)));
+      }
+      // Step 3: collapse.
+      if (collapsed[loc.groupId]) {
+        setCollapsed((prev) => ({ ...prev, [loc.groupId]: false }));
+      }
+    }
+  }
 
   // Every toggle the operator makes pins the branch that holds the row
   // (§ 6.4), before the op leaves, so a failed op leaves it shown too.

@@ -3,6 +3,7 @@ import type {
   DropInDecisionDto,
   RefinedConfig,
 } from "../api/types";
+import { rowKey } from "./unitOutcome";
 
 /** Section ID the Service Drop-ins rows render under. */
 const SERVICES_SECTION_ID = "units";
@@ -55,8 +56,13 @@ export function resolveShadowOwner(
       explanation:
         "The Service Drop-ins row for this same path carries the file into " +
         "the image. Decide it there.",
+      // The drop-in's row key (spec § 6.11), not its bare path: a bare
+      // id names a unit row.
       target: owner
-        ? { sectionId: SERVICES_SECTION_ID, itemId: owner.path }
+        ? {
+            sectionId: SERVICES_SECTION_ID,
+            itemId: rowKey({ kind: "dropin", data: owner }),
+          }
         : null,
     };
   }

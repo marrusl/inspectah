@@ -779,6 +779,8 @@ export function MainContent({
           onNavigateToConfig={(configPath) =>
             onNavigateToItem?.("config", `configs:${configPath}`)
           }
+          revealItemId={revealItemId}
+          onNavigateToItem={onNavigateToItem}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
           pendingGuard={serviceGuard}

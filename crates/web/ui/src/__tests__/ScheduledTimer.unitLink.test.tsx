@@ -201,3 +201,65 @@ describe("scheduled timer row", () => {
     await waitFor(() => expect(row).toHaveFocus());
   });
 });
+
+describe("U27: the units section resets on remount (§ 6.11 Routes)", () => {
+  /** A service row the export declines, so the filter bar is drawn. */
+  const DECLINED_ROW: ServiceDecisionDto = {
+    ...UNIT_ROW,
+    unit: "declined-demo.service",
+    kind: "service",
+    declined: {
+      renders: "advisory",
+      reason: "InstallEvidenceChanged",
+      text: "declined-demo.service is not carried.",
+    },
+  };
+
+  it("shows All, every group open, and the unit row focused", async () => {
+    // Serve a view with the declined row; every other route as above.
+    const served = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) =>
+        url === "/api/view"
+          ? {
+              ok: true,
+              status: 200,
+              json: async () =>
+                emptyView({ unit_states: [UNIT_ROW, ESCAPED_UNIT_ROW, DECLINED_ROW] }),
+            }
+          : served(url, init),
+      ),
+    );
+    render(<App />);
+    const nav = await screen.findByRole("navigation", { name: "Sections" });
+    await userEvent.click(await within(nav).findByRole("link", { name: /^Services/ }));
+    const header = (title: string) =>
+      within(screen.getByTestId("service-section")).getByRole("button", {
+        name: new RegExp(`^${title}\\b`),
+      });
+    for (const title of ["Timers", "Services"]) {
+      await userEvent.click(await waitFor(() => header(title)));
+      expect(header(title)).toHaveAttribute("aria-expanded", "false");
+    }
+    const bar = screen.getByRole("group", { name: "Show" });
+    await userEvent.click(within(bar).getByRole("button", { name: /^Needs follow-up \d+$/ }));
+    expect(screen.queryByTestId(`service-item-${TIMER_UNIT}`)).toBeNull();
+
+    await userEvent.click(
+      await within(nav).findByRole("link", { name: /^Scheduled Tasks/ }),
+    );
+    const list = await screen.findByRole("list", { name: "Scheduled Tasks context items" });
+    await userEvent.click(within(list).getByRole("link", { name: TIMER_UNIT }));
+
+    const row = await screen.findByTestId(`service-item-${TIMER_UNIT}`);
+    await waitFor(() => expect(row).toHaveFocus());
+    const pressed = within(screen.getByRole("group", { name: "Show" }))
+      .getAllByRole("button")
+      .filter((b) => b.getAttribute("aria-pressed") === "true");
+    expect(pressed.map((b) => (b.textContent ?? "").replace(/ \d+$/, ""))).toEqual(["All"]);
+    for (const title of ["Timers", "Services"]) {
+      expect(header(title)).toHaveAttribute("aria-expanded", "true");
+    }
+  });
+});

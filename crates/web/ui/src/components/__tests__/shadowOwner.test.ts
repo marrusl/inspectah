@@ -52,7 +52,7 @@ describe("resolveShadowOwner", () => {
     ).toBeNull();
   });
 
-  it("names the Service Drop-ins owner and routes to it by path", () => {
+  it("names the Service Drop-ins owner and routes to it by its row key", () => {
     const owner = resolveShadowOwner(
       configEntry({ shadowed_by: "units" }),
       [dropin()],
@@ -61,7 +61,7 @@ describe("resolveShadowOwner", () => {
     expect(owner!.label).toBe("Controlled in Service Drop-ins");
     expect(owner!.target).toEqual({
       sectionId: "units",
-      itemId: DROPIN_PATH,
+      itemId: `["dropin","${DROPIN_PATH}"]`,
     });
   });
 

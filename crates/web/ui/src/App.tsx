@@ -29,6 +29,7 @@ import { AppShell } from "./components/AppShell";
 import { AggregateApp } from "./components/AggregateApp";
 import { RpmUploadModal } from "./components/RpmUploadModal";
 import { RpmBatchUploadModal } from "./components/RpmBatchUploadModal";
+import { rowKeyForItemId, type RowKey } from "./components/unitOutcome";
 import "highlight.js/styles/github.css";
 import "./App.css";
 
@@ -79,6 +80,18 @@ const REVEAL_TESTID_PREFIXES = [
 function elementByTestId(testId: string): HTMLElement | null {
   for (const el of document.querySelectorAll<HTMLElement>("[data-testid]")) {
     if (el.getAttribute("data-testid") === testId) return el;
+  }
+  return null;
+}
+
+/**
+ * The first element, in document order, whose `data-unit-key` is exactly
+ * `key`: the units section's reveal lookup (spec § 6.11). Compared as a
+ * string, never built into a selector, as `elementByTestId` does.
+ */
+function elementByUnitKey(key: RowKey): HTMLElement | null {
+  for (const el of document.querySelectorAll<HTMLElement>("[data-unit-key]")) {
+    if (el.getAttribute("data-unit-key") === key) return el;
   }
   return null;
 }
@@ -571,13 +584,21 @@ function SingleHostApp({
     if (!itemId) return;
 
     requestAnimationFrame(() => {
-      // Try multiple testid patterns to find the target element:
-      // decision items, context items, language env rows, drop-in and unit
-      // rows, unmanaged items
-      const el = REVEAL_TESTID_PREFIXES.reduce<HTMLElement | null>(
-        (found, prefix) => found ?? elementByTestId(`${prefix}${itemId}`),
-        null,
-      );
+      let el: HTMLElement | null;
+      if (activeSection === "units") {
+        // The units section names its rows by row key, not by test id
+        // (spec § 6.11); an id that names no row finds nothing.
+        const key = rowKeyForItemId(itemId);
+        el = key === null ? null : elementByUnitKey(key);
+      } else {
+        // Try multiple testid patterns to find the target element:
+        // decision items, context items, language env rows, drop-in and unit
+        // rows, unmanaged items
+        el = REVEAL_TESTID_PREFIXES.reduce<HTMLElement | null>(
+          (found, prefix) => found ?? elementByTestId(`${prefix}${itemId}`),
+          null,
+        );
+      }
       if (!el) return;
 
       pendingFocusItemRef.current = null;

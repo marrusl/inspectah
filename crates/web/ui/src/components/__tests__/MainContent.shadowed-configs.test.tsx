@@ -10,6 +10,7 @@ import type {
   ViewResponse,
 } from "../../api/types";
 import { mockStats } from "../../test-utils/mockStats";
+import { rowKey } from "../unitOutcome";
 
 const TRIAGE: TriageTag = {
   triage: { mode: "single_host", site: null },
@@ -133,7 +134,10 @@ describe("shadowed config rows in the configs section", () => {
       />,
     );
     await userEvent.click(screen.getByTestId("shadow-owner-link"));
-    expect(onNavigateToItem).toHaveBeenCalledWith("units", DROPIN_PATH);
+    expect(onNavigateToItem).toHaveBeenCalledWith(
+      "units",
+      rowKey({ kind: "dropin", data: DROPIN }),
+    );
   });
 
   it("leaves an unshadowed config row untouched", () => {
