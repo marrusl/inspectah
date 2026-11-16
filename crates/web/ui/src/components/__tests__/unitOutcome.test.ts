@@ -152,13 +152,23 @@ describe("U4: sort and nesting (§ 6.2)", () => {
 
   it.each<[string, string, string[]]>([
     ["alpha.service", "Zeta.service", ["Zeta.service", "alpha.service"]],
-    ["a.b.service", "a-b.service", ["a-b.service", "a.b.service"]],
   ])("sorts %s and %s by code point, not by locale", (first, second, expected) => {
     const fields = {
       ...kitchenSink,
       unit_states: [unitRow({ unit: first, kind: "service" }), unitRow({ unit: second, kind: "service" })],
     };
     expect(heads(group(groupUnits(keyFields(fields)), "services"))).toEqual(expected);
+  });
+
+  it("sorts a reversed pair by name", () => {
+    const fields = {
+      ...kitchenSink,
+      unit_states: [
+        unitRow({ unit: "a.b.service", kind: "service" }),
+        unitRow({ unit: "a-b.service", kind: "service" }),
+      ],
+    };
+    expect(heads(group(groupUnits(keyFields(fields)), "services"))).toEqual(["a-b.service", "a.b.service"]);
   });
 
   it("keeps a template and its instance as sibling branches", () => {

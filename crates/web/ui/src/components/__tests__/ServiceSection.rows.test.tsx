@@ -7,8 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { ServiceSection } from "../ServiceSection";
 import type { PendingGuard } from "../../hooks/usePendingGuard";
-import type { LinkRelation, ManualLinkView } from "../../api/types";
-import type { UnitFields } from "../unitOutcome";
+import type { LinkRelation, ManualLinkCause, ManualLinkView } from "../../api/types";
+import { causeLabel, type UnitFields } from "../unitOutcome";
 import { loadUnitFields } from "../../__tests__/fixtures/systemd-units/load";
 
 const stubGuard: PendingGuard = {
@@ -124,6 +124,15 @@ describe("U12: the outcome label (§ 6.6 item 2, § 6.5, string 15)", () => {
     const label = within(row).getByText("Omitted").closest(".pf-v6-c-label") as HTMLElement;
     expectOutlineLabel(label, "grey");
     expect(badgeCells(row).some((cell) => cell.contains(label))).toBe(true);
+  });
+
+  it("puts the outcome label after the triage badge on driftify-also-main.service", () => {
+    renderUnits(kitchenSink);
+    const cells = badgeCells(unitRow("driftify-also-main.service"));
+    const triage = cells.findIndex((cell) => cell.textContent === "Unknown Origin");
+    const outcome = cells.findIndex((cell) => cell.textContent === "Advisory");
+    expect(triage).toBeGreaterThanOrEqual(0);
+    expect(outcome).toBeGreaterThan(triage);
   });
 
   it("gives an undeclined row no outcome label", () => {
@@ -287,11 +296,32 @@ describe("U20: reported rows rendered (§ 6.6 items 11, 12, strings 17, 18)", ()
     expect(seen).toContain("vendor_install_only");
   });
 
+  it.each<Exclude<ManualLinkCause, object>>(["not_in_install", "partial_install", "host_device"])(
+    "names a %s link with its string 18 label",
+    (cause) => {
+      // No fixture carries these causes, so the link is built here.
+      const link: ManualLinkView = {
+        unit: "synthetic-cause-demo.service",
+        relation: "wants",
+        parent: "multi-user.target",
+        cause,
+        advisories: [],
+      };
+      renderUnits({ ...planted, manual_links: [...planted.manual_links, link] });
+      const [row] = linkRows(link);
+      const label = within(row).getByText(CAUSE_WORDS[cause]);
+      expect(label.textContent).toBe(causeLabel(cause));
+      expect(badgeCells(row).some((cell) => cell.contains(label))).toBe(true);
+      expectOutlineLabel(label.closest(".pf-v6-c-label"), "grey");
+    },
+  );
+
   it("gives an undetermined-install row the undetermined label and today's reason words", () => {
     renderUnits(kitchenSink);
     const row = screen.getByTestId("undetermined-install-driftify-upheld.service");
     const label = within(row).getByText("[Install] cannot be relied on");
     expect(badgeCells(row).some((cell) => cell.contains(label))).toBe(true);
+    expectOutlineLabel(label.closest(".pf-v6-c-label"), "grey");
     expect(within(row).getByTestId("undetermined-install-reason").textContent).toBe("upheld by");
   });
 });

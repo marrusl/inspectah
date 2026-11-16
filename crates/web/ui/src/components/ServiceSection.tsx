@@ -918,7 +918,6 @@ function UnitBranchView({
               )}
             </span>
           </div>
-          {svc.declined && <OutcomeLabel declined={svc.declined} />}
           {badge && !svcLocked && (
             <div
               role="gridcell"
@@ -939,6 +938,8 @@ function UnitBranchView({
               </Label>
             </div>
           )}
+          {/* After the triage badge, as § 6.10's sketch draws it. */}
+          {svc.declined && <OutcomeLabel declined={svc.declined} />}
         </div>
         {attention && (
           <RowNote id={attentionId} testId={attentionTestId} text={attention} />
