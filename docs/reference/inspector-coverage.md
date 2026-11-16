@@ -186,7 +186,7 @@ A shadowed unit's command depends on its shadow, not on its package; the rules i
 A template instance whose `enable` is carried and that keeps data under `/var` gets one `# Advisory:` line before the `RUN` lines, since the image carries the unit's configuration and not its data. `refine` shows the same sentence on the unit row:
 
 ```dockerfile
-# Advisory: dirsrv@example.service keeps data under /var/lib/dirsrv/slapd-example. The image does not carry it, and the carried enable starts the unit on first boot. Put the data in place before that boot, or the unit starts without it.
+# Advisory: dirsrv@example.service keeps data under /var/lib/dirsrv/slapd-example. The image does not carry it, and the carried enable may start the unit on first boot. Put the data in place before that boot, or the unit starts without it.
 ```
 
 A carried instance's `refine` row also notes each configuration file the export stages unredacted, when the scan ran with `--no-redaction`, and each that holds a value the redaction pass flagged and did not change. These notes are not Containerfile lines.

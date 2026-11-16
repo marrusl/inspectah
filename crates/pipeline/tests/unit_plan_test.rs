@@ -4140,8 +4140,8 @@ fn a_carried_instance_with_data_paths_has_one_data_advisory() {
     };
     let plan_of = |snap: &InspectionSnapshot| plan_units(snap, &staged_writes(snap));
     let sentence = "w@a.service keeps data under /var/lib/w/a and /var/lib/w/b. The image does \
-                    not carry them, and the carried enable starts the unit on first boot. Put the \
-                    data in place before that boot, or the unit starts without it.";
+                    not carry them, and the carried enable may start the unit on first boot. Put \
+                    the data in place before that boot, or the unit starts without it.";
 
     let carried = units_snapshot(
         vec![instance(

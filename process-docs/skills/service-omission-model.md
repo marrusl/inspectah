@@ -125,7 +125,11 @@ the row, the only trace of the lists the plan cannot read).
 7) whose row has a non-empty `data_paths` gets one sentence in
 `UnitPlan.data_advisories` (`data_advisory`, every path in one sentence,
 `a, b and c`, "it" for one path and "them" for several; `None` for an
-empty list, so no caller can write a sentence that names no path).
+empty list, so no caller can write a sentence that names no path). It
+says the enable *may* start the unit on first boot: enabling makes the
+install links, and activation depends on the dependency graph and the
+unit's conditions (a provisional ruling for the owner, 2026-11-15; § 10.8
+still quotes "starts").
 `unit_state_lines` writes it as an `# Advisory:` line
 after the `# Omitted:` lines and before the `RUN` lines, escaped, and
 refine appends the same sentence to the row's `attention_reason` after

@@ -11291,9 +11291,9 @@ const DIRSRV_DATA: &str = "/var/lib/dirsrv/slapd-example";
 
 /// § 10.8's data sentence for `dirsrv@example.service`.
 const DIRSRV_DATA_SENTENCE: &str = "dirsrv@example.service keeps data under \
-     /var/lib/dirsrv/slapd-example. The image does not carry it, and the carried enable starts \
-     the unit on first boot. Put the data in place before that boot, or the unit starts without \
-     it.";
+     /var/lib/dirsrv/slapd-example. The image does not carry it, and the carried enable may \
+     start the unit on first boot. Put the data in place before that boot, or the unit starts \
+     without it.";
 
 /// T28's data case (§ 10.8 "Data under `/var`"), through the real
 /// inspectors: `dirsrv@example.service` with its configuration in the
