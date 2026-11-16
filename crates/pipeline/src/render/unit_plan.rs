@@ -2395,8 +2395,7 @@ const CONFIG_FLAGGED_REST: &str = "holds a value the redaction pass flagged and 
 /// § 10.8's data sentence, after the unit, its paths and the pronoun that
 /// stands for them. "May start": enabling makes the install links, and
 /// whether the unit starts at that boot depends on the dependency graph
-/// and its conditions (a provisional ruling for the owner, 2026-11-15,
-/// differing from § 10.8's "starts").
+/// and its conditions. This differs from § 10.8's "starts".
 const DATA_ADVISORY_REST: &str = ", and the carried enable may start the unit on first boot. \
      Put the data in place before that boot, or the unit starts without it.";
 
