@@ -448,6 +448,8 @@ function InstancePaths({
       <span className="inspectah-unit-paths__label">{label}</span>
       {/* The spaces are not drawn in the flex row; they keep the paths
           apart in the text a screen reader reads from aria-describedby. */}
+      {/* The path is a safe key: the collector and the fleet merge both
+          dedup these lists. */}
       {paths.map((p) => (
         <span key={p}>
           {" "}

@@ -294,8 +294,6 @@ describe("ServiceSection: every unit kind", () => {
   });
 });
 
-// `aria-describedby` is a list of ids separated by whitespace, so an id
-// built from a path holding a space or a tab names ids that do not exist.
 describe("ServiceSection: what an instance needs", () => {
   const INSTANCE = "dirsrv@example.service";
   const CONFIG = ["/etc/dirsrv/slapd-example", "/etc/sysconfig/dirsrv-example"];
@@ -370,6 +368,8 @@ describe("ServiceSection: what an instance needs", () => {
   });
 });
 
+// `aria-describedby` is a list of ids separated by whitespace, so an id
+// built from a path holding a space or a tab names ids that do not exist.
 describe("ServiceSection: a drop-in's notes at a path with whitespace", () => {
   /** Matches a test id holding a tab or a newline as written. */
   const EXACT = { normalizer: getDefaultNormalizer({ trim: false, collapseWhitespace: false }) };
