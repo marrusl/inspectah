@@ -1717,23 +1717,40 @@ fn unbacked_var_row(vd: &RefVarDirectory, rationale: String, state: Option<Strin
 // -- Generic sections (scheduled_tasks, non_rpm_software, selinux) ---------
 
 /// A row's id in the web response. A scheduled row's id is its kind and
-/// its source (`cron:<path>`, `timer:<path>`, `at:<file>`,
-/// `generated:<index>:<name>`): the kind ends at the first `:` and holds
-/// none itself, so rows of two kinds never share an id, and within a kind
-/// the source is unique. A timer recorded without a path is identified by
-/// its name. Every other row keeps the projection's id.
+/// its source (`cron:<path>`, `timer:<path>`, `timer-instance:<pair>`,
+/// `at:<file>`, `generated:<index>:<name>`): the kind ends at the first
+/// `:` and holds none itself, so rows of two kinds never share an id, and
+/// within a kind the source is unique. A timer recorded without a path is
+/// identified by its name. An instance timer described from its template's
+/// file records that file as its `path`, which the template's own row and
+/// every other instance share, so it is `timer-instance:` and the
+/// JSON-encoded `[path, name]`, which no two descriptions share and which
+/// no separator could make ambiguous. Every other row keeps the
+/// projection's id.
 fn generic_row_id(item: &GenericRefItem) -> String {
     match &item.scheduled {
         None => item.id.clone(),
         Some(ScheduledSource::CronJob { path }) => format!("cron:{path}"),
+        Some(ScheduledSource::Timer { path, name }) if path.is_empty() => format!("timer:{name}"),
+        Some(ScheduledSource::Timer { path, name }) if describes_own_file(path, name) => {
+            format!("timer:{path}")
+        }
         Some(ScheduledSource::Timer { path, name }) => {
-            format!("timer:{}", if path.is_empty() { name } else { path })
+            format!("timer-instance:{}", serde_json::json!([path, name]))
         }
         Some(ScheduledSource::AtJob { file }) => format!("at:{file}"),
         Some(ScheduledSource::GeneratedTimer { index, name }) => {
             format!("generated:{index}:{name}")
         }
     }
+}
+
+/// Whether the timer `name` was read from its own file at `path`: the
+/// file is `<name>.timer`, or `name` itself when a snapshot records the
+/// suffix.
+fn describes_own_file(path: &str, name: &str) -> bool {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    file == name || file.strip_suffix(".timer") == Some(name)
 }
 
 /// The generated-timer name a scheduled row describes, which its decision

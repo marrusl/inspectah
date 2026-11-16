@@ -98,6 +98,7 @@ the reference projection):
 |---|---|
 | Cron job | `cron:<path>` |
 | Collected timer | `timer:<path>`, or `timer:<name>` when the snapshot records no path |
+| Instance timer described from its template's file | `timer-instance:` and the JSON-encoded `[path, name]` |
 | At job | `at:<file>` |
 | Generated timer | `generated:<index>:<name>`, `<index>` its place in `generated_timer_units` |
 
@@ -108,6 +109,17 @@ generated one, and two lines of one cron file all share names. A shared
 id is a shared React key, DOM id and GlobalSearch key, so search and
 reveal land on the wrong row. Rows of other reference sections keep the
 projection's ids.
+
+Paths are not unique either. An instance timer found by its link is
+described from its template's file and records that file as its `path`,
+the evidence its row shows, so `worker@.timer`, `worker@a.timer` and
+`worker@b.timer` all record `etc/systemd/system/worker@.timer`. A timer
+whose path's file is not `<name>.timer` (or `<name>`) is therefore
+`timer-instance:` and `[path, name]` as JSON, never the two joined with a
+separator, since a path and a unit name can both hold `:`. A timer that
+describes its own file keeps `timer:<path>`. The JSON form holds quotes,
+so a test that looks a row up by DOM id compares strings, as reveal does,
+never through a CSS attribute selector.
 
 **Reveal matches test ids exactly.** After a navigation, App finds the
 target row by comparing each `data-testid` as a string

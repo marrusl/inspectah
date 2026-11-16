@@ -1206,6 +1206,75 @@ async fn a_scheduled_timer_without_a_path_is_identified_by_name() {
     );
 }
 
+/// A timer template whose instances `a` and `b` are enabled by their links.
+fn worker_instances_host() -> unit_hosts::UnitHost {
+    let mut host = unit_hosts::UnitHost::new()
+        .base_package("glibc")
+        .unit("worker@.timer", "indirect")
+        .unit("worker@.service", "static")
+        .preset("disable *")
+        .etc_unit(
+            "worker@.timer",
+            "[Unit]\nDescription=Worker %i\n[Timer]\nOnCalendar=daily\n\
+             [Install]\nWantedBy=timers.target\n",
+        )
+        .etc_unit(
+            "worker@.service",
+            "[Service]\nType=oneshot\nExecStart=/usr/local/bin/worker %i\n",
+        );
+    for instance in ["a", "b"] {
+        host = host.link(
+            &format!("/etc/systemd/system/timers.target.wants/worker@{instance}.timer"),
+            "/etc/systemd/system/worker@.timer",
+        );
+    }
+    host
+}
+
+/// An instance timer is described from its template's file, so the
+/// template's row and both instances' rows record one `path`. Through the
+/// production sections handler each row still has its own id: the
+/// template's row, which describes its own file, keeps `timer:<path>`, and
+/// an instance's row is identified by that path and its own name.
+#[tokio::test]
+async fn a_timer_template_and_its_instances_have_their_own_ids() {
+    const TEMPLATE_PATH: &str = "etc/systemd/system/worker@.timer";
+    let snap = unit_hosts::scan(worker_instances_host());
+    let described: Vec<(&str, &str)> = snap
+        .scheduled_tasks
+        .as_ref()
+        .expect("a scheduled section")
+        .systemd_timers
+        .iter()
+        .map(|t| (t.name.as_str(), t.path.as_str()))
+        .collect();
+    assert_eq!(
+        described,
+        [
+            ("worker@", TEMPLATE_PATH),
+            ("worker@a", TEMPLATE_PATH),
+            ("worker@b", TEMPLATE_PATH),
+        ],
+        "presence: the collector records the template's path for each"
+    );
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(unit_hosts::session(&snap))),
+    });
+    let ids: Vec<String> = scheduled_rows(state)
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            format!("timer:{TEMPLATE_PATH}"),
+            format!(r#"timer-instance:["{TEMPLATE_PATH}","worker@a"]"#),
+            format!(r#"timer-instance:["{TEMPLATE_PATH}","worker@b"]"#),
+        ]
+    );
+}
+
 /// A `SetInclude` on `item_id` through `/api/op`.
 async fn set_include(
     app: &axum::Router,

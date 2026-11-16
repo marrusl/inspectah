@@ -21,6 +21,15 @@ const VENDOR_TIMER_ID = "timer:/usr/lib/systemd/system/backup.timer";
 const PREFIXED_TIMER_ID =
   "timer:/etc/systemd/system/generated:cron-backup.timer";
 const GENERATED_ID = "generated:0:cron-backup";
+/**
+ * A timer template and two of its instances, each instance described from
+ * the template's file, so all three record one path: see
+ * `api_test::a_timer_template_and_its_instances_have_their_own_ids`.
+ */
+const WORKER_TEMPLATE_PATH = "etc/systemd/system/worker@.timer";
+const WORKER_TEMPLATE_ID = `timer:${WORKER_TEMPLATE_PATH}`;
+const WORKER_A_ID = `timer-instance:${JSON.stringify([WORKER_TEMPLATE_PATH, "worker@a"])}`;
+const WORKER_B_ID = `timer-instance:${JSON.stringify([WORKER_TEMPLATE_PATH, "worker@b"])}`;
 
 /** The text the server sends for the collision, as the plan writes it. */
 const COLLISION_TEXT =
@@ -84,6 +93,21 @@ const SECTIONS: ReferenceSection[] = [
         searchable_text: "cron-backup 0 2 * * * generated-timer",
         generated_timer: "cron-backup",
       },
+      ...(
+        [
+          [WORKER_TEMPLATE_ID, "worker@"],
+          [WORKER_A_ID, "worker@a"],
+          [WORKER_B_ID, "worker@b"],
+        ] as const
+      ).map(([id, name]) => ({
+        id,
+        title: name,
+        subtitle: "daily",
+        detail: "Worker %i\n/usr/local/bin/worker %i",
+        searchable_text: `${name} daily Worker %i\n/usr/local/bin/worker %i timer`,
+        unit: `${name}.timer`,
+        unit_row: false,
+      })),
     ],
   },
 ];
@@ -184,15 +208,25 @@ describe("scheduled rows that share a name", () => {
       `context-item-${VENDOR_TIMER_ID}`,
       `context-item-${PREFIXED_TIMER_ID}`,
       `context-item-${GENERATED_ID}`,
+      `context-item-${WORKER_TEMPLATE_ID}`,
+      `context-item-${WORKER_A_ID}`,
+      `context-item-${WORKER_B_ID}`,
     ]);
     for (const id of [
       ETC_TIMER_ID,
       VENDOR_TIMER_ID,
       PREFIXED_TIMER_ID,
       GENERATED_ID,
+      WORKER_TEMPLATE_ID,
+      WORKER_A_ID,
+      WORKER_B_ID,
     ]) {
+      // Compared as strings: an id is host data, and an instance's holds
+      // quotes, which would end a CSS attribute selector built from it.
       expect(
-        document.querySelectorAll(`[id="context-item-${id}"]`),
+        Array.from(document.querySelectorAll("[id]")).filter(
+          (el) => el.id === `context-item-${id}`,
+        ),
       ).toHaveLength(1);
     }
     const notes = screen.getAllByText(COLLISION_TEXT);
@@ -223,4 +257,22 @@ describe("scheduled rows that share a name", () => {
     const row = await screen.findByTestId(`context-item-${PREFIXED_TIMER_ID}`);
     await waitFor(() => expect(row).toHaveFocus());
   });
+
+  it.each([
+    ["worker@a", WORKER_A_ID],
+    ["worker@b", WORKER_B_ID],
+  ])(
+    "search reaches and focuses instance %s's own row, not its template's",
+    async (query, id) => {
+      render(<App />);
+      await searchAndSelect(query);
+      const row = await screen.findByTestId(`context-item-${id}`);
+      await waitFor(() => expect(row).toHaveFocus());
+      for (const other of [WORKER_TEMPLATE_ID, WORKER_A_ID, WORKER_B_ID]) {
+        if (other !== id) {
+          expect(screen.getByTestId(`context-item-${other}`)).not.toHaveFocus();
+        }
+      }
+    },
+  );
 });

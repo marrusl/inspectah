@@ -3083,6 +3083,7 @@ name. In the sections response, which lists the reference rows (not
 |---|---|
 | Cron job | `cron:<path>` |
 | Collected timer | `timer:<path>`, the timer file's path; `timer:<name>` when the snapshot records no path |
+| Instance timer described from its template's file | `timer-instance:` and the JSON-encoded `[path, name]`, since its `path` is the template's, which the template's row and every other instance record |
 | At job | `at:<file>` |
 | Generated unit | `generated:<index>:<name>`, `<index>` being its place in `generated_timer_units` |
 
