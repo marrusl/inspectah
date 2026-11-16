@@ -94,7 +94,11 @@ path order, content not captured is `NotCaptured`, an entry
 `snapshot.redactions` at the entry is `Redacted`, and on a fleet
 aggregate an entry whose path holds more than one content variant is
 `FleetVariants` whichever variant is staged (`holds_variants`, which rule
-5's `one_variant` uses too), each naming the entry. A `required_config`
+5's `one_variant` uses too), each naming the entry. An entry under the
+path whose own path `Destination` refuses (a line break in a file name)
+is never staged: it is `Excluded` naming its path as written, found by
+`lexically_under`, never filtered out, or the other members of a
+required directory would pass it. A `required_config`
 path with a `..` component is kept by the collector and fails as
 `NotInSnapshot`, since `Destination` refuses it.
 Package ownership is never evidence: a package-owned file the

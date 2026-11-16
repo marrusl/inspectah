@@ -9825,6 +9825,59 @@ fn a_quoted_configuration_argument_is_checked_through_the_scan() {
     }
 }
 
+/// Rule 6 through the scan, a required directory with a member the
+/// stager refuses: the template names `/etc/t/%i.d`, which holds a good
+/// file and one whose name holds a line break. The stager refuses that one,
+/// so the enable is omitted naming it on both routes and in refine, though
+/// the good file is staged. Control: the member renamed, the enable is
+/// carried.
+#[test]
+fn a_refused_member_of_a_required_directory_omits_the_enable() {
+    const UNIT: &str = "t@site.service";
+    const GOOD: &str = "/etc/t/site.d/good.conf";
+    const REFUSED: &str = "/etc/t/site.d/bad\nname.conf";
+    let service = "ExecStart=/usr/bin/t --conf-dir=/etc/t/%i.d";
+    let snap = scan(t_reads_host(
+        service,
+        &[(GOOD, "A=1\n"), (REFUSED, "B=2\n")],
+    ));
+    assert_eq!(change(&snap, UNIT).required_config, ["/etc/t/site.d"]);
+    assert!(
+        snap.config
+            .iter()
+            .flat_map(|c| &c.files)
+            .any(|f| f.path == REFUSED),
+        "presence: the refused member is a config entry"
+    );
+    for (route, tree) in both_exports(&snap) {
+        assert!(staged_at(&tree, GOOD), "{route}: the good member is staged");
+        let containerfile = containerfile_in(&tree);
+        let line = omitted(&containerfile, UNIT)
+            .unwrap_or_else(|| panic!("{route}: an omitted line:\n{containerfile}"));
+        assert!(
+            line.starts_with("# Omitted: t@site.service (its configuration /etc/t/site.d/bad")
+                && line.ends_with("name.conf is excluded from the export)"),
+            "{route}: {line}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, UNIT),
+            "{route}:\n{containerfile}"
+        );
+    }
+    let declined = declined_in(&session(&snap), UNIT).expect("a declined row");
+    assert_eq!(declined.reason, "InstanceConfigNotStaged");
+    assert_eq!(
+        declined.text,
+        format!("{UNIT} (its configuration {REFUSED} is excluded from the export)")
+    );
+
+    let renamed = scan(t_reads_host(
+        service,
+        &[(GOOD, "A=1\n"), ("/etc/t/site.d/badname.conf", "B=2\n")],
+    ));
+    assert_instance_carried(&renamed, UNIT, "renamed");
+}
+
 /// Rule 6 through the scan, with systemd's resets: the template names
 /// `/etc/t/old/%i.env`, and the instance's drop-in under `/etc` resets
 /// `EnvironmentFile=` and names nothing else, so with the old file missing

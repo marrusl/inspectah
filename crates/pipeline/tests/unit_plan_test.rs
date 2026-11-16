@@ -4029,6 +4029,32 @@ fn rule_6_needs_each_instance_configuration_in_the_export() {
         gap(DIR, ConfigGap::NotInSnapshot),
         "a sibling with a longer name is not under it"
     );
+    // A member the stager refuses (a line break in its name) is not
+    // staged, so it declines the enable naming it, though the other member
+    // is staged. Control: the same member with an acceptable name.
+    let refused = under(vec![
+        ("/etc/w/a.d/good.conf", "x"),
+        ("/etc/w/a.d/bad\nname.conf", "y"),
+    ]);
+    assert_eq!(
+        rule_5_outcome(&refused, "w@a.service"),
+        gap("/etc/w/a.d/bad\nname.conf", ConfigGap::Excluded),
+        "a refused member"
+    );
+    let renamed = under(vec![
+        ("/etc/w/a.d/good.conf", "x"),
+        ("/etc/w/a.d/badname.conf", "y"),
+    ]);
+    assert_eq!(rule_5_outcome(&renamed, "w@a.service"), Ok(()), "renamed");
+    let refused_elsewhere = under(vec![
+        ("/etc/w/a.d/good.conf", "x"),
+        ("/etc/w/other/bad\nname.conf", "y"),
+    ]);
+    assert_eq!(
+        rule_5_outcome(&refused_elsewhere, "w@a.service"),
+        Ok(()),
+        "a refused file outside the directory"
+    );
 
     // Rule 6 asks nothing of a `disable`, nor of a unit that is not an
     // instance.

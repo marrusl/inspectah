@@ -2272,25 +2272,33 @@ fn rule_6_instance_config(
             return Err(gap(required, ConfigGap::NotInSnapshot));
         };
         let under = format!("{}/", at.as_str());
-        let mut entries: Vec<(Destination, _)> = snap
+        // Each entry at or under the path, by its destination, or by its
+        // path as written when the stager refuses it (`None`): a refused
+        // entry is never staged, so it declines the enable, not drops out.
+        let mut entries: Vec<(String, Option<Destination>, _)> = snap
             .config
             .iter()
             .flat_map(|c| &c.files)
-            .filter_map(|f| Destination::new(&f.path).ok().map(|d| (d, f)))
-            .filter(|(d, _)| *d == at || d.as_str().starts_with(&under))
+            .filter_map(|f| match Destination::new(&f.path) {
+                Ok(d) if d == at || d.as_str().starts_with(&under) => {
+                    Some((d.as_str().to_owned(), Some(d), f))
+                }
+                Ok(_) => None,
+                Err(_) => lexically_under(&f.path, &at).then(|| (f.path.clone(), None, f)),
+            })
             .collect();
         if entries.is_empty() {
             return Err(gap(required, ConfigGap::NotInSnapshot));
         }
-        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
-        for (dest, entry) in entries {
-            let path = dest.as_str();
+        entries.sort_by(|(a, ..), (b, ..)| a.cmp(b));
+        for (path, dest, entry) in entries {
             if !entry.content_captured() {
-                return Err(gap(path, ConfigGap::NotCaptured));
+                return Err(gap(&path, ConfigGap::NotCaptured));
             }
-            if !staged.writes.contains_key(&dest) {
-                return Err(gap(path, ConfigGap::Excluded));
-            }
+            let Some(dest) = dest.filter(|d| staged.writes.contains_key(d)) else {
+                return Err(gap(&path, ConfigGap::Excluded));
+            };
+            let path = dest.as_str();
             let findings: Vec<&RedactionKind> = snap
                 .redactions
                 .iter()
@@ -2316,6 +2324,18 @@ fn rule_6_instance_config(
         }
     }
     Ok(notes)
+}
+
+/// Whether `path`, a path [`Destination`] refuses, sits at or under `at`
+/// as written: its components, empty and `.` ones dropped, start with
+/// `at`'s. Whatever follows (a `..`, a line break) is not interpreted, so a
+/// refused entry whose written path starts inside `at` counts as under it.
+fn lexically_under(path: &str, at: &Destination) -> bool {
+    let mut components = path.split('/').filter(|c| !matches!(*c, "" | "."));
+    at.as_str()
+        .split('/')
+        .skip(1)
+        .all(|part| components.next() == Some(part))
 }
 
 // ---------------------------------------------------------------------------
