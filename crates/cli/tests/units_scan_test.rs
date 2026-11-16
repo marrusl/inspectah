@@ -6452,6 +6452,27 @@ fn t37_an_instance_timers_trigger_is_recorded_from_its_template() {
             UnitState::Enabled
         );
         assert_placeholder_omits(&snap, WORKER_INSTANCE_TIMER, extra);
+        // The instance's file is its template's, which is staged: the
+        // scheduled section lists it as carried on both routes, never as
+        // not carried.
+        for (route, containerfile) in both_routes(&snap) {
+            let line = |prefix: &str| {
+                containerfile
+                    .lines()
+                    .find(|l| l.starts_with(prefix))
+                    .map(str::to_owned)
+            };
+            assert!(
+                line("# Local timers not carried")
+                    .is_none_or(|l| !l.contains(WORKER_INSTANCE_TIMER)),
+                "{extra:?}, {route}:\n{containerfile}"
+            );
+            assert!(
+                line("# Local timers carried with their configuration or drop-in row")
+                    .is_some_and(|l| l.contains(WORKER_INSTANCE_TIMER)),
+                "{extra:?}, {route}:\n{containerfile}"
+            );
+        }
     }
 
     let snap =

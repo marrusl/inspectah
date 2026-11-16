@@ -1355,6 +1355,21 @@ fn network_section_lines(snap: &InspectionSnapshot, firewall_only: bool) -> Vec<
 
 // --- Scheduled Tasks section ---
 
+/// The stem of the unit file under `/etc/systemd/system` that loads the
+/// local timer `timer`: its own name's, unless it is an instance timer
+/// described from its template's file (its `path` is the template's),
+/// then the template's (`worker@` for `worker@a`).
+fn timer_file_stem(timer: &inspectah_core::types::scheduled::SystemdTimer) -> String {
+    inspectah_core::types::units::UnitName::try_from(format!("{}.timer", timer.name))
+        .ok()
+        .and_then(|unit| unit.instance().map(|parts| parts.template()))
+        .filter(|template| {
+            format!("{ETC_UNIT_DIR}/{}", template.as_str()) == format!("/{}", timer.path)
+        })
+        .and_then(|template| template.as_str().strip_suffix(".timer").map(str::to_owned))
+        .unwrap_or_else(|| timer.name.clone())
+}
+
 fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let st = match &snap.scheduled_tasks {
         Some(s) => s,
@@ -1394,9 +1409,11 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // A local timer's file is carried by its config or drop-in row (§ 8):
     // the comment says which timers that row put in the export and which
     // it did not. Timer names are snapshot strings: every one that reaches
-    // a comment is escaped, or a newline in it would end the comment.
+    // a comment is escaped, or a newline in it would end the comment. An
+    // instance timer described from its template has no file of its own
+    // name: it is carried when its template's file is (§ 8).
     let (carried, not_carried): (Vec<_>, Vec<_>) = local_timers.iter().partition(|t| {
-        staged_unit_file(&t.name, "timer")
+        staged_unit_file(&timer_file_stem(t), "timer")
             .is_some_and(|file| is_staged(&staged, &format!("{ETC_UNIT_DIR}/{file}")))
     });
     let shown = |t: &&&inspectah_core::types::scheduled::SystemdTimer| {
