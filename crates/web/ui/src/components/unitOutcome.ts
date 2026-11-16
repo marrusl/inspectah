@@ -314,6 +314,7 @@ export function groupUnits(keyed: KeyedFields): UnitGroupModel[] {
     if (!block) {
       block = { unit, dropins: [] };
       orphanBlocks.set(unit, block);
+      // The block's group is its first drop-in's `kind`: that is the parent's kind, shared by all.
       at(groupOfKind(dropin.record.data.kind)).orphans.push(block);
     }
     block.dropins.push(dropin);

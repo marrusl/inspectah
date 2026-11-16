@@ -4,7 +4,13 @@
  * strings 19 to 22). U7, U24 matching, U25 search text and U35 (b).
  */
 import { describe, it, expect } from "vitest";
-import type { ServiceDecisionDto } from "../../api/types";
+import type {
+  DropInDecisionDto,
+  ManualLinkView,
+  MountFindingDto,
+  ServiceDecisionDto,
+  UndeterminedInstallView,
+} from "../../api/types";
 import {
   branchHeadOf,
   globalSearchText,
@@ -35,6 +41,34 @@ const plantedKeyed = keyFields(planted);
 const plantedGroups = groupUnits(plantedKeyed);
 
 const HTTPD_LIMITS = "/etc/systemd/system/httpd.service.d/limits.conf";
+
+/** Reported rows with no advisories, so each field must be searched itself. */
+const FIELD_LINK: ManualLinkView = {
+  relation: "upholds",
+  parent: "fieldparent.target",
+  unit: "fieldlinkunit.service",
+  cause: "not_in_install",
+  advisories: [],
+};
+const FIELD_INSTALL: UndeterminedInstallView = {
+  unit: "fieldinstallunit.service",
+  reason: "upheld_by",
+  install_files: ["/fieldinstall"],
+  advisories: [],
+};
+/** A drop-in whose unit is not a substring of its path. */
+const FIELD_DROPIN: DropInDecisionDto = {
+  ...kitchenSink.unit_dropins[0],
+  unit: "fielddropinunit.service",
+  path: "/etc/systemd/system/elsewhere.d/override.conf",
+};
+/** A mount finding whose kind is not a substring of its unit or mount point. */
+const FIELD_MOUNT: MountFindingDto = {
+  ...planted.mount_findings[0],
+  unit: "data-demo.mount",
+  kind: "fieldmountkind",
+  advisories: [],
+};
 
 function state(over: Partial<ShowState> = {}): ShowState {
   return { filter: "all", query: "", pins: new Set<OccurrenceKey>(), ...over };
@@ -228,6 +262,30 @@ describe("U24: section search matching (§ 6.12)", () => {
     expect(undetermined).toContain("/etc/systemd/system/driftify-upheld.service");
     expect(undetermined).toContain("check them with systemctl is-enabled");
   });
+
+  it("builds a reported row's text from each field, with no advisory to lean on", () => {
+    const keyed = keyFields({
+      ...kitchenSink,
+      manual_links: [FIELD_LINK],
+      undetermined_installs: [FIELD_INSTALL],
+    });
+    const link = keyed.manualLinks[0];
+    for (const word of ["fieldlinkunit.service", "fieldparent.target", "upholds"]) {
+      expect(sectionSearchText(link)).toContain(word);
+      expect(globalSearchText(link.record)).toContain(word);
+    }
+    const install = keyed.undeterminedInstalls[0];
+    for (const word of ["fieldinstallunit.service", "/fieldinstall"]) {
+      expect(sectionSearchText(install)).toContain(word);
+      expect(globalSearchText(install.record)).toContain(word);
+    }
+  });
+
+  it("gives a drop-in's unit even when its path does not hold it", () => {
+    const dropin = keyFields({ ...kitchenSink, unit_dropins: [FIELD_DROPIN] }).dropins[0];
+    expect(sectionSearchText(dropin)).toContain("fielddropinunit.service");
+    expect(globalSearchText(dropin.record)).toContain("fielddropinunit.service");
+  });
 });
 
 describe("§ 6.3 counts under filter and search", () => {
@@ -313,6 +371,7 @@ describe("U25: global search text (§ 6.12 table)", () => {
     for (const word of ["data-demo.mount", "mount", "/data/demo", "is enabled on the source host"]) {
       expect(mount).toContain(word);
     }
+    expect(globalSearchText({ kind: "mount_finding", data: FIELD_MOUNT })).toContain("fieldmountkind");
   });
 
   it("is lowercased", () => {

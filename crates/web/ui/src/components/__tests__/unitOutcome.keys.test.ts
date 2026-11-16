@@ -110,12 +110,21 @@ describe("§ 6.11 keys", () => {
     expect(rowKeyForItemId(key)).toBe(key);
   });
 
-  it.each(["[", '["nope","x"]', '["unit_state"]', '["manual_link","wants","x"]', "[1]"])(
-    "rowKeyForItemId(%s) names no row",
-    (itemId) => {
-      expect(rowKeyForItemId(itemId)).toBeNull();
-    },
-  );
+  it.each([
+    "[",
+    '["nope","x"]',
+    '["unit_state"]',
+    '["manual_link","wants","x"]',
+    "[1]",
+    '["unit_state", "cups.service"]',
+  ])("rowKeyForItemId(%s) names no row", (itemId) => {
+    expect(rowKeyForItemId(itemId)).toBeNull();
+  });
+
+  it("resolves only the canonical spelling of a key, not one with a space", () => {
+    expect(rowKeyForItemId('["unit_state","cups.service"]')).toBe('["unit_state","cups.service"]');
+    expect(rowKeyForItemId('["unit_state", "cups.service"]')).toBeNull();
+  });
 
   it("keeps a prefixed unit name apart from the undetermined install it looks like", () => {
     const unitRow = rowKey({ kind: "unit_state", data: unitState("undetermined-install-demo.service") });
