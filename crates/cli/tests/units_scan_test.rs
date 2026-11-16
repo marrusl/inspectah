@@ -7179,6 +7179,92 @@ fn name(unit: &str) -> UnitName {
     UnitName::try_from(unit.to_owned()).expect("a unit name")
 }
 
+/// A drop-in in a directory systemd ranks above `/etc/systemd/system`
+/// hides an `/etc` drop-in of its file name (Mark Russell, 2026-11-15):
+/// `systemctl set-property`'s `50-CPUQuota.conf` under
+/// `/etc/systemd/system.control/app.service.d/` over an `/etc`
+/// `50-CPUQuota.conf` holding `WantedBy=graphical.target`. The hidden
+/// `[Install]` is not read, so the unit, with its `multi-user.target` link,
+/// is `Enabled` at its preset with no finding. Control: the control
+/// directory's drop-in under another name hides nothing, the `/etc`
+/// `[Install]` is read, and the unit is a partial install with no state.
+#[test]
+fn a_drop_in_ranked_above_etc_hides_an_etc_drop_in_of_its_name() {
+    const ETC_DROP_IN: &str = "/etc/systemd/system/app.service.d/50-CPUQuota.conf";
+    let host = |control_name: &str| {
+        wants_link(
+            diff_host(
+                DIFF_UNIT,
+                "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n",
+                "enabled",
+            ),
+            "multi-user.target",
+            DIFF_UNIT,
+        )
+        .file(ETC_DROP_IN, "[Install]\nWantedBy=graphical.target\n")
+        .file(
+            &format!("/etc/systemd/system.control/app.service.d/{control_name}"),
+            "[Service]\nCPUQuota=20%\n",
+        )
+    };
+    let inventory = |snap: &InspectionSnapshot| {
+        snap.units
+            .as_ref()
+            .expect("a units section")
+            .inventory
+            .iter()
+            .find(|e| e.unit.as_str() == DIFF_UNIT)
+            .map(|e| e.state)
+    };
+    let warnings_of = |snap: &InspectionSnapshot| -> Vec<String> {
+        snap.warnings
+            .iter()
+            .filter(|w| w.message.contains(DIFF_UNIT) || w.message.contains("system.control"))
+            .map(|w| w.message.clone())
+            .collect()
+    };
+    let causes = |snap: &InspectionSnapshot| {
+        links_of(snap)
+            .iter()
+            .map(|l| (l.parent.as_str().to_owned(), l.cause))
+            .collect::<Vec<_>>()
+    };
+
+    let control = scan(host("50-MemoryMax.conf"));
+    assert!(
+        warnings_of(&control).is_empty(),
+        "control: no search-path refusal: {:?}",
+        warnings_of(&control)
+    );
+    assert_eq!(inventory(&control), None, "control: no state");
+    assert_eq!(
+        causes(&control),
+        [(
+            "multi-user.target".to_owned(),
+            ManualLinkCause::PartialInstall
+        )],
+        "control: the /etc [Install] is read"
+    );
+
+    let hidden = scan(host("50-CPUQuota.conf"));
+    assert!(
+        warnings_of(&hidden).is_empty(),
+        "no search-path refusal: {:?}",
+        warnings_of(&hidden)
+    );
+    assert_eq!(inventory(&hidden), Some(UnitState::Enabled));
+    assert_eq!(causes(&hidden), [], "the hidden [Install] is not read");
+    assert_eq!(changes_named(&hidden, DIFF_UNIT), 0, "at its preset");
+    assert!(
+        hidden
+            .units
+            .as_ref()
+            .expect("a units section")
+            .undetermined_installs
+            .is_empty()
+    );
+}
+
 /// A unit with some of the links its `[Install]` names and not others,
 /// and two links under `/etc` its section does not name, a `.wants` link
 /// and an alias (Mark Russell, 2026-11-15): the named link is

@@ -19,10 +19,18 @@ const INSTALL_SECTION: &str = "Install";
 pub(crate) const DROP_IN_DIR_SUFFIX: &str = ".d";
 
 /// The unit directory a drop-in sits under. The order is the priority:
-/// for one file name in one directory, an `/etc` file replaces a vendor
+/// for one file name in one directory, a file in a directory ranked above
+/// `/etc` replaces an `/etc` one, and an `/etc` file replaces a vendor
 /// one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum DropInRoot {
+    /// A directory systemd ranks above `/etc/systemd/system`, such as
+    /// `/etc/systemd/system.control`, where `systemctl set-property`
+    /// writes. A drop-in there that holds `[Install]` refuses the unit
+    /// before the reader runs (`resolve`), so one read here only hides an
+    /// `/etc` or vendor drop-in of its file name (Mark Russell,
+    /// 2026-11-15).
+    AboveEtc,
     /// `/etc/systemd/system`.
     Etc,
     /// `/usr/lib/systemd/system`.
@@ -87,11 +95,13 @@ pub(crate) fn drop_in_dirs(name: &UnitName) -> Vec<String> {
 /// roots, not one root at a time. Of the drop-ins that share a file name,
 /// the first in systemd's search order is read: every directory of the
 /// instance's own name before every directory of its template's, and
-/// within each, the one under `/etc` before the vendor one. So a vendor
-/// file in the instance's `.d` hides an `/etc` file of its name in the
-/// template's. That order was read from systemd's source (252 and 257:
-/// the search order in `install.c`, the first file of a name kept in
-/// `conf-files.c`) and not measured on RHEL 9 or 10.
+/// within each, [`DropInRoot`]'s order: a directory ranked above `/etc`
+/// (in search-path order among those), then `/etc`, then the vendor one.
+/// So a vendor file in the instance's `.d` hides an `/etc` file of its
+/// name in the template's, and a `system.control` file hides an `/etc`
+/// file of its name in the same `.d`. That order was read from systemd's
+/// source (252 and 257: the search order in `install.c`, the first file of
+/// a name kept in `conf-files.c`) and not measured on RHEL 9 or 10.
 ///
 /// An empty `WantedBy=` or `Alias=` clears every value of that key before
 /// it; an empty `Also=` clears nothing. An empty `RequiredBy=` after a
@@ -299,7 +309,7 @@ mod tests {
         }
     }
 
-    use DropInRoot::{Etc, Vendor};
+    use DropInRoot::{AboveEtc, Etc, Vendor};
 
     /// A unit file whose section wants `multi-user.target`.
     const WANTS_MULTI_USER: &str = "[Unit]\nDescription=x\n\n[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n";
@@ -463,6 +473,61 @@ mod tests {
                         "t@.service.d",
                         "10-a.conf",
                         "[Install]\nWantedBy=etc.target\n",
+                    ),
+                ],
+                wanted(&["multi-user.target", "own.target"]),
+            ),
+            (
+                "a file ranked above /etc hides an /etc one of its name in the same .d",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Etc,
+                        "a.service.d",
+                        "50-CPUQuota.conf",
+                        "[Install]\nWantedBy=extra.target\n",
+                    ),
+                    (
+                        AboveEtc,
+                        "a.service.d",
+                        "50-CPUQuota.conf",
+                        "[Service]\nCPUQuota=20%\n",
+                    ),
+                ],
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "a file ranked above /etc hides a vendor one of its name",
+                "a.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Vendor,
+                        "a.service.d",
+                        "50-CPUQuota.conf",
+                        "[Install]\nWantedBy=extra.target\n",
+                    ),
+                    (
+                        AboveEtc,
+                        "a.service.d",
+                        "50-CPUQuota.conf",
+                        "[Service]\nCPUQuota=20%\n",
+                    ),
+                ],
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "an /etc file in the instance's .d is read over one ranked above /etc in the template's",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                &[
+                    (AboveEtc, "t@.service.d", "10-a.conf", NO_INSTALL_DROP_IN),
+                    (
+                        Etc,
+                        "t@x.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=own.target\n",
                     ),
                 ],
                 wanted(&["multi-user.target", "own.target"]),

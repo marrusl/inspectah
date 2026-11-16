@@ -87,14 +87,33 @@ undetermined section there always has a record and never a state.
 ## The `[Install]` reader
 
 `read_install` reads the unit file, then one drop-in per file name across
-every directory of `drop_in_dirs` and both roots, in file-name order. Of
-drop-ins that share a file name, the first in systemd's search order wins:
-every directory of the instance's own name before every directory of its
-template's, and the `/etc` one before the vendor one within each. So a
+every directory of `drop_in_dirs` and every root, in file-name order. Of
+drop-ins that share a file name, the first in systemd's search order wins
+(G2): every directory of the instance's own name before every directory of
+its template's, and within each `DropInRoot`'s order: a directory ranked
+above `/etc` (`AboveEtc`, the four `UNREAD_SEARCH_PATH` entries tagged
+`Etc`, in search-path order), then `/etc`, then the vendor one. So a
 vendor file in `t@x.service.d` hides an `/etc` file of its name in
-`t@.service.d`. Within one directory name the `/etc` file winning was
-measured; the order across the two names was read from systemd's source
-(252 and 257) and still needs a real-host run.
+`t@.service.d`, and `systemctl set-property`'s
+`/etc/systemd/system.control/<unit>.d/50-CPUQuota.conf` hides an `/etc`
+`50-CPUQuota.conf` in `<unit>.d`, so an `[Install]` in the hidden file is
+not read (Mark Russell, 2026-11-15). `install_evidence` reads the
+`AboveEtc` drop-ins only for this: one that holds `[Install]`, shares a
+vendor drop-in's name or cannot be decoded has already refused the unit in
+`resolve`, so one that reaches the reader changes nothing but what it
+hides. A hidden `/etc` file stays in `install_drop_ins`, since the image
+reads it if the higher file is not there.
+
+Within one directory name the `/etc` file winning over the vendor one was
+measured. **Still needs a real-host run on RHEL 9 and RHEL 10:**
+
+- the order across the two directory names (instance `.d` before template
+  `.d`), read from systemd's source (252 and 257);
+- the placement above `/etc`: a `system.control` drop-in (from
+  `systemctl set-property`) hiding an `/etc` drop-in of its name, so that
+  `systemctl enable` does not act on an `[Install]` in the hidden file,
+  and the same against a vendor drop-in and across the instance and
+  template `.d`, with the G2 order above.
 
 - **Resets, as measured on RHEL 9 and 10:** an empty `WantedBy=` or
   `Alias=` clears the values before it; an empty `Also=` clears nothing.
@@ -153,7 +172,10 @@ that outranks it, an instance's own file in any of them, or an `[Install]`
 drop-in in any of them refuses the unit with a warning naming the path,
 whatever its state: the scan cannot tell what would load or what `enable`
 would do. `/usr/local/lib/systemd/system` outranks only the vendor
-directory. A drop-in there that cannot be decoded counts as a hit.
+directory. A drop-in there that cannot be decoded counts as a hit. A
+drop-in in a directory above `/etc` that is no hit is still read by the
+`[Install]` reader as `AboveEtc` (`resolve::above_etc_dirs`), because it
+hides an `/etc` drop-in of its file name.
 
 ## What becomes a finding
 

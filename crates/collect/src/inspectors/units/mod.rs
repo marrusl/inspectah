@@ -922,7 +922,9 @@ struct InstallEvidence {
 
 /// Read the install evidence of `name`, whose unit file is `fragment`:
 /// the `.conf` files in each of [`drop_in_dirs`] under both unit
-/// directories, the effective section over them, the vendor drop-ins' file
+/// directories and the directories ranked above `/etc`
+/// ([`resolve::above_etc_dirs`], which only hide a drop-in of their file
+/// name), the effective section over them, the vendor drop-ins' file
 /// names, and which `/etc` drop-ins are install files. An `/etc` drop-in is
 /// one when it holds an `[Install]` section, or a vendor drop-in of its
 /// file name exists in one of those directories (§ 10.2, "Install files").
@@ -951,10 +953,13 @@ fn install_evidence(
     let mut drop_ins = Vec::new();
     let mut unreadable = Vec::new();
     let mut install_drop_ins = Vec::new();
-    for (root, base) in [
-        (DropInRoot::Etc, ETC_UNIT_DIR),
-        (DropInRoot::Vendor, VENDOR_UNIT_DIR),
-    ] {
+    let roots = resolve::above_etc_dirs()
+        .map(|base| (DropInRoot::AboveEtc, base))
+        .chain([
+            (DropInRoot::Etc, ETC_UNIT_DIR),
+            (DropInRoot::Vendor, VENDOR_UNIT_DIR),
+        ]);
+    for (root, base) in roots {
         for dir in &dirs {
             for file_name in resolve::conf_files(exec, &format!("{base}/{dir}")).map_err(failure)? {
                 let path = format!("{base}/{dir}/{file_name}");
