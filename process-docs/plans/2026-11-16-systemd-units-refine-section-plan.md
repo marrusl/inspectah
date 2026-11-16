@@ -39,7 +39,7 @@ The pre-commit hook gives a frontend-only commit no gate, so every frontend task
 - **Frontend lane:** everything under `crates/web/ui/src` and `crates/web/ui/e2e/*.spec.ts`, and the hand-built Vitest fixtures. Tasks 2.1 to 8.3 except where marked.
 - **Rust lane:** the `SectionMeta` label in `crates/pipeline/src/section_group.rs` and its test, re-recording the `*.groups.json` system-tuning recordings it forces, recording the kitchen-sink session (the Vitest fixture and the Playwright bodies, which needs a built `inspectah` and a running refine), and registering the new e2e bodies in `crates/web/ui/e2e/fixtures/manifest.json` and `crates/web/tests/fixture_structure_test.rs`. Tasks 1.2 and 1.3.
 
-No Rust task depends on unfinished frontend work: Tasks 1.2 and 1.3 need only `main`, and can run in parallel with each other and with Task 1.4. The frontend lane needs Task 1.3's fixtures from Task 1.4 on, and Task 1.2's re-recorded groups body from Task 8.1 on.
+No Rust task depends on unfinished frontend work: Tasks 1.2 and 1.3 need only `main`, and can run in parallel with each other. The frontend lane needs Task 1.3's fixtures and its commit body from Task 1.4 on, and Task 1.2's re-recorded groups body from Task 8.1 on.
 
 ## Backlog items
 
@@ -53,7 +53,7 @@ Named by slug (spec Metadata, § 6.12, § 10.1). The items are updated outside t
 ## Global constraints
 
 - **No server change** except the `units` label in `SectionMeta` (§ 2 item 3, § 6.14). No new view response field, no snapshot or schema change, no Containerfile change; nothing in `crates/web/src` changes (§ 8 Untouched).
-- **The fleet view is unchanged** (§ 2 items 2 and 8, § 3.2). `AggregateApp`, `AggregateSidebar`, `components/aggregate/` and `aggregate_handlers.rs` are not edited. Every change to `AppShell`, `GlobalSearch` and `ContainerfilePanel` is conditioned on `isAggregateMode` being false (§ 6.15).
+- **The fleet view is unchanged** (§ 2 items 2 and 8, § 3.2). No fleet product code is edited: `src/components/AggregateApp.tsx`, everything under `src/components/aggregate/` and `crates/web/src/aggregate_handlers.rs`. The one fleet file that changes is the test `src/components/aggregate/__tests__/AggregateApp.integration.test.tsx`, which U34 extends (Tasks 5.2 and 7.3). Every change to `AppShell`, `GlobalSearch` and `ContainerfilePanel` is conditioned on `isAggregateMode` being false (§ 6.15).
 - **Strings are § 7's, verbatim.** No new served string. Reason and advisory sentences are shown as given, never composed, rephrased or parsed (§ 3.3).
 - **Rows never move on a toggle.** Placement is by kind and name only; a filter hides and never copies (§ 3.3).
 - **Two identities, one builder each.** Row keys and occurrence keys are built only by `unitOutcome.ts` (§ 6.11). An occurrence key never appears in a search entry, an item id, a URL, `data-unit-key` or a test id. No CSS selector is ever built from a key or an item id (`process-docs/skills/web-disposition-contract.md`).
@@ -153,7 +153,7 @@ Spec: § 10.1, § 6.14 (the served label), § 10.2's last two paragraphs. No vis
   - `view-units-stock10.json`: `view-units-kitchen-sink.json` with its six unit fields replaced by `stock10.units.json`'s.
 - [ ] **Step 4: Check before staging.** Search every new file for the scan host's hostname (from `/api/health`), `PrivateKey`, `BEGIN `, `password`, `token` and `REDACTED`; each `REDACTED` hit is the scan's own marker and stays. Any other hit stops the task.
 - [ ] **Step 5:** register the four e2e bodies in `manifest.json` (category `body`; schema `ViewResponse` for the views and the sequence body, `ContextSections` for the sections body). Run `cargo test -p inspectah-web --test fixture_structure_test`, review each new snapshot and the manifest snapshot diff, accept with `cargo insta accept` only after reading them.
-- [ ] **Step 6: Gate, commit** `test(web): record the kitchen-sink units session for the units section tests`. The body records the inspectah commit, the tarball's name, the op sent, and the counts the recording holds (19 unit rows, 4 drop-ins, 1 default target, 2 manual links, 1 undetermined install, 0 mount findings, if so).
+- [ ] **Step 6: Gate, commit** `test(web): record the kitchen-sink units session for the units section tests`. The body records the inspectah commit, the tarball's name, the requests sent (including the op), the trim script's steps, and the counts the recording holds (19 unit rows, 4 drop-ins, 1 default target, 2 manual links, 1 undetermined install, 0 mount findings, if so). Task 1.4 copies this record into the header of `load.ts`, the file § 10.1's provenance header lives in (Readings 13).
 
 **Acceptance:** `fixture_structure_test` passes with four new snapshots; the Vitest fixtures directory holds three files; nothing secret or host-specific remains.
 
@@ -166,10 +166,11 @@ Spec: § 10.1, § 6.14 (the served label), § 10.2's last two paragraphs. No vis
 - [ ] **Step 1: Failing test first.** `src/__tests__/fixtures/systemd-units/planted.test.ts`, one `it` per planted case of § 10.1, each finding its record and asserting the fields that make it that case: a locked row whose `attention_reason` is `service-image-mode-incompatible`; an excluded runtime updater; a `kind: "path"` row; a `kind: "slice"` row; a mount finding; a drop-in with `withheld`; an orphan drop-in with no `kind`; a link with `relation: "alias"`; a link with cause `vendor_install_only`; a `default_target` with `declined`; two instance rows with a `required_config` path each (config rows are not unit fields, so U16 in Task 4.4 supplies a config row for the first path and none for the second); `getty@.service` (masked) and `getty@tty2.service` (`instance_of: "getty@.service"`); one unit name in `unit_states`, `mount_findings`, `undetermined_installs` and a manual link's `unit`; the U8 pair (a unit row declined because its `[Install]` drop-in is excluded, and in `u8_after_include` the drop-in included and `declined` absent); `undetermined-install-demo.service` as a unit row beside an undetermined install for `demo.service`; three manual links for one unit (`wants` under `multi-user.target`, `wants` under `graphical.target`, `requires` under `multi-user.target`); two identical `wants` links for `dup-link-demo.service` under `multi-user.target` and one for `dup-link-demo-other.service`; `dup-state-demo.service` twice in `unit_states`, carried, and `/etc/systemd/system/dup-state-demo.service.d/override.conf` twice in `unit_dropins`. It also asserts the kitchen-sink records are all present unchanged, and that no record outside the `dup-*` ones contains `dup-link-demo` or `dup-state-demo`.
 - [ ] **Step 2:** `npx vitest run src/__tests__/fixtures/systemd-units` fails: no file.
 - [ ] **Step 3:** build the file from `kitchen-sink.units.json` by a `python3 -I` script outside the repository. Every string (reasons, `declined.text`, advisory lines, `withheld.text`, the locked slug) is copied from source or from a kitchen-sink record of the same case, never invented: `declined.text` for the `[Install]` case from the pipeline's rule 5 constant in `crates/pipeline/src/render/unit_plan.rs`, the locked slug from `normalize_incompatible_services`. The planted default target replaces the kitchen-sink one (one target per view). Each record has every always-present field.
-- [ ] **Step 4:** the test passes; `npx tsc --noEmit` is clean.
-- [ ] **Step 5: Commit** `test(web): add the planted units fixture`.
+- [ ] **Step 4: Provenance header** (§ 10.1, `kitchen-sink.units.json` bullet). The header comment of `src/__tests__/fixtures/systemd-units/load.ts` records, from Task 1.3's commit body (`git log --grep "record the kitchen-sink units session" -1`): the inspectah commit refine was built from, the tarball's name, the requests sent to that refine, and how the six fields were cut from the view; that `stock10` and `stock9` are hand-built from the R4 records of `process-docs/skills/real-host-validation-runs.md`; and that `planted.units.json` is kitchen-sink plus the hand-made records `planted.test.ts` names, with where each string was copied from.
+- [ ] **Step 5:** the test passes; `npx tsc --noEmit` is clean.
+- [ ] **Step 6: Commit** `test(web): add the planted units fixture`.
 
-**Acceptance:** every § 10.1 planted case is asserted present by name.
+**Acceptance:** every § 10.1 planted case is asserted present by name; `load.ts`'s header records how the kitchen-sink recording was taken and at which inspectah commit.
 
 ---
 
@@ -326,7 +327,7 @@ A branch is a unit row with its drop-ins, the default target, one orphan drop-in
 
 ## Phase 3: the section renders by groups (3 tasks)
 
-Spec: § 6.2, § 6.3, § 6.5, § 6.6 items 1 to 4, 6, 8 to 12, § 6.7, § 6.8, § 6.9 (rows without the filter), § 6.13 grid structure, § 6.14 heading, § 9.1. Tests: U3, U4, U5 (All), U10 to U14, U17 to U23 (without the filter), U31 heading half, U32 structure half, U35 (a). The filter bar does not exist yet; the section shows "All".
+Spec: § 6.2, § 6.3, § 6.5, § 6.6 items 1 to 4, 6, 8 to 12, § 6.7, § 6.8, § 6.9 (rows without the filter), § 6.13 grid structure, § 6.14 heading, § 9.1. Tests: U3, U4, U5 (All), U10 to U14, U17 to U23 (without the filter), U31 heading half, U32 structure half, U35 (a) rows and Reported count (its filter counts are Task 4.1's). The filter bar does not exist yet; the section shows "All".
 
 ### Task 3.1: `UnitGroup` (frontend lane, S)
 
@@ -343,7 +344,7 @@ Spec: § 6.2, § 6.3, § 6.5, § 6.6 items 1 to 4, 6, 8 to 12, § 6.7, § 6.8, �
 
 ### Task 3.2: `ServiceSection` renders through the groups (frontend lane, L, at the limit)
 
-**Spec:** § 6.2; § 6.3 placement; § 6.5; § 6.7; § 6.8; § 6.9 rows 1 to 3 and 5's precedence (the filter and search rows come in Tasks 4.1 and 5.1); § 6.11 `data-unit-key` and occurrence-key React keys; § 6.12 a duplicated unit row's drop-ins under its first occurrence; § 6.14 heading and `MainContent` label; § 9.1; strings 1 (heading), 2 to 6, 11 to 13. Tests: U3, U4, U5 (under All), U10, U21, U23 (rows for `stock10`, empty view), U31 heading half, U35 (a).
+**Spec:** § 6.2; § 6.3 placement; § 6.5; § 6.7; § 6.8; § 6.9 rows 1 to 3 and 5's precedence (the filter and search rows come in Tasks 4.1 and 5.1); § 6.11 `data-unit-key` and occurrence-key React keys; § 6.12 a duplicated unit row's drop-ins under its first occurrence; § 6.14 heading and `MainContent` label; § 9.1; strings 1 (heading), 2 to 6, 11 to 13. Tests: U3, U4, U5 (under All), U10, U21, U23 (rows for `stock10`, empty view), U31 heading half, U35 (a) rows and Reported count.
 
 **Files:** Modify `src/components/ServiceSection.tsx`, `src/components/MainContent.tsx` (units branch: heading, `SECTION_LABELS.units`, no shadow count); Test `src/components/__tests__/ServiceSection.groups.test.tsx`; update `ServiceSection.test.tsx`, `ServiceSection.orphan-dropins.test.tsx`, `SectionPlumbing.test.tsx` (`"Services (1 shadow override)"` becomes "Systemd units"), `src/__tests__/ScheduledTimer.unitLink.test.tsx` (heading "Services" becomes "Systemd units").
 
@@ -353,12 +354,12 @@ Spec: § 6.2, § 6.3, § 6.5, § 6.6 items 1 to 4, 6, 8 to 12, § 6.7, § 6.8, �
   - U3: group headers in order Default target, Services 11, Sockets 6, Timers 1, Other units 1, Reported, not carried 3; no Paths; planted draws Paths and the slice under Other units.
   - U4: in Services the row test ids follow code-point order; `service-item-getty@tty2.service` is not inside `service-group-getty@.service`, and its row's markup is equal with and without the template row in the input.
   - U5 under All: Services header text holds "5 need follow-up", Other units "1 needs follow-up", Sockets, Timers, Default target and Reported none.
-  - U10 (rendering): Default target group holds `default-target` with string 11 for an included, an excluded and a declined target, no kind chip.
+  - U10 (rendering): Default target group holds `default-target` with string 11 for an included, an excluded and a declined target, no kind chip; the declined target also shows its `declined.text` (the existing `declined-default-target` assertions in `ServiceSection.links.test.tsx` stay and pass). Its outcome label is Task 3.3's (U12).
   - U21: `dropin-orphan-group-sshd.service` is inside the Services group, after its last unit row, with "Other drop-in overrides" and "These overrides have no unit-state decision row."; the planted no-`kind` orphan is inside Other units.
   - Reported group: string 6 under its header; every reported row's existing test id.
   - U23 rows: `stock10` shows the Default target group and string 12; an empty view (no target) shows string 13, and "No service state changes detected." appears nowhere; `stock9` shows Services 1.
   - U31 heading: `MainContent` for `units` renders an `h2` "Systemd units" with no shadow count, against kitchen-sink (which has a full shadow). The section's container (`service-section`) has the accessible name "Systemd units" (string 1, its last use), since the per-group grids are now named by their titles.
-  - U35 (a), counting shown `role="row"` elements: two rows with `data-unit-key` equal to the `dup-link-demo.service` link key, one for `dup-link-demo-other.service`; two unit rows with `["unit_state","dup-state-demo.service"]`; two drop-in rows with the drop-in's key, both inside the first unit row's `service-group-` wrapper and none in the second's; Reported header count equals the shown reported rows.
+  - U35 (a), counting shown `role="row"` elements: two rows with `data-unit-key` equal to the `dup-link-demo.service` link key, one for `dup-link-demo-other.service`; two unit rows with `["unit_state","dup-state-demo.service"]`; two drop-in rows with the drop-in's key, both inside the first unit row's `service-group-` wrapper and none in the second's; Reported header count equals the shown reported rows. U35 (a)'s filter-count clause needs the bar and is Task 4.1's.
   - Every rendered row has `data-unit-key` equal to its record's row key (one assertion over all rows of planted).
 - [ ] **Step 2:** run; fails.
 - [ ] **Step 3: Implement.** Every row's React key and the key of the element wrapping a unit row's branch is its occurrence key (§ 8, `ServiceSection` bullet); keep `linkIdentity` only if a test id still needs it, otherwise delete it. Keep every test id, the toggles, guard keys and Space or `x` handling as today. The orphan block's heading and note and the Reported description must not add `role="row"` elements (U35 counts rows). Update the existing tests listed under Files whose assertions this changes, naming each in the commit body.
@@ -390,11 +391,11 @@ Spec: § 6.2, § 6.3, § 6.5, § 6.6 items 1 to 4, 6, 8 to 12, § 6.7, § 6.8, �
 
 ## Phase 4: filter, pinning and reveal (5 tasks, then the mid-way gate)
 
-Spec: § 6.4, § 6.6 items 5 and 7, § 6.9 rows 1 and 4, § 6.11 (routes, reveal steps 2 and 3, lookup), § 6.13 Announcements. Tests: U6, U7, U8 (a), (b), (d), (e) filter and reveal parts, U9, U15, U16, U23 (filter rows), U26 (filter and collapse cases), U27, U33, U25's "Go to owner" clause.
+Spec: § 6.4, § 6.6 items 5 and 7, § 6.9 rows 1 and 4, § 6.11 (routes, reveal steps 2 and 3, lookup), § 6.13 Announcements. Tests: U6, U7, U8 (a), (b), (d), (e) filter-change and bar clauses, U9, U15, U16, U23 (filter rows), U26 (`Also=` link filter and collapse cases, global search case reveal half), U27, U33, U35 (a) filter counts, U25's "Go to owner" clause.
 
 ### Task 4.1: The outcome filter (frontend lane, M)
 
-**Spec:** § 6.4 Values and counts, When it is drawn, disabled values, hint, What a value does, Persistence, Announcement; § 6.9 rows 1 and 4; § 6.13 The filter, Announcements; strings 7, 8, 9, 14, 19 to 22. Tests: U5 (no flag under a filter), U6, U7, U9, U23 (filter rows), U33.
+**Spec:** § 6.4 Values and counts, When it is drawn, disabled values, hint, What a value does, Persistence, Announcement; § 6.9 rows 1 and 4; § 6.13 The filter, Announcements; strings 7, 8, 9, 14, 19 to 22. Tests: U5 (no flag under a filter), U6, U7, U9, U23 (filter rows), U33, U35 (a) filter counts.
 
 **Files:** Create `src/components/UnitOutcomeFilter.tsx`; Modify `src/components/ServiceSection.tsx`; Test `src/components/__tests__/UnitOutcomeFilter.test.tsx`, `src/components/__tests__/ServiceSection.filter.test.tsx`.
 
@@ -404,7 +405,8 @@ Spec: § 6.4, § 6.6 items 5 and 7, § 6.9 rows 1 and 4, § 6.11 (routes, reveal
   - U6: no bar on `stock10` or `stock9`; bar on kitchen-sink with "All 23", "Needs follow-up 9", "Carried 14", "Excluded 0"; "Excluded" disabled; hint present; with no follow-up row (a kitchen-sink copy with every `declined` removed and one row excluded) the bar shows and the hint does not.
   - U7 render: clicking each value shows the rows Task 2.3's U7 test lists, groups with none not drawn.
   - U5: after selecting "Needs follow-up", no group header shows a follow-up flag.
-  - U9: unmount and remount gives "All"; a rerender with a new view keeps the selected value; a view in which follow-up and excluded both drop to 0 removes the bar and the filter reads "All" when the bar returns.
+  - U9: unmount and remount gives "All"; a rerender with a new view keeps the selected value; a view in which follow-up and excluded both drop to 0 removes the bar and the filter reads "All" when the bar returns. Selecting a value leaves `window.location.href` unchanged and adds no `localStorage` key (§ 6.4 Persistence).
+  - U35 (a) filter counts (`planted`): render `planted`, then a copy without the second `dup-link-demo.service` link record, then a copy without the second `dup-state-demo.service` `unit_states` record (both copies built in the test). Against `planted`'s bar, the first copy's All and Needs follow-up each read one lower and Carried and Excluded are unchanged; the second copy's All and Carried each read one lower and Needs follow-up is unchanged. So All and Needs follow-up count both link records, and All counts both unit records; a count keyed by row key fails.
   - U23 filter rows: `stock10` with `include: false` shows the bar with "All 1" and "Excluded 1" and string 12; `stock10` with planted's declined target shows "All 1", "Needs follow-up 1", the hint and string 12; a value that shows no row shows "No units match this filter." and a "Show all" link button that sets "All".
   - U33: before any change the live region exists and is empty; after selecting each value its text is the matching string 19 to 22 for the shown count, singular and plural (use `stock10` excluded for the singulars).
 - [ ] **Step 2:** run; fails. **Step 3:** implement. The bar sits between the heading and the first group. **Step 4:** pass; tsc; Vitest. **Commit** `feat(web): add the units outcome filter`.
@@ -413,14 +415,14 @@ Spec: § 6.4, § 6.6 items 5 and 7, § 6.9 rows 1 and 4, § 6.11 (routes, reveal
 
 ### Task 4.2: Pinning and focus after a toggle (frontend lane, M)
 
-**Spec:** § 6.4 pinning (every sentence); § 6.13 Focus after a toggle; § 12 third bullet (a `Set` of head occurrence keys). Tests: U8 (a), (b), (d), and (e) for the filter change and the bar ceasing to be drawn. U8 (c) and (e)'s query and reveal clauses are Task 5.1's.
+**Spec:** § 6.4 pinning (every sentence); § 6.13 Focus after a toggle; § 12 third bullet (a `Set` of head occurrence keys). Tests: U8 (a), (b), (d), and (e) for the filter change and the bar ceasing to be drawn. U8 (c), and (e)'s query-change clause and both of its reveal clauses, are Task 5.1's.
 
 **Files:** Modify `src/components/ServiceSection.tsx`; Test `src/components/__tests__/ServiceSection.pinning.test.tsx`.
 
-**Interfaces (Produces):** `pins: Set<OccurrenceKey>` in `ServiceSection`, added through `branchHeadOf` on every toggle the operator makes (click, Space, `x`), cleared on a filter value change and on unmount, filtered on each view to keys still present; `clearPins()` exposed internally for Tasks 4.3 and 5.1.
+**Interfaces (Produces):** `pins: Set<OccurrenceKey>` in `ServiceSection`, added through `branchHeadOf` on every toggle the operator makes (click, Space, `x`), cleared on a filter value change and on unmount, filtered on each view to keys still present; `clearPins()` exposed internally for Task 5.1, which clears pins when a reveal changes the filter or the query.
 
 - [ ] **Step 1: Failing tests first** (mock `applyOp` as the existing ServiceSection tests do):
-  - U8 (a): under "Needs follow-up", toggle `cups.service`; the mock returns kitchen-sink with `cups.service` `declined` cleared and `include: false`. The row stays in its place (same previous and next sibling), keeps focus, has no outcome label, and the counts read Needs follow-up 8 and Excluded 1.
+  - U8 (a): under "Needs follow-up", toggle `cups.service`; the mock returns kitchen-sink with `cups.service` `declined` cleared and `include: false`. The row stays in its place (same previous and next sibling), keeps focus, has no outcome label, and the counts read Needs follow-up 8 and Excluded 1. The Services header count equals the unit rows Services shows, the pinned `cups.service` among them; a further view in which another Services row's `declined` is cleared with no toggle on it (an Undo) lowers that count by one while `cups.service` stays shown (§ 6.4: a pinned row's group count updates from each view response).
   - U8 (b): planted under "Needs follow-up"; toggle the parent's excluded `[Install]` drop-in to included; the mock returns `loadPlantedAfterInclude()`. The parent's branch stays in place, the drop-in is included and focused, the parent shows no outcome label, the counts update.
   - U8 (d): rerender with a view in which a row's outcome changed and no toggle was made on its branch (an Undo): it follows the filter and leaves.
   - U8 (e), filter half: after (a), selecting "Carried" then "Needs follow-up" again drops the pin (`cups.service` no longer shown); a view in which the bar stops being drawn clears no pin.
@@ -433,18 +435,17 @@ Spec: § 6.4, § 6.6 items 5 and 7, § 6.9 rows 1 and 4, § 6.11 (routes, reveal
 
 ### Task 4.3: Reveal into the section (frontend lane, M)
 
-**Spec:** § 6.11 Routes (Scheduled Tasks, "Go to owner"), Which row an item id names, The reveal steps 2 and 3, Reveal lookup; § 6.2 collapse; § 8 `App.tsx`, `shadowOwner.ts`, `MainContent` (passing `revealItemId` and `onNavigateToItem`). Tests: U26 (filter and collapse cases, and the global search case with a filter and a collapsed group, driven through `handleNavigateFromSearch`), U27, U25's "Go to owner" clause.
+**Spec:** § 6.11 Routes (Scheduled Tasks, "Go to owner"), Which row an item id names, The reveal steps 2 and 3, Reveal lookup; § 6.2 collapse; § 8 `App.tsx`, `shadowOwner.ts`, `MainContent` (passing `revealItemId` and `onNavigateToItem`). Tests: U26's global search case, reveal half (a filter and a collapsed group, driven through `handleNavigateFromSearch`), U27, U25's "Go to owner" clause. Reveal steps 2 and 3 are also tested here by calling the navigation handler; U26's `Also=` cases go through the link, which exists from Task 4.4, and are Tasks 4.4's and 5.1's. U8 (e)'s "a reveal that changes the filter drops every pin" is Task 5.1's: under "All" with no query a pin changes nothing on screen, so the clause can be seen only with a query that survives the reveal.
 
 **Files:** Modify `src/App.tsx`, `src/components/MainContent.tsx`, `src/components/ServiceSection.tsx`, `src/components/shadowOwner.ts`; Test `src/__tests__/UnitsReveal.test.tsx` (mounts `App`), extend `src/__tests__/ScheduledTimer.unitLink.test.tsx`; update `src/components/__tests__/shadowOwner.test.ts` (target `itemId` becomes `["dropin","<path>"]`).
 
 **Interfaces (Consumes):** `rowKeyForItemId`, `locateRow`, `hiddenByFilter`. **(Produces):** `ServiceSection` props `revealItemId?: string` and `onNavigateToItem?: (sectionId: string, itemId: string) => void`; in `App.tsx`, `elementByUnitKey(key: RowKey): HTMLElement | null`, which walks `document.querySelectorAll("[data-unit-key]")` and compares `getAttribute("data-unit-key") === key`; the reveal effect uses it, and not `REVEAL_TESTID_PREFIXES`, when the navigation's section is `units`. `REVEAL_TESTID_PREFIXES` is unchanged.
 
 - [ ] **Step 1: Failing tests first:**
-  - U26 filter case: `App` on units with "Needs follow-up" selected; navigate (`handleNavigateFromSearch("units", "cups.socket")`, the call an `Also=` link will make): the filter reads "All", `service-item-cups.socket` is focused.
-  - U26 collapse case: collapse Sockets; navigate to `cups.socket`: Sockets is open, the row focused.
+  - Reveal step 2: `App` on units with "Needs follow-up" selected; navigate (`handleNavigateFromSearch("units", "cups.socket")`, the call an `Also=` link will make): the filter reads "All", `service-item-cups.socket` is focused.
+  - Reveal step 3: collapse Sockets; navigate to `cups.socket`: Sockets is open, the row focused.
   - U26 global search case, reveal half: a filter selected and the destination's group collapsed; navigate with the row key `["unit_state","cockpit.socket"]`, as a units search result will: shown and focused. Selecting the real result from the search box is Task 5.2's.
-  - Reveal clears pins when step 2 changes the filter.
-  - Lookup: a bare name resolves to the `unit_states` row even when a reported row of the same name exists (planted shared name); `["undetermined_install","demo.service"]` focuses that row and not `undetermined-install-demo.service`'s unit row; an id starting with `[` that does not parse focuses nothing and throws nothing.
+  - Lookup: a bare name resolves to the `unit_states` row even when a reported row of the same name exists (planted shared name); `["undetermined_install","demo.service"]` focuses that row and not `undetermined-install-demo.service`'s unit row, and the bare name `undetermined-install-demo.service` focuses `service-item-undetermined-install-demo.service` (U25's bare-name clauses); an id starting with `[` that does not parse focuses nothing and throws nothing.
   - U27 (extend the existing file): select a filter and collapse Timers in units; go to Scheduled Tasks; follow the timer row's unit link; the units section shows "All", every group open, the unit row focused.
   - U25 "Go to owner": on a shadowed config row, "Go to owner" focuses its drop-in row; `resolveShadowOwner` returns `itemId` `["dropin","<path>"]`.
   - Review focus 3: a `unit_states` row `backup\x2djob.timer`; navigating with the bare name and with its row key both focus it.
@@ -455,14 +456,15 @@ Spec: § 6.4, § 6.6 items 5 and 7, § 6.9 rows 1 and 4, § 6.11 (routes, reveal
 
 ### Task 4.4: `Also=` and configuration links (frontend lane, S)
 
-**Spec:** § 6.6 items 5 and 7; § 6.11 `Also=` route. Tests: U15, U16.
+**Spec:** § 6.6 items 5 and 7; § 6.11 `Also=` route. Tests: U15, U16, U26's `Also=` filter and collapse cases (through the link).
 
-**Files:** Modify `src/components/ServiceSection.tsx`, `src/components/MainContent.tsx` (pass the `config_files` paths); Test `src/components/__tests__/ServiceSection.navlinks.test.tsx`.
+**Files:** Modify `src/components/ServiceSection.tsx`, `src/components/MainContent.tsx` (pass the `config_files` paths); Test `src/components/__tests__/ServiceSection.navlinks.test.tsx`, extend `src/__tests__/UnitsReveal.test.tsx`.
 
 **Interfaces (Produces):** `ServiceSection` prop `configPaths: ReadonlySet<string>`.
 
 - [ ] **Step 1: Failing tests first:**
   - U15: on `cups.service`'s `Also=` line, `cups.socket` is an `<a href="#units:cups.socket">` and `cups.path` is `<code>`; the `links` word beside each is unchanged; clicking `cups.socket` calls `onNavigateToItem("units", "cups.socket")` and does not follow the hash; through `App` (in `UnitsReveal.test.tsx`), the click focuses `service-item-cups.socket`.
+  - U26 `Also=` cases, in `UnitsReveal.test.tsx` (mounts `App` on units); each first asserts `service-item-cups.socket` is hidden, then clicks the `cups.socket` link on `cups.service`'s `Also=` line with the user-event API. Filter case: with "Needs follow-up" selected, the click sets the filter to "All" and `service-item-cups.socket` is shown and focused. Collapse case: with Sockets collapsed, the click opens Sockets and the row is shown and focused.
   - U16: planted's row whose `required_config` path is in `configPaths` shows a link that calls `onNavigateToConfig(path)`; the other path is `<code>`; `data_paths` are `<code>`.
 - [ ] **Step 2:** run; fails. **Step 3:** implement. **Step 4:** pass; tsc; Vitest. **Commit** `feat(web): link Also= members and needed configuration to their rows`.
 
@@ -471,29 +473,29 @@ Spec: § 6.4, § 6.6 items 5 and 7, § 6.9 rows 1 and 4, § 6.11 (routes, reveal
 - [ ] Merge `main` into the branch if it moved; run every gate of the Verification convention except the Playwright rows (no P test exists yet). Commit nothing unless the merge needs a commit.
 - [ ] Request the implementation review below; fix rounds land as `fix(web): ...` commits on the branch.
 
-**Review gate A (mid-way):** the section renders by group with filter, pinning and reveal working, so a wrong foundation is caught before search and accessibility build on it. **In scope:** Tasks 1.2 to 4.4. Spec § 6.1 to § 6.9, § 6.11 (keys, occurrence keys, item ids, reveal steps 2 and 3, lookup, the Scheduled Tasks, `Also=` and "Go to owner" routes), § 6.14 (sidebar label and heading), § 9.1, § 10.1, the Rust assertion and re-recordings of § 10.2, and strings 1 (sidebar, heading), 2 to 23. Tests U1 to U7, U8 (a, b, d, e filter half), U9 to U23, U26 (filter and collapse cases), U27, U32 (structure half), U33, U35 (a), and U25's "Go to owner" clause. **Checks:** `unitOutcome.ts` holds every rule and no component re-derives one; occurrence keys are the React keys and the pin and focus keys, and never reach an id, URL, `data-unit-key` or test id; no selector is built from host data; the fleet view is untouched (`git diff main -- crates/web/ui/src/components/aggregate crates/web/src` is empty); every test id survives; the recorded fixtures hold nothing secret. **Gate commands:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D clippy::all`, `cargo test --workspace`, and in `crates/web/ui` `npx tsc --noEmit` and `npx vitest run`.
+**Review gate A (mid-way):** the section renders by group with filter, pinning and reveal working, so a wrong foundation is caught before search and accessibility build on it. **In scope:** Tasks 1.2 to 4.4, and only what they build. Spec § 6.1 to § 6.3; § 6.4 except what needs section search (pins cleared by a query change or by a reveal, counts unchanged by a query); § 6.5; § 6.6 items 1 to 12 and "Unchanged"; § 6.7; § 6.8; § 6.9 rows 1 to 4; § 6.11 (keys, occurrence keys, item ids, reveal steps 2 and 3, lookup, the Scheduled Tasks, `Also=` and "Go to owner" routes); § 6.14 (sidebar label and heading); § 9.1; § 10.1; the Rust assertion and re-recordings of § 10.2; strings 1 (sidebar, heading), 2 to 23. Tests U1 to U7, U8 (a, b, d, and e's filter-change and bar clauses), U9 to U23, U26 (`Also=` link filter and collapse cases, global search case reveal half), U27, U32 (structure half), U33, U35 (a), and U25's "Go to owner" clause. Not in scope here, and checked at gate B: § 6.6 item 13 (Task 7.1), § 6.9 row 5 and the search parts of § 6.4 (Task 5.1). **Checks:** `unitOutcome.ts` holds every rule and no component re-derives one; occurrence keys are the React keys and the pin and focus keys, and never reach an id, URL, `data-unit-key` or test id; no selector is built from host data; no fleet product code changed (`git diff main --stat -- crates/web/src crates/web/ui/src/components/AggregateApp.tsx crates/web/ui/src/components/aggregate ':(exclude)crates/web/ui/src/components/aggregate/__tests__/AggregateApp.integration.test.tsx'` prints nothing); every test id survives; the recorded fixtures hold nothing secret. **Gate commands:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D clippy::all`, `cargo test --workspace`, and in `crates/web/ui` `npx tsc --noEmit` and `npx vitest run`.
 
 ---
 
 ## Phase 5: search (2 tasks)
 
-Spec: § 6.12, § 6.11 reveal step 1 and the global search route, § 6.15 (search half), § 9.2. Tests: U8 (c) and (e) query and reveal halves, U24, U25, U26 (query cases), U31 global half, U34 search half, U35 (b).
+Spec: § 6.12, § 6.11 reveal step 1 and the global search route, § 6.15 (search half), § 9.2. Tests: U8 (c) and (e) query and reveal clauses, U24, U25, U26 (`Also=` link query cases, global search case from the box), U31 global half, U34 search half, U35 (b) and (c).
 
 ### Task 5.1: Section search in the units section (frontend lane, M)
 
-**Spec:** § 6.12 Section search; § 6.11 reveal step 1; § 6.4 pins cleared by a query change and by a reveal that changes the query; § 6.9 row 5; § 9.2. Tests: U24, U8 (c), U8 (e) query and reveal clauses, U26 query cases, U35 (b).
+**Spec:** § 6.12 Section search; § 6.11 reveal step 1; § 6.4 pins cleared by a query change and by a reveal that changes the query or the filter, and counts not affected by section search; § 6.9 row 5; § 9.2. Tests: U24, U8 (c), U8 (e) query-change and reveal clauses, U26 `Also=` link query cases, U35 (b) and (c).
 
 **Files:** Modify `src/components/MainContent.tsx`, `src/components/ServiceSection.tsx`; Test `src/__tests__/UnitsSectionSearch.test.tsx` (mounts `App`), extend `ServiceSection.pinning.test.tsx`, `src/__tests__/UnitsReveal.test.tsx`, `ServiceSection.groups.test.tsx`.
 
 **Interfaces (Produces):** `ServiceSection` props `filterText: string`, `onResultCount: (n: number) => void`, `onClearQuery: () => void` (supplied by `MainContent`, which owns the text), and an imperative `focusFirstRow()` reached the way `handleArrowDown` reaches other sections' first rows.
 
 - [ ] **Step 1: Failing tests first:**
-  - U24: `/` in units opens `SectionSearch`; a word of `cups.service`'s `declined.text` shows that row; `override.conf` shows `httpd.service` with both drop-ins; a word of a reported advisory line shows that row; the result count equals `shownRowCount`; a query with no match shows "No items match your search" with "Clear filter", and not string 14 even with a filter selected; ArrowDown from the box focuses the first shown row; query and filter combine (a query matching a carried row under "Needs follow-up" shows nothing but the empty state).
+  - U24: `/` in units opens `SectionSearch`; a word of `cups.service`'s `declined.text` shows that row; `override.conf` shows `httpd.service` with both drop-ins; a word of a reported advisory line shows that row; the result count equals `shownRowCount`; a query with no match shows "No items match your search" with "Clear filter", and not string 14 even with a filter selected; ArrowDown from the box focuses the first shown row; query and filter combine (a query matching a carried row under "Needs follow-up" shows nothing but the empty state); with a query that hides rows, the bar's four counts are the same as with no query (§ 6.4, counts not affected by section search).
   - U8 (c): a query that matches `cups.service` only through its `declined.text`; toggle it as in U8 (a); it stays shown.
-  - U8 (e): changing the query drops every pin; a reveal that clears the query drops every pin.
-  - U26 query cases: navigate to an `Also=` member the query hides: the query is cleared, the search box stays open, the row is focused; a query the member matches is kept.
+  - U8 (e): changing the query drops every pin; a reveal that clears the query drops every pin; a reveal that sets the filter to "All" and keeps the query drops every pin. For the last, the test builds its view from kitchen-sink so that, under "Needs follow-up" and a query, a pinned row stops matching the query after its toggle (as in U8 (c)) while the reveal's destination matches the query and is hidden by the filter; after the reveal the formerly pinned row is no longer shown.
+  - U26 `Also=` query cases, through the link as in Task 4.4: with a query that shows `cups.service` and hides `cups.socket` (asserted hidden first), clicking the `cups.socket` link clears the query, the search box stays open, and the row is shown and focused; with a query both match, the click keeps the query and focuses the row.
   - U35 (b) rendered: query `dup-link-demo` 3 link rows, then `dup-link-demo.service` 2, then `dup-link-demo` 3, then cleared the rows of U35 (a); at each query step the shown `role="row"` count, the Reported header count and the result count are equal. U35 (c): filter "Carried" shows both `dup-state-demo.service` unit rows and their two drop-in rows, Services header count equal to its shown unit rows; "All" restores U35 (a).
-- [ ] **Step 2:** run; fails. **Step 3: Implement.** `ServiceSection` decides reveal step 1 (`hiddenByQuery`, which knows the pins) and calls `onClearQuery`; steps 1, 2 and 3 are evaluated in order, each against the state the step before leaves. **Step 4:** pass; tsc; Vitest. **Commit** `feat(web): wire section search into the units section`.
+- [ ] **Step 2:** run; fails. **Step 3: Implement.** `ServiceSection` decides reveal step 1 (`hiddenByQuery`, which knows the pins) and calls `onClearQuery`; steps 1, 2 and 3 are evaluated in order, each against the state the step before leaves; a reveal whose step 1 or step 2 changes the query or the filter calls `clearPins()`. **Step 4:** pass; tsc; Vitest. **Commit** `feat(web): wire section search into the units section`.
 
 ### Task 5.2: Global search, single-host units index (frontend lane, L)
 
@@ -516,7 +518,7 @@ Spec: § 6.12, § 6.11 reveal step 1 and the global search route, § 6.15 (searc
 
 ## Phase 6: keyboard and accessibility (1 task)
 
-Spec: § 6.13 (one tab stop, row movement, toggle, focus after a toggle). Tests: U32 (movement, roving, header keys), U36. The grid structure half of U32 is Task 3.1's.
+Spec: § 6.13 (one tab stop, row movement, toggle, focus after a toggle). Tests: U32 (movement, roving), U36. U32's grid structure and header keys are Task 3.1's.
 
 ### Task 6.1: Roving tab stop and row movement (frontend lane, M)
 
@@ -535,7 +537,7 @@ Spec: § 6.13 (one tab stop, row movement, toggle, focus after a toggle). Tests:
 
 ## Phase 7: the remaining defect fixes (3 tasks)
 
-Spec: § 9.3, § 9.4, § 9.5, § 6.6 item 13, § 6.15 bullet 3. Tests: U28, U29, U30, U34 footer half. Defect 9.1 is Task 3.2's and 9.2 Task 5.1's (Readings 1). These three tasks touch none of the files Phases 4 to 6 change except `ServiceSection.tsx` for 9.3 and `AppShell.tsx` for 9.5, so a second implementer may run them beside Phases 4 to 6; with one implementer they run here.
+Spec: § 9.3, § 9.4, § 9.5, § 6.6 item 13, § 6.15 bullet 3. Tests: U28, U29, U30, U34 footer half. Defect 9.1 is Task 3.2's and 9.2 Task 5.1's (Readings 1). Task 7.2 edits only `Sidebar.tsx` and its test, which no task of Phases 4 to 6 edits, so a second implementer may run it beside those phases. Tasks 7.1 and 7.3 may not: 7.1 edits `ServiceSection.tsx`, and 7.3 edits `AppShell.tsx` and `AggregateApp.integration.test.tsx`, which Phases 4 to 6 also edit; they run after Phase 6. With one implementer all three run here.
 
 ### Task 7.1: The locked row's label (frontend lane, S)
 
@@ -618,7 +620,7 @@ Spec: § 10.1 (setup), § 10.3, § 10.2's e2e label paragraph. Tests: P1 to P8. 
 - [ ] Run every gate of the Verification convention, including both Playwright rows. Compare the whole e2e run with the baseline of Task 1.1: list each test that passes now and failed then, and each that fails now and passed then; the second list must be empty or explained by a named cause outside this branch.
 - [ ] Request the implementation review below; fix rounds land as commits on the branch, and the gate commands are run again after each.
 
-**Review gate B (final, whole branch):** **In scope:** every task, against the whole spec: § 2 to § 11, strings 1 to 25, defects § 9.1 to § 9.5, U1 to U36 and P1 to P8, the CHANGELOG and docs of § 11, and the skill updates. **Checks:** everything gate A checks, again over the whole branch; the single-host scoping of § 6.15 (`git diff main -- crates/web/ui/src/components/aggregate crates/web/src` empty; U34 green); the global search index skips the `units` reference section only in single-host mode; every units search result resolves; no new served string and no edit outside the files of the File structure table and the tests; the new P tests pass on their own with none skipped; no e2e test fails now that passed in the baseline. **Gate commands:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D clippy::all`, `cargo test --workspace`, and in `crates/web/ui` `npx tsc --noEmit`, `npx vitest run`, `npx playwright test e2e/systemd-units.spec.ts`, `npx playwright test`.
+**Review gate B (final, whole branch):** **In scope:** every task, against the whole spec: § 2 to § 11, strings 1 to 25, defects § 9.1 to § 9.5, U1 to U36 and P1 to P8, the CHANGELOG and docs of § 11, and the skill updates. That includes what gate A left out: § 6.4's search parts, § 6.6 item 13, § 6.9 row 5, § 6.12, § 6.13, § 6.15, and the clauses of U8, U26, U31, U32, U34 and U35 owned by Tasks 5.1 to 7.3. **Checks:** everything gate A checks, again over the whole branch; the single-host scoping of § 6.15 (no fleet product code changed: `git diff main --stat -- crates/web/src crates/web/ui/src/components/AggregateApp.tsx crates/web/ui/src/components/aggregate ':(exclude)crates/web/ui/src/components/aggregate/__tests__/AggregateApp.integration.test.tsx'` prints nothing; that test file changes only by U34's additions; U34 green); the global search index skips the `units` reference section only in single-host mode; every units search result resolves; no new served string; every path `git diff main --name-only` lists is in one of these sets: the files of the File structure table; tests and test data (`crates/web/tests/` and its snapshots, every `__tests__/` directory under `crates/web/ui/src` with its fixtures, `crates/web/ui/e2e/` specs, fixtures and `manifest.json`); and Task 9.1's `CHANGELOG.md`, `docs/how-to/review-and-refine.md`, `docs/reference/triage-classification.md`, `docs/reference/inspector-coverage.md`, `process-docs/skills/web-disposition-contract.md`, `process-docs/skills/e2e-fixtures-are-hand-maintained.md` and `process-docs/skills/index.md`; the new P tests pass on their own with none skipped; no e2e test fails now that passed in the baseline. **Gate commands:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D clippy::all`, `cargo test --workspace`, and in `crates/web/ui` `npx tsc --noEmit`, `npx vitest run`, `npx playwright test e2e/systemd-units.spec.ts`, `npx playwright test`.
 
 ### Task 9.3: Merge (project owner)
 
@@ -648,8 +650,8 @@ Task sizes: S is one short dispatch, M one full dispatch, L one dispatch at the 
 Where the plan reads the spec one way of two, or orders work the spec does not. None changes the design.
 
 1. **Defects 9.1 and 9.2 are not in the defect phase.** § 9.1's fix is § 6.9's empty states, built with the section's rendering (Task 3.2); § 9.2's fix is § 6.12's section search (Task 5.1), and § 12 says 9.2 needs § 6.12. Phase 7 holds the three fixes that stand alone (9.3, 9.4, 9.5). Otherwise the briefed order holds.
-2. **U32's grid structure lands with `UnitGroup`** (Task 3.1), the component that makes it; movement, roving and header keys are Task 6.1's. Building the grid wrong first and fixing it in Phase 6 would rework Task 3.2.
-3. **Test ids that span phases are split by what they need.** U8 (c) and (e)'s query and reveal clauses, and U26's query cases, need section search, which comes after the mid-way gate, so they are Task 5.1's; their filter and collapse halves are Phase 4's. U26's global search case is tested in 4.3 by sending the row key a units result will send, and completed in 5.2 by selecting the real result, which exists only from 5.2. U3, U4, U5, U20 and U21 are tested on the model in Phase 2 and rendered in Phase 3. U23's filter rows are Task 4.1's. U25's "Go to owner" clause is Task 4.3's (the `shadowOwner.ts` change); the rest is 5.2's. U31 splits heading (3.2) and search label (5.2); U34 search (5.2) and footer (7.3); U35 (a) is 3.2's, (b) and (c) 5.1's (with (b) also on the model in 2.3). Each id is complete once every listed task is.
+2. **U32's grid structure and header keys land with `UnitGroup`** (Task 3.1), the component that makes them; movement and roving are Task 6.1's. Building the grid wrong first and fixing it in Phase 6 would rework Task 3.2.
+3. **Test ids that span phases are split by what they need.** U8 (c) and (e)'s query and reveal clauses, and U26's query cases, need section search, which comes after the mid-way gate, so they are Task 5.1's; their filter and collapse halves are Phase 4's. U26's `Also=` cases go through a real click on the link, so the filter and collapse cases are Task 4.4's, the first task with the link, and the query cases 5.1's; Task 4.3 tests the reveal steps by calling the navigation handler, which is not U26's route. U26's global search case is tested in 4.3 by sending the row key a units result will send, and completed in 5.2 by selecting the real result, which exists only from 5.2. U8 (e)'s two reveal clauses are 5.1's even though 4.3 builds step 2: under "All" with no query a pin changes nothing on screen, so dropping it can be seen only with a query that survives the reveal. U3, U4, U5, U20 and U21 are tested on the model in Phase 2 and rendered in Phase 3. U23's filter rows are Task 4.1's. U25's "Go to owner" clause is Task 4.3's (the `shadowOwner.ts` change); the rest is 5.2's. U31 splits heading (3.2) and search label (5.2); U34 search (5.2) and footer (7.3). U35 (a)'s rows and Reported count are 3.2's and its filter counts 4.1's, the first task with the bar; (b) and (c) are 5.1's (with (b) also on the model in 2.3). Each id is complete once every listed task is; the table under Coverage, "Split test ids", lists every clause and its task.
 4. **Reveal step 1 is decided by `ServiceSection` and carried out by `MainContent`.** § 6.11 says `MainContent` clears the query when the destination's branch fails the match and is not pinned; the pins live in `ServiceSection` (§ 6.4, § 12). So `ServiceSection` decides (`hiddenByQuery`) and calls `onClearQuery`, which `MainContent` supplies; `MainContent` still owns and clears the text.
 5. **The reveal's steps are evaluated in order, each against the state the step before leaves.** Step 1 clears pins, so step 2 asks whether the filter hides the destination with no pins.
 6. **`planted.units.json` holds U8's second view under one extra top-level key, `u8_after_include`.** § 10.1 says the fixture "has the pair" without a format; one file keeps the pair beside the rows it changes. The loader strips the key.
@@ -659,6 +661,7 @@ Where the plan reads the spec one way of two, or orders work the spec does not. 
 10. **U35's result-count check applies where a query is active.** `resultCount` is shown only with a section query, and § 6.12 counts unit rows, the target, orphan drop-ins and reported rows, not nested drop-ins; at U35's query steps every shown row is a reported row, so the row count, the Reported header count and the result count are equal. At the unfiltered and "Carried" steps the plan checks the Reported and Services header counts against their shown rows, as U35 (a) and (c) name them.
 11. **Changelog timing.** `process-docs/changelog-policy.md` writes a feature branch's entry at merge time, so the entries are written in Task 9.1, just before the final gate, not task by task.
 12. **Collapse state is a `Record<GroupId, boolean>` in `ServiceSection`** and the filter, pins and tab stop beside it; `ServiceSection` stays mounted through filter, search and `Also=` reveals (§ 6.11), and unmounts on a section change, which resets all of them as § 6.2 and § 6.4 require.
+13. **§ 10.1's provenance header goes in `src/__tests__/fixtures/systemd-units/load.ts`.** § 10.1 asks "the test file's header" to record the inspectah commit and how `kitchen-sink.units.json` was taken; JSON holds no comment, and `load.ts` sits beside the fixtures and is the one file every test reads them through. Task 1.4 writes it from Task 1.3's commit body, which keeps the same record.
 
 ## Coverage
 
@@ -677,9 +680,9 @@ Where the plan reads the spec one way of two, or orders work the spec does not. 
 | § 6.1 outcome | 2.2 |
 | § 6.2 groups, order, sort, templates, nesting, orphans, collapse | 2.2 (model), 3.1 (collapse), 3.2 (render) |
 | § 6.3 group header | 3.1, 2.3 (count, flag), 3.2 |
-| § 6.4 filter: values, counts, drawn, disabled, hint, values' effect | 2.2, 2.3, 4.1 |
-| § 6.4 pinning | 2.3 (visibility), 4.2, 5.1 (query) |
-| § 6.4 persistence, announcement | 4.1 |
+| § 6.4 filter: values, counts, drawn, disabled, hint, values' effect | 2.2, 2.3, 4.1; 5.1 (counts not affected by section search) |
+| § 6.4 pinning | 2.3 (visibility), 4.2 (pin on toggle, filter change clears, group and filter counts update), 5.1 (query change clears, a reveal that changes the query or the filter clears) |
+| § 6.4 persistence (not in `localStorage` or the URL), announcement | 4.1 |
 | § 6.5 default target | 3.2, 3.3 (outcome label) |
 | § 6.6 items 1 to 4, 6, 8 to 12 | 3.3 (item 11 ordering also 2.2) |
 | § 6.6 items 5, 7 | 4.4 |
@@ -689,7 +692,7 @@ Where the plan reads the spec one way of two, or orders work the spec does not. 
 | § 6.8 orphan drop-ins | 2.2, 3.2 |
 | § 6.9 empty states | 3.2 (rows 1 to 3), 4.1 (row 1 bar cases, row 4), 5.1 (row 5) |
 | § 6.10 sketches | 3.2, 3.3, 4.1 (the rendered result is checked against them at gate A) |
-| § 6.11 routes | 4.3 (Scheduled Tasks, "Go to owner"), 4.4 (`Also=`), 5.2 (global search) |
+| § 6.11 routes | 4.3 (Scheduled Tasks, "Go to owner"), 4.4 (`Also=`; its query cases 5.1), 5.2 (global search) |
 | § 6.11 row keys, occurrence keys, item ids | 2.1 |
 | § 6.11 reveal steps 1, 2, 3 and lookup | 5.1 (step 1), 4.3 (steps 2, 3, lookup) |
 | § 6.12 section search | 2.3, 5.1 |
@@ -702,7 +705,7 @@ Where the plan reads the spec one way of two, or orders work the spec does not. 
 | § 8 components new and changed | File structure; 2.1 to 7.3 |
 | § 8 untouched | Global constraints; gates A and B |
 | § 9.1 to § 9.5 | 3.2, 5.1, 7.1, 7.2, 7.3 |
-| § 10.1 fixtures | 1.3 (recorded, stock), 1.4 (planted) |
+| § 10.1 fixtures | 1.3 (recorded, stock), 1.4 (planted; the provenance header in `load.ts`, Readings 13) |
 | § 10.2 Rust assertion, groups re-record | 1.2 |
 | § 10.2 e2e label specs | 8.1 |
 | § 10.3 setup | 8.1 |
@@ -740,18 +743,68 @@ String 1's accessible-name use: the section's container is labelled "Systemd uni
 | U5 | 2.2, 3.2, 4.1 | U23 | 3.2, 4.1 |
 | U6 | 4.1 | U24 | 2.3, 5.1 |
 | U7 | 2.3, 4.1 | U25 | 2.1, 2.3, 4.3, 5.2 |
-| U8 | 4.2 (a, b, d, e filter), 5.1 (c, e query and reveal) | U26 | 4.3 (filter, collapse, global search reveal half), 5.1 (query), 5.2 (global search from the box) |
+| U8 | 4.2, 5.1 | U26 | 4.3, 4.4, 5.1, 5.2 |
 | U9 | 4.1 | U27 | 4.3 |
-| U10 | 3.2 | U28 | 7.1 |
+| U10 | 3.2, 3.3 | U28 | 7.1 |
 | U11 | 3.3 | U29 | 7.2 |
 | U12 | 3.3 | U30 | 7.3 |
 | U13 | 3.3 | U31 | 3.2, 5.2 |
-| U14 | 3.3 | U32 | 3.1 (structure), 6.1 |
+| U14 | 3.3 | U32 | 3.1, 6.1 |
 | U15 | 4.4 | U33 | 4.1 |
-| U16 | 4.4 | U34 | 5.2 (search), 7.3 (footer) |
-| U17 | 3.3 | U35 | 2.3, 3.2 (a), 5.1 (b, c) |
+| U16 | 4.4 | U34 | 5.2, 7.3 |
+| U17 | 3.3 | U35 | 2.3, 3.2, 4.1, 5.1 |
 | U18 | 3.3 | U36 | 6.1 |
 | P1, P2, P4, P5 | 8.1 | P3 | 8.2 |
 | P6, P7, P8 | 8.3 | | |
+
+### Split test ids
+
+Every test id the table above gives more than one task, clause by clause as § 10.2 writes it. An id with one task owns all its clauses there.
+
+| Id | Clause | Task |
+|---|---|---|
+| U3 | Groups, order, counts, no Paths; planted's Paths and slice, on the model | 2.2 |
+| U3 | The same, rendered as headers | 3.2 |
+| U4 | Sort by name; template and instance as siblings, on the model | 2.2 |
+| U4 | Rendered: `getty@tty2.service` outside `service-group-getty@.service`, the same markup with and without the template | 3.2 |
+| U5 | Flag numbers and text, on the model | 2.2 |
+| U5 | Flags rendered under All | 3.2 |
+| U5 | No flag under a filter other than All | 4.1 |
+| U7 | What each value shows, on the model | 2.3 |
+| U7 | Rendered per value; groups with none not drawn | 4.1 |
+| U8 | (a) toggle under "Needs follow-up" keeps the row, focus and updates counts, the group count too | 4.2 |
+| U8 | (b) planted `[Install]` drop-in pair | 4.2 |
+| U8 | (c) query matching only through `declined.text` | 5.1 |
+| U8 | (d) an Undo follows the filter | 4.2 |
+| U8 | (e) a filter change drops pins; the bar ceasing to be drawn does not | 4.2 |
+| U8 | (e) a query change drops pins; a reveal that changes the query, or the filter, drops pins | 5.1 |
+| U10 | Explanation on included, excluded and declined targets; the declined target's `declined.text` | 3.2 |
+| U10 | The declined target's outcome label | 3.3 |
+| U20 | Order within a block; relation and cause labels for every value, on the model | 2.2 |
+| U20 | Rendered: adjacency, relation phrase, cause label, undetermined row | 3.3 |
+| U21 | Orphan placement, on the model | 2.2 |
+| U21 | Rendered under "Other drop-in overrides" in Services and Other units | 3.2 |
+| U23 | `stock10` string 12; empty view string 13, never the old sentence | 3.2 |
+| U23 | `stock10` draws no bar (with U6); excluded and declined target bar cases; a filter left empty shows string 14 and "Show all" | 4.1 |
+| U24 | Matching on `declined.text`, drop-in path and advisory text, on the model | 2.3 |
+| U24 | `/` opens search; result count; no-match `EmptyState`; ArrowDown; search and filter combine | 5.1 |
+| U25 | Row keys and item ids, prefixed name on the model | 2.1 |
+| U25 | Search text per record, shared name and three links on the model | 2.3 |
+| U25 | "Go to owner" focuses the drop-in; bare-name navigation to the shared name and to `undetermined-install-demo.service` | 4.3 |
+| U25 | Every result kind indexed by row key and reaching its row; reference section skipped; omitted unit found by its reason; shared name, prefixed name, three links and true duplicates as results | 5.2 |
+| U26 | Global search case, reveal half, by the row key a result sends | 4.3 |
+| U26 | `Also=` link: hidden by the filter; in a collapsed group | 4.4 |
+| U26 | `Also=` link: failing the query (cleared, box open); a matching query kept | 5.1 |
+| U26 | Global search case: the result selected from the box | 5.2 |
+| U31 | Heading "Systemd units", no shadow count | 3.2 |
+| U31 | Single-host results labelled "Systemd units" | 5.2 |
+| U32 | Structure: `aria-controls`, `aria-labelledby`, rowgroup; headers toggle on Enter and Space | 3.1 |
+| U32 | Movement, `g`/`G`, Space and `x`; roving tab stop after collapse, filter and query | 6.1 |
+| U34 | Fleet search result labelled "Services", navigates, no "Systemd units" | 5.2 |
+| U34 | Fleet footer keeps today's text | 7.3 |
+| U35 | (b) on the model | 2.3 |
+| U35 | (a) rows, nesting under the first occurrence, Reported header count | 3.2 |
+| U35 | (a) All and Needs follow-up count both link records; All counts both unit records | 4.1 |
+| U35 | (b) rendered, with Reported and result counts; (c) | 5.1 |
 
 **Not mapped to a task:** nothing in the spec. § 4 and § 5 describe today and the options considered; § 13 is empty; § 9.4's note on `kernel_boot` and `selinux` is out of scope by the spec's own words.
