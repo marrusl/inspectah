@@ -449,7 +449,7 @@ function unitStateFields(row: ServiceDecisionDto): (string | null | undefined)[]
 }
 
 /** An undetermined install's reason as its row shows it: `_` as a space. */
-function reasonWords(reason: string): string {
+export function reasonWords(reason: string): string {
   return reason.replace(/_/g, " ");
 }
 

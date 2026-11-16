@@ -38,6 +38,7 @@ import {
   locateRow,
   outcomeCounts,
   pinsInView,
+  reasonWords,
   rowKeyForItemId,
   showGroups,
   shownOutcomeRowCount,
@@ -718,7 +719,7 @@ function UndeterminedInstallRow({
         <div role="gridcell" className="inspectah-decision-row__name">
           <span>{r.unit}</span>
           <span className="inspectah-unit-kind" data-testid="undetermined-install-reason">
-            {r.reason.replace(/_/g, " ")}
+            {reasonWords(r.reason)}
           </span>
           {r.install_files.map((f) => (
             <code key={f} className="inspectah-unit-paths__path" data-testid="install-file">
