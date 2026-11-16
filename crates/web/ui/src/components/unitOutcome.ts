@@ -873,14 +873,6 @@ export function shownRowOrder(
   return order;
 }
 
-/** The first shown row in section order (§ 6.12, § 6.13); `null` when no row is shown. */
-export function firstShownRow(
-  shown: ShownGroup[],
-  collapsed: Readonly<Record<GroupId, boolean>>,
-): OccurrenceKey | null {
-  return shownRowOrder(shown, collapsed)[0] ?? null;
-}
-
 /**
  * The row holding the section's one tab stop (§ 6.13): the row that holds
  * it while that row is shown, else the first shown row; `null` when no row

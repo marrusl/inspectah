@@ -277,7 +277,8 @@ describe("ServiceSection: undetermined installs", () => {
     );
     const row = screen.getByTestId("undetermined-install-need.service");
     expect(within(row).queryByRole("checkbox")).not.toBeInTheDocument();
-    expect(row).toHaveAttribute("tabindex", "-1");
+    // The only row shown holds the section's one tab stop (§ 6.13).
+    expect(row).toHaveAttribute("tabindex", "0");
     expect(row).toHaveAttribute("data-reason", "upheld_by");
     expect(within(row).getByTestId("undetermined-install-reason")).toHaveTextContent(
       /^upheld by$/,

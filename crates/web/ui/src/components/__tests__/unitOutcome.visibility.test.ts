@@ -16,7 +16,6 @@ import {
   emptyStateFor,
   filterBarDrawn,
   filterBarPresentation,
-  firstShownRow,
   globalSearchText,
   groupUnits,
   hiddenByFilter,
@@ -713,34 +712,31 @@ const OPEN: Record<GroupId, boolean> = {
   reported: false,
 };
 
-describe("firstShownRow: the first shown row in section order (§ 6.12, § 6.13)", () => {
+/** The first shown row: what ArrowDown from the search box focuses (§ 6.12). */
+const firstOf = (shown: ShownGroup[], collapsed: Record<GroupId, boolean>) => shownRowOrder(shown, collapsed)[0];
+
+describe("shownRowOrder's first element: the first shown row in section order (§ 6.12, § 6.13)", () => {
   it("is the target under All", () => {
-    expect(firstShownRow(showGroups(ksGroups, state()), OPEN)).toBe(ksKeyed.defaultTarget!.occurrenceKey);
+    expect(firstOf(showGroups(ksGroups, state()), OPEN)).toBe(ksKeyed.defaultTarget!.occurrenceKey);
   });
 
   it("skips a collapsed group", () => {
     const shown = showGroups(ksGroups, state());
-    expect(firstShownRow(shown, { ...OPEN, default_target: true })).toBe(headKey(ksGroups, "bluetooth.service"));
+    expect(firstOf(shown, { ...OPEN, default_target: true })).toBe(headKey(ksGroups, "bluetooth.service"));
   });
 
   it("reaches an orphan drop-in and a reported row", () => {
     const orphan = sshdOrphan();
-    expect(firstShownRow(showGroups(ksGroups, state({ query: "sshd" })), OPEN)).toBe(orphan.occurrenceKey);
+    expect(firstOf(showGroups(ksGroups, state({ query: "sshd" })), OPEN)).toBe(orphan.occurrenceKey);
     const upheld = showGroups(ksGroups, state({ query: "restart loop" }));
     expect(upheld.map((g) => g.id)).toEqual(["reported"]);
-    expect(firstShownRow(upheld, OPEN)).toBe(upheld[0].reported[0].rows[0].occurrenceKey);
+    expect(firstOf(upheld, OPEN)).toBe(upheld[0].reported[0].rows[0].occurrenceKey);
   });
 
-  it("is null when no row is shown, or every shown group is collapsed", () => {
-    expect(firstShownRow([], OPEN)).toBeNull();
+  it("is absent when no row is shown, or every shown group is collapsed", () => {
+    expect(firstOf([], OPEN)).toBeUndefined();
     const shown = showGroups(ksGroups, state({ query: "restart loop" }));
-    expect(firstShownRow(shown, { ...OPEN, reported: true })).toBeNull();
-  });
-
-  it("is the first element of shownRowOrder", () => {
-    for (const shown of [showGroups(ksGroups, state()), showGroups(plantedGroups, state({ filter: "excluded" }))]) {
-      expect(firstShownRow(shown, OPEN)).toBe(shownRowOrder(shown, OPEN)[0]);
-    }
+    expect(firstOf(shown, { ...OPEN, reported: true })).toBeUndefined();
   });
 });
 

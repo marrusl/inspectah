@@ -234,7 +234,7 @@ describe("U8 (b): including a parent's [Install] drop-in under a filter", () => 
 
     respondWith(loadPlantedAfterInclude());
     const dropin = screen.getByTestId(`dropin-item-${INSTALL_DROPIN}`);
-    dropin.focus();
+    act(() => dropin.focus());
     await userEvent.keyboard("x");
     await waitFor(() => expect(count("Needs follow-up")).toBe(followUp - 1));
 
@@ -411,7 +411,7 @@ describe("U8: when a toggle pins", () => {
     renderUnits(loadUnitFields("kitchen-sink"));
     await select("Needs follow-up");
     const finish = respondLater(cupsExcluded());
-    screen.getByTestId("service-item-cups.service").focus();
+    act(() => screen.getByTestId("service-item-cups.service").focus());
     await userEvent.keyboard(" ");
     act(() => pushView(withUnit(loadUnitFields("kitchen-sink"), "cups.service", (r) => delete r.declined)));
     expect(screen.getByTestId("service-item-cups.service")).toBeInTheDocument();
@@ -466,7 +466,7 @@ describe("focus after a toggle (§ 6.13)", () => {
     await select("Needs follow-up");
     const finish = respondLater(cupsExcluded());
     const row = screen.getByTestId("service-item-cups.service");
-    row.focus();
+    act(() => row.focus());
     await userEvent.keyboard(" ");
     // A browser moves focus to the body when the focused control is
     // disabled while its request runs.
@@ -480,10 +480,10 @@ describe("focus after a toggle (§ 6.13)", () => {
     renderUnits(loadUnitFields("kitchen-sink"));
     await select("Needs follow-up");
     const finish = respondLater(cupsExcluded());
-    screen.getByTestId("service-item-cups.service").focus();
+    act(() => screen.getByTestId("service-item-cups.service").focus());
     await userEvent.keyboard(" ");
     const other = screen.getByTestId("service-item-iscsid.service");
-    other.focus();
+    act(() => other.focus());
     await finish();
     expect(document.activeElement).toBe(other);
   });
@@ -496,7 +496,7 @@ describe("a failed op", () => {
     let reject!: (err: Error) => void;
     mockFetch.mockReturnValueOnce(new Promise((_, r) => (reject = r)));
     const row = screen.getByTestId("service-item-cups.service");
-    row.focus();
+    act(() => row.focus());
     await userEvent.keyboard(" ");
     expect(mockFetch).toHaveBeenCalledTimes(1);
     // Focus lost while the op ran, as a browser may do.

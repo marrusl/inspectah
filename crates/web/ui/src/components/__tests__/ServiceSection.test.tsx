@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 // Rendered with a real pending guard, as its owner supplies one in the app.
 import { ServiceSectionWithGuard as ServiceSection } from "../../test-utils/withPendingGuard";
@@ -371,7 +371,7 @@ describe("ServiceSection parent-child cascade", () => {
     const dropinRow = screen.getByTestId(
       "dropin-item-/etc/systemd/system/httpd.service.d/override.conf",
     );
-    dropinRow.focus();
+    act(() => dropinRow.focus());
     await userEvent.keyboard(" ");
 
     // No fetch should have been called

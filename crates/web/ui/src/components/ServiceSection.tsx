@@ -32,7 +32,6 @@ import {
   causeLabel,
   emptyStateFor,
   filterBarDrawn,
-  firstShownRow,
   followUpFlagText,
   groupUnits,
   keyFields,
@@ -41,9 +40,12 @@ import {
   pinsInView,
   reasonWords,
   revealPlan,
+  rovingTabStop,
   rowKeyForItemId,
+  rowMoveTarget,
   showGroups,
   shownRowCount,
+  shownRowOrder,
   type FilterValue,
   type GroupId,
   type OccurrenceKey,
@@ -217,6 +219,11 @@ function describedBy(...ids: (string | false | null | undefined)[]): string | un
   return present.length > 0 ? present.join(" ") : undefined;
 }
 
+/** A row's `tabIndex`: 0 on the row holding the section's one tab stop (§ 6.13), else -1. */
+function tabIndexFor(key: OccurrenceKey, tabStop: OccurrenceKey | null): number {
+  return key === tabStop ? 0 : -1;
+}
+
 /** A declined row's outcome label in its badge cell (§ 6.6 item 2, § 7 string 15). */
 function OutcomeLabel({ declined }: { declined: DeclinedView }) {
   return (
@@ -295,6 +302,8 @@ interface DropInRowProps {
   isPending: boolean;
   onToggle: (path: string, currentInclude: boolean) => void;
   rowRef: RowRef;
+  /** 0 on the row holding the section's one tab stop (§ 6.13), else -1. */
+  tabIndex: number;
 }
 
 function DropInRow({
@@ -307,6 +316,7 @@ function DropInRow({
   isPending,
   onToggle,
   rowRef,
+  tabIndex,
 }: DropInRowProps) {
   const diBucket = extractTriageBucket(di.triage);
   const diBadge = badgeTextForTriage(di.triage);
@@ -343,7 +353,7 @@ function DropInRow({
       role="row"
       aria-label={di.path}
       aria-describedby={diLocked ? lockedReasonId : undefined}
-      tabIndex={diLocked ? 0 : -1}
+      tabIndex={tabIndex}
       data-testid={`dropin-item-${di.path}`}
       data-unit-key={unitKey}
       data-locked={diLocked ? "true" : undefined}
@@ -476,6 +486,7 @@ interface MountFindingRowProps {
   ordinal: number;
   onNavigateToConfig?: (path: string) => void;
   rowRef: RowRef;
+  tabIndex: number;
 }
 
 /**
@@ -484,7 +495,14 @@ interface MountFindingRowProps {
  * the export decides nothing here. The unit file is decided on its config
  * row, which `unit_file_path` names.
  */
-function MountFindingRow({ finding: f, unitKey, ordinal, onNavigateToConfig, rowRef }: MountFindingRowProps) {
+function MountFindingRow({
+  finding: f,
+  unitKey,
+  ordinal,
+  onNavigateToConfig,
+  rowRef,
+  tabIndex,
+}: MountFindingRowProps) {
   const advisoriesId = ownId(`mount-finding-advisories-${f.unit}`, ordinal, useId());
   const path = f.unit_file_path;
   return (
@@ -493,7 +511,7 @@ function MountFindingRow({ finding: f, unitKey, ordinal, onNavigateToConfig, row
       role="row"
       aria-label={f.unit}
       aria-describedby={describedBy(f.advisories.length > 0 && advisoriesId)}
-      tabIndex={-1}
+      tabIndex={tabIndex}
       data-testid={`mount-finding-${f.unit}`}
       data-unit-key={unitKey}
       className="inspectah-decision-row inspectah-mount-finding"
@@ -659,7 +677,17 @@ function AdvisoryLines({
  * its relation, its parent and the export's lines, as given. No toggle
  * and no keyboard action: the export decides nothing here.
  */
-function ManualLinkRow({ link, unitKey, rowRef }: { link: ManualLinkView; unitKey: RowKey; rowRef: RowRef }) {
+function ManualLinkRow({
+  link,
+  unitKey,
+  rowRef,
+  tabIndex,
+}: {
+  link: ManualLinkView;
+  unitKey: RowKey;
+  rowRef: RowRef;
+  tabIndex: number;
+}) {
   const baseId = useId();
   const advisoriesId = `${baseId}-advisories`;
   const notAppliedId = `${baseId}-not-applied`;
@@ -673,7 +701,7 @@ function ManualLinkRow({ link, unitKey, rowRef }: { link: ManualLinkView; unitKe
         link.advisories.length > 0 && advisoriesId,
         notApplied.length > 0 && notAppliedId,
       )}
-      tabIndex={-1}
+      tabIndex={tabIndex}
       data-testid={`manual-link-${linkIdentity(link)}`}
       data-unit-key={unitKey}
       data-cause={causeName(link.cause)}
@@ -718,10 +746,12 @@ function UndeterminedInstallRow({
   record: r,
   unitKey,
   rowRef,
+  tabIndex,
 }: {
   record: UndeterminedInstallView;
   unitKey: RowKey;
   rowRef: RowRef;
+  tabIndex: number;
 }) {
   const baseId = useId();
   const advisoriesId = `${baseId}-advisories`;
@@ -736,7 +766,7 @@ function UndeterminedInstallRow({
         r.advisories.length > 0 && advisoriesId,
         notApplied.length > 0 && notAppliedId,
       )}
-      tabIndex={-1}
+      tabIndex={tabIndex}
       data-testid={`undetermined-install-${r.unit}`}
       data-unit-key={unitKey}
       data-reason={r.reason}
@@ -780,20 +810,21 @@ interface DefaultTargetRowProps {
   isPending: boolean;
   onToggle: (currentInclude: boolean) => void;
   rowRef: RowRef;
+  tabIndex: number;
 }
 
 /**
  * The default target the export sets with `systemctl set-default`, and
  * its toggle. `declined` is the export's reason when it writes no line.
  */
-function DefaultTargetRow({ target: t, unitKey, isPending, onToggle, rowRef }: DefaultTargetRowProps) {
+function DefaultTargetRow({ target: t, unitKey, isPending, onToggle, rowRef, tabIndex }: DefaultTargetRowProps) {
   const declinedId = "declined-default-target";
   return (
     <div
       ref={rowRef}
       role="row"
       aria-label={t.target}
-      tabIndex={0}
+      tabIndex={tabIndex}
       data-testid="default-target"
       data-unit-key={unitKey}
       data-locked={t.locked ? "true" : undefined}
@@ -845,8 +876,8 @@ interface UnitBranchViewProps {
   branch: UnitBranch;
   /** The kind chip, shown only where the group mixes kinds (§ 6.6 item 10). */
   showKind: boolean;
-  /** Holds the section's one tab stop (today's rule: the first unit row, when there is no target). */
-  isTabStop: boolean;
+  /** The occurrence key of the row holding the section's one tab stop (§ 6.13). */
+  tabStop: OccurrenceKey | null;
   pendingKeys: ReadonlySet<string>;
   /** The toggled row's occurrence key comes first: it decides the pin (§ 6.4). */
   onToggleService: (toggled: OccurrenceKey, unit: string, currentInclude: boolean) => void;
@@ -863,7 +894,7 @@ interface UnitBranchViewProps {
 function UnitBranchView({
   branch,
   showKind,
-  isTabStop,
+  tabStop,
   pendingKeys,
   onToggleService,
   onToggleDropin,
@@ -912,7 +943,7 @@ function UnitBranchView({
         ref={rowRef(branch.head.occurrenceKey)}
         role="row"
         aria-label={svc.unit}
-        tabIndex={isTabStop ? 0 : -1}
+        tabIndex={tabIndexFor(branch.head.occurrenceKey, tabStop)}
         data-testid={`service-item-${svc.unit}`}
         data-unit-key={branch.head.rowKey}
         data-locked={svcLocked ? "true" : undefined}
@@ -1096,6 +1127,7 @@ function UnitBranchView({
           isPending={pendingKeys.has(dropinKey(di.record.data.path))}
           onToggle={(path, include) => onToggleDropin(di.occurrenceKey, path, include)}
           rowRef={rowRef(di.occurrenceKey)}
+          tabIndex={tabIndexFor(di.occurrenceKey, tabStop)}
         />
       ))}
     </div>
@@ -1107,10 +1139,12 @@ function ReportedRowView({
   row,
   onNavigateToConfig,
   rowRef,
+  tabIndex,
 }: {
   row: ReportedRow;
   onNavigateToConfig?: (path: string) => void;
   rowRef: RowRef;
+  tabIndex: number;
 }) {
   const { record } = row;
   switch (record.kind) {
@@ -1122,12 +1156,15 @@ function ReportedRowView({
           ordinal={row.ordinal}
           onNavigateToConfig={onNavigateToConfig}
           rowRef={rowRef}
+          tabIndex={tabIndex}
         />
       );
     case "manual_link":
-      return <ManualLinkRow link={record.data} unitKey={row.rowKey} rowRef={rowRef} />;
+      return <ManualLinkRow link={record.data} unitKey={row.rowKey} rowRef={rowRef} tabIndex={tabIndex} />;
     case "undetermined_install":
-      return <UndeterminedInstallRow record={record.data} unitKey={row.rowKey} rowRef={rowRef} />;
+      return (
+        <UndeterminedInstallRow record={record.data} unitKey={row.rowKey} rowRef={rowRef} tabIndex={tabIndex} />
+      );
   }
 }
 
@@ -1296,11 +1333,55 @@ export function ServiceSection({
     onClearQuery?.();
   }, [queryClearRequest, onClearQuery]);
 
+  // The shown rows in section order (§ 6.13): the tab stop, the movement
+  // keys and ArrowDown from the search box all read it.
+  const order = useMemo(() => shownRowOrder(shown, collapsed), [shown, collapsed]);
+
+  // The one tab stop, held by occurrence key (§ 6.13). When the row holding
+  // it stops being shown it moves to the first shown row, adjusted during
+  // render so no frame shows a hidden tab stop.
+  const [heldTabStop, setHeldTabStop] = useState<OccurrenceKey | null>(null);
+  const tabStop = rovingTabStop(order, heldTabStop);
+  if (tabStop !== heldTabStop) setHeldTabStop(tabStop);
+
+  /** The occurrence key of a row element, read from the ref map: keys are never in the DOM. */
+  const rowKeyOfElement = useCallback((el: EventTarget): OccurrenceKey | null => {
+    for (const [key, row] of rowElements.current) {
+      if (row === el) return key;
+    }
+    return null;
+  }, []);
+
+  // The tab stop follows focus onto a row, however it got there (a movement
+  // key, a click, or App's reveal).
+  const handleFocus = useCallback(
+    (e: React.FocusEvent) => {
+      const key = rowKeyOfElement(e.target);
+      if (key !== null) setHeldTabStop(key);
+    },
+    [rowKeyOfElement],
+  );
+
+  // Movement keys act on a focused row only, as in DecisionList: never from
+  // a checkbox, link or button inside one.
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const from = rowKeyOfElement(e.target);
+      if (from === null) return;
+      const to = rowMoveTarget(order, from, e.key);
+      if (to === null) return;
+      e.preventDefault();
+      setHeldTabStop(to);
+      rowElements.current.get(to)?.focus();
+    },
+    [rowKeyOfElement, order],
+  );
+
   // ArrowDown from the search box (§ 6.12): the first shown row, of any kind.
   const focusFirstRow = useCallback(() => {
-    const key = firstShownRow(shown, collapsed);
-    if (key !== null) rowElements.current.get(key)?.focus();
-  }, [shown, collapsed]);
+    const key = order[0];
+    if (key !== undefined) rowElements.current.get(key)?.focus();
+  }, [order]);
   useLayoutEffect(() => {
     if (!registerFocusFirstRow) return;
     registerFocusFirstRow(focusFirstRow);
@@ -1366,12 +1447,6 @@ export function ServiceSection({
     [sendInclude],
   );
 
-  // Today's tab stop: the target, else the first shown unit row.
-  const targetShown = shown.some((g) => g.target);
-  const tabStop = targetShown
-    ? undefined
-    : shown.find((g) => g.branches.length > 0)?.branches[0].head.occurrenceKey;
-
   // § 6.9, decided by emptyStateFor.
   const emptyState = emptyStateFor(keyed, filter, filterText, shown);
 
@@ -1381,6 +1456,8 @@ export function ServiceSection({
       role="region"
       aria-label={SECTION_NAME}
       data-testid="service-section"
+      onFocus={handleFocus}
+      onKeyDown={handleKeyDown}
     >
       {barDrawn && (
         <UnitOutcomeFilter
@@ -1429,6 +1506,7 @@ export function ServiceSection({
               isPending={pendingKeys.has(DEFAULT_TARGET_KEY)}
               onToggle={(include) => handleToggleDefaultTarget(group.target!.occurrenceKey, include)}
               rowRef={rowRef(group.target.occurrenceKey)}
+              tabIndex={tabIndexFor(group.target.occurrenceKey, tabStop)}
             />
           )}
 
@@ -1437,7 +1515,7 @@ export function ServiceSection({
               key={branch.head.occurrenceKey}
               branch={branch}
               showKind={group.id === "other_units"}
-              isTabStop={branch.head.occurrenceKey === tabStop}
+              tabStop={tabStop}
               pendingKeys={pendingKeys}
               onToggleService={handleToggleService}
               onToggleDropin={handleToggleDropin}
@@ -1478,6 +1556,7 @@ export function ServiceSection({
                       isPending={pendingKeys.has(dropinKey(di.record.data.path))}
                       onToggle={(path, include) => handleToggleDropin(di.occurrenceKey, path, include)}
                       rowRef={rowRef(di.occurrenceKey)}
+                      tabIndex={tabIndexFor(di.occurrenceKey, tabStop)}
                     />
                   ))}
                 </div>
@@ -1493,6 +1572,7 @@ export function ServiceSection({
                 row={row}
                 onNavigateToConfig={onNavigateToConfig}
                 rowRef={rowRef(row.occurrenceKey)}
+                tabIndex={tabIndexFor(row.occurrenceKey, tabStop)}
               />
             ))}
         </UnitGroup>
