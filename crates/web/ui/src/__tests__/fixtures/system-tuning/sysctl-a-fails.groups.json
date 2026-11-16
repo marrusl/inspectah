@@ -45,7 +45,7 @@
       {
         "id": "units",
         "is_triage": true,
-        "label": "Services"
+        "label": "Systemd units"
       },
       {
         "id": "scheduled_tasks",

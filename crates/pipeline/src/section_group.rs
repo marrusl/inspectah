@@ -147,7 +147,7 @@ impl SectionGroup {
             Self::Services => &[
                 SectionMeta {
                     id: "units",
-                    label: "Services",
+                    label: "Systemd units",
                     is_triage: true,
                 },
                 SectionMeta {
@@ -218,6 +218,19 @@ mod tests {
         for group in SectionGroup::all_in_order() {
             assert!(!group.label().is_empty());
         }
+    }
+
+    /// The `units` section's sidebar label is "Systemd units", and the
+    /// section stays in the services and scheduling group.
+    #[test]
+    fn units_section_is_labelled_systemd_units() {
+        let (group, meta) = SectionGroup::all_in_order()
+            .iter()
+            .flat_map(|g| g.member_sections().iter().map(move |s| (g, s)))
+            .find(|(_, s)| s.id == "units")
+            .expect("a `units` section exists in some group");
+        assert_eq!(meta.label, "Systemd units");
+        assert_eq!(group.slug(), "services-scheduling");
     }
 
     #[test]
