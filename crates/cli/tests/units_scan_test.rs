@@ -12555,6 +12555,43 @@ fn t29_an_unredacted_or_flagged_configuration_is_carried_with_a_note() {
     }
 }
 
+/// T29's notes (§ 10.8): only a scan taken with `--no-redaction` (`Raw`)
+/// gets the unredacted note. A `SensitiveRetained` snapshot ran the
+/// redaction pass, so the same carried instance gets no note. `Raw` is the
+/// control.
+#[test]
+fn t29_only_a_raw_scan_gets_the_unredacted_note() {
+    use inspectah_core::types::redaction::RedactionState;
+
+    let host = || {
+        instance_host("wireguard-tools", "wg-quick@.service", WG_QUICK, WG0)
+            .file(WG0_CONF, "[Interface]\nAddress = 10.0.0.1/24\n")
+    };
+    let with_state = |state| {
+        let mut snap = scan_unredacted(host());
+        snap.redaction_state = Some(state);
+        snap
+    };
+
+    let raw = with_state(RedactionState::Raw);
+    assert_instance_carried(&raw, WG0, "raw");
+    assert!(
+        unit_row(&raw, WG0)
+            .attention_reason
+            .is_some_and(|note| note.contains("--no-redaction")),
+        "the control gets the note"
+    );
+
+    let retained = with_state(RedactionState::SensitiveRetained {
+        redacted_by: "inspectah".into(),
+        config_hash: "sha256:0000".into(),
+        unresolved_count: 0,
+        unresolved_hints: Vec::new(),
+    });
+    assert_instance_carried(&retained, WG0, "sensitive retained");
+    assert_eq!(unit_row(&retained, WG0).attention_reason, None);
+}
+
 // ---------------------------------------------------------------------
 // § 10.2 rule 7, `Also=` members, on a single host (T25 (a) to (h) and
 // (k), T31's additive row with a member, T39's owner cases).
