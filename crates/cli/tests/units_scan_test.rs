@@ -10207,7 +10207,8 @@ fn t_reads_host(service: &str, files: &[(&str, &str)]) -> UnitHost {
     host
 }
 
-/// T44: a quoted path holding a space is one path.
+/// T44: a quoted path holding a space is one path, with `=` or a space
+/// before the quote.
 /// Rule 6 through the scan, with a command line read as systemd reads it:
 /// the quoted and unquoted forms of one configuration argument record the
 /// same path, and so do a quoted path holding a space and a path holding
@@ -10234,6 +10235,10 @@ fn a_quoted_configuration_argument_is_checked_through_the_scan() {
         (
             "ExecStart=/usr/bin/t /etc/t:secrets/%i.conf",
             "/etc/t:secrets/site.conf",
+        ),
+        (
+            "ExecStart=/usr/bin/t --config=\"/etc/t sites/%i.conf\"",
+            "/etc/t sites/site.conf",
         ),
     ] {
         let missing = scan(t_reads_host(service, &[]));
@@ -10372,7 +10377,8 @@ fn needs_evidence_omitted(unit: &str, path: &str) -> String {
     )
 }
 
-/// T44: a reset drop-in in `install_drop_ins`, excluded or under `/run`.
+/// T44: a reset drop-in in `install_drop_ins`, excluded or under `/run`, and
+/// one that also holds `[Install]`, which keeps `InstallEvidenceChanged`.
 /// Rule 5 for what an instance reads, through the scan: the template
 /// requires `/etc/t/old/%i.env` and a drop-in resets `EnvironmentFile=`.
 /// With the reset drop-in under `/etc` and included, nothing is required
@@ -10433,6 +10439,105 @@ fn a_reset_drop_in_the_export_does_not_carry_omits_the_enable() {
         UNIT,
         &needs_evidence_omitted(UNIT, RUN_RESET),
         "InstanceNeedsEvidenceChanged",
+    );
+
+    // The same reset in a drop-in that also holds `[Install]`: it is an
+    // install file, so excluding it keeps `InstallEvidenceChanged`.
+    let with_install = scan(t_reads_host(
+        service,
+        &[(
+            DROP_IN,
+            "[Service]\nEnvironmentFile=\n\n[Install]\nWantedBy=multi-user.target\n",
+        )],
+    ));
+    let row = change(&with_install, UNIT);
+    assert!(row.required_config.is_empty());
+    assert_eq!(row.install_drop_ins, [DROP_IN]);
+    assert_instance_carried(&with_install, UNIT, "the reset with [Install] included");
+    let evidence = evidence_declined(UNIT, DROP_IN);
+    let excluded = (drop_in_item(DROP_IN), false);
+    let containerfile = containerfile_in(&exported_after(
+        &with_install,
+        std::slice::from_ref(&excluded),
+    ));
+    assert_eq!(
+        omitted(&containerfile, UNIT),
+        Some(format!("# Omitted: {}", evidence.text).as_str()),
+        "{containerfile}"
+    );
+    assert!(
+        in_no_systemctl_instruction(&containerfile, UNIT),
+        "{containerfile}"
+    );
+    assert_eq!(
+        declined_in(
+            &session_after(&with_install, std::slice::from_ref(&excluded)),
+            UNIT
+        ),
+        Some(evidence)
+    );
+    let restored = containerfile_in(&exported_after(
+        &with_install,
+        &[excluded.clone(), (excluded.0.clone(), true)],
+    ));
+    assert!(acts(&restored, "enable", UNIT), "{restored}");
+}
+
+/// T44: a runtime drop-in that cannot be read, through the scan. A
+/// type-wide drop-in under `/run` that is not text leaves what the
+/// instance reads unknown: the row keeps its state change with
+/// `needs_unknown` naming the file, the Units section degrades naming it, a
+/// warning names the unit and the file, and the enable is omitted as
+/// `InstanceNeedsUnknown` on both routes and on the refine row. Control:
+/// the same drop-in readable, the enable is carried.
+#[test]
+fn an_unreadable_runtime_drop_in_omits_the_enable_through_the_scan() {
+    const UNIT: &str = "t@site.service";
+    const RUN_DROP_IN: &str = "/run/systemd/system/service.d/50-env.conf";
+    let service = "ExecStart=/usr/bin/t %i";
+
+    let control = scan(t_reads_host(
+        service,
+        &[(RUN_DROP_IN, "[Service]\nNice=5\n")],
+    ));
+    assert_eq!(change(&control, UNIT).needs_unknown, None);
+    assert_instance_carried(&control, UNIT, "readable");
+
+    let snap =
+        scan(t_reads_host(service, &[]).file_error(RUN_DROP_IN, std::io::ErrorKind::InvalidData));
+    assert_eq!(changes_named(&snap, UNIT), 1);
+    assert_eq!(
+        serde_json::to_value(change(&snap, UNIT)).expect("the row serializes")["needs_unknown"],
+        serde_json::json!({"cause": "unreadable", "path": RUN_DROP_IN})
+    );
+    assert!(
+        snap.warnings.iter().any(|w| w.inspector == "Units"
+            && w.message.starts_with("degraded: ")
+            && w.message.contains(RUN_DROP_IN)),
+        "{:?}",
+        snap.warnings
+    );
+    assert!(
+        snap.warnings.iter().any(|w| w.message.contains(UNIT)
+            && w.message.contains(&format!(
+                "{RUN_DROP_IN}, a drop-in directory or drop-in systemd reads for the instance, \
+                 cannot be read"
+            ))
+            && w.message
+                .ends_with("so what the instance reads is unknown and its enable is not carried")
+            && w.extra.get("path") == Some(&serde_json::json!(RUN_DROP_IN))),
+        "{:?}",
+        snap.warnings
+    );
+    assert_instance_omitted(
+        &snap,
+        UNIT,
+        &format!(
+            "# Omitted: {UNIT} ({RUN_DROP_IN}, a drop-in directory or drop-in systemd reads for \
+             the instance, could not be read on the source host, so what the instance reads is \
+             unknown and its enable is not carried)"
+        ),
+        "InstanceNeedsUnknown",
     );
 }
 
@@ -10830,8 +10935,9 @@ fn a_configuration_path_under_e_gates_the_enable() {
 /// The unknown-needs warning names the unit, the setting and the file it
 /// is in, with its line, and never the value, which can hold a credential
 /// the redaction pass never sees in a warning. A command line holding a
-/// token and a path inspectah cannot expand (`%h`) declines the enable,
-/// and the token is in no exported artifact: not in the snapshot or its
+/// token and a path inspectah cannot expand (`%h`) records `needs_unknown`
+/// and declines the enable, with the exact `# Omitted:` line on both routes
+/// and the refine row, and the token is in no exported artifact: not in the snapshot or its
 /// warnings, not in any file either route writes (the snapshot JSON, the
 /// Containerfile, the scan's README, refine's audit report and the rest),
 /// and not in refine's view or
@@ -10843,14 +10949,25 @@ fn an_uninterpretable_value_is_reported_without_its_value() {
     let service = format!("ExecStart=/usr/bin/t --token={SENTINEL} --config=%h/t/%i.conf");
     let snap = scan(t_reads_host(&service, &[]));
     assert_eq!(changes_named(&snap, UNIT), 1);
-    for (route, containerfile) in both_routes(&snap) {
-        assert!(
-            omitted(&containerfile, UNIT).is_some_and(|line| line.contains(&format!(
-                "its ExecStart= setting in {T_TEMPLATE_PATH} (line 2)"
-            ))),
-            "{route}:\n{containerfile}"
-        );
-    }
+    assert_eq!(
+        serde_json::to_value(change(&snap, UNIT)).expect("the row serializes")["needs_unknown"],
+        serde_json::json!({
+            "cause": "uninterpretable",
+            "key": "ExecStart",
+            "path": T_TEMPLATE_PATH,
+            "line": 2,
+        })
+    );
+    assert_instance_omitted(
+        &snap,
+        UNIT,
+        &format!(
+            "# Omitted: {UNIT} (its ExecStart= setting in {T_TEMPLATE_PATH} (line 2) names a \
+             path for the instance that inspectah cannot read as systemd does, so what the \
+             instance reads is unknown and its enable is not carried)"
+        ),
+        "InstanceNeedsUnknown",
+    );
     let warning = snap
         .warnings
         .iter()
@@ -14387,8 +14504,9 @@ fn link_warning_of(snap: &InspectionSnapshot, cause: &str) -> (String, serde_jso
 /// A target unit file, for a parent a link test needs to load.
 const TARGET_UNIT: &str = "[Unit]\nDescription=Test target\n";
 
-/// T43: the template link with `starts`, `instance_filled`, `template_alias`, `.requires` and
-/// `.upholds` links, and seven masked units.
+/// T43: the template link with `starts`, `instance_filled` (its links too),
+/// `template_alias`, `.requires` and `.upholds` links, and seven masked
+/// units (every link compared).
 /// The branches of the unreported-link warnings beyond the § 7.3 cases:
 /// a template linked under a plain parent with a unit file of its own
 /// name, which starts the instance named for the parent, against one
@@ -14476,8 +14594,18 @@ fn units_unreported_link_warnings_cover_every_branch() {
                 &vendor("bar@.service"),
             ),
     );
+    let (message, links) = link_warning_of(&filled, "instance_filled");
     assert_eq!(
-        link_warning_of(&filled, "instance_filled").0,
+        links,
+        serde_json::json!([
+            {"path": etc("ali.target.wants/bar@.service"), "unit": "bar@.service"},
+            {"path": etc("foo@.target.wants/bar@.service"), "unit": "bar@.service"},
+            {"path": etc("foo@a.target.wants/bar@.service"), "unit": "bar@.service"},
+            {"path": etc("gone.target.wants/bar@.service"), "unit": "bar@.service"},
+        ])
+    );
+    assert_eq!(
+        message,
         format!(
             "4 links are not reported or carried: for each, its unit is a template, and the \
              scan does not read links that systemd fills in with an instance name. The links: \
@@ -14628,11 +14756,21 @@ fn units_unreported_link_warnings_cover_every_branch() {
             shown.join("; ")
         )
     );
-    assert_eq!(links.as_array().map(Vec::len), Some(7));
+    let expected: Vec<serde_json::Value> = names
+        .iter()
+        .map(|name| {
+            serde_json::json!({
+                "path": etc(&format!("multi-user.target.wants/{name}")),
+                "unit": name,
+            })
+        })
+        .collect();
+    assert_eq!(links, serde_json::Value::Array(expected));
 }
 
-/// T43: `not_read`, `masked`, `refused`, `alias` and `dangling`, the dangling instance and `static`
-/// links, two masked units, and the `StaticUnit` control.
+/// T43: `not_read`, `masked`, `refused`, `alias` and `dangling` (its cause and
+/// fields too), the dangling instance and `static` links, two masked units,
+/// and the `StaticUnit` control.
 /// § 7.3's units that a link under `/etc` names and the listing does not
 /// print as a unit this scan reads, through the scan. None of these links
 /// is reported as a `ManualLink` or carried, and each that no other warning
@@ -14781,6 +14919,25 @@ fn units_an_etc_link_names_that_the_listing_does_not_print() {
         // Not a read failure: the section is not degraded.
         assert_eq!(snap.completeness, Completeness::Complete, "{label}");
     }
+
+    // The dangling link's warning by its cause, with its text and fields.
+    let dangling = scan(
+        host()
+            .preset("disable *")
+            .link(&wants("gone.service"), &vendor("gone.service")),
+    );
+    assert_eq!(
+        link_warning_of(&dangling, "dangling"),
+        (
+            format!(
+                "link {} (gone.service) is not reported or carried: there is no unit file of \
+                 its name under /etc/systemd/system or /usr/lib/systemd/system, so the link \
+                 points at nothing",
+                wants("gone.service")
+            ),
+            serde_json::json!([{"path": wants("gone.service"), "unit": "gone.service"}])
+        )
+    );
 
     // Many links of one kind are one warning listing every link, with the
     // path and unit of each among its fields.
