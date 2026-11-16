@@ -13539,6 +13539,178 @@ fn t26_a_shadowed_default_target_whose_shadow_is_excluded_names_it() {
     }
 }
 
+/// `snap` with the first drop-in row at `path` included, as the scan
+/// export of an aggregate reads an operator's include.
+fn with_first_drop_in_included(snap: &InspectionSnapshot, path: &str) -> InspectionSnapshot {
+    let mut snap = snap.clone();
+    snap.units
+        .as_mut()
+        .expect("a units section")
+        .drop_ins
+        .iter_mut()
+        .find(|d| d.path == path)
+        .unwrap_or_else(|| panic!("no drop-in row at {path}"))
+        .disposition = FindingKind::included();
+    snap
+}
+
+/// The default target's decline as `session`'s view holds it.
+fn default_target_declined(
+    session: &RefineSession,
+) -> Option<inspectah_refine::projection::DeclinedView> {
+    session
+        .decisions()
+        .default_target
+        .clone()
+        .and_then(|v| v.declined)
+}
+
+/// T26 on a fleet aggregate: `host-a` sets the package's
+/// `graphical.target`, `host-b` a full replacement of it under `/etc`.
+/// The aggregate keeps `host-a`'s `Vendor` target and sets it while the
+/// replacement is not in the export. With the replacement included, the
+/// image would load that file for the name, so the target is omitted with
+/// a reason that names the file and says what the image would set, not
+/// the `[Install]` text `set-default` never reads. The same line on the
+/// scan export and the refine export, and the same text in refine's view.
+#[test]
+fn t26_a_vendor_default_target_with_a_file_staged_at_its_name_names_it() {
+    const SHADOW: &str = "/etc/systemd/system/graphical.target";
+    const VENDOR: &str = "/usr/lib/systemd/system/graphical.target";
+    let merged = merged(
+        named(target_host(Some(VENDOR)), "host-a"),
+        named(
+            target_host(Some(SHADOW)).etc_unit(
+                "graphical.target",
+                "[Unit]\nDescription=Graphical, edited\n",
+            ),
+            "host-b",
+        ),
+    );
+    let recorded = merged
+        .units
+        .as_ref()
+        .and_then(|u| u.default_target.as_ref())
+        .expect("a default target");
+    assert!(
+        matches!(recorded.target.fragment(), UnitFragment::Vendor { .. }),
+        "host-a's Vendor target: {:?}",
+        recorded.target.fragment()
+    );
+    assert!(recorded.disposition.is_included(), "both hosts set it");
+    for (route, containerfile) in both_routes(&merged) {
+        assert!(
+            containerfile
+                .lines()
+                .any(|l| l == set_default_line("graphical.target")),
+            "{route}:\n{containerfile}"
+        );
+    }
+
+    let text = format!(
+        "graphical.target (the export carries a unit file at {SHADOW}, which is not the file \
+         recorded for it, so the image would set that file as the default target instead)"
+    );
+    let line = format!("# Omitted: {text}");
+    let refine = session_after(&merged, &[(drop_in_item(SHADOW), true)]);
+    assert_eq!(
+        default_target_declined(&refine),
+        Some(inspectah_refine::projection::DeclinedView {
+            renders: inspectah_refine::projection::DeclinedRenders::Omitted,
+            reason: "DefaultTargetFileStaged".into(),
+            text: text.clone(),
+        })
+    );
+    for (route, containerfile) in [
+        (
+            "scan",
+            containerfile_in(&render_export(&with_first_drop_in_included(
+                &merged, SHADOW,
+            ))),
+        ),
+        ("refine", containerfile_in(&export_session(&refine))),
+    ] {
+        assert!(
+            !containerfile.contains("set-default"),
+            "{route}:\n{containerfile}"
+        );
+        assert_eq!(
+            omitted(&containerfile, "graphical.target"),
+            Some(line.as_str()),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
+/// T26 on a fleet aggregate: both hosts set a full replacement of
+/// `graphical.target` under `/etc`, with different content. With a
+/// replacement included, the image would set one host's file for every
+/// host, so the target is omitted with a reason that says so, not the
+/// `[Install]` text `set-default` never reads. The same line on the scan
+/// export and the refine export, and the same text in refine's view.
+#[test]
+fn t26_a_shadowed_default_target_with_two_variants_says_so() {
+    const SHADOW: &str = "/etc/systemd/system/graphical.target";
+    let host = |hostname: &str, description: &str| {
+        named(
+            target_host(Some(SHADOW)).etc_unit(
+                "graphical.target",
+                &format!("[Unit]\nDescription={description}\n"),
+            ),
+            hostname,
+        )
+    };
+    let merged = merged(
+        host("host-a", "Graphical, a"),
+        host("host-b", "Graphical, b"),
+    );
+    let recorded = merged
+        .units
+        .as_ref()
+        .and_then(|u| u.default_target.as_ref())
+        .expect("a default target");
+    assert!(
+        matches!(recorded.target.fragment(), UnitFragment::Shadowed { .. }),
+        "a Shadowed target: {:?}",
+        recorded.target.fragment()
+    );
+    assert!(recorded.disposition.is_included(), "both hosts set it");
+
+    let text = format!(
+        "graphical.target (the source hosts' files for it at {SHADOW} differ, so the image \
+         would set one host's file as the default target on every host)"
+    );
+    let line = format!("# Omitted: {text}");
+    let refine = session_after(&merged, &[(drop_in_item(SHADOW), true)]);
+    assert_eq!(
+        default_target_declined(&refine),
+        Some(inspectah_refine::projection::DeclinedView {
+            renders: inspectah_refine::projection::DeclinedRenders::Omitted,
+            reason: "DefaultTargetFileVariants".into(),
+            text: text.clone(),
+        })
+    );
+    for (route, containerfile) in [
+        (
+            "scan",
+            containerfile_in(&render_export(&with_first_drop_in_included(
+                &merged, SHADOW,
+            ))),
+        ),
+        ("refine", containerfile_in(&export_session(&refine))),
+    ] {
+        assert!(
+            !containerfile.contains("set-default"),
+            "{route}:\n{containerfile}"
+        );
+        assert_eq!(
+            omitted(&containerfile, "graphical.target"),
+            Some(line.as_str()),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
 /// § 7.6: a `default.target` link to anything but a target gives a
 /// structured warning naming the link and no record.
 #[test]

@@ -302,9 +302,12 @@ The default target is planned by `plan_default_target`: rule 5's file
 half, then the package half for a `Vendor` target. `set-default` reads no
 `[Install]`, so the drop-in half and rule 7 do not apply. A target that
 fails is `default_target_declined`, written with `default_target_line`.
-A `Shadowed` target whose replacement is not staged is declined as
-`DefaultTargetFileNotStaged` before the file half runs, because the file
-half's `InstallEvidenceChanged` text speaks of `[Install]`.
+The file half's `InstallEvidenceChanged` text speaks of `[Install]`, so
+`set_default_reason` restates it for the target: a `Shadowed` replacement
+that is not staged is `DefaultTargetFileNotStaged`, a staged `Local` or
+`Shadowed` file holding fleet variants is `DefaultTargetFileVariants`, and
+a file staged at another path that would load in the recorded one's place
+(a `Vendor` target's name) is `DefaultTargetFileStaged`.
 
 Runtime package updaters (`RUNTIME_UPDATERS` in `core/baseline.rs`) are
 excluded by default at collect and in the fleet merge, and can be
