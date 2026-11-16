@@ -74,24 +74,7 @@
  *   builder reproduces the kitchen-sink's driftify-upheld.service record
  *   exactly first.
  */
-import type {
-  DefaultTargetView,
-  DropInDecisionDto,
-  ManualLinkView,
-  MountFindingDto,
-  ServiceDecisionDto,
-  UndeterminedInstallView,
-} from "../../../api/types";
-
-/** The six unit fields of the view response. Task 2.1 moves this type. */
-export interface UnitFields {
-  unit_states: ServiceDecisionDto[];
-  unit_dropins: DropInDecisionDto[];
-  default_target?: DefaultTargetView;
-  mount_findings: MountFindingDto[];
-  manual_links: ManualLinkView[];
-  undetermined_installs: UndeterminedInstallView[];
-}
+import type { UnitFields } from "../../../components/unitOutcome";
 
 export type UnitFixtureName = "kitchen-sink" | "planted" | "stock10" | "stock9";
 
