@@ -323,6 +323,71 @@ fn state_change_vendor_drop_ins_are_file_names_on_load() {
     }
 }
 
+/// § 6.7, § 7.5: `required_config` holds absolute paths under `/etc` and
+/// `data_paths` absolute paths under `/var` outside `/var/run` and
+/// `/var/lock`. A value of another form fails the load naming the field
+/// and the value; the forms the collector records load.
+#[test]
+fn state_change_instance_paths_are_checked_on_load() {
+    let with_lists = |config: serde_json::Value, data: serde_json::Value| {
+        let mut payload: serde_json::Value = serde_json::from_str(&payload_with_state_change(
+            subject("app.service", "vendor", Some("apppkg")),
+            "enabled",
+        ))
+        .expect("the payload is JSON");
+        let change = &mut payload["units"]["state_changes"][0];
+        change["required_config"] = config;
+        change["data_paths"] = data;
+        payload.to_string()
+    };
+
+    let snap = InspectionSnapshot::load(&with_lists(
+        serde_json::json!(["/etc/wireguard/wg0.conf"]),
+        serde_json::json!(["/var/lib/dirsrv/slapd-example"]),
+    ))
+    .expect("the collector's forms load");
+    let change = &snap.units.expect("units present").state_changes[0];
+    assert_eq!(change.required_config, ["/etc/wireguard/wg0.conf"]);
+    assert_eq!(change.data_paths, ["/var/lib/dirsrv/slapd-example"]);
+
+    for refused in [
+        "etc/x.conf",
+        "/usr/etc/x.conf",
+        "/etc",
+        "/etcetera/x",
+        "/etc/../usr/x",
+        "/etc/x\n# injected",
+        "/var/lib/x",
+    ] {
+        let err = InspectionSnapshot::load(&with_lists(
+            serde_json::json!([refused]),
+            serde_json::json!([]),
+        ))
+        .expect_err("not an instance configuration path")
+        .to_string();
+        assert!(err.contains("required_config"), "{refused:?}: {err}");
+    }
+    for refused in [
+        "var/lib/x",
+        "/var",
+        "/var/run/x.pid",
+        "/var/lock/x",
+        "/var/lib/../../etc",
+        "/etc/x",
+    ] {
+        let err = InspectionSnapshot::load(&with_lists(
+            serde_json::json!([]),
+            serde_json::json!([refused]),
+        ))
+        .expect_err("not an instance data path")
+        .to_string();
+        assert!(
+            err.contains("data_paths") && err.contains(refused),
+            "{refused}: {err}"
+        );
+    }
+}
+
 /// § 6.7: an `Also=` member's `vendor_drop_ins` holds file names only, as
 /// the row's own list does. A member holding `../x.conf` fails the load
 /// naming the field; the same member holding `10-a.conf` loads.

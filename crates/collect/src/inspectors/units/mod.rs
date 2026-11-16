@@ -23,13 +23,14 @@ use std::path::Path;
 
 mod also;
 mod install;
+mod instance;
 mod links;
 mod resolve;
 pub(crate) mod specifiers;
 
 use install::{
     DropInRoot, DropInSource, InstallRead, InstallSection, drop_in_dirs, read_install,
-    read_vendor_install,
+    read_vendor_install, selected_drop_ins,
 };
 use links::{HostLinks, InstallDifference};
 use resolve::{ETC_UNIT_DIR, Entry, ResolveError, Resolved, VENDOR_UNIT_DIR};
@@ -736,6 +737,14 @@ fn build_state_changes(
                 apply_runtime_updater_default(&mut change);
                 change.install_drop_ins = evidence.row_install_drop_ins();
                 change.vendor_drop_ins = evidence.vendor_drop_ins;
+                // § 7.5: what an enabled instance reads and keeps. Its
+                // enable is the command that needs them (§ 10.8).
+                if change.current_state() == UnitState::Enabled {
+                    let needs =
+                        instance::instance_needs(exec, change.unit().name(), &evidence.unit_texts);
+                    change.required_config = needs.required_config;
+                    change.data_paths = needs.data_paths;
+                }
                 state_changes.push(change);
             }
             Err(e) => warnings.push(warn(&e.to_string())),
@@ -925,6 +934,11 @@ struct InstallEvidence {
     hiding_drop_ins: Vec<String>,
     /// File names of the vendor drop-ins that apply, sorted.
     vendor_drop_ins: Vec<String>,
+    /// The unit file's text, then the texts of the drop-ins of its own and
+    /// its template's `.d` that systemd reads, in load order: what an
+    /// instance's needs are read from (§ 7.5). A file that is not text is
+    /// left out.
+    unit_texts: Vec<String>,
 }
 
 impl InstallEvidence {
@@ -1047,6 +1061,15 @@ fn install_evidence(
         .iter()
         .map(|(source, text)| (source.clone(), text.as_str()))
         .collect();
+    let unit_texts = fragment_text
+        .iter()
+        .cloned()
+        .chain(
+            selected_drop_ins(name, &drop_ins)
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .collect();
     // The vendor-side read (§ 7.2): for a packaged unit file with an
     // install file under `/etc`, a shadow or an install drop-in.
     let vendor_text = match fragment {
@@ -1086,6 +1109,7 @@ fn install_evidence(
         install_drop_ins,
         hiding_drop_ins: hiding_drop_ins.into_iter().collect(),
         vendor_drop_ins: vendor_names.into_iter().collect(),
+        unit_texts,
     })
 }
 

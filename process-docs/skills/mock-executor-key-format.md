@@ -56,6 +56,8 @@ sysctl harness (`crates/cli/tests/support/sysctl_hosts.rs`,
 `SysctlHost::link`) applies this rule for every link it is given,
 and for a link to a directory it registers the target's listing and
 files under the link's path too.
+`file_exists` is true for a registered file or a registered directory
+(`with_dir`), as `Path::exists` is for both on a real host.
 
 **6. Link checks behave like the real syscalls.** `resolve_final_target`
 follows a link on any component, so `/etc/sysctl.d/a.conf` under a

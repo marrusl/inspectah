@@ -266,6 +266,31 @@ unit. In phase 4 every instance is recorded and then declined by the
 every rule; Task 5.2 removes it. Preset lines that list instances
 (`enable t@.service a b`) apply only to those instances.
 
+**What an enabled instance needs** (`instance.rs`). An `Enabled` instance
+row records `required_config` (paths under `/etc`, kept whether or not
+they exist) and `data_paths` (paths under `/var` that exist, never under
+`/var/run` or `/var/lock`, `RUNTIME_VAR_DIRS`). They come from the unit
+file and the drop-ins of its own and its template's `.d` that systemd
+reads (`InstallEvidence::unit_texts`, the same selection as
+`read_install`), plus the fixed tables. Non-obvious points:
+
+- Values are expanded with `SpecifierSet::Runtime`, so `%I` is
+  unescaped; `[Install]` never is (`%I` is not expanded there). A value
+  with any specifier `expand_unit_specifiers` does not know is dropped.
+- A path counts only when the value itself holds `%i` or `%I`. An
+  `EnvironmentFile=` with the `-` prefix and a negated condition (`!`) are
+  left out; a path inside a word (`--config=/etc/x/%i.conf`, `src:dst`)
+  is found.
+- The form check (`is_instance_config_path`, `is_instance_data_path` in
+  core) is shared by the collector and the snapshot loader, which refuses
+  any other value: `..` or `.` components, control characters, the root
+  itself. A path with a line break would otherwise reach a Containerfile
+  comment.
+- The type-wide (`service.d`) and dash-prefix drop-in directories are not
+  read here, as for `[Install]`.
+- Existence is `Executor::file_exists`, true for a directory on both
+  executors (`MockExecutor` counts a registered directory).
+
 ## The default target
 
 `default_target` reads the link at `DEFAULT_TARGET_LINK` and records a
@@ -295,8 +320,9 @@ Since the state comes from the links, a test host that lists a unit
 ## Fleet merge
 
 - `merge_service_sections` unions a state change's `also`,
-  `install_drop_ins` and `vendor_drop_ins` after `merge_items` picks the
-  representative, so the lists do not depend on which host won.
+  `install_drop_ins`, `vendor_drop_ins`, `required_config` and
+  `data_paths` after `merge_items` picks the representative
+  (`union_lists`), so the lists do not depend on which host won.
 - Link findings and undetermined records keep the first host's version by
   hostname order (`merge_by_first_host`).
 - The default target keeps the most common target, excluded unless every

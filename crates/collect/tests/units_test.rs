@@ -5503,3 +5503,215 @@ fn t30_an_also_template_compares_as_its_default_instance() {
         ]
     );
 }
+
+// ── What an instance needs (§ 7.5, T28's collector cases) ──────────
+
+/// A host with the vendor template `template` holding `text`, listed
+/// `indirect` under `disable *`, and `instance` linked from
+/// `multi-user.target.wants`, so the instance is an `Enabled` state
+/// change against a `disable` preset.
+fn instance_host(template: &str, text: &str, instance: &str) -> MockExecutor {
+    also_host(
+        &[(template, "indirect")],
+        "disable *\n",
+        &[(template, text)],
+        &[instance],
+    )
+}
+
+/// A template's `[Service]` lines, wanted by `multi-user.target`.
+fn template_with(service: &str) -> String {
+    format!("[Service]\n{service}\n[Install]\nWantedBy=multi-user.target\n")
+}
+
+/// The `required_config` and `data_paths` of `unit`'s state change.
+fn needs_of(section: &UnitSection, unit: &str) -> (Vec<String>, Vec<String>) {
+    let change = section
+        .state_changes
+        .iter()
+        .find(|c| c.unit().name().as_str() == unit)
+        .unwrap_or_else(|| panic!("{unit} should be a state change"));
+    (change.required_config.clone(), change.data_paths.clone())
+}
+
+/// § 7.5's fixed table: `wg-quick@.service` names no path under `/etc`,
+/// and `wg-quick@wg0` needs `/etc/wireguard/wg0.conf` all the same. The
+/// path is kept though nothing exists there.
+#[test]
+fn t28_wg_quick_needs_its_configuration_from_the_table() {
+    let text = template_with("Type=oneshot\nExecStart=/usr/bin/wg-quick up %i\n");
+    let (section, _) = scan(&instance_host(
+        "wg-quick@.service",
+        &text,
+        "wg-quick@wg0.service",
+    ));
+    assert_eq!(
+        needs_of(&section, "wg-quick@wg0.service"),
+        (vec!["/etc/wireguard/wg0.conf".to_owned()], vec![])
+    );
+}
+
+/// § 7.5: the other two configuration rows of the fixed table.
+#[test]
+fn the_openvpn_templates_need_their_configuration_from_the_table() {
+    let text = template_with("ExecStart=/usr/sbin/openvpn --config %i.conf\n");
+    for (template, instance, expected) in [
+        (
+            "openvpn-client@.service",
+            "openvpn-client@site.service",
+            "/etc/openvpn/client/site.conf",
+        ),
+        (
+            "openvpn-server@.service",
+            "openvpn-server@site.service",
+            "/etc/openvpn/server/site.conf",
+        ),
+    ] {
+        let (section, _) = scan(&instance_host(template, &text, instance));
+        assert_eq!(
+            needs_of(&section, instance),
+            (vec![expected.to_owned()], vec![]),
+            "{instance}"
+        );
+    }
+}
+
+/// § 7.5: an `EnvironmentFile=` with the `-` prefix is optional to
+/// systemd and is left out; one without it is required. A path that does
+/// not hold `%i` or `%I` is not an instance's.
+#[test]
+fn an_optional_environment_file_is_not_required() {
+    let text = template_with(
+        "EnvironmentFile=/etc/x/%i.env\nEnvironmentFile=-/etc/y/%i.env\n\
+         EnvironmentFile=/etc/sysconfig/worker\nExecStart=/usr/bin/worker\n",
+    );
+    let (section, _) = scan(&instance_host(
+        "worker@.service",
+        &text,
+        "worker@site.service",
+    ));
+    assert_eq!(
+        needs_of(&section, "worker@site.service"),
+        (vec!["/etc/x/site.env".to_owned()], vec![])
+    );
+}
+
+/// § 7.5's data row of the fixed table: `dirsrv@example` keeps
+/// `/var/lib/dirsrv/slapd-example` when that exists on the host, and
+/// records nothing for it when it does not. The template's own
+/// `/etc/dirsrv/slapd-%i` is found by the derivation, and its `/run` path
+/// is outside `/etc` and `/var` and dropped.
+#[test]
+fn t28_dirsrv_keeps_its_data_directory_when_it_exists() {
+    let text = template_with(
+        "ExecStart=/usr/sbin/ns-slapd -D /etc/dirsrv/slapd-%i -i /run/dirsrv/slapd-%i.pid\n",
+    );
+    let host = || instance_host("dirsrv@.service", &text, "dirsrv@example.service");
+    let config = vec!["/etc/dirsrv/slapd-example".to_owned()];
+
+    let (section, _) = scan(&host().with_dir("/var/lib/dirsrv/slapd-example", vec![]));
+    assert_eq!(
+        needs_of(&section, "dirsrv@example.service"),
+        (
+            config.clone(),
+            vec!["/var/lib/dirsrv/slapd-example".to_owned()]
+        )
+    );
+
+    let (section, _) = scan(&host());
+    assert_eq!(
+        needs_of(&section, "dirsrv@example.service"),
+        (config, vec![])
+    );
+}
+
+/// § 7.5: a path under `/var/run` or `/var/lock` resolves into `/run` and
+/// is not data, even when something is there.
+#[test]
+fn t28_a_runtime_path_under_var_is_not_data() {
+    let text = template_with(
+        "PIDFile=/var/run/worker/%i.pid\nExecStartPre=/usr/bin/touch /var/lock/worker-%i\n\
+         ExecStart=/usr/bin/worker\n",
+    );
+    let (section, _) = scan(
+        &instance_host("worker@.service", &text, "worker@site.service")
+            .with_file("/var/run/worker/site.pid", "1\n")
+            .with_file("/var/lock/worker-site", ""),
+    );
+    assert_eq!(needs_of(&section, "worker@site.service"), (vec![], vec![]));
+}
+
+/// § 7.5: a `StateDirectory=` value that holds `%i` is data under
+/// `/var/lib`, kept when it exists; a value without one is not the
+/// instance's.
+#[test]
+fn a_state_directory_for_the_instance_is_data() {
+    let text = template_with("StateDirectory=worker/%i shared\nExecStart=/usr/bin/worker\n");
+    let host = || instance_host("worker@.service", &text, "worker@site.service");
+    let (section, _) = scan(
+        &host()
+            .with_dir("/var/lib/worker/site", vec![])
+            .with_dir("/var/lib/shared", vec![]),
+    );
+    assert_eq!(
+        needs_of(&section, "worker@site.service"),
+        (vec![], vec!["/var/lib/worker/site".to_owned()])
+    );
+    let (section, _) = scan(&host());
+    assert_eq!(needs_of(&section, "worker@site.service"), (vec![], vec![]));
+}
+
+/// § 6.7: a value is stored only when it expands to an absolute path under
+/// `/etc` or `/var`. A path elsewhere, one that climbs out with `..`
+/// through `%I`, and one holding a specifier inspectah does not expand are
+/// dropped; a path after `--option=` is read.
+#[test]
+fn a_value_outside_etc_or_var_is_dropped() {
+    let text = template_with(
+        "ExecStart=/usr/bin/worker --dir /srv/%i --conf=/etc/worker/%i.conf\n\
+         ReadWritePaths=/var/lib/w/%I /etc/w/%h/%i\n",
+    );
+    let (section, _) = scan(
+        &instance_host("worker@.service", &text, "worker@..-..-usr.service")
+            .with_dir("/var/lib/w/../../usr", vec![]),
+    );
+    assert_eq!(
+        needs_of(&section, "worker@..-..-usr.service"),
+        (vec!["/etc/worker/..-..-usr.conf".to_owned()], vec![])
+    );
+}
+
+/// § 7.2: the effective unit is the file and the drop-ins that apply to
+/// it, so a drop-in in the instance's own `.d` under `/etc` adds what it
+/// names.
+#[test]
+fn an_instance_drop_in_adds_what_it_names() {
+    let text = template_with("ExecStart=/usr/bin/worker\n");
+    let exec = with_drop_in(
+        instance_host("worker@.service", &text, "worker@site.service")
+            .with_dir_entry(ETC, "worker@site.service.d"),
+        &format!("{ETC}/worker@site.service.d"),
+        "10-env.conf",
+        "[Service]\nEnvironmentFile=/etc/z/%i.env\n",
+    );
+    let (section, _) = scan(&exec);
+    assert_eq!(
+        needs_of(&section, "worker@site.service"),
+        (vec!["/etc/z/site.env".to_owned()], vec![])
+    );
+}
+
+/// Control: a unit that is not an instance records neither list, though
+/// its file names `%i`.
+#[test]
+fn a_unit_that_is_not_an_instance_needs_nothing() {
+    let text = template_with("EnvironmentFile=/etc/x/%i.env\nExecStart=/usr/bin/worker\n");
+    let exec = also_host(
+        &[("worker.service", "enabled")],
+        "disable *\n",
+        &[("worker.service", &text)],
+        &["worker.service"],
+    );
+    let (section, _) = scan(&exec);
+    assert_eq!(needs_of(&section, "worker.service"), (vec![], vec![]));
+}

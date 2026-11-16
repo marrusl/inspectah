@@ -932,6 +932,17 @@ pub struct UnitStateChange {
     /// each one path component ending in `.conf`, checked on load.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vendor_drop_ins: Vec<String>,
+    /// Paths under `/etc` an enabled template instance reads and cannot
+    /// start without, kept whether or not anything exists there (§ 7.5).
+    /// Each is an [`is_instance_config_path`], checked on load. Recorded
+    /// only: the plan decides from it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_config: Vec<String>,
+    /// Paths under `/var` that hold an enabled template instance's
+    /// persistent data and exist on the source host (§ 7.5). Each is an
+    /// [`is_instance_data_path`], checked on load.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_paths: Vec<String>,
     #[serde(default)]
     pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
@@ -955,6 +966,10 @@ struct UnitStateChangeWire {
     #[serde(default)]
     vendor_drop_ins: Vec<String>,
     #[serde(default)]
+    required_config: Vec<String>,
+    #[serde(default)]
+    data_paths: Vec<String>,
+    #[serde(default)]
     disposition: FindingKind,
     #[serde(default)]
     locked: bool,
@@ -975,10 +990,26 @@ impl TryFrom<UnitStateChangeWire> for UnitStateChange {
         {
             return Err(UnitStateChangeError::VendorDropInName { name: name.clone() });
         }
+        if let Some(path) = wire
+            .required_config
+            .iter()
+            .find(|path| !is_instance_config_path(path))
+        {
+            return Err(UnitStateChangeError::InstanceConfigPath { path: path.clone() });
+        }
+        if let Some(path) = wire
+            .data_paths
+            .iter()
+            .find(|path| !is_instance_data_path(path))
+        {
+            return Err(UnitStateChangeError::InstanceDataPath { path: path.clone() });
+        }
         let mut change = Self::new(wire.unit, wire.current_state, wire.default_state)?;
         change.also = wire.also;
         change.install_drop_ins = wire.install_drop_ins;
         change.vendor_drop_ins = wire.vendor_drop_ins;
+        change.required_config = wire.required_config;
+        change.data_paths = wire.data_paths;
         change.disposition = wire.disposition;
         change.locked = wire.locked;
         change.aggregate = wire.aggregate;
@@ -1013,6 +1044,61 @@ pub enum UnitStateChangeError {
          ending in .conf"
     )]
     VendorDropInName { name: String },
+    /// An instance's configuration is recorded as an absolute path under
+    /// `/etc` ([`is_instance_config_path`]).
+    #[error(
+        "required_config holds {path:?}: an instance's configuration is recorded as an \
+         absolute path under /etc"
+    )]
+    InstanceConfigPath { path: String },
+    /// An instance's data is recorded as an absolute path under `/var`,
+    /// outside `/var/run` and `/var/lock` ([`is_instance_data_path`]).
+    #[error(
+        "data_paths holds {path:?}: an instance's data is recorded as an absolute path \
+         under /var, outside /var/run and /var/lock"
+    )]
+    InstanceDataPath { path: String },
+}
+
+/// The directory an instance's required configuration sits under (§ 7.5).
+const INSTANCE_CONFIG_ROOT: &str = "/etc";
+
+/// The directory an instance's persistent data sits under (§ 7.5).
+const INSTANCE_DATA_ROOT: &str = "/var";
+
+/// The paths under `/var` that resolve into `/run`, which is empty at
+/// every boot, so nothing under them is data to migrate (§ 7.5).
+pub const RUNTIME_VAR_DIRS: [&str; 2] = ["/var/run", "/var/lock"];
+
+/// Whether `path` is strictly below the directory `root`: absolute, with
+/// no empty, `.` or `..` component after the root, and no control
+/// character, so the path names what it reads as and puts no line break
+/// into a comment the plan writes from it.
+fn is_path_below(path: &str, root: &str) -> bool {
+    path.strip_prefix(root)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|rest| {
+            !path.chars().any(char::is_control)
+                && rest.split('/').all(|part| !matches!(part, "" | "." | ".."))
+        })
+}
+
+/// Whether `path` can be an instance's `required_config` entry: a path
+/// below `/etc` ([`is_path_below`]). The one rule for the form, shared by
+/// the collector and the snapshot loader, so the two cannot disagree.
+pub fn is_instance_config_path(path: &str) -> bool {
+    is_path_below(path, INSTANCE_CONFIG_ROOT)
+}
+
+/// Whether `path` can be an instance's `data_paths` entry: a path below
+/// `/var` ([`is_path_below`]) that is not [`RUNTIME_VAR_DIRS`] or below one
+/// of them. The one rule for the form, shared by the collector and the
+/// snapshot loader.
+pub fn is_instance_data_path(path: &str) -> bool {
+    is_path_below(path, INSTANCE_DATA_ROOT)
+        && !RUNTIME_VAR_DIRS
+            .iter()
+            .any(|dir| path == *dir || is_path_below(path, dir))
 }
 
 /// The suffix of a drop-in file systemd reads.
@@ -1153,6 +1239,8 @@ impl UnitStateChange {
             also: Vec::new(),
             install_drop_ins: Vec::new(),
             vendor_drop_ins: Vec::new(),
+            required_config: Vec::new(),
+            data_paths: Vec::new(),
             disposition: FindingKind::included(),
             locked: false,
             aggregate: None,
@@ -1381,6 +1469,8 @@ mod tests {
                 also: _,             // names and links: classified in the pipeline guard
                 install_drop_ins: _, // identifiers: drop-in paths, no content
                 vendor_drop_ins: _,  // identifiers: file names, no content
+                required_config: _,  // identifiers: paths under /etc, no content
+                data_paths: _,       // identifiers: paths under /var, no content
                 disposition: _,      // decision
                 locked: _,           // decision
                 aggregate: _,        // fleet counts

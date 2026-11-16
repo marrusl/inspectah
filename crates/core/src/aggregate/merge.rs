@@ -1647,8 +1647,9 @@ fn merge_default_target(
 }
 
 /// Gives the merged `change` the union of the list fields of every row
-/// `observed` holds for its unit (§ 12): `install_drop_ins` and
-/// `vendor_drop_ins` sorted, as the collector records them, and `also` in
+/// `observed` holds for its unit (§ 12): `install_drop_ins`,
+/// `vendor_drop_ins`, `required_config` and `data_paths` sorted, as the
+/// collector records them, and `also` in
 /// the order the hosts recorded its members, host by host. A member that
 /// two hosts record with different `links` becomes
 /// [`MemberLinks::Other`], and its `vendor_drop_ins` are the union of the
@@ -1666,6 +1667,9 @@ fn union_lists(change: &mut UnitStateChange, observed: &[(usize, UnitStateChange
     );
     change.vendor_drop_ins =
         dedup_strings(rows.iter().map(|row| row.vendor_drop_ins.clone()).collect());
+    change.required_config =
+        dedup_strings(rows.iter().map(|row| row.required_config.clone()).collect());
+    change.data_paths = dedup_strings(rows.iter().map(|row| row.data_paths.clone()).collect());
     let mut also: Vec<AlsoMember> = Vec::new();
     for member in rows.iter().flat_map(|row| &row.also) {
         match also.iter_mut().find(|seen| seen.unit == member.unit) {

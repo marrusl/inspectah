@@ -245,8 +245,11 @@ impl Executor for MockExecutor {
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))
     }
 
+    /// A registered file or directory exists, as `Path::exists` says for
+    /// both on a real host.
     fn file_exists(&self, path: &Path) -> bool {
-        self.files.contains_key(path.to_str().unwrap_or(""))
+        let key = path.to_str().unwrap_or("");
+        self.files.contains_key(key) || self.dirs.contains_key(key)
     }
 
     fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {

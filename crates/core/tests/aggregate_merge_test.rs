@@ -3587,6 +3587,63 @@ fn a_state_change_merges_the_union_of_its_phase_4_lists() {
     );
 }
 
+/// `dirsrv@example.service` enabled, recorded with the configuration and
+/// data paths given.
+fn instance_change(required_config: &[&str], data_paths: &[&str]) -> UnitStateChange {
+    let name = unit_name("dirsrv@example.service");
+    let mut change = UnitStateChange::new(
+        test_carried_unit(name, Some("389-ds-base".into())),
+        UnitState::Enabled,
+        Some(PresetDefault::Disable),
+    )
+    .expect("an instance can be enabled");
+    change.required_config = required_config.iter().map(|p| (*p).to_owned()).collect();
+    change.data_paths = data_paths.iter().map(|p| (*p).to_owned()).collect();
+    change
+}
+
+/// § 12: an instance's `required_config` and `data_paths` are each the
+/// union across every host that has it, sorted, whichever host's row the
+/// merge keeps. Control: one host alone keeps its lists.
+#[test]
+fn an_instance_merges_the_union_of_what_it_needs() {
+    let h1 = instance_change(
+        &["/etc/dirsrv/slapd-example"],
+        &["/var/lib/dirsrv/slapd-example"],
+    );
+    let h2 = instance_change(
+        &["/etc/sysconfig/dirsrv-example", "/etc/dirsrv/slapd-example"],
+        &[],
+    );
+    for sections in [
+        vec![
+            changes_section(vec![h1.clone()]),
+            changes_section(vec![h2.clone()]),
+        ],
+        vec![
+            changes_section(vec![h2.clone()]),
+            changes_section(vec![h1.clone()]),
+        ],
+    ] {
+        let result = merge_service_sections(sections, 2, &host_names(2)).expect("a merged section");
+        assert_eq!(result.state_changes.len(), 1, "one row per unit name");
+        let merged = &result.state_changes[0];
+        assert_eq!(
+            merged.required_config,
+            ["/etc/dirsrv/slapd-example", "/etc/sysconfig/dirsrv-example"]
+        );
+        assert_eq!(merged.data_paths, ["/var/lib/dirsrv/slapd-example"]);
+    }
+
+    let alone = merge_service_sections(vec![changes_section(vec![h2])], 1, &host_names(1))
+        .expect("a merged section");
+    assert_eq!(
+        alone.state_changes[0].required_config,
+        ["/etc/dirsrv/slapd-example", "/etc/sysconfig/dirsrv-example"]
+    );
+    assert!(alone.state_changes[0].data_paths.is_empty());
+}
+
 /// A link finding for a test.
 fn manual_link(
     relation: inspectah_core::types::units::LinkRelation,

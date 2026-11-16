@@ -115,8 +115,24 @@ pub(crate) fn read_install(
     fragment: &str,
     drop_ins: &[(DropInSource, &str)],
 ) -> InstallRead {
+    let mut reader = Reader::new(name);
+    reader.read(fragment);
+    for text in selected_drop_ins(name, drop_ins) {
+        reader.read(text);
+    }
+    reader.finish()
+}
+
+/// The texts of the drop-ins of `drop_ins` that systemd reads for `name`,
+/// in load order: one per file name, in file-name order, the first of a
+/// name in the search order [`read_install`] gives. A drop-in from a
+/// directory [`drop_in_dirs`] does not name is left out.
+pub(crate) fn selected_drop_ins<'t>(
+    name: &UnitName,
+    drop_ins: &[(DropInSource, &'t str)],
+) -> Vec<&'t str> {
     let dirs = drop_in_dirs(name);
-    let mut selected: BTreeMap<&str, ((usize, DropInRoot), &str)> = BTreeMap::new();
+    let mut selected: BTreeMap<&str, ((usize, DropInRoot), &'t str)> = BTreeMap::new();
     for (source, text) in drop_ins {
         let Some(dir_rank) = dirs.iter().position(|dir| *dir == source.dir) else {
             continue;
@@ -133,13 +149,7 @@ pub(crate) fn read_install(
             }
         }
     }
-
-    let mut reader = Reader::new(name);
-    reader.read(fragment);
-    for (_, text) in selected.into_values() {
-        reader.read(text);
-    }
-    reader.finish()
+    selected.into_values().map(|(_, text)| text).collect()
 }
 
 /// The `[Install]` section the package alone provides for `name` (§ 7.2
