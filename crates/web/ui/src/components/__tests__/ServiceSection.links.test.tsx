@@ -86,7 +86,7 @@ function makeLink(overrides: Partial<ManualLinkView> = {}): ManualLinkView {
 
 const NEED_DROP_IN = "/etc/systemd/system/need.service.d/10-reset.conf";
 const UNDETERMINED_LINES = [
-  `# Advisory: need.service is not carried: its [Install] section on the source host cannot be relied on (an empty RequiredBy= whose effect was not measured), and these files under /etc/systemd/system change it: ${NEED_DROP_IN}.`,
+  `# Advisory: need.service is not carried: its [Install] section on the source host cannot be relied on (enabling the unit would also make an .upholds link), and these files under /etc/systemd/system change it: ${NEED_DROP_IN}.`,
   "#   The image's links for need.service can differ from the source host's, including links its package install made before these files are copied. Check them with systemctl is-enabled in the image.",
 ];
 
@@ -95,7 +95,7 @@ function makeUndetermined(
 ): UndeterminedInstallView {
   return {
     unit: "need.service",
-    reason: "required_by_reset",
+    reason: "upheld_by",
     install_files: [NEED_DROP_IN],
     advisories: UNDETERMINED_LINES,
     ...overrides,
@@ -276,9 +276,9 @@ describe("ServiceSection: undetermined installs", () => {
     const row = screen.getByTestId("undetermined-install-need.service");
     expect(within(row).queryByRole("checkbox")).not.toBeInTheDocument();
     expect(row).toHaveAttribute("tabindex", "-1");
-    expect(row).toHaveAttribute("data-reason", "required_by_reset");
+    expect(row).toHaveAttribute("data-reason", "upheld_by");
     expect(within(row).getByTestId("undetermined-install-reason")).toHaveTextContent(
-      /^required by reset$/,
+      /^upheld by$/,
     );
     expect(
       within(row)

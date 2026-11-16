@@ -554,7 +554,6 @@ export type LinkRelation = "wants" | "requires" | "upholds" | "alias" | "also";
 /** Why an `[Install]` section cannot be relied on (Rust: `InstallUnknown`). */
 export type InstallUnknown =
   | "specifier"
-  | "required_by_reset"
   | "foreign_name"
   | "upheld_by"
   | "unreadable";
