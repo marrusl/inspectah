@@ -10533,6 +10533,69 @@ fn t25_c_a_member_whose_configuration_argument_is_quoted() {
     }
 }
 
+/// T25 (c) with the member's needs unknown: an unbalanced quote in the
+/// argument that names its configuration. The member keeps its row and its
+/// enable is omitted as `InstanceNeedsUnknown`, so the owner, whose `Also=`
+/// would enable it, gets rule 7's `RowNotCarried` advisory and no enable,
+/// on both routes. Control: the quote closed and the configuration staged,
+/// both are carried.
+#[test]
+fn t25_c_a_member_whose_needs_are_unknown() {
+    const MEMBER: &str = "t@two.service";
+    const CONF: &str = "/etc/t sites/two.conf";
+    let host = |exec_start: &str| {
+        let reads = format!(
+            "[Service]\nExecStart=/usr/bin/t {exec_start}\n\n[Install]\nWantedBy=multi-user.target\n"
+        );
+        let host = rule7_host(
+            &[],
+            &[(BUNDLE, "enabled"), (T_TEMPLATE, "indirect")],
+            &[
+                (BUNDLE, &wanted_with(&format!("Also={MEMBER}\n"))),
+                (T_TEMPLATE, &reads),
+            ],
+        )
+        .file(CONF, "PORT=2\n");
+        instance_link(
+            host,
+            "/etc/systemd/system",
+            "multi-user.target",
+            MEMBER,
+            T_TEMPLATE_PATH,
+        )
+    };
+    let control = scan(host("--config=\"/etc/t sites/%i.conf\""));
+    assert_also_carried(&control, MEMBER, "enable", "member");
+    assert_also_carried(&control, BUNDLE, "enable", "owner");
+
+    let snap = scan(host("--config=\"/etc/t sites/%i.conf"));
+    assert!(change(&snap, MEMBER).needs_unknown.is_some());
+    let head = also_head(BUNDLE, "enable", MEMBER, ROW_NOT_CARRIED);
+    let member_line = format!(
+        "# Omitted: {MEMBER} (its ExecStart= setting in {T_TEMPLATE_PATH} (line 2) names a path \
+         for the instance that inspectah cannot read as systemd does, so what the instance \
+         reads is unknown and its enable is not carried)"
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            advisory_for(&containerfile, BUNDLE),
+            std::slice::from_ref(&head),
+            "{route}:\n{containerfile}"
+        );
+        assert_eq!(
+            omitted(&containerfile, MEMBER),
+            Some(member_line.as_str()),
+            "{route}:\n{containerfile}"
+        );
+        for unit in [BUNDLE, MEMBER] {
+            assert!(
+                in_no_systemctl_instruction(&containerfile, unit),
+                "{route} {unit}:\n{containerfile}"
+            );
+        }
+    }
+}
+
 /// § 7.5 through the scan: a command argument that names a path for the
 /// instance and that systemd's parser refuses (an unbalanced quote) makes
 /// what the instance reads unknown. The instance keeps its state change,
