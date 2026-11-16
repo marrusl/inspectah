@@ -294,3 +294,37 @@ describe('U25: "Go to owner" (§ 6.11)', () => {
     await expectFocused(`dropin-item-${SHADOW_PATH}`);
   });
 });
+
+/** The cups.socket link on cups.service's Also= line. */
+function cupsSocketLink(): HTMLElement {
+  return within(screen.getByTestId("service-item-cups.service")).getByRole("link", { name: "cups.socket" });
+}
+
+describe("U15: an Also= link reveals its member (§ 6.6 item 5)", () => {
+  it("focuses service-item-cups.socket", async () => {
+    await openUnits(kitchenSink);
+    expect(screen.getByTestId("service-item-cups.socket")).not.toHaveFocus();
+    await userEvent.click(cupsSocketLink());
+    await expectFocused("service-item-cups.socket");
+  });
+});
+
+describe("U26: an Also= link into retained state (§ 6.11)", () => {
+  it("sets the filter to All when it hides the member", async () => {
+    await openUnits(kitchenSink);
+    await selectFilter("Needs follow-up");
+    expect(isShown(screen.queryByTestId("service-item-cups.socket"))).toBe(false);
+    await userEvent.click(cupsSocketLink());
+    await expectFocused("service-item-cups.socket");
+    expect(selectedFilter()).toBe("All");
+  });
+
+  it("opens the member's collapsed group", async () => {
+    await openUnits(kitchenSink);
+    await collapse("Sockets");
+    expect(isShown(screen.getByTestId("service-item-cups.socket"))).toBe(false);
+    await userEvent.click(cupsSocketLink());
+    await expectFocused("service-item-cups.socket");
+    expect(groupHeader("Sockets")).toHaveAttribute("aria-expanded", "true");
+  });
+});

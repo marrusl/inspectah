@@ -75,6 +75,11 @@ export interface ServiceSectionProps {
   revealItemId?: string;
   /** Navigates to an item, as `App`'s `handleNavigateFromSearch` does. */
   onNavigateToItem?: (sectionId: string, itemId: string) => void;
+  /**
+   * The paths `config_files` holds: a `required_config` path among them
+   * links to its config row (§ 6.6 item 7).
+   */
+  configPaths?: ReadonlySet<string>;
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
   /**
@@ -153,6 +158,12 @@ const SHOW_ALL_LABEL = "Show all";
 
 /** No section query yet (§ 6.12 arrives with section search). */
 const NO_QUERY = "";
+
+/** No config row to link to. */
+const NO_CONFIG_PATHS: ReadonlySet<string> = new Set();
+
+/** The section id an `Also=` member link navigates to (§ 6.11). */
+const UNITS_SECTION_ID = "units";
 
 /** No pinned branch. */
 const NO_PINS: ReadonlySet<OccurrenceKey> = new Set();
@@ -556,12 +567,17 @@ function InstancePaths({
   label,
   pathTestId,
   paths,
+  linkedPaths = NO_CONFIG_PATHS,
+  onNavigateToConfig,
 }: {
   id: string;
   testId: string;
   label: string;
   pathTestId: string;
   paths: string[];
+  /** Paths with a config row, shown as a link to it (§ 6.6 item 7). */
+  linkedPaths?: ReadonlySet<string>;
+  onNavigateToConfig?: (path: string) => void;
 }) {
   return (
     <div id={id} data-testid={testId} className="inspectah-unit-paths">
@@ -573,7 +589,20 @@ function InstancePaths({
       {paths.map((p) => (
         <span key={p}>
           {" "}
-          <code data-testid={pathTestId}>{p}</code>
+          {onNavigateToConfig && linkedPaths.has(p) ? (
+            <a
+              href={`#configs:${p}`}
+              data-testid={pathTestId}
+              onClick={(e) => {
+                e.preventDefault();
+                onNavigateToConfig(p);
+              }}
+            >
+              {p}
+            </a>
+          ) : (
+            <code data-testid={pathTestId}>{p}</code>
+          )}
         </span>
       ))}
     </div>
@@ -795,6 +824,11 @@ interface UnitBranchViewProps {
   onToggleService: (toggled: OccurrenceKey, unit: string, currentInclude: boolean) => void;
   onToggleDropin: (toggled: OccurrenceKey, path: string, currentInclude: boolean) => void;
   rowRef: (key: OccurrenceKey) => RowRef;
+  /** The row keys of the unit rows, which an `Also=` member links to (§ 6.6 item 5). */
+  unitRowKeys: ReadonlySet<RowKey>;
+  onNavigateToItem?: (sectionId: string, itemId: string) => void;
+  configPaths: ReadonlySet<string>;
+  onNavigateToConfig?: (path: string) => void;
 }
 
 /** A unit row and the drop-ins nested under it (§ 6.2, § 6.12). */
@@ -806,6 +840,10 @@ function UnitBranchView({
   onToggleService,
   onToggleDropin,
   rowRef,
+  unitRowKeys,
+  onNavigateToItem,
+  configPaths,
+  onNavigateToConfig,
 }: UnitBranchViewProps) {
   const svc = branch.head.record.data;
   const bucket = extractTriageBucket(svc.triage);
@@ -966,14 +1004,33 @@ function UnitBranchView({
         {svc.also && svc.also.length > 0 && (
           <div className="inspectah-unit-paths inspectah-unit-also">
             <span className="inspectah-unit-paths__label">Also=</span>
-            {svc.also.map((m) => (
-              <span key={m.unit} data-testid="also-member">
-                <code data-testid="also-member-unit">{m.unit}</code>{" "}
-                <span className="inspectah-unit-state" data-testid="also-member-links">
-                  {m.links}
+            {svc.also.map((m) => {
+              // A bare member name reveals `["unit_state", member]`, so it
+              // links only when that row exists (§ 6.11).
+              const key = rowKeyForItemId(m.unit);
+              const linked = onNavigateToItem && key !== null && unitRowKeys.has(key);
+              return (
+                <span key={m.unit} data-testid="also-member">
+                  {linked ? (
+                    <a
+                      href={`#${UNITS_SECTION_ID}:${m.unit}`}
+                      data-testid="also-member-unit"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        onNavigateToItem(UNITS_SECTION_ID, m.unit);
+                      }}
+                    >
+                      {m.unit}
+                    </a>
+                  ) : (
+                    <code data-testid="also-member-unit">{m.unit}</code>
+                  )}{" "}
+                  <span className="inspectah-unit-state" data-testid="also-member-links">
+                    {m.links}
+                  </span>
                 </span>
-              </span>
-            ))}
+              );
+            })}
           </div>
         )}
         {svc.required_config.length > 0 && (
@@ -983,6 +1040,8 @@ function UnitBranchView({
             label="Needs configuration:"
             pathTestId="required-config-path"
             paths={svc.required_config}
+            linkedPaths={configPaths}
+            onNavigateToConfig={onNavigateToConfig}
           />
         )}
         {svc.data_paths.length > 0 && (
@@ -1050,6 +1109,8 @@ export function ServiceSection({
   defaultTarget,
   onNavigateToConfig,
   revealItemId,
+  onNavigateToItem,
+  configPaths = NO_CONFIG_PATHS,
   onViewUpdate,
   onMutationError,
   pendingGuard,
@@ -1070,6 +1131,10 @@ export function ServiceSection({
     [services, dropins, defaultTarget, mountFindings, manualLinks, undeterminedInstalls],
   );
   const groups = useMemo(() => groupUnits(keyed), [keyed]);
+  const unitRowKeys = useMemo(
+    () => new Set<RowKey>(keyed.unitStates.map((k) => k.rowKey)),
+    [keyed],
+  );
   const counts = useMemo(() => outcomeCounts(keyed), [keyed]);
   const barDrawn = filterBarDrawn(counts);
 
@@ -1303,6 +1368,10 @@ export function ServiceSection({
               onToggleService={handleToggleService}
               onToggleDropin={handleToggleDropin}
               rowRef={rowRef}
+              unitRowKeys={unitRowKeys}
+              onNavigateToItem={onNavigateToItem}
+              configPaths={configPaths}
+              onNavigateToConfig={onNavigateToConfig}
             />
           ))}
 

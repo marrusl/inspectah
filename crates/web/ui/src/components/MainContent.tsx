@@ -255,6 +255,12 @@ export function MainContent({
     [viewData],
   );
 
+  // The units section links a required_config path to its config row.
+  const configPaths = useMemo(
+    () => new Set(viewData ? viewData.config_files.map((c) => c.entry.path) : []),
+    [viewData],
+  );
+
   // A config entry whose path is also carried by Service Drop-ins is
   // Inventory: the session refuses SetInclude on it. Resolving the owner
   // here is what turns a dead "Inventory" badge into a pointer at the
@@ -781,6 +787,7 @@ export function MainContent({
           }
           revealItemId={revealItemId}
           onNavigateToItem={onNavigateToItem}
+          configPaths={configPaths}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
           pendingGuard={serviceGuard}
