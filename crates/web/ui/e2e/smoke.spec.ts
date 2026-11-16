@@ -25,7 +25,7 @@ test.describe("Smoke tests", () => {
 
   test("sidebar shows reference sections", async ({ page }) => {
     const sidebar = page.locator(".inspectah-layout__sidebar");
-    await expect(sidebar.getByText("Services")).toBeVisible();
+    await expect(sidebar.getByText("Systemd units")).toBeVisible();
     await expect(sidebar.getByText("Users & Groups")).toBeVisible();
   });
 

@@ -6,7 +6,7 @@ const REVIEW_SECTIONS = [
   "Packages",
   "Config Files",
   "Users & Groups",
-  "Services",
+  "Systemd units",
   "Containers",
   "System Tuning",
 ];
@@ -30,7 +30,7 @@ const SECTIONS_WITH_FIXTURE_DATA = [
   "Packages",      // packages
   "Config Files",  // configs
   "Users & Groups",// users_groups
-  "Services",      // services
+  "Systemd units", // units
   "Containers",    // containers (maps to compose in fixture)
   "System Tuning", // sysctls + tuned
   "Version Changes", // version_changes
