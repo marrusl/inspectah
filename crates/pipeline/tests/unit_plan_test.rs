@@ -2548,7 +2548,7 @@ fn var_symlink_line(top: &str) -> String {
     )
 }
 /// The rename line for an automount, which keeps its suffix and has a
-/// matching mount unit (decided by the project owner, 2026-11-14).
+/// matching mount unit.
 fn automount_var_symlink_line(top: &str) -> String {
     format!(
         "#   {top} is a symlink into /var in the RHEL bootc base image. The unit must be renamed \
@@ -4501,8 +4501,7 @@ const ALSO_FOOTER: &str =
     "#   Each command follows Also= in its turn. Check the result with systemctl is-enabled.";
 
 /// The header in their place when the lines cannot reproduce the source
-/// host: a member is `Other`, or a line is withheld (Mark Russell,
-/// 2026-11-15).
+/// host: a member is `Other`, or a line is withheld.
 const ALSO_PARTIAL_HEADER: &str = "#   These lines do not reproduce the source host. Check each \
      unit, then add after the configuration COPY:";
 

@@ -60,7 +60,7 @@ pub(super) fn unit_search_path() -> impl Iterator<Item = &'static str> {
 /// The directories of [`UNREAD_SEARCH_PATH`] that outrank
 /// `/etc/systemd/system`, in search-path order. The `[Install]` reader
 /// reads their drop-ins as [`DropInRoot::AboveEtc`], so a drop-in there
-/// hides an `/etc` drop-in of its file name (Mark Russell, 2026-11-15).
+/// hides an `/etc` drop-in of its file name.
 pub(super) fn above_etc_dirs() -> impl Iterator<Item = &'static str> {
     UNREAD_SEARCH_PATH
         .into_iter()

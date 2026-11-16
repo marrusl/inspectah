@@ -28,8 +28,7 @@ pub(crate) enum DropInRoot {
     /// `/etc/systemd/system.control`, where `systemctl set-property`
     /// writes. A drop-in there that holds `[Install]` refuses the unit
     /// before the reader runs (`resolve`), so one read here only hides an
-    /// `/etc` or vendor drop-in of its file name (Mark Russell,
-    /// 2026-11-15).
+    /// `/etc` or vendor drop-in of its file name.
     AboveEtc,
     /// `/etc/systemd/system`.
     Etc,

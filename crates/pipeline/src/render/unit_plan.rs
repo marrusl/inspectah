@@ -240,7 +240,7 @@ pub enum OmissionReason {
     /// package half is never checked for a `Shadowed` target, and with the
     /// package absent too, `set-default` fails. Its own reason because
     /// [`Self::InstallEvidenceChanged`]'s text is about `[Install]`, which
-    /// `set-default` never reads (Mark Russell, 2026-11-15). `path` is the
+    /// `set-default` never reads. `path` is the
     /// replacement's image path.
     DefaultTargetFileNotStaged { path: String },
     /// The export stages a unit file at `path` under `/etc` that is not the
@@ -1072,8 +1072,7 @@ const ALSO_EACH_FOLLOWS: &str =
 
 /// The header of the lines to add for a links mismatch they cannot
 /// reproduce: a member is `Other`, or a line is withheld. It takes the
-/// place of [`ALSO_TO_REPRODUCE`], and no footer follows (Mark Russell,
-/// 2026-11-15).
+/// place of [`ALSO_TO_REPRODUCE`], and no footer follows.
 const ALSO_PARTIAL: &str = "#   These lines do not reproduce the source host. Check each unit, \
      then add after the configuration COPY:";
 
@@ -1281,7 +1280,7 @@ const UNDETERMINED_CHECK: &str = "can differ from the source host's, including l
      in the image.";
 
 /// [`UNDETERMINED_CHECK`] for a record with no install file, where no file
-/// is copied (Mark Russell, 2026-11-15).
+/// is copied.
 const UNDETERMINED_CHECK_NO_FILE: &str = "can differ from the source host's, including links \
      its package install made. Check them with systemctl is-enabled in the image.";
 
@@ -1291,7 +1290,7 @@ const UNDETERMINED_ASSIGNS_ALSO: &str = "It assigns Also=, so the units it names
 
 /// The sentence for an undetermined record with no install file whose
 /// unit file could not be read as text: whether it assigns `Also=` is not
-/// known (Mark Russell, 2026-11-15).
+/// known.
 const UNDETERMINED_MAY_ASSIGN_ALSO: &str = "It may assign Also=, so units it names may be \
      enabled or disabled with it in the image, and inspectah could not read it to check.";
 
@@ -1509,8 +1508,7 @@ pub fn manual_link_lines(link: &ManualLink, staged: &StagedWrites<'_>) -> Vec<St
              {parent}."
         ),
         // The `/etc` files that name the alias are copied, so the advice
-        // never asks for an `Alias=` the export already carries (Mark
-        // Russell, 2026-11-15).
+        // never asks for an `Alias=` the export already carries.
         LinkName::Alias { .. } if link.cause == ManualLinkCause::HostInstallOnly => format!(
             "#   {ALIAS_FILES_COPIED} To carry it, make the link in the Containerfile after the \
              configuration COPY, or run systemctl enable on {unit} after that COPY, which also \
@@ -2966,7 +2964,7 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
 /// Rule 5's file-half reason for a default target recorded with
 /// `fragment`, restated for `set-default`: [`rule_5_file`]'s
 /// `InstallEvidenceChanged` speaks of `[Install]`, which `set-default`
-/// never reads (Mark Russell, 2026-11-15). At the recorded `Local` or
+/// never reads. At the recorded `Local` or
 /// `Shadowed` file's own path it means that file is not staged (only a
 /// `Shadowed` one gives it there) or, staged, holds variants; at any other
 /// path, a file is staged that would load in the recorded one's place.

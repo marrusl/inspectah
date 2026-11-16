@@ -4943,7 +4943,7 @@ fn t30_changed_links_are_install_difference_findings() {
             })
             .collect();
         // A package section that cannot be relied on, (i), also gets the
-        // unit's record naming the `/etc` file (Mark Russell, 2026-11-15).
+        // unit's record naming the `/etc` file.
         let record = expected.iter().find_map(|(.., cause, _)| match cause {
             ManualLinkCause::Undetermined { reason } => Some((*reason, vec![file.clone()])),
             _ => None,

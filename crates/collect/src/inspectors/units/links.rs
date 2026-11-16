@@ -32,8 +32,7 @@ const DEFAULT_TARGET: &str = "default.target";
 
 /// The templates whose instances name a volume or an escaped device path of
 /// the source host. A link to one of their instances is never carried,
-/// whatever its `[Install]` says (§ 7.5 of the units spec). (Mark Russell,
-/// 2026-11-13)
+/// whatever its `[Install]` says (§ 7.5 of the units spec).
 pub(crate) const HOST_DEVICE_TEMPLATES: [&str; 2] =
     ["systemd-cryptsetup@.service", "systemd-fsck@.service"];
 
@@ -347,8 +346,7 @@ pub(crate) struct LinkFindings {
 /// - With a `Known` section that names links, a link outside them is a
 ///   `NotInInstall` link. When the unit is `Enabled` or `Disabled` that is
 ///   all; when neither verb reproduces the links, each link under `/etc`
-///   the section names is a `PartialInstall` link (Mark Russell,
-///   2026-11-15).
+///   the section names is a `PartialInstall` link.
 /// - With an `Undetermined` section, each link under `/etc` is an
 ///   `Undetermined` link with its reason. The unit has one
 ///   [`UndeterminedInstall`] when it assigns `Also=` or has an install file
@@ -530,8 +528,8 @@ fn only_in<T: Clone + PartialEq>(side: &[T], other: &[T]) -> Vec<T> {
 /// - `VendorUndetermined`: as for an effective section that cannot be
 ///   relied on, the unit has no install state and one
 ///   [`UndeterminedInstall`] with the package section's reason and
-///   `install_files`, whether or not it has a link (Mark Russell,
-///   2026-11-15), and each of its links under `/etc` is an `Undetermined`
+///   `install_files`, whether or not it has a link, and each of its links
+///   under `/etc` is an `Undetermined`
 ///   finding with that reason, in place of what [`link_findings`] reported
 ///   for it.
 pub(crate) fn apply_install_difference(
@@ -1231,7 +1229,7 @@ mod tests {
             [(LinkRelation::Wants, "multi-user.target", PartialInstall)]
         );
         // A partial unit's link the section does not name, a `.wants` link
-        // or an alias, is not in the section (Mark Russell, 2026-11-15).
+        // or an alias, is not in the section.
         let partial_and_more = link_findings(
             &unit("a.service"),
             &section(

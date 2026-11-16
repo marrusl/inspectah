@@ -1580,7 +1580,7 @@ fn selinux_two_collected_rows_with_one_subject_dedup_or_conflict() {
 }
 
 /// A collected row mapping the other direction is a conflict whether or not
-/// anything triggers the synthesis (Mark, 2026-10-28): `/srv` is a symlink to
+/// anything triggers the synthesis: `/srv` is a symlink to
 /// `/var/srv` on the image, so the row inverts the base's own layout and is
 /// wrong on its own terms.
 #[test]
@@ -1926,7 +1926,7 @@ fn selinux_header_count_is_plural_for_two_rules() {
 /// synthesis and a conflict are reported the same way everywhere. After the
 /// collision rule the helper can hold a synthesized row the block never
 /// emits, so emission is part of what it reports rather than something each
-/// consumer re-derives (Mark, 2026-10-28).
+/// consumer re-derives.
 #[test]
 fn selinux_equivalences_marks_a_synthesis_the_block_never_emits() {
     use inspectah_pipeline::render::selinux::{EquivalenceOrigin, selinux_equivalences};

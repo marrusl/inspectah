@@ -31,7 +31,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 
 /// Templates whose instance reads a configuration file its unit file does
-/// not name, and that file's path (Mark Russell, 2026-11-13).
+/// not name, and that file's path.
 /// `wg-quick@.service` runs `wg-quick up %i`; the OpenVPN templates pass
 /// `--config %i.conf` from a `WorkingDirectory=`.
 const INSTANCE_CONFIG_TABLE: [(&str, &str); 3] = [
@@ -41,7 +41,7 @@ const INSTANCE_CONFIG_TABLE: [(&str, &str); 3] = [
 ];
 
 /// Templates whose instance keeps data at a path its unit file does not
-/// name, and that path (Mark Russell, 2026-11-13).
+/// name, and that path.
 const INSTANCE_DATA_TABLE: [(&str, &str); 1] = [("dirsrv@.service", "/var/lib/dirsrv/slapd-%i")];
 
 /// Whether `template` is on one of the three fixed lists of § 7.5: the

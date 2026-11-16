@@ -2569,7 +2569,7 @@ fn var_symlink_line(top: &str) -> String {
     )
 }
 /// The rename line for an automount, which keeps its suffix and has a
-/// matching mount unit (decided by the project owner, 2026-11-14).
+/// matching mount unit.
 fn automount_var_symlink_line(top: &str) -> String {
     format!(
         "#   {top} is a symlink into /var in the RHEL bootc base image. The unit must be renamed \
@@ -7484,7 +7484,7 @@ fn undetermined_second_line(unit: &str) -> String {
 
 /// The second line of § 10.9's unit-level block for `unit` when the record
 /// has no install file: no files are copied, so it says nothing about a
-/// copy (Mark Russell, 2026-11-15).
+/// copy.
 fn undetermined_no_file_second_line(unit: &str) -> String {
     format!(
         "#   The image's links for {unit} can differ from the source host's, including links \
@@ -7520,7 +7520,7 @@ fn name(unit: &str) -> UnitName {
 }
 
 /// A drop-in in a directory systemd ranks above `/etc/systemd/system`
-/// hides an `/etc` drop-in of its file name (Mark Russell, 2026-11-15):
+/// hides an `/etc` drop-in of its file name:
 /// `systemctl set-property`'s `50-CPUQuota.conf` under
 /// `/etc/systemd/system.control/app.service.d/` over an `/etc`
 /// `50-CPUQuota.conf` holding `WantedBy=graphical.target`. The hidden
@@ -7808,7 +7808,7 @@ fn a_fleet_row_needs_every_hosts_hiding_drop_in_staged() {
 
 /// A unit with some of the links its `[Install]` names and not others,
 /// and two links under `/etc` its section does not name, a `.wants` link
-/// and an alias (Mark Russell, 2026-11-15): the named link is
+/// and an alias: the named link is
 /// `PartialInstall`, with its "Present:" line, and each unnamed one is
 /// `NotInInstall`, with the hand-made text, in the snapshot, refine's
 /// `manual_links` and both exports. The unit has no state change.
@@ -8784,7 +8784,7 @@ fn t40_an_upheld_vendor_unit_with_a_link_or_also() {
 }
 
 /// A package `[Install]` that cannot be relied on, under an `/etc` shadow
-/// that can (Mark Russell, 2026-11-15): the vendor unit's `UpheldBy=`, at
+/// that can: the vendor unit's `UpheldBy=`, at
 /// its `enable` preset. With a shadow that names no link and no link on the
 /// host, and with a shadow naming `multi-user.target` and that link, the
 /// unit has one record naming the shadow, the block on both routes and in
@@ -9175,7 +9175,7 @@ fn t31_added_links_are_enabled_after_the_copy() {
 /// host. The alias's `HostInstallOnly` block does not tell the operator to
 /// add an `Alias=` the copied shadow already holds: its second line says the
 /// export copies those files and gives the two ways to make the link in the
-/// image (Mark Russell, 2026-11-15). The same block on both routes and in
+/// image. The same block on both routes and in
 /// refine's row, and no `systemctl` instruction names the unit.
 #[test]
 fn t32_a_host_only_alias_is_advised_without_adding_alias() {
@@ -12340,7 +12340,7 @@ fn t39_an_owner_whose_member_is_off_is_an_advisory() {
 /// T39's owner note (§ 7.4), on one host and on a fleet aggregate of two
 /// hosts, in the scanned snapshot, the scan and refine exports' snapshots
 /// and refine's row: one sentence that names no host, so it fits a merged
-/// row as well as a single host's (Mark Russell, 2026-11-15).
+/// row as well as a single host's.
 #[test]
 fn t39_the_member_off_note_fits_a_host_and_a_fleet() {
     const NOTE: &str = "A unit it enables through Also= is not enabled alongside it.";
@@ -13465,7 +13465,7 @@ fn t26_a_local_default_target_follows_its_config_row() {
 /// `graphical.target` under `/etc`: carried while the shadow's drop-in row
 /// is included, and with it excluded omitted with its own reason, which
 /// names the shadow and says the image cannot set it, not the `[Install]`
-/// text `set-default` never reads (Mark Russell, 2026-11-15).
+/// text `set-default` never reads.
 /// The same line on the scan export (the row excluded in the snapshot) and
 /// the refine export, and the same text in refine's view.
 #[test]

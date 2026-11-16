@@ -1066,7 +1066,7 @@ pub enum UnitStateChangeError {
 
 /// The attention note the collector gives an enabled instance of a
 /// template on no list of § 7.5 whose unit file names no path under `/etc`
-/// or `/var` for it (Mark Russell, 2026-11-13). It says nothing of
+/// or `/var` for it. It says nothing of
 /// carriage: the plan decides that ([`INSTANCE_CARRIED_ALONE`]).
 pub const INSTANCE_READS_UNKNOWN: &str = "inspectah does not know what this instance reads: its \
      template is on no list, and its unit file names no path under /etc or /var for it.";

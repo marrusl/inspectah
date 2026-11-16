@@ -644,7 +644,7 @@ fn build_state_changes(
                             );
                         }
                         // A package section that cannot be relied on leaves
-                        // the state unknown too (Mark Russell, 2026-11-15).
+                        // the state unknown too.
                         if found.undetermined.is_some() {
                             reported.insert(subject.name.clone());
                         }
@@ -948,8 +948,7 @@ const ADDS_LINKS_REASON: &str = "Its /etc files add links the package's unit doe
 /// The attention note of an owner at its preset that is a row because a
 /// unit its `Also=` reaches is `Unlinked` or `Other` (§ 7.4 of the units
 /// spec, "An owner at its preset whose member is off"). It names no host,
-/// so it reads true on a fleet aggregate's merged row too (Mark Russell,
-/// 2026-11-15).
+/// so it reads true on a fleet aggregate's merged row too.
 const MEMBER_OFF_REASON: &str = "A unit it enables through Also= is not enabled alongside it.";
 
 /// A unit kept for a state change or as an enabled storage unit, with what
@@ -1338,8 +1337,8 @@ impl InstallEvidence {
 /// ruled out. A drop-in ranked above `/etc` that hides one of them is
 /// recorded in `hiding_drop_ins`. When the unit file or a drop-in that applies cannot be read
 /// as text, the section is `Undetermined(Unreadable)` with `Also=` taken as
-/// assigned, and the state is read from the links alone (Mark Russell,
-/// 2026-11-15). An `Err` names a file or directory that could not be read.
+/// assigned, and the state is read from the links alone. An `Err` names a
+/// file or directory that could not be read.
 fn install_evidence(
     exec: &dyn Executor,
     name: &UnitName,
@@ -1573,7 +1572,7 @@ fn etc_unit_file_warning(name: &UnitName, detail: &str) -> Warning {
 /// The warning for a unit whose unit file or `[Install]` drop-in
 /// `paths` cannot be read as text, built by `warn`, with `paths` among its
 /// fields: its section is undetermined and its state is read from its
-/// links alone (Mark Russell, 2026-11-15).
+/// links alone.
 fn unreadable_install_warning(warn: impl FnOnce(&str) -> Warning, paths: &[String]) -> Warning {
     let mut warning = warn(&format!(
         "{} cannot be read as text, so its [Install] section is undetermined \
