@@ -12,9 +12,9 @@ use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::scheduled::{
     AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer, TimerTrigger,
 };
-use inspectah_core::types::units::{LinkRelation, UnitName, systemd_reads_drop_in};
+use inspectah_core::types::units::{UnitName, systemd_reads_drop_in};
 use inspectah_core::types::warnings::Warning;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Secret-like patterns in cron/at commands that trigger redaction hints.
@@ -112,13 +112,11 @@ impl Inspector for ScheduledTasksInspector {
         );
 
         // --- Existing systemd timers ---
-        let aliases = TimerAliases::read(exec);
         let local_listed = scan_systemd_timers(
             exec,
             &mut section,
             "etc/systemd/system",
             "local",
-            &aliases,
             &mut degraded_reasons,
         );
         scan_systemd_timers(
@@ -126,7 +124,6 @@ impl Inspector for ScheduledTasksInspector {
             &mut section,
             "usr/lib/systemd/system",
             "vendor",
-            &aliases,
             &mut degraded_reasons,
         );
         // A local timer file the listing left out loads over the vendor
@@ -141,7 +138,7 @@ impl Inspector for ScheduledTasksInspector {
                 timer.trigger = TimerTrigger::Unresolved;
             }
         }
-        scan_instance_timers(exec, &mut section, &aliases);
+        scan_instance_timers(exec, &mut section);
 
         // --- At jobs ---
         scan_at_jobs(exec, &mut section, &mut hints, &mut degraded_reasons);
@@ -799,7 +796,6 @@ fn scan_systemd_timers(
     section: &mut ScheduledTaskSection,
     base_dir: &str,
     source_label: &str,
-    aliases: &TimerAliases,
     degraded_reasons: &mut Vec<String>,
 ) -> bool {
     let dir_path = format!("/{base_dir}");
@@ -840,7 +836,7 @@ fn scan_systemd_timers(
             String::new()
         };
         let exec_start = parse_unit_field(&service_text, "ExecStart");
-        let (trigger, trigger_drop_ins) = timer_trigger(exec, name, &timer_text, aliases);
+        let (trigger, trigger_drop_ins) = timer_trigger(exec, name, &timer_text);
 
         section.systemd_timers.push(SystemdTimer {
             name: name.to_string(),
@@ -888,11 +884,7 @@ const SERVICE_SUFFIX: &str = ".service";
 /// inspector finds instances by ([`read_host_links`]); a failed read there
 /// is the units inspector's to report, and an instance it hides is left
 /// undescribed, which rule 5 reads as an unresolved trigger.
-fn scan_instance_timers(
-    exec: &dyn Executor,
-    section: &mut ScheduledTaskSection,
-    aliases: &TimerAliases,
-) {
+fn scan_instance_timers(exec: &dyn Executor, section: &mut ScheduledTaskSection) {
     let (host_links, _failures) = read_host_links(exec);
     for unit in host_links.admin.keys() {
         let Some(parts) = unit.instance() else {
@@ -921,7 +913,7 @@ fn scan_instance_timers(
                 .find(|path| exec.file_exists(Path::new(path)))
                 .map(|path| exec.read_file(Path::new(&path)).unwrap_or_default())
                 .unwrap_or_default();
-            let (trigger, trigger_drop_ins) = timer_trigger(exec, name, &timer_text, aliases);
+            let (trigger, trigger_drop_ins) = timer_trigger(exec, name, &timer_text);
             section.systemd_timers.push(SystemdTimer {
                 name: name.to_owned(),
                 on_calendar: parse_unit_field(&timer_text, "OnCalendar"),
@@ -987,12 +979,7 @@ fn timer_unit_assignments(content: &str) -> Vec<String> {
 /// trigger of a timer whose name is not a unit name, and of a timer whose
 /// drop-in directory cannot be listed in full or whose drop-in cannot be
 /// read: the unit it starts is not known.
-fn timer_trigger(
-    exec: &dyn Executor,
-    name: &str,
-    timer_text: &str,
-    aliases: &TimerAliases,
-) -> (TimerTrigger, Vec<String>) {
+fn timer_trigger(exec: &dyn Executor, name: &str, timer_text: &str) -> (TimerTrigger, Vec<String>) {
     let Ok(unit) = UnitName::try_from(format!("{name}{TIMER_SUFFIX}")) else {
         return (TimerTrigger::Unresolved, Vec::new());
     };
@@ -1042,7 +1029,7 @@ fn timer_trigger(
     let decided = files.iter().enumerate().find_map(|(at, (_, values))| {
         values
             .iter()
-            .find_map(|value| accepted_trigger(value, name, &unit, aliases, at == 0))
+            .find_map(|value| accepted_trigger(value, name, &unit))
             .map(|trigger| (at, trigger))
     });
     let (decided_at, trigger) = decided.unwrap_or_else(|| {
@@ -1053,7 +1040,10 @@ fn timer_trigger(
     // Evidence is an `/etc` drop-in whose leaving out can change the
     // trigger: the one the accepted value is in, and one at or before it
     // that hides a drop-in of its file name, which the image reads without
-    // it. A file after the accepted value cannot change it.
+    // it. A file after the accepted value cannot change it. For an
+    // unresolved trigger every `/etc` drop-in up to and including the
+    // unresolved value stays.
+    let unresolved = trigger == TimerTrigger::Unresolved;
     let hides = |path: &str| {
         found
             .iter()
@@ -1073,7 +1063,7 @@ fn timer_trigger(
         .filter_map(|(at, (path, _))| path.map(|path| (at, path)))
         .filter(|(at, path)| {
             path.starts_with(&format!("{ETC_TIMER_DROP_IN_DIR}/"))
-                && (*at == decided_at || hides(path))
+                && (*at == decided_at || unresolved || hides(path))
         })
         .map(|(_, path)| path.to_owned())
         .collect();
@@ -1081,27 +1071,20 @@ fn timer_trigger(
 }
 
 /// What systemd makes of one `Unit=` `value` in the timer `timer`, whose
-/// name without its type is `name`, read from the timer's own file when
-/// `in_unit_file` and from a drop-in otherwise: `None` when it ignores the
-/// assignment and reads on (empty, a specifier outside its table
-/// ([`trigger_unit_ignored`]), or a name of the timer itself, "Units cannot
+/// name without its type is `name`: `None` when it ignores the assignment
+/// and reads on (empty, a specifier outside its table
+/// ([`trigger_unit_ignored`]), or the timer's own name, "Units cannot
 /// trigger themselves"); otherwise the trigger, [`TimerTrigger::Unresolved`]
-/// when the reader cannot tell what systemd does.
+/// when the reader cannot tell what systemd does: a specifier it does not
+/// expand, a result that is not a unit name, or another `.timer` name.
 ///
-/// systemd's self test, `unit_has_name` (`src/core/unit.c`, 252 and 257),
-/// checks the unit's id and its aliases. `unit_load_fragment`
-/// (`src/core/load-fragment.c`) parses the unit file and only then merges
-/// in the alias names `unit_file_find_fragment` found, so a drop-in's
-/// `Unit=` naming an alias is rejected, while the unit file's is tested
-/// against whichever names the unit had when it was loaded: that is
-/// `Unresolved`. So is a `.timer` name when the aliases could not be read.
-fn accepted_trigger(
-    value: &str,
-    name: &str,
-    timer: &UnitName,
-    aliases: &TimerAliases,
-    in_unit_file: bool,
-) -> Option<TimerTrigger> {
+/// systemd accepts a timer as a timer's trigger (no type check in
+/// `config_parse_trigger_unit` or `src/core/timer.c`, 252 and 257), but
+/// rejects any name of the timer itself, its alias links included
+/// (`unit_has_name`). Whether another `.timer` name is one of those links
+/// turns on files across the search path and in the image that the scan
+/// cannot prove, so it is never read as either.
+fn accepted_trigger(value: &str, name: &str, timer: &UnitName) -> Option<TimerTrigger> {
     if value.is_empty() || trigger_unit_ignored(value) {
         return None;
     }
@@ -1111,71 +1094,10 @@ fn accepted_trigger(
     if expanded == timer.as_str() {
         return None;
     }
-    match aliases.is_alias(timer, &expanded) {
-        Some(true) if !in_unit_file => return None,
-        Some(true) | None => return Some(TimerTrigger::Unresolved),
-        Some(false) => {}
+    if expanded.ends_with(TIMER_SUFFIX) {
+        return Some(TimerTrigger::Unresolved);
     }
     Some(UnitName::try_from(expanded).map_or(TimerTrigger::Unresolved, TimerTrigger::Unit))
-}
-
-/// The alias names of each unit file, as systemd finds them when it loads
-/// the unit: the links directly under `/etc/systemd/system` and
-/// `/usr/lib/systemd/system` whose chain ends at that file
-/// ([`read_host_links`]). An `Alias=` line in `[Install]` makes no name
-/// until `enable` makes its link, so it is not one. The other directories
-/// on the search path (`/run`, `/usr/local/lib`) are not read.
-enum TimerAliases {
-    /// Each unit file name's aliases.
-    Known(BTreeMap<UnitName, BTreeSet<UnitName>>),
-    /// A read of the links failed: any `.timer` name may be an alias.
-    Unknown,
-}
-
-impl TimerAliases {
-    /// The aliases on `exec`, or [`Self::Unknown`] when a read of the links
-    /// failed.
-    fn read(exec: &dyn Executor) -> Self {
-        let (links, failures) = read_host_links(exec);
-        if !failures.is_empty() || links.admin_unreadable {
-            return Self::Unknown;
-        }
-        let mut aliases: BTreeMap<UnitName, BTreeSet<UnitName>> = BTreeMap::new();
-        for (unit, found) in links.admin.iter().chain(&links.vendor) {
-            for link in found.iter().filter(|l| l.relation == LinkRelation::Alias) {
-                aliases
-                    .entry(unit.clone())
-                    .or_default()
-                    .insert(link.parent.clone());
-            }
-        }
-        Self::Known(aliases)
-    }
-
-    /// Whether `candidate` is an alias of the timer `timer`: for an
-    /// instance, an alias of its template that is itself a template, with
-    /// the instance filled in. `None` when the aliases are unknown and
-    /// `candidate` is a `.timer` name; an alias always has its unit's type.
-    fn is_alias(&self, timer: &UnitName, candidate: &str) -> Option<bool> {
-        let aliases = match self {
-            Self::Known(aliases) => aliases,
-            Self::Unknown => return (!candidate.ends_with(TIMER_SUFFIX)).then_some(false),
-        };
-        let found = match timer.instance() {
-            None => aliases
-                .get(timer)
-                .is_some_and(|names| names.iter().any(|alias| alias.as_str() == candidate)),
-            Some(parts) => aliases.get(&parts.template()).is_some_and(|names| {
-                names.iter().any(|alias| {
-                    alias.is_template()
-                        && alias.as_str().split_once('@').is_some_and(|(prefix, _)| {
-                            candidate == format!("{prefix}@{}{TIMER_SUFFIX}", parts.instance())
-                        })
-                })
-            }),
-        };
-        Some(found)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1348,10 +1270,6 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
 
-    /// Aliases read from a host with no alias link.
-    fn no_aliases() -> TimerAliases {
-        TimerAliases::Known(BTreeMap::new())
-    }
     use inspectah_core::traits::progress::NullProgress;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::system::SourceSystem;
@@ -1749,7 +1667,6 @@ mod tests {
                 &MockExecutor::new(),
                 name,
                 &format!("[Timer]\nUnit={value}\n"),
-                &no_aliases(),
             )
             .0
         };
@@ -1809,12 +1726,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                timer_trigger(
-                    &MockExecutor::new(),
-                    name,
-                    &format!("[Timer]\n{timer}"),
-                    &no_aliases()
-                ),
+                timer_trigger(&MockExecutor::new(), name, &format!("[Timer]\n{timer}")),
                 (unit(trigger), Vec::new()),
                 "{timer:?} for {name}"
             );
@@ -1872,12 +1784,7 @@ mod tests {
             ("Unit=report.timer\n", "report", "report.service"),
         ] {
             assert_eq!(
-                timer_trigger(
-                    &MockExecutor::new(),
-                    name,
-                    &format!("[Timer]\n{timer}"),
-                    &no_aliases()
-                ),
+                timer_trigger(&MockExecutor::new(), name, &format!("[Timer]\n{timer}")),
                 (unit(trigger), Vec::new()),
                 "{timer:?} for {name}"
             );
@@ -1899,12 +1806,7 @@ mod tests {
                 "[Timer]\nUnit=worker.service\n",
             );
         assert_eq!(
-            timer_trigger(
-                &exec,
-                "report",
-                "[Timer]\nOnCalendar=daily\n",
-                &no_aliases()
-            ),
+            timer_trigger(&exec, "report", "[Timer]\nOnCalendar=daily\n"),
             (
                 unit("worker.service"),
                 vec!["/etc/systemd/system/report.timer.d/20-unit.conf".to_owned()]
@@ -1912,23 +1814,15 @@ mod tests {
         );
     }
 
-    /// A vendor `report.timer` with the vendor alias link
-    /// `alias.timer -> report.timer`, no `Unit=` in its file, and the `/etc`
+    /// A vendor `report.timer` with no `Unit=` in its file, and the `/etc`
     /// drop-ins `10-alias.conf` (`Unit=alias.timer`) and `20-unit.conf`
     /// (`Unit=worker.service`).
     fn aliased_timer_host() -> MockExecutor {
         MockExecutor::new()
-            .with_dir(
-                "/usr/lib/systemd/system",
-                vec!["report.timer", "alias.timer"],
-            )
+            .with_dir("/usr/lib/systemd/system", vec!["report.timer"])
             .with_file(
                 "/usr/lib/systemd/system/report.timer",
                 "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n",
-            )
-            .with_link(
-                "/usr/lib/systemd/system/alias.timer",
-                "/usr/lib/systemd/system/report.timer",
             )
             .with_dir(
                 "/etc/systemd/system/report.timer.d",
@@ -1944,91 +1838,63 @@ mod tests {
             )
     }
 
-    /// systemd's "Units cannot trigger themselves" test (`unit_has_name`,
-    /// 252 and 257) checks the timer's aliases too, and the alias links are
-    /// merged into the unit's names before its drop-ins are read. So an
-    /// `/etc` drop-in's `Unit=alias.timer`, naming the timer by its alias
-    /// link, is skipped like the timer's own name: the trigger is the next
-    /// `Unit=`, `worker.service`, and its drop-in is the evidence.
+    /// A `Unit=` naming another `.timer` is `Unresolved`, wherever the
+    /// link that could make it one of the timer's own names sits, or with
+    /// none: systemd rejects a name of the timer itself and accepts another
+    /// timer (no type check in `config_parse_trigger_unit` or `timer.c`,
+    /// 252 and 257), and which it is depends on alias links across the
+    /// search path and the image that the scan cannot prove. The drop-ins
+    /// up to it stay evidence.
     #[test]
-    fn a_drop_in_naming_the_timer_by_an_alias_is_skipped() {
-        let timers = timers_on(&aliased_timer_host());
-        let report = timers
-            .iter()
-            .find(|t| t.name == "report")
-            .unwrap_or_else(|| panic!("presence: report.timer's description in {timers:?}"));
-        assert_eq!(
-            report.trigger,
-            TimerTrigger::Unit("worker.service".to_owned().try_into().unwrap())
-        );
-        assert_eq!(
-            report.trigger_drop_ins,
-            ["/etc/systemd/system/report.timer.d/20-unit.conf"]
-        );
-
-        let unit = |name: &str| TimerTrigger::Unit(name.to_owned().try_into().unwrap());
-        let name = |n: &str| -> UnitName { n.to_owned().try_into().unwrap() };
-        let known = |timer: &str, alias: &str| {
-            TimerAliases::Known(BTreeMap::from([(
-                name(timer),
-                BTreeSet::from([name(alias)]),
-            )]))
-        };
-        let exec = aliased_timer_host();
-        let daily = "[Timer]\nOnCalendar=daily\n";
-        // Control: with no alias link, `alias.timer` is another unit and is
-        // the trigger.
-        assert_eq!(
-            timer_trigger(&exec, "report", daily, &no_aliases()),
-            (
-                unit("alias.timer"),
-                vec!["/etc/systemd/system/report.timer.d/10-alias.conf".to_owned()]
-            )
-        );
-        // With the links unread, a `.timer` name may be an alias, so the
-        // trigger is unknown; a `.service` name is not.
-        assert_eq!(
-            timer_trigger(&exec, "report", daily, &TimerAliases::Unknown).0,
-            TimerTrigger::Unresolved
-        );
-        assert_eq!(
-            timer_trigger(
-                &MockExecutor::new(),
-                "report",
-                "[Timer]\nUnit=worker.service\n",
-                &TimerAliases::Unknown
-            )
-            .0,
-            unit("worker.service")
-        );
-        // In the timer's own file, which systemd parses before it merges
-        // the alias names in, an alias is unknown: `Unresolved`.
-        assert_eq!(
-            timer_trigger(
-                &MockExecutor::new(),
-                "report",
-                "[Timer]\nUnit=alias.timer\nUnit=worker.service\n",
-                &known("report.timer", "alias.timer")
-            )
-            .0,
-            TimerTrigger::Unresolved
-        );
-        // An instance: a template alias of its template, with the instance
-        // filled in, is a name of the timer; a plain alias is not.
-        for (alias, trigger) in [
-            ("other@.timer", unit("x@a.service")),
-            ("other.timer", unit("other@a.timer")),
+    fn another_timers_name_is_unresolved() {
+        for link in [
+            Some("/etc/systemd/system/alias.timer"),
+            Some("/usr/lib/systemd/system/alias.timer"),
+            Some("/run/systemd/system/alias.timer"),
+            None,
         ] {
-            let exec = MockExecutor::new()
-                .with_dir("/etc/systemd/system/worker@a.timer.d", vec!["10-a.conf"])
-                .with_file(
-                    "/etc/systemd/system/worker@a.timer.d/10-a.conf",
-                    "[Timer]\nUnit=other@%i.timer\nUnit=x@%i.service\n",
-                );
+            let exec = match link {
+                Some(path) => {
+                    aliased_timer_host().with_link(path, "/usr/lib/systemd/system/report.timer")
+                }
+                None => aliased_timer_host(),
+            };
+            let timers = timers_on(&exec);
+            let report = timers
+                .iter()
+                .find(|t| t.name == "report")
+                .unwrap_or_else(|| panic!("presence: report.timer's description in {timers:?}"));
+            assert_eq!(report.trigger, TimerTrigger::Unresolved, "{link:?}");
             assert_eq!(
-                timer_trigger(&exec, "worker@a", daily, &known("worker@.timer", alias)).0,
+                report.trigger_drop_ins,
+                ["/etc/systemd/system/report.timer.d/10-alias.conf"],
+                "{link:?}"
+            );
+        }
+        // The timer's own file, and the instance form through `%i`, the
+        // same. A `.service` name still resolves.
+        for (timer, name, trigger) in [
+            (
+                "Unit=other.timer\nUnit=worker.service\n",
+                "report",
+                TimerTrigger::Unresolved,
+            ),
+            (
+                "Unit=alias@%i.timer\n",
+                "worker@a",
+                TimerTrigger::Unresolved,
+            ),
+            ("Unit=alias@a.timer\n", "worker@a", TimerTrigger::Unresolved),
+            (
+                "Unit=worker.service\n",
+                "report",
+                TimerTrigger::Unit("worker.service".to_owned().try_into().unwrap()),
+            ),
+        ] {
+            assert_eq!(
+                timer_trigger(&MockExecutor::new(), name, &format!("[Timer]\n{timer}")).0,
                 trigger,
-                "{alias}"
+                "{timer:?} for {name}"
             );
         }
     }
@@ -2053,22 +1919,12 @@ mod tests {
                 "[Timer]\nUnit=vendor.service\n",
             );
         assert_eq!(
-            timer_trigger(
-                &exec,
-                "report",
-                "[Timer]\nOnCalendar=daily\n",
-                &no_aliases()
-            ),
+            timer_trigger(&exec, "report", "[Timer]\nOnCalendar=daily\n"),
             (unit("report.service"), vec![HIDING.to_owned()])
         );
         // The timer's own `Unit=` comes before every drop-in.
         assert_eq!(
-            timer_trigger(
-                &exec,
-                "report",
-                "[Timer]\nUnit=own.service\n",
-                &no_aliases()
-            ),
+            timer_trigger(&exec, "report", "[Timer]\nUnit=own.service\n"),
             (unit("own.service"), Vec::new())
         );
     }
@@ -2106,12 +1962,7 @@ mod tests {
             );
         let unit = |name: &str| TimerTrigger::Unit(name.to_owned().try_into().unwrap());
         assert_eq!(
-            timer_trigger(
-                &exec,
-                "report",
-                "[Timer]\nOnCalendar=daily\n",
-                &no_aliases()
-            ),
+            timer_trigger(&exec, "report", "[Timer]\nOnCalendar=daily\n"),
             (
                 unit("other.service"),
                 vec!["/etc/systemd/system/report.timer.d/10-unit.conf".to_owned()]
@@ -2120,21 +1971,11 @@ mod tests {
         // The timer's own `Unit=` comes first and stands over the drop-ins,
         // so none of them is evidence: leaving one out changes nothing.
         assert_eq!(
-            timer_trigger(
-                &exec,
-                "report",
-                "[Timer]\nUnit=own.service\n",
-                &no_aliases()
-            ),
+            timer_trigger(&exec, "report", "[Timer]\nUnit=own.service\n"),
             (unit("own.service"), Vec::new())
         );
         assert_eq!(
-            timer_trigger(
-                &MockExecutor::new(),
-                "plain",
-                "[Timer]\nOnCalendar=daily\n",
-                &no_aliases()
-            ),
+            timer_trigger(&MockExecutor::new(), "plain", "[Timer]\nOnCalendar=daily\n"),
             (unit("plain.service"), Vec::new())
         );
         for (timer, trigger) in [
@@ -2144,7 +1985,7 @@ mod tests {
             ("[Timer]\nUnit=\n", "plain.service"),
         ] {
             assert_eq!(
-                timer_trigger(&MockExecutor::new(), "plain", timer, &no_aliases()),
+                timer_trigger(&MockExecutor::new(), "plain", timer),
                 (unit(trigger), Vec::new()),
                 "{timer:?}"
             );
@@ -2290,12 +2131,7 @@ mod tests {
                 "[Timer]\nUnit=vendor-instance.service\n",
             );
         assert_eq!(
-            timer_trigger(
-                &exec,
-                "worker@a",
-                "[Timer]\nOnCalendar=daily\n",
-                &no_aliases()
-            ),
+            timer_trigger(&exec, "worker@a", "[Timer]\nOnCalendar=daily\n"),
             (
                 unit("etc-template@a.service"),
                 vec!["/etc/systemd/system/worker@.timer.d/20-b.conf".to_owned()]
@@ -2303,12 +2139,7 @@ mod tests {
         );
         // The plain timer `worker` reads neither directory.
         assert_eq!(
-            timer_trigger(
-                &exec,
-                "worker",
-                "[Timer]\nOnCalendar=daily\n",
-                &no_aliases()
-            ),
+            timer_trigger(&exec, "worker", "[Timer]\nOnCalendar=daily\n"),
             (unit("worker.service"), Vec::new())
         );
     }

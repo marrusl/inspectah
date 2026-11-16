@@ -395,16 +395,17 @@ showed, and the build failed with no warning anywhere.
   `accepted_trigger` before the first accepted value is chosen. Skipping
   it matters: recorded as the trigger, the timer's own staged file would
   satisfy `local_trigger_missing` while the real trigger is excluded.
-  **The timer's names include its alias links.** `unit_has_name` (252 and
-  257) checks the id and the aliases, and `unit_load_fragment` merges the
-  alias names in after it parses the unit file and before the drop-ins
-  are read. So a drop-in's `Unit=` naming an alias link (under
-  `/etc/systemd/system` or `/usr/lib/systemd/system`, chain resolved,
-  `TimerAliases` from `read_host_links`) is skipped; in the unit file,
-  parsed before the merge, an alias is `Unresolved`; and with the links
-  unread any `.timer` name is `Unresolved`. An `Alias=` line in
-  `[Install]` is no name until `enable` makes its link. `/run` and
-  `/usr/local/lib` aliases are not read.
+  **Another timer's name is `Unresolved`.** systemd accepts a timer as a
+  timer's trigger (no type check in `config_parse_trigger_unit` or
+  `timer.c`, 252 and 257) but rejects any name of the timer itself
+  (`unit_has_name`), and the scan cannot prove for the image whether a
+  `.timer` name is the timer's own. So `accepted_trigger` stops on any
+  `.timer` name other than the timer's own file name, in the unit file
+  or a drop-in, and the enable is not carried. Do not try to tell the
+  timer's other names apart from another timer's: each attempt left a
+  case where a wrong trigger reached the plan. For an `Unresolved`
+  trigger, `trigger_drop_ins` keeps every `/etc` drop-in up to and
+  including the unresolved one.
   **`trigger_drop_ins` holds only the `/etc` drop-ins whose leaving out
   can change the trigger**: the one that holds the accepted `Unit=`, and
   one at or before it that hides a drop-in of its file name. A drop-in

@@ -6301,22 +6301,27 @@ fn t37_a_self_trigger_is_skipped_through_the_export() {
     assert!(acts(&cf, "enable", "report.timer"), "{cf}");
 }
 
-/// T37, a self-trigger through an alias: a vendor `report.timer` with the
-/// vendor alias link `alias.timer`, and `/etc` drop-ins `10-alias.conf`
-/// (`Unit=alias.timer`, which systemd rejects as the timer's own name)
-/// and `20-unit.conf` (`Unit=worker.service`). The trigger is
-/// `worker.service` and `20-unit.conf` is its evidence: excluding that
-/// drop-in, or `worker.service`, omits the timer's enable; with both
-/// included it is carried.
+/// T37, another timer's name: a vendor `report.timer` with `/etc`
+/// drop-ins `10-alias.conf` (`Unit=alias.timer`) and `20-unit.conf`
+/// (`Unit=worker.service`). Whether `alias.timer` is a name of the timer,
+/// which systemd skips, or another timer, which it accepts, turns on alias
+/// links the scan cannot prove for the image, so the trigger is
+/// `Unresolved` and the enable is omitted with everything included: with
+/// the alias link under `/usr/lib`, under `/run`, or with none. With the
+/// link under `/etc`, a link made by hand, the timer has no state change
+/// and no `systemctl` line either way. The instance form, `Unit=alias@a.timer` for `worker@a.timer`, is
+/// `Unresolved` too. Control: with `10-alias.conf` naming a `.service`
+/// instead, the trigger resolves and the enable is carried.
 #[test]
-fn t37_a_self_trigger_by_alias_is_skipped_through_the_export() {
+fn t37_another_timers_name_leaves_the_trigger_unresolved() {
     const ALIAS_DROP_IN: &str = "/etc/systemd/system/report.timer.d/10-alias.conf";
     const UNIT_DROP_IN: &str = "/etc/systemd/system/report.timer.d/20-unit.conf";
-    let snap = scan(
+    let host = |first: &str| {
         UnitHost::new()
             .base_package("glibc")
             .unit("report.timer", "enabled")
             .unit("worker.service", "static")
+            .unit("first.service", "static")
             .preset("disable *")
             .vendor_unit(
                 "report.timer",
@@ -6324,47 +6329,83 @@ fn t37_a_self_trigger_by_alias_is_skipped_through_the_export() {
                  [Install]\nWantedBy=timers.target\n",
                 Some("glibc"),
             )
-            .link(
-                "/usr/lib/systemd/system/alias.timer",
-                "/usr/lib/systemd/system/report.timer",
-            )
             .etc_unit(
                 "worker.service",
                 "[Service]\nType=oneshot\nExecStart=/usr/local/bin/worker\n",
             )
-            .file(ALIAS_DROP_IN, "[Timer]\nUnit=alias.timer\n")
-            .file(UNIT_DROP_IN, "[Timer]\nUnit=worker.service\n"),
-    );
-    let timer = snap
+            .etc_unit(
+                "first.service",
+                "[Service]\nType=oneshot\nExecStart=/usr/local/bin/first\n",
+            )
+            .file(ALIAS_DROP_IN, &format!("[Timer]\nUnit={first}\n"))
+            .file(UNIT_DROP_IN, "[Timer]\nUnit=worker.service\n")
+    };
+    let report = |snap: &InspectionSnapshot| {
+        snap.scheduled_tasks
+            .as_ref()
+            .and_then(|st| st.systemd_timers.iter().find(|t| t.name == "report"))
+            .cloned()
+            .expect("presence: report.timer's description")
+    };
+    let unresolved = "# Omitted: report.timer (its Unit= could not be resolved to a unit \
+                      name, so inspectah cannot tell whether that unit is in the image)";
+    for link in [
+        Some("/etc/systemd/system/alias.timer"),
+        Some("/usr/lib/systemd/system/alias.timer"),
+        Some("/run/systemd/system/alias.timer"),
+        None,
+    ] {
+        let host = match link {
+            Some(path) => host("alias.timer").link(path, "/usr/lib/systemd/system/report.timer"),
+            None => host("alias.timer"),
+        };
+        let snap = scan(host);
+        assert_eq!(
+            report(&snap).trigger,
+            inspectah_core::types::scheduled::TimerTrigger::Unresolved,
+            "{link:?}"
+        );
+        // A hand-made alias link under `/etc` is not a link the timer's
+        // `[Install]` makes, so the timer has no state change and no line
+        // at all; with every other placement its enable is omitted.
+        let row = changes_named(&snap, "report.timer") == 1;
+        assert_eq!(
+            row,
+            link != Some("/etc/systemd/system/alias.timer"),
+            "{link:?}"
+        );
+        for (route, cf) in both_routes(&snap) {
+            assert!(
+                in_no_systemctl_instruction(&cf, "report.timer"),
+                "{link:?} {route}:\n{cf}"
+            );
+            assert_eq!(
+                omitted(&cf, "report.timer"),
+                row.then_some(unresolved),
+                "{link:?} {route}:\n{cf}"
+            );
+        }
+    }
+
+    let control = scan(host("first.service"));
+    assert_eq!(report(&control).trigger, trigger_unit("first.service"));
+    assert_eq!(report(&control).trigger_drop_ins, [ALIAS_DROP_IN]);
+    for (route, cf) in both_routes(&control) {
+        assert!(acts(&cf, "enable", "report.timer"), "{route}:\n{cf}");
+    }
+
+    let instance = scan(t37_instance_host("").file(
+        "/etc/systemd/system/worker@a.timer.d/10-alias.conf",
+        "[Timer]\nUnit=alias@a.timer\n",
+    ));
+    let timer = instance
         .scheduled_tasks
         .as_ref()
-        .and_then(|st| st.systemd_timers.iter().find(|t| t.name == "report"))
-        .expect("presence: report.timer's description");
-    assert_eq!(timer.trigger, trigger_unit("worker.service"));
-    assert_eq!(timer.trigger_drop_ins, [UNIT_DROP_IN]);
-
-    let carried = containerfile_in(&exported_after(&snap, &[]));
-    assert!(acts(&carried, "enable", "report.timer"), "{carried}");
-    let drop_in = ItemId::DropIn {
-        path: UNIT_DROP_IN.into(),
-    };
-    let cf = containerfile_in(&exported_after(&snap, &[(drop_in, false)]));
-    assert!(in_no_systemctl_instruction(&cf, "report.timer"), "{cf}");
-    assert!(
-        omitted(&cf, "report.timer").is_some_and(|line| line.contains(&format!(
-            "the drop-in {UNIT_DROP_IN} that sets its Unit= is not in the export"
-        ))),
-        "{cf}"
-    );
-    let cf = containerfile_in(&exported_after(
-        &snap,
-        &[(config_item(&etc_path("worker.service")), false)],
-    ));
-    assert!(in_no_systemctl_instruction(&cf, "report.timer"), "{cf}");
+        .and_then(|st| st.systemd_timers.iter().find(|t| t.name == "worker@a"))
+        .expect("presence: worker@a.timer's description");
     assert_eq!(
-        omitted(&cf, "report.timer"),
-        Some(trigger_not_staged("worker.service").as_str()),
-        "{cf}"
+        timer.trigger,
+        inspectah_core::types::scheduled::TimerTrigger::Unresolved
     );
 }
 
