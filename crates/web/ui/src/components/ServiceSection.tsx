@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useState } from "react";
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button, Label } from "@patternfly/react-core";
 import type {
   DeclinedView,
@@ -27,6 +27,7 @@ import {
   OUTCOME_LABELS,
   RELATION_LABELS,
   UNDETERMINED_CAUSE_LABEL,
+  branchHeadOf,
   causeLabel,
   filterBarDrawn,
   followUpFlagText,
@@ -34,6 +35,7 @@ import {
   keyFields,
   liveRegionText,
   outcomeCounts,
+  pinsInView,
   showGroups,
   shownOutcomeRowCount,
   type FilterValue,
@@ -144,6 +146,9 @@ const NO_QUERY = "";
 /** No pinned branch. */
 const NO_PINS: ReadonlySet<OccurrenceKey> = new Set();
 
+/** Hands a toggleable row's element to the section, by occurrence key. */
+type RowRef = (el: HTMLDivElement | null) => void;
+
 /** Every group open. */
 const NONE_COLLAPSED = Object.fromEntries(GROUP_ORDER.map((id) => [id, false])) as Record<
   GroupId,
@@ -245,6 +250,7 @@ interface DropInRowProps {
   isInstallDropIn?: boolean;
   isPending: boolean;
   onToggle: (path: string, currentInclude: boolean) => void;
+  rowRef: RowRef;
 }
 
 function DropInRow({
@@ -256,6 +262,7 @@ function DropInRow({
   isInstallDropIn = false,
   isPending,
   onToggle,
+  rowRef,
 }: DropInRowProps) {
   const diBucket = extractTriageBucket(di.triage);
   const diBadge = badgeTextForTriage(di.triage);
@@ -288,6 +295,7 @@ function DropInRow({
 
   return (
     <div
+      ref={rowRef}
       role="row"
       aria-label={di.path}
       aria-describedby={diLocked ? lockedReasonId : undefined}
@@ -703,16 +711,18 @@ interface DefaultTargetRowProps {
   unitKey: RowKey;
   isPending: boolean;
   onToggle: (currentInclude: boolean) => void;
+  rowRef: RowRef;
 }
 
 /**
  * The default target the export sets with `systemctl set-default`, and
  * its toggle. `declined` is the export's reason when it writes no line.
  */
-function DefaultTargetRow({ target: t, unitKey, isPending, onToggle }: DefaultTargetRowProps) {
+function DefaultTargetRow({ target: t, unitKey, isPending, onToggle, rowRef }: DefaultTargetRowProps) {
   const declinedId = "declined-default-target";
   return (
     <div
+      ref={rowRef}
       role="row"
       aria-label={t.target}
       tabIndex={0}
@@ -770,8 +780,10 @@ interface UnitBranchViewProps {
   /** Holds the section's one tab stop (today's rule: the first unit row, when there is no target). */
   isTabStop: boolean;
   pendingKeys: ReadonlySet<string>;
-  onToggleService: (unit: string, currentInclude: boolean) => void;
-  onToggleDropin: (path: string, currentInclude: boolean) => void;
+  /** The toggled row's occurrence key comes first: it decides the pin (§ 6.4). */
+  onToggleService: (toggled: OccurrenceKey, unit: string, currentInclude: boolean) => void;
+  onToggleDropin: (toggled: OccurrenceKey, path: string, currentInclude: boolean) => void;
+  rowRef: (key: OccurrenceKey) => RowRef;
 }
 
 /** A unit row and the drop-ins nested under it (§ 6.2, § 6.12). */
@@ -782,6 +794,7 @@ function UnitBranchView({
   pendingKeys,
   onToggleService,
   onToggleDropin,
+  rowRef,
 }: UnitBranchViewProps) {
   const svc = branch.head.record.data;
   const bucket = extractTriageBucket(svc.triage);
@@ -819,6 +832,7 @@ function UnitBranchView({
     <div data-testid={`service-group-${svc.unit}`}>
       {/* Parent service row */}
       <div
+        ref={rowRef(branch.head.occurrenceKey)}
         role="row"
         aria-label={svc.unit}
         tabIndex={isTabStop ? 0 : -1}
@@ -832,7 +846,7 @@ function UnitBranchView({
           if (svcLocked) return;
           if (e.key === " " || e.key === "x") {
             e.preventDefault();
-            onToggleService(svc.unit, svc.include);
+            onToggleService(branch.head.occurrenceKey, svc.unit, svc.include);
           }
         }}
       >
@@ -843,7 +857,7 @@ function UnitBranchView({
               role="checkbox"
               id={rowId(`switch-service-${svc.unit}`)}
               checked={svc.include}
-              onChange={() => onToggleService(svc.unit, svc.include)}
+              onChange={() => onToggleService(branch.head.occurrenceKey, svc.unit, svc.include)}
               disabled={isPending || svcLocked}
               aria-label={
                 svcLocked
@@ -981,7 +995,8 @@ function UnitBranchView({
           parentLocked={svcLocked}
           isInstallDropIn={svc.install_drop_ins?.includes(di.record.data.path) ?? false}
           isPending={pendingKeys.has(dropinKey(di.record.data.path))}
-          onToggle={onToggleDropin}
+          onToggle={(path, include) => onToggleDropin(di.occurrenceKey, path, include)}
+          rowRef={rowRef(di.occurrenceKey)}
         />
       ))}
     </div>
@@ -1057,19 +1072,56 @@ export function ServiceSection({
     setAnnouncement("");
   }
 
+  // Pinned branches, by the occurrence key of the row heading each (§ 6.4,
+  // § 12). They go with the section on unmount. The filter's return to
+  // "All" above clears none: it follows a toggle.
+  const [pins, setPins] = useState<ReadonlySet<OccurrenceKey>>(NO_PINS);
+  // Each view keeps only the pins whose occurrence key it still holds.
+  const [pinsCheckedFor, setPinsCheckedFor] = useState(keyed);
+  if (pinsCheckedFor !== keyed) {
+    setPinsCheckedFor(keyed);
+    setPins((prev) => pinsInView(prev, keyed));
+  }
+  /** Clears every pin: a filter change here; a query change or a reveal later (§ 6.11). */
+  const clearPins = useCallback(() => setPins(NO_PINS), []);
+
   const shown = useMemo(
-    () => showGroups(groups, { filter, query: NO_QUERY, pins: NO_PINS }),
-    [groups, filter],
+    () => showGroups(groups, { filter, query: NO_QUERY, pins }),
+    [groups, filter, pins],
   );
 
   const changeFilter = useCallback(
     (value: FilterValue) => {
       setFilter(value);
+      clearPins();
       const next = showGroups(groups, { filter: value, query: NO_QUERY, pins: NO_PINS });
       setAnnouncement(liveRegionText(value, shownOutcomeRowCount(next)));
     },
-    [groups],
+    [groups, clearPins],
   );
+
+  // Toggleable rows by occurrence key, so focus returns to the occurrence
+  // the operator toggled (§ 6.13), never to a twin with its row key.
+  const rowElements = useRef(new Map<OccurrenceKey, HTMLDivElement>());
+  const rowRef = useCallback(
+    (key: OccurrenceKey): RowRef =>
+      (el) => {
+        if (el) rowElements.current.set(key, el);
+        else rowElements.current.delete(key);
+      },
+    [],
+  );
+  const [focusRequest, setFocusRequest] = useState<{ key: OccurrenceKey } | null>(null);
+  // After the op settles, the toggled row gets focus back if focus was lost
+  // meanwhile (a browser blurs a control disabled while its request runs).
+  // Focus the operator moved elsewhere stays where it is.
+  useLayoutEffect(() => {
+    if (!focusRequest) return;
+    const active = document.activeElement;
+    if (active === null || active === document.body) {
+      rowElements.current.get(focusRequest.key)?.focus();
+    }
+  }, [focusRequest]);
 
   // Every group opens on mount; the state goes with the section (§ 6.2).
   const [collapsed, setCollapsed] = useState<Record<GroupId, boolean>>(NONE_COLLAPSED);
@@ -1078,8 +1130,12 @@ export function ServiceSection({
     [],
   );
 
+  // Every toggle the operator makes pins the branch that holds the row
+  // (§ 6.4), before the op leaves, so a failed op leaves it shown too.
   const sendInclude = useCallback(
-    (key: string, op: RefinementOp) => {
+    (key: string, op: RefinementOp, toggled: OccurrenceKey) => {
+      const head = branchHeadOf(groups, toggled);
+      setPins((prev) => (prev.has(head) ? prev : new Set(prev).add(head)));
       runGuarded(key, () =>
         applyOp(op)
           .then(onViewUpdate)
@@ -1087,47 +1143,48 @@ export function ServiceSection({
             onMutationError(
               err instanceof Error ? err : new Error(String(err)),
             ),
-          ),
+          )
+          .finally(() => setFocusRequest({ key: toggled })),
       );
     },
-    [runGuarded, onViewUpdate, onMutationError],
+    [groups, runGuarded, onViewUpdate, onMutationError],
   );
 
   const handleToggleService = useCallback(
-    (unit: string, currentInclude: boolean) => {
+    (toggled: OccurrenceKey, unit: string, currentInclude: boolean) => {
       sendInclude(serviceKey(unit), {
         op: "SetInclude",
         target: {
           item_id: { kind: "Unit", key: { unit } },
           include: !currentInclude,
         },
-      });
+      }, toggled);
     },
     [sendInclude],
   );
 
   const handleToggleDropin = useCallback(
-    (path: string, currentInclude: boolean) => {
+    (toggled: OccurrenceKey, path: string, currentInclude: boolean) => {
       sendInclude(dropinKey(path), {
         op: "SetInclude",
         target: {
           item_id: { kind: "DropIn", key: { path } },
           include: !currentInclude,
         },
-      });
+      }, toggled);
     },
     [sendInclude],
   );
 
   const handleToggleDefaultTarget = useCallback(
-    (currentInclude: boolean) => {
+    (toggled: OccurrenceKey, currentInclude: boolean) => {
       sendInclude(DEFAULT_TARGET_KEY, {
         op: "SetInclude",
         target: {
           item_id: { kind: "DefaultTarget" },
           include: !currentInclude,
         },
-      });
+      }, toggled);
     },
     [sendInclude],
   );
@@ -1191,7 +1248,8 @@ export function ServiceSection({
               target={group.target.record.data}
               unitKey={group.target.rowKey}
               isPending={pendingKeys.has(DEFAULT_TARGET_KEY)}
-              onToggle={handleToggleDefaultTarget}
+              onToggle={(include) => handleToggleDefaultTarget(group.target!.occurrenceKey, include)}
+              rowRef={rowRef(group.target.occurrenceKey)}
             />
           )}
 
@@ -1204,6 +1262,7 @@ export function ServiceSection({
               pendingKeys={pendingKeys}
               onToggleService={handleToggleService}
               onToggleDropin={handleToggleDropin}
+              rowRef={rowRef}
             />
           ))}
 
@@ -1234,7 +1293,8 @@ export function ServiceSection({
                       parentExcluded={false}
                       parentLocked={false}
                       isPending={pendingKeys.has(dropinKey(di.record.data.path))}
-                      onToggle={handleToggleDropin}
+                      onToggle={(path, include) => handleToggleDropin(di.occurrenceKey, path, include)}
+                      rowRef={rowRef(di.occurrenceKey)}
                     />
                   ))}
                 </div>
