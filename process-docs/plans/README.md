@@ -33,6 +33,7 @@ Implementers ran the work and never came back to tick them.
 | [2026-07-08-language-package-detection-v2-fix-round.md](2026-07-08-language-package-detection-v2-fix-round.md) | Executed | 2026-11-04 |
 | [2026-08-15-usr-walk-presentation-plan.md](2026-08-15-usr-walk-presentation-plan.md) | **Superseded — do not execute** | 2026-11-04 |
 | [2026-10-27-refine-ui-fixup-phase-0.md](2026-10-27-refine-ui-fixup-phase-0.md) | Executed (phase 0 only) | 2026-11-04 |
+| [2026-11-13-unified-systemd-units-plan.md](2026-11-13-unified-systemd-units-plan.md) | Executed (phases 1 to 5) | 2026-11-16 |
 | [ansible-role-inspectah-plan.md](ansible-role-inspectah-plan.md) | Executed (in the role repo) | 2026-11-04 |
 | [crates-reorganization.md](crates-reorganization.md) | Executed | 2026-11-04 |
 
@@ -44,6 +45,8 @@ Implementers ran the work and never came back to tick them.
   was deleted afterwards. The TUI is the only case.
 - **Executed (phase 0 only)** — a staged plan whose later phases are separate
   releases with their own plans.
+- **Executed (phases 1 to 5)** — a staged plan whose last phase is separate
+  work with no plan yet.
 - **Superseded** — replaced by a later design. The marker names the successor.
 
 ## Two things that mislead readers here

@@ -1,5 +1,16 @@
 # Unified systemd unit collection: implementation plan
 
+> ## Executed (phases 1 to 5) (2026-11-16)
+>
+> **Checkbox state below is not evidence** — most boxes were never ticked.
+> This plan is complete; phase 6 (the dedicated refine section, spec § 11.2)
+> is not in it, has not started, and is separate work.
+> Classified from the tree:
+> - Merged at `aacb5e17 Merge branch 'refs/heads/feat/unified-systemd-units'`.
+> - `crates/core/src/types/units.rs` and the units inspector in
+>   `crates/collect/src/inspectors/units/` are in the tree.
+> - The spec is in `process-docs/specs/implemented/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking. Every task is test-first: write the failing test the task names, run it and see it fail for the stated reason, then implement.
 
 **Goal:** one model of systemd unit state for every unit type that exists as a static unit file, replacing the service-only collection, so that a socket, path, timer, target, slice or package-owned storage unit the administrator switched against its preset is carried into the image or omitted with a stated reason.
@@ -8,7 +19,7 @@
 
 **Tech stack:** Rust, serde, insta, proptest, axum, React and TypeScript with Vitest. One new dev-dependency: `proptest` in `inspectah-core`, for T2's property test (Task 2.1), which the spec requires.
 
-**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `6a045e69`. The spec is the contract. Section numbers (§) and test ids (T1 to T44) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
+**Spec:** `process-docs/specs/implemented/2026-11-13-unified-systemd-units.md` at `6a045e69`. The spec is the contract. Section numbers (§) and test ids (T1 to T44) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
 
 **Branch:** `feat/unified-systemd-units`, cut from `main` by Task 1.1. Phases 1 to 5 land on it and it merges to `main` once, after phase 5 (§ 15).
 
@@ -827,7 +838,7 @@ Before Task 5.1: merge `main` into the branch and run the gate. `main` at `a9567
 
 ### Task 5.7: Merge (project owner)
 
-- [ ] With review gate 5 passed and Task 5.6's gate met, the project owner merges `feat/unified-systemd-units` to `main`. The spec moves from `proposed/` to `implemented/` in the merge's follow-up, with the plan's status marker and a row in `process-docs/plans/README.md`, per that file's rule.
+- [x] With review gate 5 passed and Task 5.6's gate met, the project owner merges `feat/unified-systemd-units` to `main`. The spec moves from `proposed/` to `implemented/` in the merge's follow-up, with the plan's status marker and a row in `process-docs/plans/README.md`, per that file's rule.
 
 ---
 
