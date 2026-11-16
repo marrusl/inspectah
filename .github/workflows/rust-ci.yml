@@ -18,6 +18,7 @@ on:
       - 'crates/web/build.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'testdata/**'
       - '**.tar.gz'
       - 'scripts/**'
@@ -68,9 +69,12 @@ jobs:
           node-version: '26'
           cache: 'npm'
           cache-dependency-path: crates/web/ui/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      # Installs the version and components rust-toolchain.toml names, the
+      # same toolchain the pre-commit hook gets locally. Not
+      # dtolnay/rust-toolchain: it picks its version from its own @rev and
+      # never reads the file, so it would put the version in a second place.
+      - name: Install Rust toolchain
+        run: rustup toolchain install && rustup show active-toolchain
       - uses: Swatinem/rust-cache@v2
       # Every independent gate reports, rather than the first failure hiding
       # the rest. On the first run after this workflow was revived, one

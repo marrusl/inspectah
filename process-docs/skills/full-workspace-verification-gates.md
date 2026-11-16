@@ -1,6 +1,6 @@
 ---
 name: full-workspace-verification-gates
-description: Running the full clippy/test/frontend gate suite correctly: the single clippy command the pre-commit hook and CI both run, what that hook does and does not gate (nothing for a frontend-only commit, `tsc && vite build` but never vitest or Playwright for a mixed commit), measured gate timings (2026-10-31 table, superseded figures noted) and why a slower run means something is wrong, why an agent cannot time its own run, and why periodic `cargo clean` is maintenance rather than risk.
+description: Running the full clippy/test/frontend gate suite correctly: the single clippy command the pre-commit hook and CI both run, the pinned toolchain in `rust-toolchain.toml` and how to bump it, what that hook does and does not gate (nothing for a frontend-only commit, `tsc && vite build` but never vitest or Playwright for a mixed commit), measured gate timings (2026-10-31 table, superseded figures noted) and why a slower run means something is wrong, why an agent cannot time its own run, and why periodic `cargo clean` is maintenance rather than risk.
 ---
 
 # Running the Full Verification Gate Suite
@@ -23,6 +23,21 @@ warnings, such as an unused variable or a dead function, print and exit
 0 (measured 2026-11-08). `--all-targets` lints test code as well as lib
 and bin targets. A green hook or a green CI run means the workspace
 has no lint from `clippy::all`; it says nothing about compiler warnings.
+
+**Both run the same clippy version, too.** `rust-toolchain.toml` at the
+repo root pins the toolchain to an exact release, and it is the only
+place the version is written: rustup reads it for every cargo command
+run inside the clone, and both `rust-ci.yml` and `build-binary.yml`
+install from it with `rustup toolchain install`. CI used to follow
+`@stable`, so on 2026-11-15 the 1.100.0 release widened
+`needless_bool` and turned main red with no code change.
+
+To bump, in one commit or PR: change `channel` in `rust-toolchain.toml`,
+run `cargo clippy --workspace --all-targets -- -D clippy::all` (the hook
+does this when the file is staged), and fix whatever the new lints
+flag. Never bump the file alone and fix the lints later. Targets are
+per toolchain, so a release build after a bump needs `rustup target add`
+run again inside the clone (see `release-process.md`).
 
 **The hook does not gate TypeScript.** A frontend-only commit gets
 nothing from it: the fast path at `.githooks/pre-commit:18-27` exits

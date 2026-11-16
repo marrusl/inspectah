@@ -11,6 +11,7 @@ on:
       - 'crates/web/ui/package.json'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
 
 jobs:
   build:
@@ -27,9 +28,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      # Version from rust-toolchain.toml, as in rust-ci.yml. Targets stay
+      # out of that file so local builds do not download them.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+          rustup show active-toolchain
 
       - uses: Swatinem/rust-cache@v2
         with:

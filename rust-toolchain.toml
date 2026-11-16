@@ -1,0 +1,8 @@
+# The one place the Rust version is set. rustup reads this for local
+# builds and the pre-commit hook, and every CI workflow installs from it,
+# so the hook and CI always run the same clippy. Bumping it is deliberate:
+# see process-docs/skills/full-workspace-verification-gates.md.
+[toolchain]
+channel = "1.100.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
