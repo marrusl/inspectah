@@ -1534,9 +1534,11 @@ export function ServiceSection({
               nowhere. It closes the group of the parent's kind (§ 6.8). */}
           {group.orphans.length > 0 && (
             <div data-testid="dropin-orphans">
-              <h3 className="inspectah-service-section__orphan-heading">
+              {/* Not a heading: the block sits in the group's rowgroup, which
+                  may own rows only, and a generic element is transparent to it. */}
+              <div className="inspectah-service-section__orphan-heading">
                 Other drop-in overrides
-              </h3>
+              </div>
               <p className="inspectah-service-section__orphan-note">
                 These overrides have no unit-state decision row.
               </p>

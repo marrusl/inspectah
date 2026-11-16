@@ -223,6 +223,25 @@ describe("ServiceSection orphan drop-ins (U21)", () => {
     expect(orphans).toHaveTextContent("These overrides have no unit-state decision row.");
   });
 
+  it.each(["kitchen-sink", "planted"] as const)(
+    "gives nothing outside a row a role a rowgroup may not own, with %s (aria-required-children)",
+    (fixture) => {
+      renderUnits(loadUnitFields(fixture));
+      const rowgroups = Array.from(document.querySelectorAll('[role="rowgroup"]'));
+      expect(rowgroups.length).toBeGreaterThan(0);
+      const outsideRows = rowgroups.flatMap((rg) =>
+        Array.from(rg.querySelectorAll("*")).filter((el) => el.closest('[role="row"]') === null),
+      );
+      expect(outsideRows.length).toBeGreaterThan(0);
+      for (const el of outsideRows) {
+        // Text the block shows outside its rows is generic: no heading,
+        // list or other element with a role of its own.
+        expect(el.getAttribute("role"), el.outerHTML.slice(0, 80)).toBeNull();
+        expect(["DIV", "SPAN", "P"], el.outerHTML.slice(0, 80)).toContain(el.tagName);
+      }
+    },
+  );
+
   it("puts planted's orphan with no kind in Other units", () => {
     const planted = loadUnitFields("planted");
     const orphan = planted.unit_dropins.find((d) => d.kind === undefined)!;
