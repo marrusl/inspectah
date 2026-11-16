@@ -3711,8 +3711,11 @@ fn rule_5_outcome(snap: &InspectionSnapshot, unit: &str) -> Result<(), OmissionR
 /// section, by the lexical test, or carries a recorded vendor drop-in's
 /// name. Files in the type-wide and dash-prefix directories, and a
 /// `[Service]` override under a name of its own, are not install files.
-/// The instance cases are omitted with the placeholder for now
-/// ([`every_instance_row_is_omitted_with_the_placeholder`]).
+/// For an instance: an unrecorded install file in the template's `.d`
+/// fails, the same file recorded and staged passes, a local template
+/// recorded for the instance and staged alone passes, and a unit file
+/// staged at the instance's own name fails, as does a template file staged
+/// under `/etc` for an instance recorded from its vendor template (T25 (h)).
 #[test]
 fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
     use UnitState::{Disabled, Enabled};
@@ -3723,6 +3726,9 @@ fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
     let vendor_named = etc_drop_in("app.service", "10-members.conf");
     let dotdot = "/etc/systemd/system/app.service.d/../10-install.conf";
     let typewide = "/etc/systemd/system/service.d/10-install.conf";
+    let template_dir = etc_drop_in("w@.service", "10-install.conf");
+    let etc_template = "/etc/systemd/system/w@.service";
+    let own_name = "/etc/systemd/system/w@a.service";
     let dash = "/etc/systemd/system/a-.service.d/10-install.conf";
     let evidence = |path: &str| {
         Err(OmissionReason::InstallEvidenceChanged {
@@ -3828,6 +3834,40 @@ fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
             vec![(&extra, "[Install]\nWantedBy=a.target \\\n  b.target\n")],
             evidence(&extra),
         ),
+        (
+            "an instance: an unrecorded [Install] drop-in in the template's .d",
+            change_with("w@a.service", vendor("w@.service"), Enabled),
+            vec![(&template_dir, install)],
+            evidence(&template_dir),
+        ),
+        (
+            "an instance: the template's .d drop-in recorded and staged",
+            with_install_files(
+                change_with("w@a.service", vendor("w@.service"), Enabled),
+                &[&template_dir],
+                &[],
+            ),
+            vec![(&template_dir, install)],
+            Ok(()),
+        ),
+        (
+            "an instance: a local template recorded for it, staged alone",
+            change_with("w@a.service", local("w@.service"), Enabled),
+            vec![(etc_template, install)],
+            Ok(()),
+        ),
+        (
+            "an instance: a unit file staged at its own name",
+            change_with("w@a.service", local("w@.service"), Enabled),
+            vec![(etc_template, install), (own_name, install)],
+            evidence(own_name),
+        ),
+        (
+            "an instance recorded from its vendor template, a template file staged",
+            change_with("w@a.service", vendor("w@.service"), Enabled),
+            vec![(etc_template, "[Install]\nAlso=x.service\n")],
+            evidence(etc_template),
+        ),
     ];
     for (label, change, files, expected) in cases {
         let unit = change.unit().name().as_str().to_owned();
@@ -3836,85 +3876,200 @@ fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
     }
 }
 
-/// § 15, phase 4: every instance row is omitted with the placeholder,
-/// which decides before every other rule, whatever the files staged for
-/// it and whatever its verb. Rule 5's instance cases (the template's `.d`,
-/// a local template staged alone, a unit file at the instance's own name)
-/// are decided by the placeholder until instances are carried. Control:
-/// the same rows under a name that is not an instance are planned or
-/// declined by rule 5.
+/// § 7.5, phase 5: an instance row is planned like any row. Its
+/// `disable`, and its `mask` over the template's file or with no file, are
+/// carried; nothing declines a row for being an instance.
 #[test]
-fn every_instance_row_is_omitted_with_the_placeholder() {
-    use UnitState::{Disabled, Enabled, Masked};
-    let install = "[Install]\nWantedBy=multi-user.target\n";
-    let template_dir = etc_drop_in("w@.service", "10-install.conf");
-    type Case<'a> = (&'a str, UnitStateChange, Vec<(&'a str, &'a str)>);
-    let cases: Vec<Case> = vec![
-        (
-            "an unrecorded [Install] drop-in in the template's .d",
-            change_with("w@a.service", vendor("w@.service"), Enabled),
-            vec![(&template_dir, install)],
-        ),
-        (
-            "the template's .d drop-in recorded and staged",
-            with_install_files(
-                change_with("w@a.service", vendor("w@.service"), Enabled),
-                &[&template_dir],
-                &[],
-            ),
-            vec![(&template_dir, install)],
-        ),
-        (
-            "a local template recorded for an instance, staged alone",
-            change_with("w@a.service", local("w@.service"), Enabled),
-            vec![("/etc/systemd/system/w@.service", install)],
-        ),
-        (
-            "a unit file staged at the instance's own name",
-            change_with("w@a.service", local("w@.service"), Enabled),
-            vec![
-                ("/etc/systemd/system/w@.service", install),
-                ("/etc/systemd/system/w@a.service", install),
-            ],
-        ),
+fn an_instance_disable_or_mask_is_planned_like_any_row() {
+    use UnitState::{Disabled, Masked};
+    for (label, change) in [
         (
             "a disable",
             change_with("w@a.service", vendor("w@.service"), Disabled),
-            vec![],
         ),
         (
-            "a mask",
-            change_with("w@a.service", UnitFragment::Absent, Masked),
-            vec![],
+            "a mask over the template",
+            change_with("w@a.service", vendor("w@.service"), Masked),
         ),
-    ];
-    for (label, change, files) in cases {
-        let snap = units_snapshot(vec![change], files);
-        assert_eq!(
-            rule_5_outcome(&snap, "w@a.service"),
-            Err(OmissionReason::InstanceNotCarriedYet),
-            "{label}"
-        );
+        (
+            "a mask with no file",
+            change_with("w@a.service", UnitFragment::Absent, Masked),
+        ),
+    ] {
+        let snap = units_snapshot(vec![change], vec![]);
+        assert_eq!(rule_5_outcome(&snap, "w@a.service"), Ok(()), "{label}");
     }
+}
+
+/// § 10.2 rule 6 and § 10.8's table, on the plan: an instance's `enable`
+/// is carried only when every `required_config` path is in the export as
+/// the host had it. Each failing case names the path; a directory passes
+/// on the entries under it. A `Flagged` finding and a scan taken with no
+/// redaction carry the enable with a note naming the path. Rule 6 asks
+/// nothing of a `disable`, nor of a unit that is not an instance.
+#[test]
+fn rule_6_needs_each_instance_configuration_in_the_export() {
+    use inspectah_core::types::redaction::{
+        DetectionMethod, RedactionFinding, RedactionKind, RedactionState,
+    };
+    use inspectah_pipeline::render::unit_plan::ConfigGap;
+    const CONF: &str = "/etc/w/a.conf";
+    const DIR: &str = "/etc/w/a.d";
+    let instance = |required: &[&str], state| {
+        let mut change = change_with("w@a.service", vendor("w@.service"), state);
+        change.required_config = required.iter().map(|p| (*p).to_owned()).collect();
+        change
+    };
+    let finding = |path: &str, kind| RedactionFinding {
+        path: path.into(),
+        source: "file".into(),
+        kind,
+        pattern: "test".into(),
+        remediation: String::new(),
+        line: None,
+        replacement: None,
+        detection_method: DetectionMethod::Pattern,
+        confidence: None,
+        finding_kind: None,
+    };
+    let gap = |path: &str, gap| {
+        Err(OmissionReason::InstanceConfigNotStaged {
+            path: path.to_owned(),
+            gap,
+        })
+    };
+    let notes = |snap: &InspectionSnapshot| plan_units(snap, &staged_writes(snap)).instance_notes;
+
+    let clean = units_snapshot(
+        vec![instance(&[CONF], UnitState::Enabled)],
+        vec![(CONF, "x")],
+    );
+    assert_eq!(rule_5_outcome(&clean, "w@a.service"), Ok(()), "clean");
+    assert!(notes(&clean).is_empty());
+
+    let missing = units_snapshot(vec![instance(&[CONF], UnitState::Enabled)], vec![]);
     assert_eq!(
-        OmissionReason::InstanceNotCarriedYet.describe(),
-        "template instances are not carried yet"
+        rule_5_outcome(&missing, "w@a.service"),
+        gap(CONF, ConfigGap::NotInSnapshot),
+        "not in the snapshot"
     );
 
-    // The controls: not instances, so rule 5 decides.
-    let planned = units_snapshot(
-        vec![change_with("w.service", local("w.service"), Enabled)],
-        vec![("/etc/systemd/system/w.service", install)],
+    let mut excluded = clean.clone();
+    excluded.config.as_mut().unwrap().files[0].disposition = FindingKind::excluded();
+    assert_eq!(
+        rule_5_outcome(&excluded, "w@a.service"),
+        gap(CONF, ConfigGap::Excluded),
+        "excluded"
     );
-    assert_eq!(rule_5_outcome(&planned, "w.service"), Ok(()));
-    let declined = units_snapshot(
-        vec![change_with("w.service", local("w.service"), Enabled)],
-        vec![],
+
+    let mut uncaptured = clean.clone();
+    uncaptured.config.as_mut().unwrap().files[0].disposition = FindingKind::advisory(
+        inspectah_core::types::AdvisoryType::ContentNotCaptured,
+        "the read failed",
     );
     assert_eq!(
-        rule_5_outcome(&declined, "w.service"),
-        Err(OmissionReason::UnitFileNotStaged)
+        rule_5_outcome(&uncaptured, "w@a.service"),
+        gap(CONF, ConfigGap::NotCaptured),
+        "not captured"
     );
+
+    for kind in [RedactionKind::Inline, RedactionKind::Excluded] {
+        let mut redacted = clean.clone();
+        redacted.redactions = vec![finding(CONF, kind.clone())];
+        assert_eq!(
+            rule_5_outcome(&redacted, "w@a.service"),
+            gap(CONF, ConfigGap::Redacted),
+            "{kind:?}"
+        );
+    }
+
+    let mut flagged = clean.clone();
+    flagged.redactions = vec![finding(CONF, RedactionKind::Flagged)];
+    assert_eq!(rule_5_outcome(&flagged, "w@a.service"), Ok(()), "flagged");
+    assert_eq!(
+        notes(&flagged),
+        [(
+            UnitName::try_from("w@a.service".to_owned()).unwrap(),
+            format!(
+                "Its configuration {CONF} holds a value the redaction pass flagged and did not \
+                 change. Check it before the image is used."
+            )
+        )]
+    );
+
+    let mut raw = clean.clone();
+    raw.redaction_state = Some(RedactionState::Raw);
+    assert_eq!(rule_5_outcome(&raw, "w@a.service"), Ok(()), "raw");
+    assert_eq!(
+        notes(&raw)[0].1,
+        format!(
+            "Its configuration {CONF} is staged as the source host had it: the scan was taken \
+             with --no-redaction, so no secret in it was redacted."
+        )
+    );
+
+    // A directory: the entries under it decide, and the one that falls
+    // short is named.
+    let under = |files| units_snapshot(vec![instance(&[DIR], UnitState::Enabled)], files);
+    let both = under(vec![
+        ("/etc/w/a.d/one.conf", "x"),
+        ("/etc/w/a.d/two.conf", "y"),
+    ]);
+    assert_eq!(rule_5_outcome(&both, "w@a.service"), Ok(()), "directory");
+    let mut one_out = both.clone();
+    one_out.config.as_mut().unwrap().files[1].disposition = FindingKind::excluded();
+    assert_eq!(
+        rule_5_outcome(&one_out, "w@a.service"),
+        gap("/etc/w/a.d/two.conf", ConfigGap::Excluded),
+        "a file under the directory excluded"
+    );
+    let sibling = under(vec![("/etc/w/a.dx", "x")]);
+    assert_eq!(
+        rule_5_outcome(&sibling, "w@a.service"),
+        gap(DIR, ConfigGap::NotInSnapshot),
+        "a sibling with a longer name is not under it"
+    );
+
+    // Rule 6 asks nothing of a `disable`, nor of a unit that is not an
+    // instance.
+    let disabled = units_snapshot(vec![instance(&[CONF], UnitState::Disabled)], vec![]);
+    assert_eq!(rule_5_outcome(&disabled, "w@a.service"), Ok(()), "disable");
+    let mut plain = change_with("w.service", vendor("w.service"), UnitState::Enabled);
+    plain.required_config = vec![CONF.to_owned()];
+    let plain = units_snapshot(vec![plain], vec![]);
+    assert_eq!(
+        rule_5_outcome(&plain, "w.service"),
+        Ok(()),
+        "not an instance"
+    );
+
+    // The texts.
+    for (gap, text) in [
+        (
+            ConfigGap::Excluded,
+            "its configuration /etc/w/a.conf is excluded from the export",
+        ),
+        (
+            ConfigGap::NotCaptured,
+            "its configuration /etc/w/a.conf was not captured",
+        ),
+        (
+            ConfigGap::Redacted,
+            "its configuration /etc/w/a.conf holds a redacted value; provision the secret on \
+             the deployed host and enable the unit there",
+        ),
+        (
+            ConfigGap::NotInSnapshot,
+            "its configuration /etc/w/a.conf is not in the export",
+        ),
+    ] {
+        let reason = OmissionReason::InstanceConfigNotStaged {
+            path: CONF.to_owned(),
+            gap,
+        };
+        assert_eq!(reason.describe(), text, "{gap:?}");
+        assert_eq!(reason.name(), "InstanceConfigNotStaged");
+    }
 }
 
 /// § 10.2 rule 5: in a fleet aggregate, a recorded install drop-in whose

@@ -222,13 +222,18 @@ fn line_view(line: DeclinedLine, reason: &OmissionReason) -> DeclinedView {
 
 /// One view per state change row, each with the plan's decline, if any.
 /// A row the plan does not decline (planned, or excluded, as a
-/// runtime updater is) has none.
+/// runtime updater is) has none. A carried instance's attention notes from
+/// the plan (§ 10.8) follow the row's own note, one sentence after another.
 fn unit_state_views(states: Vec<RefinedServiceState>, plan: &UnitPlan) -> Vec<UnitStateView> {
     let declined: BTreeMap<&UnitName, (UnitAction, &OmissionReason)> = plan
         .declined
         .iter()
         .map(|(name, action, reason)| (name, (*action, reason)))
         .collect();
+    let mut notes: BTreeMap<&UnitName, Vec<&str>> = BTreeMap::new();
+    for (name, note) in &plan.instance_notes {
+        notes.entry(name).or_default().push(note);
+    }
     states
         .into_iter()
         .map(|RefinedServiceState { entry, triage }| {
@@ -267,7 +272,15 @@ fn unit_state_views(states: Vec<RefinedServiceState>, plan: &UnitPlan) -> Vec<Un
                 include: entry.disposition.is_included(),
                 locked: entry.locked,
                 triage,
-                attention_reason: entry.attention_reason.clone(),
+                attention_reason: {
+                    let sentences: Vec<&str> = entry
+                        .attention_reason
+                        .as_deref()
+                        .into_iter()
+                        .chain(notes.get(name).into_iter().flatten().copied())
+                        .collect();
+                    (!sentences.is_empty()).then(|| sentences.join(" "))
+                },
                 declined: declined
                     .get(name)
                     .map(|(action, reason)| declined_view(name, *action, reason)),

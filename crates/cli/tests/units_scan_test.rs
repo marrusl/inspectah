@@ -1654,10 +1654,8 @@ fn a_merged_vendor_row_beside_a_local_or_shadowed_row_in_both_orders() {
 /// export unchanged (the backslashes stay inside the quotes).
 ///
 /// Built by hand, with the instance a vendor unit whose file is its
-/// template, which the state change type admits for an enabled instance.
-/// Instances are not carried yet, so the instance is the placeholder's
-/// `# Omitted:` line, and a name that is not an instance carries the
-/// `\x2d` operand.
+/// template, which the state change type admits for an enabled instance,
+/// and a name that is not an instance with the same `\x2d`.
 #[test]
 fn t13_unusual_unit_names_are_quoted_operands_through_both_exports() {
     use inspectah_core::types::units::{
@@ -1701,9 +1699,9 @@ fn t13_unusual_unit_names_are_quoted_operands_through_both_exports() {
         ..Default::default()
     });
     let expected = vec![
-        format!(r"# Omitted: probe@a\x2db.service ({INSTANCE_PLACEHOLDER})"),
         "RUN systemctl enable -- \\".to_owned(),
         r"    'probe-a\x2db.service' \".to_owned(),
+        r"    'probe@a\x2db.service' \".to_owned(),
         "    '-.slice'".to_owned(),
         "RUN systemctl disable -- \\".to_owned(),
         format!("    '{long}'"),
@@ -6431,10 +6429,11 @@ fn worker_timer(snap: &InspectionSnapshot) -> &inspectah_core::types::scheduled:
 /// local template with its trigger expanded for the instance, from the
 /// template's file or from a drop-in in the template's `<prefix>@.timer.d`,
 /// which is then the trigger's evidence and a row refine can exclude. Its
-/// enable is still declined by the phase 4 placeholder: the omissions this
-/// trigger leads to (`TimerTriggerNotStaged` with the trigger's file
-/// excluded, `TimerTriggerEvidenceChanged` with the drop-in excluded) are
-/// asserted once Task 5.2 carries instances.
+/// enable is carried. With the trigger's file excluded (the template
+/// `worker@.service` or `other@.service`, which is what loads for the
+/// instance), it is omitted as `TimerTriggerNotStaged`; with the template
+/// directory's drop-in excluded, as `TimerTriggerEvidenceChanged`; with
+/// the timer template's own file excluded, as `UnitFileNotStaged`.
 #[test]
 fn t37_an_instance_timers_trigger_is_recorded_from_its_template() {
     for (extra, trigger) in [
@@ -6451,7 +6450,27 @@ fn t37_an_instance_timers_trigger_is_recorded_from_its_template() {
             change(&snap, WORKER_INSTANCE_TIMER).current_state(),
             UnitState::Enabled
         );
-        assert_placeholder_omits(&snap, WORKER_INSTANCE_TIMER, extra);
+        assert_instance_carried(&snap, WORKER_INSTANCE_TIMER, extra);
+        let template = format!("{}@.service", trigger.split('@').next().expect("a prefix"));
+        let not_staged = containerfile_in(&exported_after(
+            &snap,
+            &[(config_item(&etc_path(&template)), false)],
+        ));
+        assert_eq!(
+            omitted(&not_staged, WORKER_INSTANCE_TIMER),
+            Some(
+                format!(
+                    "# Omitted: {WORKER_INSTANCE_TIMER} (its unit {trigger} is not in the \
+                     export, and a timer whose unit is missing does not start)"
+                )
+                .as_str()
+            ),
+            "{extra:?}:\n{not_staged}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&not_staged, WORKER_INSTANCE_TIMER),
+            "{extra:?}:\n{not_staged}"
+        );
         // The instance's file is its template's, which is staged: the
         // scheduled section lists it as carried on both routes, never as
         // not carried.
@@ -6494,6 +6513,11 @@ fn t37_an_instance_timers_trigger_is_recorded_from_its_template() {
                 .is_none_or(|l| !l.contains(WORKER_INSTANCE_TIMER)),
             "{extra:?}, excluded:\n{excluded}"
         );
+        assert_eq!(
+            omitted(&excluded, WORKER_INSTANCE_TIMER),
+            Some(format!("# Omitted: {WORKER_INSTANCE_TIMER} ({NOT_STAGED}").as_str()),
+            "{extra:?}, excluded:\n{excluded}"
+        );
     }
 
     let snap =
@@ -6510,7 +6534,27 @@ fn t37_an_instance_timers_trigger_is_recorded_from_its_template() {
             false,
         ))
         .expect("the template drop-in is a row refine can exclude");
-    assert_placeholder_omits(&snap, WORKER_INSTANCE_TIMER, "drop-in");
+    assert_instance_carried(&snap, WORKER_INSTANCE_TIMER, "drop-in");
+    let changed = containerfile_in(&exported_after(
+        &snap,
+        &[(drop_in_item(WORKER_UNIT_DROP_IN), false)],
+    ));
+    assert_eq!(
+        omitted(&changed, WORKER_INSTANCE_TIMER),
+        Some(
+            format!(
+                "# Omitted: {WORKER_INSTANCE_TIMER} (the drop-in {WORKER_UNIT_DROP_IN} that sets \
+                 its Unit= is not in the export, so the unit it would start is not the one \
+                 recorded)"
+            )
+            .as_str()
+        ),
+        "{changed}"
+    );
+    assert_eq!(
+        declined_in(&refine, WORKER_INSTANCE_TIMER).map(|d| d.reason),
+        Some("TimerTriggerEvidenceChanged".to_owned())
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -9220,31 +9264,21 @@ fn t40_an_excluded_install_file_omits_the_undetermined_block() {
 }
 
 // ---------------------------------------------------------------------
-// § 7.5 and § 15: enabled template instances are collected and, until
-// instances are carried, omitted with a placeholder reason (T27, T22's
-// instance repeats, T39's state changes, T23's device link and T24's
-// instance cases through the scan).
+// § 7.5, § 10.2 rule 6 and § 10.8: template instances are collected and
+// carried like any unit, an enable only with its configuration (T27, T22's
+// instance repeats, T39's state changes, T23's device link, T24's
+// instance cases, T28 and T29, through the scan).
 // ---------------------------------------------------------------------
 
-/// The placeholder reason every instance row is omitted with (§ 15).
-const INSTANCE_PLACEHOLDER: &str = "template instances are not carried yet";
 /// The vendor template of the instance hosts.
 const T_TEMPLATE: &str = "t@.service";
 const T_TEMPLATE_PATH: &str = "/usr/lib/systemd/system/t@.service";
 
-/// The `# Omitted:` line the placeholder gives `unit`.
-fn placeholder_line(unit: &str) -> String {
-    format!("# Omitted: {unit} ({INSTANCE_PLACEHOLDER})")
-}
-
-/// The placeholder as the refine view holds it.
-fn placeholder_declined(unit: &str) -> inspectah_refine::projection::DeclinedView {
-    inspectah_refine::projection::DeclinedView {
-        renders: inspectah_refine::projection::DeclinedRenders::Omitted,
-        reason: "InstanceNotCarriedYet".into(),
-        text: format!("{unit} ({INSTANCE_PLACEHOLDER})"),
-    }
-}
+/// § 7.5's attention note for an instance of a template on no list whose
+/// unit file names nothing it reads.
+const INSTANCE_READS_UNKNOWN: &str = "inspectah does not know what this instance reads: its \
+     template is on no list, and its unit file names no path under /etc or /var for it. It is \
+     carried on its unit file alone.";
 
 /// A template `t@.service` wanted by `multi-user.target`, with
 /// `DefaultInstance=` when given.
@@ -9332,35 +9366,76 @@ fn changes_named(snap: &InspectionSnapshot, unit: &str) -> usize {
         .count()
 }
 
-/// `unit`'s row is omitted with the placeholder on both routes and in the
-/// refine view, and no `systemctl` instruction names it.
-fn assert_placeholder_omits(snap: &InspectionSnapshot, unit: &str, label: &str) {
+/// `unit`'s row is carried with its own verb on both routes, with no
+/// `# Omitted:` line, and its refine row declines nothing.
+fn assert_instance_carried(snap: &InspectionSnapshot, unit: &str, label: &str) {
+    let verb = change(snap, unit).implied_action().to_string();
     assert_eq!(
         declined_in(&session(snap), unit),
-        Some(placeholder_declined(unit)),
+        None,
         "{label}: the refine row"
     );
     for (route, containerfile) in both_routes(snap) {
-        assert_eq!(
-            count_lines(&containerfile, &placeholder_line(unit)),
-            1,
+        assert!(
+            acts(&containerfile, &verb, unit),
             "{label}, {route}:\n{containerfile}"
         );
         assert!(
-            in_no_systemctl_instruction(&containerfile, unit),
+            omitted(&containerfile, unit).is_none(),
             "{label}, {route}:\n{containerfile}"
         );
     }
 }
 
+/// `unit`'s row is declined on both routes with the `# Omitted:` line
+/// `line`, its refine row holds the same text under `reason`, and no
+/// `systemctl` instruction names it.
+fn assert_instance_omitted(snap: &InspectionSnapshot, unit: &str, line: &str, reason: &str) {
+    for (route, containerfile) in both_routes(snap) {
+        assert_eq!(
+            omitted(&containerfile, unit),
+            Some(line),
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, unit),
+            "{route}:\n{containerfile}"
+        );
+    }
+    assert_eq!(
+        declined_in(&session(snap), unit),
+        Some(inspectah_refine::projection::DeclinedView {
+            renders: inspectah_refine::projection::DeclinedRenders::Omitted,
+            reason: reason.into(),
+            text: line
+                .strip_prefix("# Omitted: ")
+                .expect("an omitted line")
+                .to_owned(),
+        })
+    );
+}
+
+/// `unit`'s row as the refine view shows it.
+fn unit_row(snap: &InspectionSnapshot, unit: &str) -> inspectah_refine::projection::UnitStateView {
+    session(snap)
+        .decisions()
+        .unit_states
+        .iter()
+        .find(|r| r.unit.as_str() == unit)
+        .cloned()
+        .unwrap_or_else(|| panic!("no unit row for {unit}"))
+}
+
 /// T27: an enabled instance found through the directory scan, its only
 /// trace a link under `/etc`, has a state change with the template as its
-/// file and an inventory entry; its refine row exists and shows the
-/// placeholder, which is the `# Omitted:` line on both routes, and no
-/// instruction enables it. Linked from two parents, it is one state change
-/// and one line.
+/// file and an inventory entry, and a refine row. Its template names no
+/// path for it and is on no list, so its enable is carried on both routes
+/// with § 7.5's attention note on the row and in refine. Linked from two
+/// parents, it is one state change and one operand. With an
+/// `EnvironmentFile=` naming `/etc/t/%i.conf` and no such file, rule 6
+/// omits the enable; with the file, it is carried and has no note.
 #[test]
-fn t27_an_enabled_instance_found_by_its_link_is_omitted_for_now() {
+fn t27_an_enabled_instance_found_by_its_link_is_carried() {
     const UNIT: &str = "t@site.service";
     let snap = scan(template_host(&["disable *"], None, &["site"]));
     assert_eq!(change(&snap, UNIT).current_state(), UnitState::Enabled);
@@ -9371,15 +9446,15 @@ fn t27_an_enabled_instance_found_by_its_link_is_omitted_for_now() {
             owning_package: None,
         }
     );
-    assert!(
-        session(&snap)
-            .decisions()
-            .unit_states
-            .iter()
-            .any(|r| r.unit.as_str() == UNIT),
-        "the refine row"
+    assert_eq!(
+        change(&snap, UNIT).attention_reason.as_deref(),
+        Some(INSTANCE_READS_UNKNOWN)
     );
-    assert_placeholder_omits(&snap, UNIT, "one parent");
+    assert_eq!(
+        unit_row(&snap, UNIT).attention_reason.as_deref(),
+        Some(INSTANCE_READS_UNKNOWN)
+    );
+    assert_instance_carried(&snap, UNIT, "one parent");
 
     let two_parents = "[Service]\nExecStart=/usr/bin/t %i\n\n[Install]\n\
                        WantedBy=multi-user.target graphical.target\n";
@@ -9405,7 +9480,46 @@ fn t27_an_enabled_instance_found_by_its_link_is_omitted_for_now() {
     assert_eq!(changes_named(&snap, UNIT), 1);
     assert_eq!(change(&snap, UNIT).current_state(), UnitState::Enabled);
     assert!(links_of(&snap).is_empty(), "{:?}", links_of(&snap));
-    assert_placeholder_omits(&snap, UNIT, "two parents");
+    assert_instance_carried(&snap, UNIT, "two parents");
+    for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            count_lines(&containerfile, &format!("    '{UNIT}'")),
+            1,
+            "{route}:\n{containerfile}"
+        );
+    }
+
+    // Rule 6: the template names the instance's configuration.
+    let reads = "[Service]\nEnvironmentFile=/etc/t/%i.conf\nExecStart=/usr/bin/t %i\n\n\
+                 [Install]\nWantedBy=multi-user.target\n";
+    let host = |with_file: bool| {
+        let host = instance_link(
+            UnitHost::new()
+                .unit(T_TEMPLATE, "indirect")
+                .preset("disable *")
+                .vendor_unit(T_TEMPLATE, reads, None),
+            "/etc/systemd/system",
+            "multi-user.target",
+            UNIT,
+            T_TEMPLATE_PATH,
+        );
+        if with_file {
+            host.file("/etc/t/site.conf", "PORT=1\n")
+        } else {
+            host
+        }
+    };
+    let missing = scan(host(false));
+    assert_eq!(change(&missing, UNIT).required_config, ["/etc/t/site.conf"]);
+    assert_instance_omitted(
+        &missing,
+        UNIT,
+        "# Omitted: t@site.service (its configuration /etc/t/site.conf is not in the export)",
+        "InstanceConfigNotStaged",
+    );
+    let present = scan(host(true));
+    assert_eq!(change(&present, UNIT).attention_reason, None);
+    assert_instance_carried(&present, UNIT, "configuration present");
 }
 
 /// T27: an instance linked only under `/run` is not found: no state
@@ -9507,7 +9621,7 @@ fn t22_the_install_state_cases_repeat_for_an_instance() {
     let snap = scan(rescue_only(&["enable backup@.service x", "disable *"]));
     assert_eq!(change(&snap, UNIT).current_state(), UnitState::Disabled);
     assert_eq!(found(&snap), std::slice::from_ref(&rescue_link));
-    assert_placeholder_omits(&snap, UNIT, "enable preset");
+    assert_instance_carried(&snap, UNIT, "enable preset");
 
     // Both links, under `disable *`.
     let snap = scan(instance_link(
@@ -9519,7 +9633,7 @@ fn t22_the_install_state_cases_repeat_for_an_instance() {
     ));
     assert_eq!(change(&snap, UNIT).current_state(), UnitState::Enabled);
     assert_eq!(found(&snap), [rescue_link]);
-    assert_placeholder_omits(&snap, UNIT, "both links");
+    assert_instance_carried(&snap, UNIT, "both links");
     let containerfile = containerfile_in(&render_export(&snap));
     assert!(
         containerfile
@@ -9568,7 +9682,7 @@ fn t22_the_install_state_cases_repeat_for_an_instance() {
     ));
     assert_eq!(change(&snap, UNIT).current_state(), UnitState::Enabled);
     assert!(found(&snap).is_empty(), "{:?}", found(&snap));
-    assert_placeholder_omits(&snap, UNIT, "vendor second link");
+    assert_instance_carried(&snap, UNIT, "vendor second link");
 
     // Only vendor links, on the package's concrete instance file.
     let host = UnitHost::new()
@@ -9587,8 +9701,7 @@ fn t22_the_install_state_cases_repeat_for_an_instance() {
 
 /// One T39 case through the scan: `unit` is collected with an inventory
 /// entry in `state` and the preset the lookup gave, then has the state
-/// change `change` or none. A state change is omitted with the
-/// placeholder.
+/// change `change` or none. A state change is carried with its verb.
 fn assert_t39(
     snap: &InspectionSnapshot,
     unit: &str,
@@ -9603,7 +9716,7 @@ fn assert_t39(
     match expected_change {
         Some(expected) => {
             assert_eq!(change(snap, unit).current_state(), expected, "{label}");
-            assert_placeholder_omits(snap, unit, label);
+            assert_instance_carried(snap, unit, label);
         }
         None => assert_eq!(changes_named(snap, unit), 0, "{label}"),
     }
@@ -9696,7 +9809,8 @@ fn fragment_of_entry<'a>(
 /// instance are not read for it. A matching `Unknown` line gives no preset
 /// and the structured warning naming the line, its file and the unit; no
 /// matching rule gives no preset. The derived cases (an instance with no
-/// link, found from the presets) are not found by this scan.
+/// link, found from the presets) are
+/// `t39_a_disabled_instance_is_found_from_the_presets`.
 #[test]
 fn t39_an_instance_backed_only_by_its_template() {
     use PresetDefault::{Disable, Enable};
@@ -9807,8 +9921,8 @@ const PRESET_PATH: &str = "/usr/lib/systemd/system-preset/90-default.preset";
 
 /// T39's getty cases, enabled instances only, with RHEL 9.8's preset files
 /// and with RHEL 10.2's: `tty1` enabled has no state change and `tty2`
-/// enabled is an `Enabled` state change, omitted for now. `tty1` with no
-/// link is found from the presets, which this scan does not do.
+/// enabled is an `Enabled` state change, carried. `tty1` with no link is
+/// `t39_an_unlinked_getty_tty1_is_found_on_both_releases`.
 #[test]
 fn t39_getty_instances_on_both_releases() {
     const GETTY: &str = "[Service]\nExecStart=-/sbin/agetty %I\n\n[Install]\n\
@@ -9863,7 +9977,8 @@ fn t39_getty_instances_on_both_releases() {
 
 /// One T39 instance derived from the presets (§ 7.5): collected with no
 /// link, an inventory entry `Disabled` against the `enable` the template's
-/// rule gives it, and a `Disabled` state change whose file is `template`.
+/// rule gives it, and a `Disabled` state change whose file is `template`,
+/// rendering `RUN systemctl disable` on both routes.
 fn assert_derived_disable(snap: &InspectionSnapshot, unit: &str, template: &str, label: &str) {
     let entry = inventory_entry(snap, unit).unwrap_or_else(|| panic!("{label}: no entry"));
     assert_eq!(
@@ -9882,6 +9997,7 @@ fn assert_derived_disable(snap: &InspectionSnapshot, unit: &str, template: &str,
         Some(template),
         "{label}"
     );
+    assert_instance_carried(snap, unit, label);
 }
 
 /// T39's derived instances (§ 7.5, "A disabled instance is found from the
@@ -10014,7 +10130,7 @@ fn t40_an_undetermined_owner_with_also_derives_no_instance() {
 /// T23 through the scan: an `/etc` link to an instance of
 /// `systemd-fsck@.service` is a `HostDevice` link whose advisory has no
 /// command line, with no state change, no inventory entry and no
-/// placeholder line. Control: the same link to an instance of a template
+/// `# Omitted:` line. Control: the same link to an instance of a template
 /// on no list, wanted by `local-fs.target`, is an `Enabled` state change.
 #[test]
 fn t23_a_host_device_instance_link_through_the_scan() {
@@ -10055,9 +10171,8 @@ fn t23_a_host_device_instance_link_through_the_scan() {
             std::slice::from_ref(&advisory),
             "{route}:\n{containerfile}"
         );
-        assert_eq!(
-            count_lines(&containerfile, &placeholder_line(FSCK)),
-            0,
+        assert!(
+            omitted(&containerfile, FSCK).is_none(),
             "{route}:\n{containerfile}"
         );
         assert!(
@@ -10114,15 +10229,22 @@ fn t23_a_host_device_instance_link_through_the_scan() {
 
 /// T24 through the scan: a concrete `worker@site.service` under `/etc`
 /// beside a vendor template is a `Local` fragment whose file is the
-/// instance; an instance with no file of its own has the template as its
-/// file. Both rows are omitted with the placeholder, which decides before
-/// rule 5 does.
+/// instance, carried with the template's package excluded and its own file
+/// staged, and omitted with `UnitFileNotStaged` when its file is excluded.
+/// An instance with no file of its own has the template as its file and is
+/// carried. Task 4.3's scan-level instance cases: an `[Install]` drop-in in
+/// the template's `.d` is recorded and the enable is carried with it, and
+/// omitted as `InstallEvidenceChanged` when it is excluded; a unit file
+/// staged at the instance's own name, from another row, omits the enable
+/// recorded from the template the same way.
 #[test]
 fn t24_the_effective_file_of_an_instance_through_the_scan() {
     const UNIT: &str = "worker@site.service";
     const TEMPLATE_PATH: &str = "/usr/lib/systemd/system/worker@.service";
     let base = || {
         UnitHost::new()
+            .base_package("glibc")
+            .package("workerpkg")
             .unit("worker@.service", "indirect")
             .preset("disable *")
             .vendor_unit("worker@.service", WANTS_MULTI_USER, Some("workerpkg"))
@@ -10136,15 +10258,36 @@ fn t24_the_effective_file_of_an_instance_through_the_scan() {
         fragment_of(&snap, UNIT),
         &UnitFragment::Local { file: name(UNIT) }
     );
-    assert_placeholder_omits(&snap, UNIT, "a concrete instance under /etc");
-
-    let snap = scan(instance_link(
-        base(),
-        "/etc/systemd/system",
-        "multi-user.target",
-        UNIT,
-        TEMPLATE_PATH,
+    assert_instance_carried(&snap, UNIT, "a concrete instance under /etc");
+    let package_out = containerfile_in(&exported_after(
+        &snap,
+        &[(package_item("workerpkg"), false)],
     ));
+    assert!(
+        acts(&package_out, "enable", UNIT),
+        "the template's package excluded:\n{package_out}"
+    );
+    let file_out = containerfile_in(&exported_after(
+        &snap,
+        &[(config_item(&etc_path(UNIT)), false)],
+    ));
+    assert_eq!(
+        omitted(&file_out, UNIT),
+        Some(format!("# Omitted: {UNIT} ({NOT_STAGED}").as_str()),
+        "{file_out}"
+    );
+    assert!(in_no_systemctl_instruction(&file_out, UNIT), "{file_out}");
+
+    let linked = || {
+        instance_link(
+            base(),
+            "/etc/systemd/system",
+            "multi-user.target",
+            UNIT,
+            TEMPLATE_PATH,
+        )
+    };
+    let snap = scan(linked());
     assert_eq!(
         fragment_of(&snap, UNIT),
         &UnitFragment::Vendor {
@@ -10152,7 +10295,37 @@ fn t24_the_effective_file_of_an_instance_through_the_scan() {
             owning_package: Some("workerpkg".into()),
         }
     );
-    assert_placeholder_omits(&snap, UNIT, "the template");
+    assert_instance_carried(&snap, UNIT, "the template");
+
+    // A unit file at the instance's own name, staged from another row.
+    let own_name = with_config_entry(&snap, &etc_path(UNIT), WANTS_MULTI_USER);
+    let containerfile = containerfile_in(&exported_after(&own_name, &[]));
+    assert_eq!(
+        omitted(&containerfile, UNIT),
+        Some(format!("# Omitted: {UNIT} ({}", evidence_changed(&etc_path(UNIT))).as_str()),
+        "{containerfile}"
+    );
+
+    // An `[Install]` drop-in in the template's `.d`.
+    let drop_in = etc_drop_in("worker@.service", "10-extra.conf");
+    let snap = scan(
+        instance_link(
+            linked(),
+            "/etc/systemd/system",
+            "extra.target",
+            UNIT,
+            TEMPLATE_PATH,
+        )
+        .file(&drop_in, "[Install]\nWantedBy=extra.target\n"),
+    );
+    assert_eq!(change(&snap, UNIT).install_drop_ins, [drop_in.as_str()]);
+    assert_instance_carried(&snap, UNIT, "the template's .d drop-in");
+    let excluded = containerfile_in(&exported_after(&snap, &[(drop_in_item(&drop_in), false)]));
+    assert_eq!(
+        omitted(&excluded, UNIT),
+        Some(format!("# Omitted: {UNIT} ({}", evidence_changed(&drop_in)).as_str()),
+        "{excluded}"
+    );
 }
 
 /// T24's search-path cases for an instance, through the scan: an instance
@@ -10250,30 +10423,49 @@ fn t24_the_search_path_refuses_an_instance_through_the_scan() {
 
 /// A listed instance the name gate refuses stays refused: `t@site.service`
 /// listed `bad` beside its `/etc` link gets today's warning, no state
-/// change and no inventory entry. The control is
-/// `t27_an_enabled_instance_found_by_its_link_is_omitted_for_now`, the same
-/// link with no listing row.
+/// change and no inventory entry. Nor do the presets derive it again: the
+/// same name as the bare `enable` rule's `DefaultInstance=`, with no link.
+/// The control is `t27_an_enabled_instance_found_by_its_link_is_carried`,
+/// the same link with no listing row.
 #[test]
 fn a_listed_instance_the_gate_refuses_is_not_found_by_its_link() {
     const UNIT: &str = "t@site.service";
-    let snap = scan(template_host(&["disable *"], None, &["site"]).unit(UNIT, "bad"));
-    assert!(
-        snap.warnings.iter().any(|w| w.message
-            == format!("unit {UNIT} has state 'bad' - unit file is invalid or unreadable")),
-        "{:?}",
-        snap.warnings
+    let refused = |snap: &InspectionSnapshot, label: &str| {
+        assert!(
+            snap.warnings.iter().any(|w| w.message
+                == format!("unit {UNIT} has state 'bad' - unit file is invalid or unreadable")),
+            "{label}: {:?}",
+            snap.warnings
+        );
+        assert_eq!(changes_named(snap, UNIT), 0, "{label}");
+        assert!(inventory_entry(snap, UNIT).is_none(), "{label}");
+        for (route, containerfile) in both_routes(snap) {
+            assert!(
+                !containerfile.contains(UNIT),
+                "{label}, {route}:\n{containerfile}"
+            );
+        }
+    };
+    refused(
+        &scan(template_host(&["disable *"], None, &["site"]).unit(UNIT, "bad")),
+        "linked",
     );
-    assert_eq!(changes_named(&snap, UNIT), 0);
-    assert!(inventory_entry(&snap, UNIT).is_none());
+    refused(
+        &scan(template_host(&["enable t@.service"], Some("site"), &[]).unit(UNIT, "bad")),
+        "derived",
+    );
 }
 
 /// § 7.5 paragraph 2 through the scan: a listed `getty@tty3.service`
 /// `masked`, with its `/dev/null` link and a leftover `getty.target.wants`
-/// link, is one `Masked` state change, omitted with the placeholder on
-/// both routes and in refine, and no `systemctl mask` names it. The link
-/// does not find it a second time.
+/// link, is one `Masked` state change carried as `RUN systemctl mask` on
+/// both routes, named once. The link does not find it a second time. The
+/// same for an instance with its own unit file. Like any mask, it is
+/// omitted under rule 4 when a unit file is staged at its name, and under
+/// rule 5's package half when the template's package is excluded; a
+/// protected instance's mask is rule 3's FIXME.
 #[test]
-fn a_masked_instance_is_one_state_change_omitted_for_now() {
+fn a_masked_instance_is_carried_as_a_mask() {
     const UNIT: &str = "getty@tty3.service";
     const GETTY: &str = "[Service]\nExecStart=-/sbin/agetty %I\n\n[Install]\n\
                          WantedBy=getty.target\nDefaultInstance=tty1\n";
@@ -10292,10 +10484,351 @@ fn a_masked_instance_is_one_state_change_omitted_for_now() {
     ));
     assert_eq!(changes_named(&snap, UNIT), 1);
     assert_eq!(change(&snap, UNIT).current_state(), UnitState::Masked);
-    assert_placeholder_omits(&snap, UNIT, "a masked instance");
+    assert_instance_carried(&snap, UNIT, "a masked instance");
     for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            instructions_naming(&containerfile, UNIT),
+            1,
+            "{route}:\n{containerfile}"
+        );
+    }
+
+    // Its own unit file, under the mask.
+    const OWN: &str = "t@own.service";
+    let own = scan(
+        UnitHost::new()
+            .unit(OWN, "masked")
+            .preset("disable *")
+            .vendor_unit(OWN, &t_template(None), None)
+            .mask(OWN),
+    );
+    assert_eq!(change(&own, OWN).current_state(), UnitState::Masked);
+    assert_instance_carried(&own, OWN, "its own unit file");
+
+    // Rule 4: a unit file staged at the instance's name.
+    let occupied = with_config_entry(&own, &etc_path(OWN), "[Service]\nExecStart=/bin/true\n");
+    let path = etc_path(OWN);
+    assert_instance_omitted(
+        &occupied,
+        OWN,
+        &format!(
+            "# Omitted: {OWN} (the export also carries a unit file at {path}; exclude one of the \
+             two)"
+        ),
+        "MaskPathOccupied",
+    );
+
+    // Rule 5's package half: the template's package excluded.
+    let packaged = scan(
+        UnitHost::new()
+            .base_package("glibc")
+            .package("ttypkg")
+            .unit(T_TEMPLATE, "indirect")
+            .unit("t@tty9.service", "masked")
+            .preset("disable *")
+            .vendor_unit(T_TEMPLATE, &t_template(None), Some("ttypkg"))
+            .mask("t@tty9.service"),
+    );
+    assert_instance_carried(&packaged, "t@tty9.service", "the package included");
+    let containerfile = containerfile_in(&exported_after(
+        &packaged,
+        &[(package_item("ttypkg"), false)],
+    ));
+    assert_eq!(
+        omitted(&containerfile, "t@tty9.service"),
+        Some("# Omitted: t@tty9.service (package 'ttypkg' was excluded)"),
+        "{containerfile}"
+    );
+    assert!(
+        in_no_systemctl_instruction(&containerfile, "t@tty9.service"),
+        "{containerfile}"
+    );
+
+    // Rule 3: a protected instance's mask is a FIXME.
+    const PROTECTED: &str = "ostree-fin@a.service";
+    let protected = scan(
+        UnitHost::new()
+            .unit("ostree-fin@.service", "indirect")
+            .unit(PROTECTED, "masked")
+            .preset("disable *")
+            .vendor_unit("ostree-fin@.service", &t_template(None), None)
+            .mask(PROTECTED),
+    );
+    for (route, containerfile) in both_routes(&protected) {
         assert!(
-            !acts(&containerfile, "mask", UNIT),
+            fixme_for(&containerfile, PROTECTED).is_some(),
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, PROTECTED),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
+/// The OpenVPN client template, as the package ships it: its unit file
+/// names no path for the instance, and § 7.5's table gives
+/// `/etc/openvpn/client/%i.conf`.
+const OPENVPN_CLIENT: &str = "[Unit]\nDescription=OpenVPN tunnel for %I\n\n[Service]\n\
+     Type=notify\nWorkingDirectory=/etc/openvpn/client\n\
+     ExecStart=/usr/sbin/openvpn --suppress-timestamps --nobind --config %i.conf\n\n\
+     [Install]\nWantedBy=multi-user.target\n";
+const OPENVPN_SITE: &str = "openvpn-client@site.service";
+const OPENVPN_CONF: &str = "/etc/openvpn/client/site.conf";
+const OPENVPN_CONF_TEXT: &str = "client\nremote vpn.example.net 1194\n";
+
+/// The WireGuard template: `wg-quick up %i` names no path, and § 7.5's
+/// table gives `/etc/wireguard/%i.conf`.
+const WG_QUICK: &str = "[Unit]\nDescription=WireGuard via wg-quick(8) for %I\n\n[Service]\n\
+     Type=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/wg-quick up %i\n\
+     ExecStop=/usr/bin/wg-quick down %i\n\n[Install]\nWantedBy=multi-user.target\n";
+const WG0: &str = "wg-quick@wg0.service";
+const WG0_CONF: &str = "/etc/wireguard/wg0.conf";
+/// A WireGuard private key, in the form the redaction pattern matches.
+const WG_KEY: &str = "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=";
+
+/// A host whose `package` ships `template` (listed `indirect`), with
+/// `unit` linked from `multi-user.target.wants` under `/etc` and enabled
+/// against `disable *`. Scanned against a base image.
+fn instance_host(package: &str, template: &str, text: &str, unit: &str) -> UnitHost {
+    instance_link(
+        UnitHost::new()
+            .base_package("glibc")
+            .package(package)
+            .unit(template, "indirect")
+            .preset("disable *")
+            .vendor_unit(template, text, Some(package)),
+        "/etc/systemd/system",
+        "multi-user.target",
+        unit,
+        &format!("/usr/lib/systemd/system/{template}"),
+    )
+}
+
+/// [`instance_host`] for `openvpn-client@site.service`.
+fn openvpn_host() -> UnitHost {
+    instance_host(
+        "openvpn",
+        "openvpn-client@.service",
+        OPENVPN_CLIENT,
+        OPENVPN_SITE,
+    )
+}
+
+/// The `InstanceConfigNotStaged` line for `unit` and `path`, whose text
+/// after the path is `rest`.
+fn config_omitted(unit: &str, path: &str, rest: &str) -> String {
+    format!("# Omitted: {unit} (its configuration {path} {rest})")
+}
+
+/// T28 through the real inspectors: the `openvpn-client@site` link, the
+/// vendor template naming `multi-user.target`, and an included, clean
+/// `/etc/openvpn/client/site.conf`: one state change named for the
+/// instance with the template's owner, the configuration in
+/// `required_config`, the instance in `RUN systemctl enable` on both
+/// routes, and no attention note.
+#[test]
+fn t28_a_carried_instance() {
+    let snap = scan(openvpn_host().file(OPENVPN_CONF, OPENVPN_CONF_TEXT));
+    assert_eq!(changes_named(&snap, OPENVPN_SITE), 1);
+    let row = change(&snap, OPENVPN_SITE);
+    assert_eq!(row.current_state(), UnitState::Enabled);
+    assert_eq!(
+        fragment_of(&snap, OPENVPN_SITE),
+        &UnitFragment::Vendor {
+            file: name("openvpn-client@.service"),
+            owning_package: Some("openvpn".into()),
+        }
+    );
+    assert_eq!(row.required_config, [OPENVPN_CONF]);
+    assert_eq!(row.attention_reason, None);
+    assert_instance_carried(&snap, OPENVPN_SITE, "T28");
+    assert_eq!(unit_row(&snap, OPENVPN_SITE).attention_reason, None);
+}
+
+/// T29 through the real inspectors: each case where the instance's
+/// configuration is not in the export as the host had it gives its
+/// `# Omitted:` line and no enable, on both routes and on the refine row.
+/// Excluded through `RefineSession`, the enable returns when the row is
+/// included again. Content not captured (a file over the size cap). The
+/// WireGuard key, through the real redaction pass: the staged file holds no
+/// key. The file missing on the source; a package-owned, unmodified file;
+/// a package-owned file the administrator changed on a host where
+/// `rpm -Va` fails. Positive controls: a clean unowned file (T28), and a
+/// package-owned file the administrator changed with `rpm -Va` working.
+#[test]
+fn t29_an_instance_whose_configuration_is_not_in_the_export() {
+    let clean = scan(openvpn_host().file(OPENVPN_CONF, OPENVPN_CONF_TEXT));
+
+    // Excluded through refine, then included again.
+    let excluded_op = (config_item(OPENVPN_CONF), false);
+    let containerfile =
+        containerfile_in(&exported_after(&clean, std::slice::from_ref(&excluded_op)));
+    let excluded_line = config_omitted(OPENVPN_SITE, OPENVPN_CONF, "is excluded from the export");
+    assert_eq!(
+        omitted(&containerfile, OPENVPN_SITE),
+        Some(excluded_line.as_str()),
+        "{containerfile}"
+    );
+    assert!(
+        in_no_systemctl_instruction(&containerfile, OPENVPN_SITE),
+        "{containerfile}"
+    );
+    let declined = declined_in(
+        &session_after(&clean, std::slice::from_ref(&excluded_op)),
+        OPENVPN_SITE,
+    )
+    .expect("a declined row");
+    assert_eq!(declined.reason, "InstanceConfigNotStaged");
+    assert_eq!(format!("# Omitted: {}", declined.text), excluded_line);
+    let restored = containerfile_in(&exported_after(
+        &clean,
+        &[excluded_op.clone(), (excluded_op.0, true)],
+    ));
+    assert!(acts(&restored, "enable", OPENVPN_SITE), "{restored}");
+
+    // Content not captured: a file over the config inspector's size cap.
+    let too_big = format!("client\n{}\n", "# padding\n".repeat(30_000));
+    let snap = scan(openvpn_host().file(OPENVPN_CONF, &too_big));
+    assert_instance_omitted(
+        &snap,
+        OPENVPN_SITE,
+        &config_omitted(OPENVPN_SITE, OPENVPN_CONF, "was not captured"),
+        "InstanceConfigNotStaged",
+    );
+
+    // The WireGuard key, through the real redaction pass.
+    let wg_conf = format!("[Interface]\nPrivateKey = {WG_KEY}\nAddress = 10.0.0.1/24\n");
+    let wg = scan(
+        instance_host("wireguard-tools", "wg-quick@.service", WG_QUICK, WG0)
+            .file(WG0_CONF, &wg_conf),
+    );
+    assert_eq!(change(&wg, WG0).required_config, [WG0_CONF]);
+    assert!(
+        wg.redactions.iter().any(|f| f.path == WG0_CONF),
+        "the redaction pass recorded the key: {:?}",
+        wg.redactions
+    );
+    assert_instance_omitted(
+        &wg,
+        WG0,
+        &config_omitted(
+            WG0,
+            WG0_CONF,
+            "holds a redacted value; provision the secret on the deployed host and enable the \
+             unit there",
+        ),
+        "InstanceConfigNotStaged",
+    );
+    for (route, tree) in both_exports(&wg) {
+        assert!(staged_at(&tree, WG0_CONF), "{route}: the file is staged");
+        assert!(
+            files_holding(tree.path(), WG_KEY).is_empty(),
+            "{route}: no file holds the key"
+        );
+    }
+
+    // Nothing in the snapshot at the path: the file missing on the source,
+    // a package-owned file left as the package shipped it, and a changed
+    // package-owned file on a host where `rpm -Va` fails.
+    let not_in = config_omitted(OPENVPN_SITE, OPENVPN_CONF, "is not in the export");
+    for (label, host) in [
+        ("missing", openvpn_host()),
+        (
+            "package-owned, unmodified",
+            openvpn_host().owned_file(OPENVPN_CONF, OPENVPN_CONF_TEXT, "openvpn"),
+        ),
+        (
+            "package-owned, changed, rpm -Va failing",
+            openvpn_host()
+                .owned_file(OPENVPN_CONF, OPENVPN_CONF_TEXT, "openvpn")
+                .rpm_va("", 2),
+        ),
+    ] {
+        let snap = scan(host);
+        assert!(
+            snap.config
+                .iter()
+                .flat_map(|c| &c.files)
+                .all(|f| f.path != OPENVPN_CONF),
+            "{label}: no config entry"
+        );
+        assert_instance_omitted(&snap, OPENVPN_SITE, &not_in, "InstanceConfigNotStaged");
+    }
+
+    // The controls.
+    assert_instance_carried(&clean, OPENVPN_SITE, "clean, unowned");
+    let changed = scan(
+        openvpn_host()
+            .owned_file(OPENVPN_CONF, OPENVPN_CONF_TEXT, "openvpn")
+            .rpm_va(&format!("S.5....T.  c {OPENVPN_CONF}\n"), 1),
+    );
+    assert!(
+        changed
+            .config
+            .iter()
+            .flat_map(|c| &c.files)
+            .any(|f| f.path == OPENVPN_CONF && f.package.as_deref() == Some("openvpn")),
+        "a package-owned config entry"
+    );
+    assert_instance_carried(
+        &changed,
+        OPENVPN_SITE,
+        "package-owned, changed, rpm -Va working",
+    );
+}
+
+/// T29's notes (§ 10.8): under `--no-redaction` the WireGuard instance is
+/// carried with an attention note naming the path, on its refine row; a
+/// `Flagged` finding on the configuration leaves the enable carried with
+/// its own note. The notes are not Containerfile lines.
+#[test]
+fn t29_an_unredacted_or_flagged_configuration_is_carried_with_a_note() {
+    let wg_conf = format!("[Interface]\nPrivateKey = {WG_KEY}\nAddress = 10.0.0.1/24\n");
+    let host = || {
+        instance_host("wireguard-tools", "wg-quick@.service", WG_QUICK, WG0)
+            .file(WG0_CONF, &wg_conf)
+    };
+
+    // The scan command's `--no-redaction` path.
+    let mut raw = scan_unredacted(host());
+    raw.redaction_state = Some(inspectah_core::types::redaction::RedactionState::Raw);
+    assert_instance_carried(&raw, WG0, "--no-redaction");
+    assert_eq!(
+        unit_row(&raw, WG0).attention_reason.as_deref(),
+        Some(
+            "Its configuration /etc/wireguard/wg0.conf is staged as the source host had it: the \
+             scan was taken with --no-redaction, so no secret in it was redacted."
+        )
+    );
+
+    // A `Flagged` finding on a clean file.
+    let mut flagged = scan(openvpn_host().file(OPENVPN_CONF, OPENVPN_CONF_TEXT));
+    flagged
+        .redactions
+        .push(inspectah_core::types::redaction::RedactionFinding {
+            path: OPENVPN_CONF.into(),
+            source: "inspector_hint".into(),
+            kind: inspectah_core::types::redaction::RedactionKind::Flagged,
+            pattern: "inspector_hint".into(),
+            remediation: "a value that looks like a credential".into(),
+            line: None,
+            replacement: None,
+            detection_method: inspectah_core::types::redaction::DetectionMethod::Heuristic,
+            confidence: None,
+            finding_kind: None,
+        });
+    assert_instance_carried(&flagged, OPENVPN_SITE, "flagged");
+    assert_eq!(
+        unit_row(&flagged, OPENVPN_SITE).attention_reason.as_deref(),
+        Some(
+            "Its configuration /etc/openvpn/client/site.conf holds a value the redaction pass \
+             flagged and did not change. Check it before the image is used."
+        )
+    );
+    for (route, containerfile) in both_routes(&flagged) {
+        assert!(
+            !containerfile.contains("redaction pass flagged"),
             "{route}:\n{containerfile}"
         );
     }
@@ -10495,9 +11028,10 @@ fn t39_an_owner_whose_member_is_off_is_an_advisory() {
 /// `Also=t@two.service`, the package shipping only `t@.service`, and no
 /// link for `t@two`: rule 7's advisory naming `t@two.service`, with
 /// `p.service`'s `enable` and `t@two.service`'s `disable`, and no
-/// `systemctl` instruction naming either. The control, `t@two` linked: no
-/// owner row, no advisory, and no `systemctl` instruction naming either
-/// (the linked instance's own row is omitted by the phase 4 placeholder).
+/// `systemctl` instruction naming either. The control, `t@two` linked:
+/// `t@two` is `Installed` and its own row (enabled against `disable *`)
+/// carries its `enable`; `p.service` has no row, and no rule 7 advisory and
+/// no `systemctl` instruction names it.
 #[test]
 fn t39_an_owner_whose_instance_member_is_off_is_an_advisory() {
     let host = |linked: bool| {
@@ -10549,11 +11083,16 @@ fn t39_an_owner_whose_instance_member_is_off_is_an_advisory() {
 
     let control = scan(host(true));
     assert_eq!(changes_named(&control, "p.service"), 0);
+    assert!(
+        inventory_entry(&control, "p.service").is_some(),
+        "control: p.service is collected"
+    );
+    assert_instance_carried(&control, "t@two.service", "control");
     for (route, containerfile) in both_routes(&control) {
         assert!(
             in_no_systemctl_instruction(&containerfile, "p.service")
-                && in_no_systemctl_instruction(&containerfile, "t@two.service")
-                && advisory_for(&containerfile, "p.service").is_empty(),
+                && advisory_for(&containerfile, "p.service").is_empty()
+                && !containerfile.contains("# Advisory: p.service "),
             "control {route}:\n{containerfile}"
         );
     }
@@ -10700,33 +11239,63 @@ fn t25_b_a_disable_with_members() {
     assert_also_advisory(&snap, BUNDLE, &block, &["z.service", "x.service"]);
 }
 
-/// T25 (c): a member that is an instance with its own row, which this
-/// phase omits: `RowNotCarried`, and no line to add.
+/// T25 (c), phase 5 (with T29's last sentence): a member that is an
+/// instance with its own row. The member's enable is carried when its
+/// configuration is in the export, and the owner's `enable` with it; with
+/// the member's configuration excluded, the member is omitted by rule 6
+/// and the owner is `RowNotCarried`, with no line to add.
 #[test]
-fn t25_c_an_instance_member_with_its_own_row_is_not_carried() {
+fn t25_c_an_instance_member_with_its_own_row() {
+    const MEMBER: &str = "t@two.service";
+    const CONF: &str = "/etc/t/two.conf";
+    let reads = "[Service]\nEnvironmentFile=/etc/t/%i.conf\nExecStart=/usr/bin/t %i\n\n\
+                 [Install]\nWantedBy=multi-user.target\n";
     let host = rule7_host(
         &[],
         &[(BUNDLE, "enabled"), (T_TEMPLATE, "indirect")],
         &[
-            (BUNDLE, &wanted_with("Also=t@two.service\n")),
-            (T_TEMPLATE, &t_template(None)),
+            (BUNDLE, &wanted_with(&format!("Also={MEMBER}\n"))),
+            (T_TEMPLATE, reads),
         ],
-    );
+    )
+    .file(CONF, "PORT=2\n");
     let snap = scan(instance_link(
         host,
         "/etc/systemd/system",
         "multi-user.target",
-        "t@two.service",
+        MEMBER,
         T_TEMPLATE_PATH,
     ));
-    assert_eq!(changes_named(&snap, "t@two.service"), 1);
-    let block = vec![also_head(
-        BUNDLE,
-        "enable",
-        "t@two.service",
-        ROW_NOT_CARRIED,
-    )];
-    assert_also_advisory(&snap, BUNDLE, &block, &["t@two.service"]);
+    assert_eq!(changes_named(&snap, MEMBER), 1);
+    assert_also_carried(&snap, MEMBER, "enable", "(c) member");
+    assert_also_carried(&snap, BUNDLE, "enable", "(c) owner");
+
+    let head = also_head(BUNDLE, "enable", MEMBER, ROW_NOT_CARRIED);
+    let excluded = [(config_item(CONF), false)];
+    let containerfile = containerfile_in(&exported_after(&snap, &excluded));
+    assert_eq!(
+        advisory_for(&containerfile, BUNDLE),
+        std::slice::from_ref(&head),
+        "{containerfile}"
+    );
+    assert_eq!(
+        omitted(&containerfile, MEMBER),
+        Some(
+            format!("# Omitted: {MEMBER} (its configuration {CONF} is excluded from the export)")
+                .as_str()
+        ),
+        "{containerfile}"
+    );
+    for unit in [BUNDLE, MEMBER] {
+        assert!(
+            in_no_systemctl_instruction(&containerfile, unit),
+            "{unit}:\n{containerfile}"
+        );
+    }
+    assert_eq!(
+        declined_in(&session_after(&snap, &excluded), BUNDLE),
+        Some(also_declined(&head))
+    );
 }
 
 /// T25 (d): a member whose row the operator excluded: an advisory; the
@@ -10859,6 +11428,9 @@ fn t25_g_a_chain_names_its_unlinked_end_from_each_owner() {
 ///   the drop-in included and excluded: `InstallFile` both times.
 /// - A staged local unit that sets `Also=`, and a local mount unit as a
 ///   member: `InstallFile`.
+/// - An instance recorded from a vendor template, with a `t@.service` that
+///   sets `Also=` staged from another row: omitted by rule 5, naming that
+///   file.
 #[test]
 fn t25_h_install_evidence() {
     // The shadow that drops `Also=`.
@@ -10970,6 +11542,33 @@ fn t25_h_install_evidence() {
     );
     let block = install_file_block(BUNDLE, "enable", mount, "srv-data.mount");
     assert_also_advisory(&snap, BUNDLE, &block, &[]);
+
+    // An instance recorded from its vendor template, and a template file
+    // that sets `Also=` staged from another row.
+    let instance = scan(instance_link(
+        rule7_host(
+            &[],
+            &[(T_TEMPLATE, "indirect")],
+            &[(T_TEMPLATE, &t_template(None))],
+        ),
+        "/etc/systemd/system",
+        "multi-user.target",
+        "t@one.service",
+        T_TEMPLATE_PATH,
+    ));
+    assert_instance_carried(&instance, "t@one.service", "(h) instance");
+    let template = etc_path(T_TEMPLATE);
+    let imported = with_config_entry(
+        &instance,
+        &template,
+        &format!("{}Also=helper.service\n", t_template(None)),
+    );
+    assert_instance_omitted(
+        &imported,
+        "t@one.service",
+        &format!("# Omitted: t@one.service ({}", evidence_changed(&template)),
+        "InstallEvidenceChanged",
+    );
 }
 
 /// T25 (k), second half: an `/etc` drop-in that holds only `[Service]`,
@@ -11599,4 +12198,124 @@ fn a_default_target_follows_its_package() {
         "{included}"
     );
     assert_eq!(omitted(&included, "app.target"), None, "{included}");
+}
+
+/// § 7.3's units that a link under `/etc` names and the listing does not
+/// print as a unit this scan reads, through the scan. What the code does
+/// today, asserted so a change is seen (the task report records each for
+/// the project owner): only a listed `static` or `indirect` unit is
+/// admitted by its link, and an instance by its link alone. A unit the
+/// listing does not print at all is not read, so its link is reported
+/// nowhere. A masked unit's `/etc` links produce no `ManualLink`. A link
+/// to a unit the search path refuses gives the refusal warning and no
+/// `ManualLink`. A link to an alias name (listed `alias`) produces nothing.
+/// A dangling link produces nothing when the listing does not print its
+/// name, an instance's included, and the "no unit file" warning when it
+/// lists the name `static`.
+#[test]
+fn units_an_etc_link_names_that_the_listing_does_not_print() {
+    let wants = |unit: &str| format!("/etc/systemd/system/multi-user.target.wants/{unit}");
+    let vendor = |unit: &str| format!("/usr/lib/systemd/system/{unit}");
+    let alias_unit = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n\
+                      Alias=al.service\n";
+    // (label, host, the linked unit, warning naming it, if any)
+    let cases: Vec<(&str, UnitHost, &str, Option<&str>)> = vec![
+        (
+            "not listed, a vendor unit with [Install]",
+            UnitHost::new()
+                .vendor_unit("ghost.service", WANTS_MULTI_USER, None)
+                .link(&wants("ghost.service"), &vendor("ghost.service")),
+            "ghost.service",
+            None,
+        ),
+        (
+            "listed masked, with a leftover link",
+            UnitHost::new()
+                .unit("m.service", "masked")
+                .vendor_unit("m.service", WANTS_MULTI_USER, None)
+                .mask("m.service")
+                .link(&wants("m.service"), &vendor("m.service")),
+            "m.service",
+            None,
+        ),
+        (
+            "refused by the search path",
+            UnitHost::new()
+                .unit("u.service", "enabled")
+                .vendor_unit("u.service", WANTS_MULTI_USER, None)
+                .file("/run/systemd/system/u.service", WANTS_MULTI_USER),
+            "u.service",
+            Some("is on the systemd search path"),
+        ),
+        (
+            "an alias name, listed alias",
+            UnitHost::new()
+                .unit("real.service", "disabled")
+                .unit("al.service", "alias")
+                .vendor_unit("real.service", alias_unit, None)
+                .link(&wants("al.service"), &vendor("real.service")),
+            "al.service",
+            None,
+        ),
+        (
+            "dangling, an instance of no template",
+            UnitHost::new().link(&wants("nof@x.service"), &vendor("nof@.service")),
+            "nof@x.service",
+            None,
+        ),
+        (
+            "dangling, not listed",
+            UnitHost::new().link(&wants("gone.service"), &vendor("gone.service")),
+            "gone.service",
+            None,
+        ),
+        (
+            "dangling, listed static",
+            UnitHost::new()
+                .unit("gone.service", "static")
+                .link(&wants("gone.service"), &vendor("gone.service")),
+            "gone.service",
+            Some("no unit file under /etc/systemd/system or /usr/lib/systemd/system"),
+        ),
+    ];
+    for (label, host, unit, warning) in cases {
+        let snap = scan(host.preset("disable *"));
+        assert!(
+            links_of(&snap).iter().all(|l| l.unit.as_str() != unit),
+            "{label}: {:?}",
+            links_of(&snap)
+        );
+        let named: Vec<&str> = snap
+            .warnings
+            .iter()
+            .filter(|w| w.message.starts_with(&format!("unit {unit} ")))
+            .map(|w| w.message.as_str())
+            .collect();
+        match warning {
+            Some(text) => assert!(
+                named.len() == 1 && named[0].contains(text),
+                "{label}: {named:?}"
+            ),
+            None => assert!(named.is_empty(), "{label}: {named:?}"),
+        }
+        let expected_changes = usize::from(unit == "m.service");
+        assert_eq!(changes_named(&snap, unit), expected_changes, "{label}");
+    }
+
+    // The control: a listed `static` unit with no `[Install]` and the same
+    // link is admitted, and its link is a `StaticUnit` link.
+    let control = scan(
+        UnitHost::new()
+            .unit("ghost.service", "static")
+            .preset("disable *")
+            .vendor_unit("ghost.service", NO_INSTALL, None)
+            .link(&wants("ghost.service"), &vendor("ghost.service")),
+    );
+    assert_eq!(
+        links_of(&control)
+            .iter()
+            .map(|l| (l.unit.as_str(), l.cause))
+            .collect::<Vec<_>>(),
+        [("ghost.service", ManualLinkCause::StaticUnit)]
+    );
 }

@@ -8,6 +8,7 @@ use inspectah_core::baseline::{
     TARGET_NEEDS_UNIT, TMP_MOUNT, is_runtime_updater, target_needs_unit, target_needs_unit_text,
 };
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::redaction::{RedactionKind, RedactionState};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::TimerTrigger;
 use inspectah_core::types::units::{
@@ -213,10 +214,6 @@ pub fn effective_target_packages(rpm: &RpmSection) -> std::collections::BTreeSet
 // The unit plan: every `systemctl` line for a collected unit
 // ---------------------------------------------------------------------------
 
-/// The placeholder reason of [`OmissionReason::InstanceNotCarriedYet`]
-/// (§ 15 of the units spec).
-const INSTANCE_NOT_CARRIED_YET: &str = "template instances are not carried yet";
-
 /// Why the plan writes no command for a unit it was asked to act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OmissionReason {
@@ -267,10 +264,10 @@ pub enum OmissionReason {
         name: UnitName,
         reserved_by: Reservation,
     },
-    /// The unit is a template instance. Instances are collected and not
-    /// yet carried (§ 15 of the units spec, phase 4), so every instance
-    /// row is omitted with this reason until they are.
-    InstanceNotCarriedYet,
+    /// A template instance's configuration is not in the export as the
+    /// source host had it (§ 10.2 rule 6, § 10.8). `path` is the
+    /// configuration path, or the file under it that falls short.
+    InstanceConfigNotStaged { path: String, gap: ConfigGap },
     /// The command would also act on `member` (§ 10.2 rule 7). An
     /// advisory ([`also_advisory_lines`]). `member` is the first member in
     /// `also` order that fails the first failing condition, or for
@@ -292,6 +289,19 @@ pub enum OmissionReason {
         further: Option<Box<(AlsoWhy, Vec<UnitName>)>>,
         add: Vec<UnitName>,
     },
+}
+
+/// What falls short about an instance's configuration (§ 10.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigGap {
+    /// The entry is excluded, or the stager leaves it out or withholds it.
+    Excluded,
+    /// The entry's content was not captured.
+    NotCaptured,
+    /// The redaction pass replaced or removed a value in it.
+    Redacted,
+    /// The snapshot holds nothing at the path.
+    NotInSnapshot,
 }
 
 /// Why rule 7 of § 10.2 makes a command an advisory.
@@ -357,7 +367,19 @@ impl OmissionReason {
                  unit and its file",
                 name = name.as_str()
             ),
-            Self::InstanceNotCarriedYet => INSTANCE_NOT_CARRIED_YET.to_owned(),
+            Self::InstanceConfigNotStaged { path, gap } => match gap {
+                ConfigGap::Excluded => {
+                    format!("its configuration {path} is excluded from the export")
+                }
+                ConfigGap::NotCaptured => format!("its configuration {path} was not captured"),
+                ConfigGap::Redacted => format!(
+                    "its configuration {path} holds a redacted value; provision the secret on the \
+                     deployed host and enable the unit there"
+                ),
+                ConfigGap::NotInSnapshot => {
+                    format!("its configuration {path} is not in the export")
+                }
+            },
             Self::GeneratedNameCollision {
                 name,
                 reserved_by: Reservation::Inventory,
@@ -396,7 +418,7 @@ impl OmissionReason {
             Self::TimerTriggerNotStaged { .. } => "TimerTriggerNotStaged",
             Self::MaskPathOccupied { .. } => "MaskPathOccupied",
             Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
-            Self::InstanceNotCarriedYet => "InstanceNotCarriedYet",
+            Self::InstanceConfigNotStaged { .. } => "InstanceConfigNotStaged",
             Self::AlsoMember { .. } => "AlsoMember",
         }
     }
@@ -417,7 +439,7 @@ impl OmissionReason {
             | Self::TimerTriggerNotStaged { .. }
             | Self::MaskPathOccupied { .. }
             | Self::GeneratedNameCollision { .. }
-            | Self::InstanceNotCarriedYet
+            | Self::InstanceConfigNotStaged { .. }
             | Self::AlsoMember { .. } => None,
         }
     }
@@ -516,6 +538,11 @@ pub struct UnitPlan {
     pub declined: Vec<(UnitName, UnitAction, OmissionReason)>,
     /// Planned units whose package's presence could not be proved.
     pub advisories: Vec<ServiceAdvisory>,
+    /// The attention notes of carried instance enables (§ 10.8): a
+    /// configuration path staged from a scan with no redaction, or holding
+    /// a value the redaction pass flagged and did not change. Not a
+    /// Containerfile line: refine shows each on its row.
+    pub instance_notes: Vec<(UnitName, String)>,
     /// The enables of the units the scheduled section generates from cron
     /// entries, which that section copies and enables (§ 10.2 item 3,
     /// § 10.7).
@@ -1758,7 +1785,8 @@ pub fn etc_unit_path(file: &UnitName) -> String {
 ///   else [`OmissionReason::InstallEvidenceChanged`] with its path.
 /// - `Vendor`, a package-owned storage unit, and (for a mask, which this
 ///   rule never sees) `Absent`: no unit file is staged at the unit's name,
-///   else `InstallEvidenceChanged` with that path.
+///   nor, for an instance recorded from its vendor template, at the
+///   template's, else `InstallEvidenceChanged` with that path.
 ///
 /// "Staged" is [`is_staged`], the stager's own answer by [`Destination`],
 /// so the plan and the stager cannot disagree about a spelling. In a fleet
@@ -1793,9 +1821,17 @@ fn rule_5_file(
             one_variant(snap, path)?;
             own_name_free(unit.name(), file, staged)
         }
-        UnitFragment::Vendor { .. } | UnitFragment::Absent => {
-            no_file_at(etc_unit_path(unit.name()), staged)
+        // An instance recorded from its vendor template: a template file
+        // staged under `/etc` would load in the template's place, with an
+        // `[Install]` nobody recorded.
+        UnitFragment::Vendor { file, .. } => {
+            no_file_at(etc_unit_path(unit.name()), staged)?;
+            if file == unit.name() {
+                return Ok(());
+            }
+            no_file_at(etc_unit_path(file), staged)
         }
+        UnitFragment::Absent => no_file_at(etc_unit_path(unit.name()), staged),
     }
 }
 
@@ -1870,14 +1906,16 @@ fn timer_trigger_check(
 /// entry provides it; one whose presence cannot be decided is taken to,
 /// as the presence tiers take an unproved absence. A vendor file is known
 /// from a state change recorded `Vendor` or `Shadowed`, or a drop-in row
-/// at the path, which is a full shadow.
+/// at the path, which is a full shadow. The file of an instance trigger is
+/// its template's unless the snapshot holds one at the instance's own name
+/// ([`trigger_file`]).
 fn local_trigger_missing(
     snap: &InspectionSnapshot,
     trigger: &UnitName,
     presence: Option<&Presence<'_>>,
     staged: &StagedWrites<'_>,
 ) -> bool {
-    let path = etc_unit_path(trigger);
+    let path = etc_unit_path(&trigger_file(snap, trigger));
     if is_staged(staged, &path) {
         return false;
     }
@@ -1925,6 +1963,49 @@ fn local_trigger_missing(
         )
     });
     local_change || !entries.is_empty()
+}
+
+/// The unit file under `/etc/systemd/system` that loads for `trigger`: its
+/// own, or, for an instance the snapshot holds nothing at the own name of
+/// (no config entry, no drop-in row, no state change recorded from that
+/// file), its template's, which is what systemd loads for it.
+fn trigger_file(snap: &InspectionSnapshot, trigger: &UnitName) -> UnitName {
+    let Some(parts) = trigger.instance() else {
+        return trigger.clone();
+    };
+    let Ok(own) = Destination::new(&etc_unit_path(trigger)) else {
+        return trigger.clone();
+    };
+    let at_own = |p: &str| Destination::new(p).is_ok_and(|d| d == own);
+    let held = snap
+        .config
+        .iter()
+        .flat_map(|c| &c.files)
+        .any(|f| at_own(&f.path))
+        || snap
+            .units
+            .iter()
+            .flat_map(|u| &u.drop_ins)
+            .any(|d| at_own(&d.path))
+        || snap
+            .units
+            .iter()
+            .flat_map(|u| &u.state_changes)
+            .filter(|sc| sc.unit().name() == trigger)
+            .any(|sc| match sc.unit() {
+                CarriedUnit::Ordinary(ordinary) => match ordinary.fragment() {
+                    UnitFragment::Local { file } | UnitFragment::Shadowed { file, .. } => {
+                        file == trigger
+                    }
+                    UnitFragment::Vendor { .. } | UnitFragment::Absent => false,
+                },
+                CarriedUnit::PackagedStorage(_) => false,
+            });
+    if held {
+        trigger.clone()
+    } else {
+        parts.template()
+    }
 }
 
 /// Whether rule 5 asks the presence tiers about the unit's package
@@ -2077,6 +2158,103 @@ fn one_variant(snap: &InspectionSnapshot, path: String) -> Result<(), OmissionRe
     } else {
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Rule 6, an instance's configuration
+// ---------------------------------------------------------------------------
+
+/// The attention note of a carried instance whose configuration file was
+/// staged by a scan taken with no redaction (§ 10.8), before the path.
+const CONFIG_UNREDACTED: &str = "Its configuration";
+
+/// [`CONFIG_UNREDACTED`]'s text after the path.
+const CONFIG_UNREDACTED_REST: &str = "is staged as the source host had it: the scan was taken \
+     with --no-redaction, so no secret in it was redacted.";
+
+/// The attention note of a carried instance whose configuration holds a
+/// value the redaction pass flagged and did not change (§ 10.8), after the
+/// path.
+const CONFIG_FLAGGED_REST: &str = "holds a value the redaction pass flagged and did not \
+     change. Check it before the image is used.";
+
+/// Rule 6 (§ 10.2, § 10.8), for an `enable` on a template instance: every
+/// path in `required_config` is in the export as the source host had it.
+/// For each path, in order, the config entries at it or under it decide,
+/// in path order:
+///
+/// - none: [`ConfigGap::NotInSnapshot`], naming the path. Package
+///   ownership is no evidence (§ 10.8, "Only a file the export carries
+///   passes");
+/// - an entry whose content was not captured: [`ConfigGap::NotCaptured`];
+/// - an entry the stager does not write, excluded, left out or withheld:
+///   [`ConfigGap::Excluded`];
+/// - an entry `snapshot.redactions` holds an `Inline` or `Excluded`
+///   finding for: [`ConfigGap::Redacted`].
+///
+/// Each but the first names the entry's path. `Ok` holds the attention
+/// notes of a passing instance: one per entry with a `Flagged` finding,
+/// and one per entry when the snapshot was taken with no redaction.
+fn rule_6_instance_config(
+    snap: &InspectionSnapshot,
+    change: &UnitStateChange,
+    staged: &StagedWrites<'_>,
+) -> Result<Vec<String>, OmissionReason> {
+    let mut notes = Vec::new();
+    if change.unit().name().instance().is_none() {
+        return Ok(notes);
+    }
+    let unredacted = matches!(snap.redaction_state, Some(RedactionState::Raw));
+    let gap = |path: &str, gap| OmissionReason::InstanceConfigNotStaged {
+        path: path.to_owned(),
+        gap,
+    };
+    for required in &change.required_config {
+        let Ok(at) = Destination::new(required) else {
+            return Err(gap(required, ConfigGap::NotInSnapshot));
+        };
+        let under = format!("{}/", at.as_str());
+        let mut entries: Vec<(Destination, _)> = snap
+            .config
+            .iter()
+            .flat_map(|c| &c.files)
+            .filter_map(|f| Destination::new(&f.path).ok().map(|d| (d, f)))
+            .filter(|(d, _)| *d == at || d.as_str().starts_with(&under))
+            .collect();
+        if entries.is_empty() {
+            return Err(gap(required, ConfigGap::NotInSnapshot));
+        }
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (dest, entry) in entries {
+            let path = dest.as_str();
+            if !entry.content_captured() {
+                return Err(gap(path, ConfigGap::NotCaptured));
+            }
+            if !staged.writes.contains_key(&dest) {
+                return Err(gap(path, ConfigGap::Excluded));
+            }
+            let findings: Vec<&RedactionKind> = snap
+                .redactions
+                .iter()
+                .filter(|f| Destination::new(&f.path).is_ok_and(|d| d == dest))
+                .map(|f| &f.kind)
+                .collect();
+            if findings
+                .iter()
+                .any(|kind| matches!(kind, RedactionKind::Inline | RedactionKind::Excluded))
+            {
+                return Err(gap(path, ConfigGap::Redacted));
+            }
+            if unredacted {
+                notes.push(format!(
+                    "{CONFIG_UNREDACTED} {path} {CONFIG_UNREDACTED_REST}"
+                ));
+            } else if findings.contains(&&RedactionKind::Flagged) {
+                notes.push(format!("{CONFIG_UNREDACTED} {path} {CONFIG_FLAGGED_REST}"));
+            }
+        }
+    }
+    Ok(notes)
 }
 
 // ---------------------------------------------------------------------------
@@ -2296,10 +2474,8 @@ impl<'a> Presence<'a> {
 /// single authority for which unit-state `systemctl` lines the
 /// Containerfile carries; refine reads the same plan.
 ///
-/// A template instance's row is declined with
-/// [`OmissionReason::InstanceNotCarriedYet`] before any rule is read:
-/// instances are not carried yet. Per other state change, the rules of the
-/// § 10.2 table in its order; the first that fails decides:
+/// Per state change, the rules of the § 10.2 table in its order; the first
+/// that fails decides:
 ///
 /// 1. Rule 2 ([`rule_2_storage_file`]), every verb: a package-owned
 ///    storage unit with a unit file staged at its name is declined.
@@ -2317,7 +2493,11 @@ impl<'a> Presence<'a> {
 ///    ([`classify_service_presence`], unchanged; an aggregate applies Tier 2
 ///    alone). With no package section there is nothing to read and the unit
 ///    is emitted: there is no separate path without one.
-/// 6. Rule 7 ([`rule_7_also`]), `enable` and `disable` with `Also=`
+/// 6. Rule 6 ([`rule_6_instance_config`]), `enable` on a template
+///    instance: its configuration is in the export as the host had it.
+///    Its attention notes go to `instance_notes` once the enable is
+///    planned.
+/// 7. Rule 7 ([`rule_7_also`]), `enable` and `disable` with `Also=`
 ///    members, once every row's result under the rules above is known:
 ///    the command becomes an advisory unless its members agree.
 ///
@@ -2345,9 +2525,16 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         .filter(|name| is_runtime_updater(name.as_str()))
         .cloned()
         .collect();
-    // The rows that pass rules 1 to 6, with their presence advisories. Rule
-    // 7 reads every row's result, so it runs once all are known.
-    let mut passed: Vec<(&UnitStateChange, PlannedUnit, Option<ServiceAdvisory>)> = Vec::new();
+    // The rows that pass rules 1 to 6, with their presence advisories and
+    // instance notes. Rule 7 reads every row's result, so it runs once all
+    // are known.
+    type Passed<'s> = (
+        &'s UnitStateChange,
+        PlannedUnit,
+        Option<ServiceAdvisory>,
+        Vec<String>,
+    );
+    let mut passed: Vec<Passed<'_>> = Vec::new();
     for sc in units
         .state_changes
         .iter()
@@ -2355,13 +2542,6 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
     {
         let name = sc.unit().name().clone();
         let action = sc.implied_action();
-        // § 15, phase 4: instances are collected and not carried yet, so
-        // the placeholder decides before every rule.
-        if name.instance().is_some() {
-            plan.declined
-                .push((name, action, OmissionReason::InstanceNotCarriedYet));
-            continue;
-        }
         let rules_2_to_4 = rule_2_storage_file(sc.unit(), staged)
             .and_then(|()| rule_3_target_needs_unit(&name, action))
             .and_then(|()| rule_4_mask_path(&name, action, staged));
@@ -2406,7 +2586,18 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
             plan.declined.push((name, action, reason));
             continue;
         }
-        passed.push((sc, PlannedUnit { name, action }, advisory));
+        let notes = if action == UnitAction::Enable {
+            match rule_6_instance_config(snap, sc, staged) {
+                Ok(notes) => notes,
+                Err(reason) => {
+                    plan.declined.push((name, action, reason));
+                    continue;
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        passed.push((sc, PlannedUnit { name, action }, advisory, notes));
     }
     let rows: BTreeMap<&UnitName, &UnitStateChange> = units
         .state_changes
@@ -2415,13 +2606,18 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         .collect();
     let carried: BTreeMap<&UnitName, UnitAction> = passed
         .iter()
-        .map(|(_, planned, _)| (&planned.name, planned.action))
+        .map(|(_, planned, _, _)| (&planned.name, planned.action))
         .collect();
     let mut also_declined = Vec::new();
-    for (sc, planned, advisory) in &passed {
+    for (sc, planned, advisory, notes) in &passed {
         match rule_7_also(snap, staged, sc, planned.action, &rows, &carried) {
             Ok(()) => {
                 plan.advisories.extend(advisory.clone());
+                plan.instance_notes.extend(
+                    notes
+                        .iter()
+                        .map(|note| (planned.name.clone(), note.clone())),
+                );
                 plan.planned.push(PlannedUnit {
                     name: planned.name.clone(),
                     action: planned.action,

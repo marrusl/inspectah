@@ -861,6 +861,21 @@ fn build_state_changes(
                         instance::instance_needs(exec, change.unit().name(), &evidence.unit_texts);
                     change.required_config = needs.required_config;
                     change.data_paths = needs.data_paths;
+                    // § 7.5: an instance of a template on no list that
+                    // names nothing it reads is carried on its unit file
+                    // alone, with a note saying so.
+                    let unknown = change
+                        .unit()
+                        .name()
+                        .instance()
+                        .is_some_and(|parts| !instance::on_a_list(&parts.template()));
+                    if unknown && change.required_config.is_empty() && change.data_paths.is_empty()
+                    {
+                        add_note(
+                            &mut change.attention_reason,
+                            instance::INSTANCE_READS_UNKNOWN,
+                        );
+                    }
                 }
                 state_changes.push(change);
             }
@@ -874,6 +889,14 @@ fn build_state_changes(
         manual_links,
         undetermined_installs,
     }
+}
+
+/// Add `note` to a row's attention reason, after any note it has.
+fn add_note(reason: &mut Option<String>, note: &str) {
+    *reason = Some(match reason.take() {
+        Some(earlier) => format!("{earlier} {note}"),
+        None => note.to_owned(),
+    });
 }
 
 /// The attention note of an additive row (§ 7.4 of the units spec): the

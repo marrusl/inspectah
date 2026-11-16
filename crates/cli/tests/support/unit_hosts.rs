@@ -116,6 +116,8 @@ pub struct UnitHost {
     packages: Vec<String>,
     /// The base image's packages, when the scan has a baseline.
     base_packages: Vec<String>,
+    /// What `rpm -Va` prints and its exit code, when not a clean verify.
+    rpm_va: Option<(String, i32)>,
 }
 
 impl UnitHost {
@@ -154,6 +156,14 @@ impl UnitHost {
     /// earlier ones.
     pub fn preset(mut self, rule: &str) -> Self {
         self.presets.push(rule.into());
+        self
+    }
+
+    /// `rpm -Va` prints `stdout` and exits with `exit_code`: a report of
+    /// modified files exits 1, and a failed run exits with anything else.
+    /// Without it, every file verifies.
+    pub fn rpm_va(mut self, stdout: &str, exit_code: i32) -> Self {
+        self.rpm_va = Some((stdout.into(), exit_code));
         self
     }
 
@@ -269,9 +279,17 @@ impl UnitHost {
             .collect();
         let this = self.file(PRESET_FILE, &presets);
 
+        let rpm_va = match &this.rpm_va {
+            Some((stdout, exit_code)) => ExecResult {
+                stdout: stdout.clone(),
+                exit_code: *exit_code,
+                ..Default::default()
+            },
+            None => ok(""),
+        };
         let mut mock = MockExecutor::new()
             .with_command(RPM_QA, ok(&installed))
-            .with_command("rpm -Va", ok(""))
+            .with_command("rpm -Va", rpm_va)
             .with_command(RPM_FILE_OWNERSHIP, ok(&ownership))
             .with_command(LIST_UNIT_FILES, ok(&listing))
             .with_command_prefix(DNF_SOURCE_REPO, ok(&source_repos));
