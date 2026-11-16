@@ -34,7 +34,8 @@ const DEFAULT_TARGET: &str = "default.target";
 /// the source host. A link to one of their instances is never carried,
 /// whatever its `[Install]` says (§ 7.5 of the units spec). (Mark Russell,
 /// 2026-11-13)
-const HOST_DEVICE_TEMPLATES: [&str; 2] = ["systemd-cryptsetup@.service", "systemd-fsck@.service"];
+pub(crate) const HOST_DEVICE_TEMPLATES: [&str; 2] =
+    ["systemd-cryptsetup@.service", "systemd-fsck@.service"];
 
 /// One link to a unit: the relation and the unit whose dependency
 /// directory holds it, or, for an alias, the alias name.

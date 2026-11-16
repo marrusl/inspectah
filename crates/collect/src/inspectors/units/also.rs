@@ -33,13 +33,15 @@ pub(crate) fn also_name(
     let Some(instance) = section.default_instance else {
         return Err(name.clone());
     };
-    // `prefix@.suffix` becomes `prefix@instance.suffix`; an instance that
-    // does not make a unit name is no instance of it.
-    let (prefix, suffix) = name
-        .as_str()
-        .split_once("@.")
-        .expect("a template name holds `@.`");
-    UnitName::try_from(format!("{prefix}@{instance}.{suffix}")).map_err(|_| name.clone())
+    instance_name(name, &instance).ok_or_else(|| name.clone())
+}
+
+/// The instance `instance` of `template`: `prefix@.suffix` becomes
+/// `prefix@instance.suffix`. `None` when `template` is not a template, or
+/// when the result is not a unit name, since then it is no instance of it.
+pub(crate) fn instance_name(template: &UnitName, instance: &str) -> Option<UnitName> {
+    let (prefix, suffix) = template.as_str().split_once("@.")?;
+    UnitName::try_from(format!("{prefix}@{instance}.{suffix}")).ok()
 }
 
 /// The effective `[Install]` of `name`, or `None` when it has no unit file

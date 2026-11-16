@@ -148,6 +148,83 @@ fn linked_instances(host_links: &HostLinks, listing: &HashSet<UnitName>) -> Vec<
         .collect()
 }
 
+/// The state word recorded, for warnings only, for an instance derived from
+/// the presets or from `Also=` ([`preset_instances`], [`derivable`]): it
+/// has no listing row and no link under `/etc/systemd/system`, and systemd
+/// reads such an instance as `disabled`.
+const DERIVED_INSTANCE_STATE: &str = "disabled";
+
+/// Whether `name` is a candidate instance § 7.5 of the units spec derives:
+/// an instance not yet found (`known` holds every name the listing gave
+/// and every instance its links found), with no link under
+/// `/etc/systemd/system`, of a template not tied to a host's devices, and
+/// not a D-Bus activation alias. An instance with a link of its own is
+/// found by it ([`linked_instances`]) or reported where its link is read.
+fn derivable(name: &UnitName, known: &HashSet<UnitName>, host_links: &HostLinks) -> bool {
+    name.instance()
+        .is_some_and(|parts| !links::HOST_DEVICE_TEMPLATES.contains(&parts.template().as_str()))
+        && !known.contains(name)
+        && !host_links.any_admin_link(name)
+        && !name.as_str().starts_with(DBUS_ACTIVATION_ALIAS_PREFIX)
+}
+
+/// The instances the image's package install would link from the presets
+/// (§ 7.1 source 6 and § 7.5 of the units spec, "A disabled instance is
+/// found from the presets"), for the templates the listing gives. For each
+/// template whose first matching rule is a bare `enable`, the candidate is
+/// its `DefaultInstance=`, read from the template's effective `[Install]`;
+/// for the list form, each listed instance. A `disable` rule, a rule this
+/// scan does not read, or no rule derives none, and neither does a masked
+/// template, whose mask covers every instance. A candidate the listing
+/// gives (an instance with its own unit file) or that has a link under
+/// `/etc` is not derived again ([`derivable`]). Nothing new is read from
+/// the host beyond the template's own files.
+fn preset_instances(
+    exec: &dyn Executor,
+    units: &[UnitFileEntry],
+    rules: &[PresetRule],
+    known: &HashSet<UnitName>,
+    host_links: &HostLinks,
+    read_failures: &mut Vec<String>,
+) -> Vec<Listed> {
+    let mut derived: Vec<UnitName> = Vec::new();
+    for unit in units.iter().filter(|unit| unit.state != "masked") {
+        let Ok(template) = UnitName::try_from(unit.unit.clone()) else {
+            continue;
+        };
+        if !template.is_template() {
+            continue;
+        }
+        let candidates: Vec<UnitName> = match first_rule(template.as_str(), rules) {
+            Some(PresetRule::Plain {
+                verb: PresetDefault::Enable,
+                ..
+            }) => also::also_name(exec, &template, read_failures)
+                .ok()
+                .into_iter()
+                .collect(),
+            Some(PresetRule::EnableInstances { instances, .. }) => instances
+                .iter()
+                .filter_map(|instance| also::instance_name(&template, instance))
+                .collect(),
+            _ => Vec::new(),
+        };
+        for name in candidates {
+            if derivable(&name, known, host_links) && !derived.contains(&name) {
+                derived.push(name);
+            }
+        }
+    }
+    derived
+        .into_iter()
+        .map(|name| Listed {
+            name,
+            raw_state: DERIVED_INSTANCE_STATE.to_owned(),
+            listed: None,
+        })
+        .collect()
+}
+
 /// Result of parsing a raw systemd unit state string into the typed contract.
 enum ParsedUnitState {
     /// Durable administrator intent: produces a `UnitStateChange`.
@@ -456,11 +533,17 @@ struct UnitFindings {
 /// `warnings`; a unit file that could not be read goes to `read_failures`. The names refused by the search path,
 /// unreadable, or with an undetermined `[Install]` section go to
 /// `reported`, so the storage pass does not report them again.
+///
+/// Once every unit in `listed` is read, the instances an enabled unit's
+/// `Also=` reached are read the same way, each one [`derivable`] against
+/// `known` (every name already found) and the links (§ 7.5).
+#[allow(clippy::too_many_arguments)] // the scan's state, read once by the caller
 fn build_state_changes(
     exec: &dyn Executor,
     listed: Vec<Listed>,
     host_links: &HostLinks,
     rules: &[PresetRule],
+    known: &HashSet<UnitName>,
     warnings: &mut Vec<Warning>,
     read_failures: &mut Vec<String>,
     reported: &mut HashSet<UnitName>,
@@ -471,7 +554,30 @@ fn build_state_changes(
     let mut unknown_lines: BTreeMap<(String, usize), Vec<UnitName>> = BTreeMap::new();
     let mut found = Vec::new();
     let mut fragments = Vec::new();
-    for subject in listed {
+    // § 7.5: the instances an enabled unit's `Also=` reaches, collected as
+    // the units are read, then read themselves once every listed unit is.
+    let mut known = known.clone();
+    let mut also_reached: Vec<UnitName> = Vec::new();
+    let mut also_read = false;
+    let mut queue: std::collections::VecDeque<Listed> = listed.into();
+    loop {
+        let Some(subject) = queue.pop_front() else {
+            if also_read {
+                break;
+            }
+            also_read = true;
+            for name in std::mem::take(&mut also_reached) {
+                if derivable(&name, &known, host_links) {
+                    known.insert(name.clone());
+                    queue.push_back(Listed {
+                        name,
+                        raw_state: DERIVED_INSTANCE_STATE.to_owned(),
+                        listed: None,
+                    });
+                }
+            }
+            continue;
+        };
         let warn =
             |detail: &str| service_warning(subject.name.as_str(), &subject.raw_state, detail);
         let (fragment, state, evidence, additive) = match resolve::resolve(exec, &subject.name) {
@@ -639,13 +745,24 @@ fn build_state_changes(
                 fragment,
                 UnitFragment::Vendor { .. } | UnitFragment::Shadowed { .. }
             );
+        // Every enabled unit's `Also=` is walked too, for the instances it
+        // reaches (§ 7.5, "Instances named by an enabled unit's `Also=`").
+        let enabled = candidate.state == UnitState::Enabled;
         let named = match &evidence.read {
-            Some(InstallRead::Known(section)) if state_change || at_preset => {
+            Some(InstallRead::Known(section)) if state_change || at_preset || enabled => {
                 section.also.as_slice()
             }
             _ => &[],
         };
         let members = also::also_members(exec, &candidate.name, named, host_links, read_failures);
+        if enabled {
+            also_reached.extend(
+                members
+                    .iter()
+                    .filter(|member| member.unit.instance().is_some())
+                    .map(|member| member.unit.clone()),
+            );
+        }
         let member_off = at_preset && members.iter().any(also::is_off);
         let state_change = state_change || member_off;
         if state_change || is_enabled_storage(&candidate) {
@@ -1452,8 +1569,20 @@ impl Inspector for UnitsInspector {
             }
         }
         // 4a. The enabled instances the listing has no row for, found by
-        //     their links (§ 7.5).
+        //     their links, then the instances the presets would link (§ 7.5).
         listed.extend(linked_instances(&host_links, &listing));
+        let mut known = listing.clone();
+        known.extend(listed.iter().map(|subject| subject.name.clone()));
+        let derived = preset_instances(
+            exec,
+            &units,
+            &preset_rules,
+            &known,
+            &host_links,
+            &mut unit_file_read_failures,
+        );
+        known.extend(derived.iter().map(|subject| subject.name.clone()));
+        listed.extend(derived);
 
         // 4b. Each unit's file, install state and preset: the inventory,
         //     the state changes and the enabled storage units.
@@ -1469,6 +1598,7 @@ impl Inspector for UnitsInspector {
             listed,
             &host_links,
             &preset_rules,
+            &known,
             &mut warnings,
             &mut unit_file_read_failures,
             &mut reported,
@@ -3899,6 +4029,7 @@ mod tests {
             vec![storage_unit("tmp.mount")],
             &local_fs_link("tmp.mount"),
             &disable_all(),
+            &HashSet::new(),
             &mut warnings,
             &mut failures,
             &mut HashSet::new(),
@@ -3928,6 +4059,7 @@ mod tests {
                 vec![storage_unit("tmp.mount")],
                 &local_fs_link("tmp.mount"),
                 &disable_all(),
+                &HashSet::new(),
                 &mut warnings,
                 &mut failures,
                 &mut HashSet::new(),

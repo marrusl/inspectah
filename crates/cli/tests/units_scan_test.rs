@@ -9861,6 +9861,156 @@ fn t39_getty_instances_on_both_releases() {
     }
 }
 
+/// One T39 instance derived from the presets (§ 7.5): collected with no
+/// link, an inventory entry `Disabled` against the `enable` the template's
+/// rule gives it, and a `Disabled` state change whose file is `template`.
+fn assert_derived_disable(snap: &InspectionSnapshot, unit: &str, template: &str, label: &str) {
+    let entry = inventory_entry(snap, unit).unwrap_or_else(|| panic!("{label}: no entry"));
+    assert_eq!(
+        (entry.state, entry.preset),
+        (UnitState::Disabled, Some(PresetDefault::Enable)),
+        "{label}"
+    );
+    assert_eq!(changes_named(snap, unit), 1, "{label}");
+    assert_eq!(
+        change(snap, unit).current_state(),
+        UnitState::Disabled,
+        "{label}"
+    );
+    assert_eq!(
+        fragment_of_entry(snap, unit, Some(UnitState::Disabled)),
+        Some(template),
+        "{label}"
+    );
+}
+
+/// T39's derived instances (§ 7.5, "A disabled instance is found from the
+/// presets"), through the real inspectors. Under a bare `enable t@.service`
+/// with no rule after it and no link for `t@one`, `t@one` is found and is a
+/// `Disabled` state change. A list-form rule finds each listed instance the
+/// same way. Under `disable t@.service` no instance is derived. A candidate
+/// with its own unit file is one row, not two.
+#[test]
+fn t39_a_disabled_instance_is_found_from_the_presets() {
+    let snap = scan(template_host(&["enable t@.service"], Some("one"), &[]));
+    assert_derived_disable(&snap, "t@one.service", T_TEMPLATE, "bare enable");
+
+    let snap = scan(template_host(
+        &["enable t@.service two three", "disable *"],
+        Some("one"),
+        &[],
+    ));
+    for unit in ["t@two.service", "t@three.service"] {
+        assert_derived_disable(&snap, unit, T_TEMPLATE, "list form");
+    }
+    assert!(
+        inventory_entry(&snap, "t@one.service").is_none(),
+        "list form"
+    );
+
+    let snap = scan(template_host(&["disable t@.service"], Some("one"), &[]));
+    assert!(inventory_entry(&snap, "t@one.service").is_none(), "disable");
+    assert_eq!(changes_named(&snap, "t@one.service"), 0, "disable");
+
+    // The bare rule's candidate with its own unit file, listed `disabled`:
+    // read once, as a listed unit, by its own name, which the bare rule
+    // does not match, so `disable *` is its preset and it has no row.
+    let snap = scan(
+        template_host(&["enable t@.service", "disable *"], Some("one"), &[])
+            .unit("t@one.service", "disabled")
+            .vendor_unit("t@one.service", &t_template(None), None),
+    );
+    let units = snap.units.as_ref().expect("a units section");
+    let entries: Vec<_> = units
+        .inventory
+        .iter()
+        .filter(|e| e.unit.as_str() == "t@one.service")
+        .map(|e| (e.state, e.preset))
+        .collect();
+    assert_eq!(
+        entries,
+        [(UnitState::Disabled, Some(PresetDefault::Disable))],
+        "own file"
+    );
+    assert_eq!(changes_named(&snap, "t@one.service"), 0, "own file");
+}
+
+/// T39's getty case with no link (§ 7.5), on RHEL 9.8's preset files and on
+/// RHEL 10.2's: `getty@tty1` is found from `enable getty@.service` and its
+/// `DefaultInstance=tty1`, a `Disabled` state change.
+#[test]
+fn t39_an_unlinked_getty_tty1_is_found_on_both_releases() {
+    const GETTY: &str = "[Service]\nExecStart=-/sbin/agetty %I\n\n[Install]\n\
+                         WantedBy=getty.target\nDefaultInstance=tty1\n";
+    const PRESET_DIR: &str = "/usr/lib/systemd/system-preset";
+    for (label, rhel_98) in [("RHEL 9.8", true), ("RHEL 10.2", false)] {
+        let mut host = UnitHost::new()
+            .unit("getty@.service", "disabled")
+            .vendor_unit("getty@.service", GETTY, Some("systemd"))
+            .file(
+                &format!("{PRESET_DIR}/90-systemd.preset"),
+                "enable getty@.service\n",
+            )
+            .file(
+                &format!("{PRESET_DIR}/99-default-disable.preset"),
+                "disable *\n",
+            );
+        if rhel_98 {
+            host = host.preset("enable getty@tty1.service");
+        }
+        let snap = scan(host);
+        assert_derived_disable(&snap, "getty@tty1.service", "getty@.service", label);
+        assert!(
+            inventory_entry(&snap, "getty@tty2.service").is_none(),
+            "{label}"
+        );
+    }
+}
+
+/// T40's `UpheldBy=` vendor unit with `Also=t@two.service` and one link,
+/// the package shipping `t@.service`: the per-link advisory and the
+/// unit's `UndeterminedInstall`, and, since an undetermined owner has no
+/// readable `Also=`, no candidate instance derived from it.
+#[test]
+fn t40_an_undetermined_owner_with_also_derives_no_instance() {
+    let upheld = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n\
+                  UpheldBy=multi-user.target\nAlso=t@two.service\n";
+    let snap = scan(
+        t40_host(upheld, None)
+            .unit(T_TEMPLATE, "disabled")
+            .vendor_unit(T_TEMPLATE, &t_template(None), Some("needpkg"))
+            .link(
+                "/etc/systemd/system/multi-user.target.wants/need.service",
+                "/usr/lib/systemd/system/need.service",
+            ),
+    );
+    let units = snap.units.as_ref().expect("a units section");
+    assert!(units.state_changes.is_empty(), "{:?}", units.state_changes);
+    assert_eq!(
+        units
+            .undetermined_installs
+            .iter()
+            .map(|r| r.unit.as_str())
+            .collect::<Vec<_>>(),
+        ["need.service"]
+    );
+    assert_eq!(
+        links_of(&snap)
+            .iter()
+            .map(|l| (l.parent.as_str(), l.unit.as_str(), l.cause))
+            .collect::<Vec<_>>(),
+        [(
+            "multi-user.target",
+            "need.service",
+            ManualLinkCause::Undetermined {
+                reason: InstallUnknown::UpheldBy
+            }
+        )]
+    );
+    assert!(inventory_entry(&snap, "t@two.service").is_none());
+    assert_eq!(changes_named(&snap, "t@two.service"), 0);
+}
+
 /// T23 through the scan: an `/etc` link to an instance of
 /// `systemd-fsck@.service` is a `HostDevice` link whose advisory has no
 /// command line, with no state change, no inventory entry and no
@@ -10372,6 +10522,18 @@ fn t39_an_owner_whose_instance_member_is_off_is_an_advisory() {
         }
     };
     let snap = scan(host(false));
+    // Collected from `p.service`'s `Also=` (§ 7.5): a `Disabled` inventory
+    // entry and no row of its own, beside the owner row.
+    let entry = inventory_entry(&snap, "t@two.service").expect("t@two's inventory entry");
+    assert_eq!(
+        (entry.state, entry.preset),
+        (UnitState::Disabled, Some(PresetDefault::Disable))
+    );
+    assert_eq!(changes_named(&snap, "t@two.service"), 0);
+    assert_eq!(
+        change(&snap, "p.service").current_state(),
+        UnitState::Enabled
+    );
     let mut block = vec![also_head(
         "p.service",
         "enable",
