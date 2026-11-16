@@ -2209,26 +2209,28 @@ const CONFIG_UNREDACTED_REST: &str = "is staged as the source host had it: the s
 const CONFIG_FLAGGED_REST: &str = "holds a value the redaction pass flagged and did not \
      change. Check it before the image is used.";
 
-/// § 10.8's data sentence, after the unit and its paths.
-const DATA_ADVISORY_REST: &str = "The image does not carry it, and the carried enable starts \
-     the unit on first boot. Put the data in place before that boot, or the unit starts without \
-     it.";
+/// § 10.8's data sentence, after the unit, its paths and the pronoun that
+/// stands for them.
+const DATA_ADVISORY_REST: &str = ", and the carried enable starts the unit on first boot. Put \
+     the data in place before that boot, or the unit starts without it.";
 
 /// § 10.8 "Data under `/var`": the sentence for a carried instance enable
 /// whose data sits at `paths`, which the image does not carry. Several
-/// paths are named in one sentence (`a, b and c`). Written as an
-/// `# Advisory:` line before the `RUN` lines ([`unit_state_lines`]) and,
-/// unchanged, on the refine row's `attention_reason`.
-pub fn data_advisory(unit: &UnitName, paths: &[String]) -> String {
-    let named = match paths {
-        [] => String::new(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+/// paths are named in one sentence (`a, b and c`) and are "them" where
+/// one path is "it". Written as an `# Advisory:` line before the `RUN`
+/// lines ([`unit_state_lines`]) and, unchanged, on the refine row's
+/// `attention_reason`. `None` when `paths` is empty: an instance with no
+/// data has no sentence, so no caller can render one that names nothing.
+pub fn data_advisory(unit: &UnitName, paths: &[String]) -> Option<String> {
+    let (named, pronoun) = match paths {
+        [] => return None,
+        [one] => (one.clone(), "it"),
+        [rest @ .., last] => (format!("{} and {last}", rest.join(", ")), "them"),
     };
-    format!(
-        "{} keeps data under {named}. {DATA_ADVISORY_REST}",
+    Some(format!(
+        "{} keeps data under {named}. The image does not carry {pronoun}{DATA_ADVISORY_REST}",
         unit.as_str()
-    )
+    ))
 }
 
 /// Rule 6 (§ 10.2, § 10.8), for an `enable` on a template instance: every
@@ -2679,12 +2681,9 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
                 );
                 if planned.action == UnitAction::Enable
                     && planned.name.instance().is_some()
-                    && !sc.data_paths.is_empty()
+                    && let Some(sentence) = data_advisory(&planned.name, &sc.data_paths)
                 {
-                    plan.data_advisories.push((
-                        planned.name.clone(),
-                        data_advisory(&planned.name, &sc.data_paths),
-                    ));
+                    plan.data_advisories.push((planned.name.clone(), sentence));
                 }
                 plan.planned.push(PlannedUnit {
                     name: planned.name.clone(),

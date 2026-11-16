@@ -4089,7 +4089,7 @@ fn a_carried_instance_with_data_paths_has_one_data_advisory() {
     };
     let plan_of = |snap: &InspectionSnapshot| plan_units(snap, &staged_writes(snap));
     let sentence = "w@a.service keeps data under /var/lib/w/a and /var/lib/w/b. The image does \
-                    not carry it, and the carried enable starts the unit on first boot. Put the \
+                    not carry them, and the carried enable starts the unit on first boot. Put the \
                     data in place before that boot, or the unit starts without it.";
 
     let carried = units_snapshot(
@@ -4126,9 +4126,15 @@ fn a_carried_instance_with_data_paths_has_one_data_advisory() {
     assert!(
         plan_of(&one).data_advisories[0]
             .1
-            .starts_with("w@a.service keeps data under /var/lib/w/a. The image"),
+            .starts_with("w@a.service keeps data under /var/lib/w/a. The image does not carry it,"),
         "{:?}",
         plan_of(&one).data_advisories
+    );
+    let name = UnitName::try_from("w@a.service".to_owned()).unwrap();
+    assert_eq!(
+        inspectah_pipeline::render::unit_plan::data_advisory(&name, &[]),
+        None,
+        "no paths, no sentence"
     );
 
     let declined = units_snapshot(
