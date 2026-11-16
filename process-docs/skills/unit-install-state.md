@@ -134,16 +134,14 @@ the row gets the hiding file: the § 7.4 gate, the vendor-side read and the
 findings' and records' `install_files` keep the `/etc` list, whose block
 says "these files under /etc/systemd/system".
 
-Within one directory name the `/etc` file winning over the vendor one was
-measured. **Still needs a real-host run on RHEL 9 and RHEL 10:**
-
-- the order across the two directory names (instance `.d` before template
-  `.d`), read from systemd's source (252 and 257);
-- the placement above `/etc`: a `system.control` drop-in (from
-  `systemctl set-property`) hiding an `/etc` drop-in of its name, so that
-  `systemctl enable` does not act on an `[Install]` in the hidden file,
-  and the same against a vendor drop-in and across the instance and
-  template `.d`, with the G2 order above.
+All of this order is measured on RHEL 9 and RHEL 10, in a `RUN`-step
+container and with systemd as PID 1: the `/etc` file winning over the
+vendor one within one directory name, the instance's `.d` winning over its
+template's, and a drop-in in any of the four directories above `/etc`
+(`systemctl set-property`'s `system.control` one included) hiding a
+same-named one below it, so `systemctl enable` does not act on an
+`[Install]` in the hidden file. The record is "R5's open items" in
+[real-host-validation-runs](real-host-validation-runs.md).
 
 - **Resets, as measured on RHEL 9 and 10:** an empty `WantedBy=`,
   `RequiredBy=` or `Alias=` clears the values before it; an empty `Also=`
@@ -169,8 +167,9 @@ measured. **Still needs a real-host run on RHEL 9 and RHEL 10:**
   advisory side rather than a `disable`.
 - **Hidden drop-ins are skipped.** `conf_files` drops a name starting with
   `.`, as systemd does when it lists drop-ins, so an editor's
-  `.#override.conf` is never read. That was read from systemd's source,
-  not measured. The rule is `systemd_reads_drop_in` in core, and the
+  `.#override.conf` is never read. Measured on RHEL 9 and RHEL 10 ("R5's
+  open items" in real-host-validation-runs): a `.hidden.conf` holding
+  `WantedBy=` is not read, under `/etc` or `/usr/lib`. The rule is `systemd_reads_drop_in` in core, and the
   plan's rule 5 and rule 7 install-file checks, the timer trigger reader
   and the runtime drop-in reader use the same function: a
   hidden file can still be collected and staged as a drop-in row, and a
@@ -416,8 +415,6 @@ the fixed tables. Non-obvious points:
   contents, not warnings, so the value would reach the snapshot JSON, the
   README and refine's Services section in the clear. A setting whose syntax is not modeled
   (`Description=` and the rest) is read leniently and never declines.
-  The plan cannot decline it by name without a snapshot field, so the
-  row is left out (schema 28 has none).
 - **Resets are applied before paths are derived** (`effective_assignments`,
   `Syntax::resets`, from each parser's empty-value branch in
   `load-fragment.c`, 252 and 257): over the unit file then the drop-ins in
