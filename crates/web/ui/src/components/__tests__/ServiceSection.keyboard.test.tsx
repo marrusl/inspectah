@@ -247,6 +247,39 @@ describe("U32: Space and x (§ 6.13 Toggle)", () => {
   });
 });
 
+describe("row keys pressed with Ctrl, Cmd or Alt are left to the browser and the app (§ 6.13)", () => {
+  it.each<[string, string]>([
+    ["Ctrl+k", "{Control>}k{/Control}"],
+    ["Cmd+k", "{Meta>}k{/Meta}"],
+    ["Alt+k", "{Alt>}k{/Alt}"],
+    ["Cmd+G", "{Meta>}{Shift>}G{/Shift}{/Meta}"],
+  ])("%s on a row moves nothing; plain k still moves", async (_name, keys) => {
+    renderUnits(loadUnitFields("planted"));
+    const cups = screen.getByTestId("service-item-cups.service");
+    act(() => cups.focus());
+    await userEvent.keyboard(keys);
+    expectFocusedStop(cups);
+    await userEvent.keyboard("k");
+    expectFocusedStop(screen.getByTestId("service-item-bluetooth.service"));
+  });
+
+  it.each<[string, string, () => HTMLElement]>([
+    ["Cmd+x on a unit row", "{Meta>}x{/Meta}", () => screen.getByTestId("service-item-bluetooth.service")],
+    ["Ctrl+x on a drop-in row", "{Control>}x{/Control}", () => screen.getByTestId(`dropin-item-${HTTPD_OVERRIDE}`)],
+    ["Alt+Space on the target row", "{Alt>} {/Alt}", () => screen.getByTestId("default-target")],
+  ])("%s toggles nothing; plain x still toggles", async (_name, keys, row) => {
+    const planted = loadUnitFields("planted");
+    renderUnits(planted);
+    respondWith(planted);
+    act(() => row().focus());
+    await userEvent.keyboard(keys);
+    expect(mockFetch).not.toHaveBeenCalled();
+    await userEvent.keyboard("x");
+    await waitFor(() => expect(viewUpdates).toHaveBeenCalledTimes(1));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("U32: the roving tab stop (§ 6.13)", () => {
   it("is one shown row, the first, on mount", () => {
     renderUnits(loadUnitFields("planted"));

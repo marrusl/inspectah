@@ -914,6 +914,22 @@ export function rovingTabStop(order: readonly OccurrenceKey[], held: OccurrenceK
   return order[0] ?? null;
 }
 
+/** The modifier keys of a key press, as a keyboard event carries them. */
+export interface KeyModifiers {
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+}
+
+/**
+ * Whether a row key press is left alone (§ 6.13): with Ctrl, Cmd or Alt
+ * held it belongs to the browser or the app (Ctrl+K opens global search),
+ * so no row moves or toggles. Shift is no such modifier: `G` needs it.
+ */
+export function rowKeyIgnored(e: KeyModifiers): boolean {
+  return e.ctrlKey || e.metaKey || e.altKey;
+}
+
 /** § 6.13 row movement, `DecisionList`'s keys: a step of one, or an end. */
 const ROW_MOVES: Record<string, "next" | "previous" | "first" | "last"> = {
   ArrowDown: "next",

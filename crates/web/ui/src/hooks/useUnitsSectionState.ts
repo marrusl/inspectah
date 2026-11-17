@@ -34,6 +34,7 @@ import {
   revealPlan,
   rovingTabStop,
   rowKeyForItemId,
+  rowKeyIgnored,
   rowMoveTarget,
   showGroups,
   shownRowCount,
@@ -357,6 +358,7 @@ export function useUnitsSectionState({
   // a checkbox, link or button inside one.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (rowKeyIgnored(e)) return;
       const from = rowKeyOfElement(e.target);
       if (from === null) return;
       const to = rowMoveTarget(order, from, e.key);

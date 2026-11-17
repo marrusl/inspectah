@@ -30,6 +30,7 @@ import {
   followUpFlagText,
   reasonWords,
   rowKeyForItemId,
+  rowKeyIgnored,
   type OccurrenceKey,
   type ReportedRow,
   type RowKey,
@@ -337,7 +338,7 @@ function DropInRow({
         transition: "opacity 200ms ease, background-color 150ms ease",
       }}
       onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return;
+        if (e.target !== e.currentTarget || rowKeyIgnored(e)) return;
         if (disabled) return;
         if (e.key === " " || e.key === "x") {
           e.preventDefault();
@@ -800,7 +801,7 @@ function DefaultTargetRow({ target: t, unitKey, isPending, onToggle, rowRef, tab
       data-locked={t.locked ? "true" : undefined}
       className={`inspectah-decision-row${t.locked ? " inspectah-decision-row--locked" : ""}`}
       onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return;
+        if (e.target !== e.currentTarget || rowKeyIgnored(e)) return;
         if (t.locked || isPending) return;
         if (e.key === " " || e.key === "x") {
           e.preventDefault();
@@ -920,7 +921,7 @@ function UnitBranchView({
         className={`inspectah-decision-row${svcLocked ? " inspectah-decision-row--locked" : ""}`}
         style={{ borderLeft }}
         onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return;
+          if (e.target !== e.currentTarget || rowKeyIgnored(e)) return;
           if (svcLocked) return;
           if (e.key === " " || e.key === "x") {
             e.preventDefault();

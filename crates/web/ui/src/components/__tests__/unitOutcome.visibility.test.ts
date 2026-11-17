@@ -28,6 +28,7 @@ import {
   revealPlan,
   rovingTabStop,
   rowKey,
+  rowKeyIgnored,
   rowMoveTarget,
   sectionSearchText,
   showGroups,
@@ -921,6 +922,22 @@ describe("rovingTabStop: the row holding the section's one tab stop (§ 6.13)", 
   it("is null when no row is shown", () => {
     expect(rovingTabStop([], "b")).toBeNull();
     expect(rovingTabStop([], null)).toBeNull();
+  });
+});
+
+describe("rowKeyIgnored: Ctrl, Cmd and Alt leave a row key alone (§ 6.13)", () => {
+  const none = { ctrlKey: false, metaKey: false, altKey: false };
+  it.each<[string, typeof none, boolean]>([
+    ["no modifier", none, false],
+    ["Ctrl", { ...none, ctrlKey: true }, true],
+    ["Cmd", { ...none, metaKey: true }, true],
+    ["Alt", { ...none, altKey: true }, true],
+  ])("%s", (_name, modifiers, ignored) => {
+    expect(rowKeyIgnored(modifiers)).toBe(ignored);
+  });
+
+  it("does not count Shift, which G needs", () => {
+    expect(rowKeyIgnored({ ...none, shiftKey: true } as typeof none)).toBe(false);
   });
 });
 
