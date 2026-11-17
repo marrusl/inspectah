@@ -329,14 +329,28 @@ export function useUnitsSectionState({
     return null;
   }, []);
 
-  // The tab stop follows focus onto a row, however it got there (a movement
-  // key, a click, or App's reveal).
+  /**
+   * The occurrence key of the innermost row holding an element, the row
+   * itself included, read from the ref map.
+   */
+  const rowKeyContaining = useCallback((el: EventTarget): OccurrenceKey | null => {
+    if (!(el instanceof Node)) return null;
+    let found: { key: OccurrenceKey; row: HTMLDivElement } | null = null;
+    for (const [key, row] of rowElements.current) {
+      if (row.contains(el) && (found === null || found.row.contains(row))) found = { key, row };
+    }
+    return found === null ? null : found.key;
+  }, []);
+
+  // The tab stop follows focus onto a row or a control inside one, however
+  // it got there (a movement key, Tab, a click, or App's reveal), so
+  // Shift+Tab returns to the row being worked on (§ 6.13).
   const handleFocus = useCallback(
     (e: React.FocusEvent) => {
-      const key = rowKeyOfElement(e.target);
+      const key = rowKeyContaining(e.target);
       if (key !== null) setHeldTabStop(key);
     },
-    [rowKeyOfElement],
+    [rowKeyContaining],
   );
 
   // Movement keys act on a focused row only, as in DecisionList: never from

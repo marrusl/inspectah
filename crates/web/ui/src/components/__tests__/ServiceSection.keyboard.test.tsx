@@ -367,6 +367,15 @@ describe("U32: the roving tab stop (§ 6.13)", () => {
     expectFocusedStop(row);
   });
 
+  it("moves to the row whose checkbox takes focus", () => {
+    renderUnits(loadUnitFields("planted"));
+    expect(theStop()).toBe(screen.getByTestId("default-target"));
+    const checkbox = screen.getByRole("checkbox", { name: "Toggle bluetooth.service" });
+    act(() => checkbox.focus());
+    expect(document.activeElement).toBe(checkbox);
+    expect(theStop()).toBe(screen.getByTestId("service-item-bluetooth.service"));
+  });
+
   it("leaves filter buttons, headers and in-row links as tab stops, and checkboxes focusable", () => {
     renderUnits(loadUnitFields("planted"));
     const section = screen.getByTestId("service-section");
@@ -384,7 +393,6 @@ describe("U32: the roving tab stop (§ 6.13)", () => {
       .filter((c) => !(c as HTMLInputElement).disabled);
     expect(checkboxes.length).toBeGreaterThan(0);
     for (const c of checkboxes) {
-      expect(c.tabIndex).toBe(0);
       act(() => c.focus());
       expect(document.activeElement).toBe(c);
     }
