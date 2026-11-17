@@ -369,6 +369,7 @@ const UNITS_SCOPED_SELECTORS = [
   ".inspectah-units-section .inspectah-decision-row__main",
   ".inspectah-units-section .inspectah-decision-row__name",
   ".inspectah-units-section .inspectah-decision-row__name > *",
+  ".inspectah-units-section .inspectah-decision-row__badge",
   ".inspectah-units-section .inspectah-unit-filter .pf-v6-c-toggle-group",
 ];
 
@@ -383,5 +384,15 @@ describe("narrow widths: the rules that reflow rows and the bar keep applying (Â
     for (const row of Array.from(section.querySelectorAll('[role="row"]'))) {
       expect(row.querySelector(":scope > .inspectah-decision-row__main"), row.getAttribute("data-testid") ?? "").not.toBeNull();
     }
+  });
+
+  it("draws a mount finding's unit file in a badge cell of the section, which the badge rule wraps", () => {
+    renderUnits(planted);
+    const mount = planted.mount_findings.find((f) => f.unit_file_path !== null)!;
+    const file = screen.getByTestId(`mount-finding-file-${mount.unit}`);
+    expect(file.textContent).toBe(mount.unit_file_path);
+    const cell = file.closest(".inspectah-decision-row__badge");
+    expect(cell).not.toBeNull();
+    expect(screen.getByTestId("service-section").contains(cell)).toBe(true);
   });
 });

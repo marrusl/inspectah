@@ -69,6 +69,16 @@ const LONG_DECLINED_TEXT =
   `${"The unit's install section cannot be carried as recorded on the source host. ".repeat(6)}` +
   `/etc/systemd/system/${"nested-directory/".repeat(10)}override.conf`;
 
+/** A name part with no break opportunity, wider than a phone-width section. */
+const UNBROKEN_LENGTH = 120;
+const UNBROKEN = "x".repeat(UNBROKEN_LENGTH);
+
+/** The planted Vitest fixture's mount finding: the record with every field shown. */
+const PLANTED_UNITS = path.join(HERE, "..", "src", "__tests__", "fixtures", "systemd-units", "planted.units.json");
+const PLANTED_MOUNT_FINDING = (
+  JSON.parse(fs.readFileSync(PLANTED_UNITS, "utf-8")) as UnitFields
+).mount_findings[0];
+
 /** Axe over the given parts of the page; fails on any critical or serious violation. */
 async function expectNoBlockingViolations(
   page: Page,
@@ -473,6 +483,54 @@ test.describe("Systemd units section", () => {
     expect(await rowsWithClippedNames(page)).toEqual([]);
     expect(await barButtonsInsideSection(page)).toBe(true);
     expect(await barLineCount(page)).toBeGreaterThan(1);
+  });
+
+  test("P7: at 320 x 800 a long file link, parent, install file and drop-in path wrap inside the section", async ({
+    page,
+  }) => {
+    await setupUnits(page);
+    // The kitchen-sink view has no mount finding: add planted's, and give
+    // each row kind's long-valued field a value with no break opportunity.
+    const view = JSON.parse(fs.readFileSync(VIEW_BODIES["kitchen-sink"], "utf-8"));
+    const mount = { ...PLANTED_MOUNT_FINDING, unit_file_path: `/etc/systemd/system/${UNBROKEN}.mount` };
+    view.mount_findings = [mount];
+    view.manual_links[0].parent = `${UNBROKEN}.target`;
+    view.undetermined_installs[0].install_files = [`/etc/systemd/system/${UNBROKEN}.service`];
+    const dropin = view.unit_dropins.find((d: { unit: string }) => d.unit === "nginx.service");
+    dropin.path = `/etc/systemd/system/nginx.service.d/${UNBROKEN}.conf`;
+    // Registered last, so it answers before the preset route.
+    await page.route("**/api/view", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(view) }),
+    );
+    await page.setViewportSize(PHONE);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    await sidebarEntry(page, /^Systemd units /).click();
+    const section = page.getByTestId("service-section");
+    await expect(section).toBeVisible();
+
+    const link = page.getByTestId(`mount-finding-file-${mount.unit}`);
+    await expect(link).toHaveText(mount.unit_file_path);
+    await expect(link).toHaveAttribute("href", `#configs:${mount.unit_file_path}`);
+    const parts = [
+      link,
+      section.getByTestId("manual-link-parent").first(),
+      section.getByTestId("install-file").first(),
+      page.getByTestId(`dropin-item-${dropin.path}`).locator(".inspectah-decision-row__name > span"),
+    ];
+    await expect.poll(() => pageScrollsSideways(page)).toBe(false);
+    expect(await sectionScrollsSideways(page)).toBe(false);
+    for (const part of parts) {
+      await expect(part).toBeVisible();
+      const box = await part.evaluate((el, selector) => {
+        const s = document.querySelector(selector)!.getBoundingClientRect();
+        const r = el.getBoundingClientRect();
+        return { left: r.left, right: r.right, sectionLeft: s.left, sectionRight: s.right, text: el.textContent };
+      }, SECTION_SELECTOR);
+      expect(box.text).toContain(UNBROKEN);
+      expect(box.left, box.text ?? "").toBeGreaterThanOrEqual(box.sectionLeft);
+      expect(box.right, box.text ?? "").toBeLessThanOrEqual(box.sectionRight);
+    }
   });
 
   test("P8: dark theme keeps contrast on outcome labels, the follow-up flag and the preset", async ({

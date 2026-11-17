@@ -686,6 +686,16 @@ body,
   min-width: 0;
 }
 
+/* A badge cell is not always a short label: a mount finding's unit file
+   link is a path. Here a badge cell may shrink to the row and break its
+   text anywhere, so the whole path wraps inside the section. */
+.inspectah-units-section .inspectah-decision-row__badge {
+  flex-shrink: 1;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+}
+
 /* Each button after the first overlaps its neighbour by one border width
    (PatternFly's negative inline-start margin on toggle group items), so a
    button that starts a wrapped line would sit that far outside the
