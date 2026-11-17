@@ -8,7 +8,7 @@
  * real global search box and selects a real result, as an operator does.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "../App";
 import type { ReferenceSection, ViewResponse } from "../api/types";
@@ -354,5 +354,90 @@ describe("U26: a global search result selected from within the units section (§
     expect(screen.getByTestId("service-item-cockpit.socket")).toHaveFocus();
     expect(within(bar).getByRole("button", { name: /^All \d+$/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /^Sockets\b/ })).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+/** Kitchen-sink after excluding `cups.service`: its declined cleared. */
+function cupsExcluded(): UnitFields {
+  const fields = loadUnitFields("kitchen-sink");
+  const cups = fields.unit_states.find((r) => r.unit === "cups.service")!;
+  delete cups.declined;
+  cups.include = false;
+  return fields;
+}
+
+/**
+ * Serves the view, and answers each op with `afterOp`, which the view then
+ * serves too. Each response is a fresh copy, as a server's is.
+ */
+function serveWithOps(view: ViewResponse, afterOp: ViewResponse): { ops: () => number } {
+  let ops = 0;
+  let current = view;
+  const routes: Record<string, () => unknown> = {
+    "/api/health": () => HEALTH,
+    "/api/groups": () => GROUPS,
+    "/api/view": () => structuredClone(current),
+    "/api/snapshot/sections": () => SECTIONS,
+    "/api/viewed": () => ({ ids: [] }),
+    "/api/ops": () => [],
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (method === "POST" && url === "/api/op") {
+        ops += 1;
+        current = afterOp;
+        return { ok: true, status: 200, json: async () => structuredClone(afterOp) };
+      }
+      if (method !== "GET" && url !== "/api/viewed") mutatingRequests.push(`${method} ${url}`);
+      if (!(url in routes)) return { ok: false, status: 404, json: async () => ({ error: url }) };
+      return { ok: true, status: 200, json: async () => routes[url]() };
+    }),
+  );
+  return { ops: () => ops };
+}
+
+describe("U26: a reveal lands after the section query it clears has settled (§ 6.11)", () => {
+  it("shows and focuses cups.service that only its pin showed, again on a second selection, and a later toggle keeps the filter", async () => {
+    const served = serveWithOps(emptyView({ ...kitchenSink }), emptyView({ ...cupsExcluded() }));
+    render(<App />);
+    await openSection(/^Systemd units/, "Systemd units");
+    await screen.findByTestId("service-section");
+    // Let the section's own focus on opening settle before `/` is pressed.
+    await act(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const bar = () => screen.getByRole("group", { name: "Show" });
+    const pressed = () =>
+      within(bar())
+        .getAllByRole("button")
+        .filter((b) => b.getAttribute("aria-pressed") === "true")
+        .map((b) => (b.textContent ?? "").replace(/ \d+$/, ""));
+    await userEvent.click(within(bar()).getByRole("button", { name: /^Needs follow-up \d+$/ }));
+    await userEvent.keyboard("/");
+    const box = await screen.findByRole("textbox", { name: "Filter section items" });
+    // cups.service's reason holds "socket"; excluded, its reason is gone.
+    await userEvent.type(box, "socket");
+    await userEvent.click(screen.getByRole("checkbox", { name: "Toggle cups.service" }));
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Toggle cups.service" })).not.toBeChecked());
+    expect(served.ops()).toBe(1);
+    // Only its pin shows it now: excluded, it neither needs follow-up nor matches the query.
+    expect(screen.getByTestId("service-item-cups.service")).toBeInTheDocument();
+
+    await selectAndExpectFocus(only(await globalSearch("cups.service"), "cups.service"), unitKey("cups.service"));
+    expect(screen.getByTestId("service-item-cups.service")).toHaveFocus();
+    expect(pressed()).toEqual(["All"]);
+
+    await selectAndExpectFocus(only(await globalSearch("cups.service"), "cups.service"), unitKey("cups.service"));
+    expect(screen.getByTestId("service-item-cups.service")).toHaveFocus();
+
+    // A later toggle under Needs follow-up leaves the filter where the operator put it.
+    await userEvent.click(within(bar()).getByRole("button", { name: /^Needs follow-up \d+$/ }));
+    const iscsid = screen.getByRole("checkbox", { name: "Toggle iscsid.service" });
+    await userEvent.click(iscsid);
+    await waitFor(() => expect(served.ops()).toBe(2));
+    await act(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    expect(pressed()).toEqual(["Needs follow-up"]);
+    expect(screen.queryByTestId("service-item-cups.service")).toBeNull();
+    expect(screen.getByTestId("service-item-iscsid.service")).toBeInTheDocument();
   });
 });

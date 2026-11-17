@@ -6,12 +6,15 @@
  * it decides none itself.
  *
  * Order matters. The state adjustments made during render run in this
- * order, each reading what the one before left: (1) the filter returns to
+ * order, each reading the effective values the one before left, not the
+ * stored state the same pass is replacing: (1) the filter returns to
  * "All" when the bar stops being drawn; (2) a new view prunes the pins to
  * the occurrence keys it holds; (3) a query change clears every pin; (4)
  * the reveal applies its steps, reading the filter, query, pins and
- * collapse state as (1) to (3) leave them; (5) the tab stop moves to a
- * shown row. Keep them in this order.
+ * collapse state as (1) to (3) leave them. The query it reads is the one
+ * after a global search navigation's reset: `MainContent` clears its
+ * text during its own render, before this section renders with the new
+ * reveal. (5) The tab stop moves to a shown row. Keep them in this order.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RefinementOp, ViewResponse } from "../api/types";
@@ -42,7 +45,6 @@ import {
   type OutcomeCounts,
   type ShownGroup,
   type UnitFields,
-  type UnitGroupModel,
 } from "../components/unitOutcome";
 
 /** No section query. */
@@ -53,6 +55,19 @@ const NO_PINS: ReadonlySet<OccurrenceKey> = new Set();
 
 /** Hands a toggleable row's element to the section, by occurrence key. */
 export type RowRef = (el: HTMLDivElement | null) => void;
+
+/**
+ * A reveal as the section has taken it (§ 6.11): the item id, the query
+ * when it arrived, and whether it still waits for a view holding its row.
+ */
+interface RevealProgress {
+  itemId: string | undefined;
+  query: string;
+  pending: boolean;
+}
+
+/** No reveal. */
+const NO_REVEAL: RevealProgress = { itemId: undefined, query: NO_QUERY, pending: false };
 
 /** Every group open. */
 const NONE_COLLAPSED = Object.fromEntries(GROUP_ORDER.map((id) => [id, false])) as Record<
@@ -146,34 +161,96 @@ export function useUnitsSectionState({
   // localStorage (§ 6.4 Persistence).
   const [filter, setFilter] = useState<FilterValue>("all");
   const [announcement, setAnnouncement] = useState("");
-  // The bar stopped being drawn: the filter returns to "All", and the live
-  // region starts empty when the bar returns. Adjusted during render, so
-  // no frame shows a filter with no bar.
-  if (!barDrawn && (filter !== "all" || announcement !== "")) {
-    setFilter("all");
-    setAnnouncement("");
-  }
-
   // Pinned branches, by the occurrence key of the row heading each (§ 6.4,
-  // § 12). They go with the section on unmount. The filter's return to
-  // "All" above clears none: it follows a toggle.
+  // § 12). They go with the section on unmount.
   const [pins, setPins] = useState<ReadonlySet<OccurrenceKey>>(NO_PINS);
-  // Each view keeps only the pins whose occurrence key it still holds.
   const [pinsCheckedFor, setPinsCheckedFor] = useState(keyed);
+  const [queryCheckedFor, setQueryCheckedFor] = useState(filterText);
+  // Every group opens on mount; the state goes with the section (§ 6.2).
+  const [collapsed, setCollapsed] = useState<Record<GroupId, boolean>>(NONE_COLLAPSED);
+  const [reveal, setReveal] = useState<RevealProgress>(NO_REVEAL);
+  // Reveal step 1 clears MainContent's query text, which may not be set
+  // while this section renders, so it is handed over in a layout effect:
+  // still before App's reveal looks the row up. Handled once, then reset.
+  const [queryClearRequest, setQueryClearRequest] = useState<object | null>(null);
+
+  // (1) The bar stopped being drawn: the filter returns to "All", and the
+  // live region starts empty when the bar returns. Clears no pin: it
+  // follows a toggle.
+  let effectiveFilter = filter;
+  let effectiveAnnouncement = announcement;
+  if (!barDrawn) {
+    effectiveFilter = "all";
+    effectiveAnnouncement = "";
+  }
+  // (2) Each view keeps only the pins whose occurrence key it still holds.
+  let effectivePins = pins;
   if (pinsCheckedFor !== keyed) {
     setPinsCheckedFor(keyed);
-    setPins((prev) => pinsInView(prev, keyed));
+    effectivePins = pinsInView(effectivePins, keyed);
   }
-  /** Clears every pin: a filter change, a query change or a reveal that changes either (§ 6.4). */
-  const clearPins = useCallback(() => setPins(NO_PINS), []);
-
-  // A query change clears every pin (§ 6.4), adjusted during render so no
-  // frame shows the new query with the old pins.
-  const [queryCheckedFor, setQueryCheckedFor] = useState(filterText);
+  // (3) A query change clears every pin (§ 6.4).
   if (queryCheckedFor !== filterText) {
     setQueryCheckedFor(filterText);
-    setPins(NO_PINS);
+    effectivePins = NO_PINS;
   }
+  // A query clear already asked for is the query in effect.
+  let effectiveQuery = queryClearRequest ? NO_QUERY : filterText;
+  let effectiveCollapsed = collapsed;
+
+  // (4) The reveal (§ 6.11): undo whatever hides the destination, so the
+  // row is shown before App's reveal effect looks it up. revealPlan
+  // decides all three steps, against the values (1) to (3) leave. A new
+  // reveal is pending until a view holds its row; it is then planned and
+  // applied once, and never again on a later view. A pending reveal is
+  // dropped when the operator changes the query, so it never clears a
+  // query typed after it.
+  let nextReveal = reveal;
+  if (reveal.itemId !== revealItemId) {
+    nextReveal = { itemId: revealItemId, query: filterText, pending: revealItemId !== undefined };
+  } else if (reveal.pending && reveal.query !== filterText) {
+    nextReveal = { ...reveal, pending: false };
+  }
+  if (nextReveal.pending && nextReveal.itemId !== undefined) {
+    const key = rowKeyForItemId(nextReveal.itemId);
+    const plan =
+      key === null
+        ? null
+        : revealPlan(groups, key, {
+            filter: effectiveFilter,
+            query: effectiveQuery,
+            pins: effectivePins,
+            collapsed: effectiveCollapsed,
+          });
+    // An id that is no row key names no row in any view.
+    if (key === null) nextReveal = { ...nextReveal, pending: false };
+    if (plan) {
+      nextReveal = { ...nextReveal, pending: false };
+      if (plan.clearQuery) {
+        setQueryClearRequest({});
+        effectiveQuery = NO_QUERY;
+      }
+      if (plan.clearPins) effectivePins = NO_PINS;
+      if (plan.filterToAll) {
+        effectiveFilter = "all";
+        const all = showGroups(groups, { filter: "all", query: effectiveQuery, pins: NO_PINS });
+        effectiveAnnouncement = liveRegionText("all", shownRowCount(all));
+      }
+      const openGroup = plan.openGroup;
+      if (openGroup !== null) effectiveCollapsed = { ...effectiveCollapsed, [openGroup]: false };
+    }
+  }
+  if (nextReveal !== reveal) setReveal(nextReveal);
+
+  // The adjustments above, stored during render so no frame shows a filter
+  // with no bar, a new query with the old pins, or a hidden destination.
+  if (effectiveFilter !== filter) setFilter(effectiveFilter);
+  if (effectiveAnnouncement !== announcement) setAnnouncement(effectiveAnnouncement);
+  if (effectivePins !== pins) setPins(effectivePins);
+  if (effectiveCollapsed !== collapsed) setCollapsed(effectiveCollapsed);
+
+  /** Clears every pin: a filter change (§ 6.4). */
+  const clearPins = useCallback(() => setPins(NO_PINS), []);
 
   const shown = useMemo(
     () => showGroups(groups, { filter, query: filterText, pins }),
@@ -219,46 +296,11 @@ export function useUnitsSectionState({
     }
   }, [focusRequest]);
 
-  // Every group opens on mount; the state goes with the section (§ 6.2).
-  const [collapsed, setCollapsed] = useState<Record<GroupId, boolean>>(NONE_COLLAPSED);
   const toggleGroup = useCallback(
     (id: GroupId) => setCollapsed((prev) => ({ ...prev, [id]: !prev[id] })),
     [],
   );
 
-  // The reveal (§ 6.11): undo whatever hides the destination, adjusted
-  // during render so the row is shown before App's reveal effect looks it
-  // up. revealPlan decides all three steps. Rechecked when the view
-  // changes, so a reveal sent before the view loaded still lands.
-  const [revealChecked, setRevealChecked] = useState<{
-    itemId: string | undefined;
-    groups: UnitGroupModel[];
-  }>({ itemId: undefined, groups });
-  // Step 1 clears MainContent's query text, which may not be set while this
-  // section renders, so it is handed over in a layout effect: still before
-  // App's reveal looks the row up. Handled once, then reset.
-  const [queryClearRequest, setQueryClearRequest] = useState<object | null>(null);
-  if (revealChecked.itemId !== revealItemId || revealChecked.groups !== groups) {
-    setRevealChecked({ itemId: revealItemId, groups });
-    const key = revealItemId === undefined ? null : rowKeyForItemId(revealItemId);
-    const plan =
-      key === null ? null : revealPlan(groups, key, { filter, query: filterText, pins, collapsed });
-    if (plan) {
-      if (plan.clearQuery) setQueryClearRequest({});
-      if (plan.filterToAll) {
-        setFilter("all");
-        const all = showGroups(groups, {
-          filter: "all",
-          query: plan.clearQuery ? NO_QUERY : filterText,
-          pins: NO_PINS,
-        });
-        setAnnouncement(liveRegionText("all", shownRowCount(all)));
-      }
-      if (plan.clearPins) clearPins();
-      const openGroup = plan.openGroup;
-      if (openGroup !== null) setCollapsed((prev) => ({ ...prev, [openGroup]: false }));
-    }
-  }
   useLayoutEffect(() => {
     if (!queryClearRequest) return;
     setQueryClearRequest(null);

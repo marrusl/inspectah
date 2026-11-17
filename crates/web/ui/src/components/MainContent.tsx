@@ -198,10 +198,18 @@ export function MainContent({
     null,
   );
 
-  // Clear stale filter when switching sections or when global search navigates within same section
-  useEffect(() => {
+  // Clear stale filter when switching sections or when global search
+  // navigates within same section. Adjusted during render, so the section
+  // a navigation reveals a row in renders with the query already cleared
+  // and plans its reveal against that (units: spec § 6.11).
+  const [filterClearedFor, setFilterClearedFor] = useState({ activeSection, filterClearCounter });
+  if (
+    filterClearedFor.activeSection !== activeSection ||
+    filterClearedFor.filterClearCounter !== filterClearCounter
+  ) {
+    setFilterClearedFor({ activeSection, filterClearCounter });
     setFilterText("");
-  }, [activeSection, filterClearCounter]);
+  }
 
   // Deferred post-ungroup focus: waits for the re-render with new package rows
   // before attempting querySelector, fixing the timing race where the DOM hasn't

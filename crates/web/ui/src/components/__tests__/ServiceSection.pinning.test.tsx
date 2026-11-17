@@ -378,6 +378,19 @@ describe("U8 (e): what clears pins, with a section query", () => {
     expect(screen.getByTestId("service-item-httpd.service")).toBeInTheDocument();
   });
 
+  it("a reveal for an id naming no row does not clear a query typed after it when a later view adds the row", () => {
+    const full = loadUnitFields("kitchen-sink");
+    renderUnits({ ...full, unit_states: full.unit_states.filter((r) => r.unit !== "tmp.mount") });
+    // No row carries the key yet, so the reveal changes nothing; App's
+    // lookup finds no row and leaves the reveal set.
+    act(() => reveal("tmp.mount"));
+    act(() => setQuery("httpd"));
+    // The view now holds tmp.mount, which the query typed after the reveal hides.
+    act(() => pushView(loadUnitFields("kitchen-sink")));
+    expect(screen.queryByTestId("service-item-tmp.mount")).not.toBeInTheDocument();
+    expect(screen.getByTestId("service-item-httpd.service")).toBeInTheDocument();
+  });
+
   it("a reveal that sets the filter to All and keeps the query drops every pin", async () => {
     await toggleCupsUnderQuery("Needs follow-up");
     // cups.socket matches the query and is carried: step 2 alone.
