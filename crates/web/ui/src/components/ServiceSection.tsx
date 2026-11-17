@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useId, useMemo } from "react";
 import { Button, EmptyState, EmptyStateBody, Label } from "@patternfly/react-core";
 import type {
   DeclinedView,
@@ -10,11 +10,10 @@ import type {
   UndeterminedInstallView,
   DefaultTargetView,
   ViewResponse,
-  RefinementOp,
   TriageTag,
 } from "../api/types";
-import { applyOp } from "../api/client";
 import type { PendingGuard } from "../hooks/usePendingGuard";
+import { useUnitsSectionState, type RowRef } from "../hooks/useUnitsSectionState";
 import {
   attentionLabelColor,
   formatTriageReason,
@@ -23,36 +22,18 @@ import {
   extractTriageBucket,
 } from "./attentionUtils";
 import {
-  GROUP_ORDER,
   GROUP_TITLES,
   OUTCOME_LABELS,
   RELATION_LABELS,
   UNDETERMINED_CAUSE_LABEL,
-  branchHeadOf,
   causeLabel,
-  emptyStateFor,
-  filterBarDrawn,
   followUpFlagText,
-  groupUnits,
-  keyFields,
-  liveRegionText,
-  outcomeCounts,
-  pinsInView,
   reasonWords,
-  revealPlan,
-  rovingTabStop,
   rowKeyForItemId,
-  rowMoveTarget,
-  showGroups,
-  shownRowCount,
-  shownRowOrder,
-  type FilterValue,
-  type GroupId,
   type OccurrenceKey,
   type ReportedRow,
   type RowKey,
   type UnitBranch,
-  type UnitGroupModel,
 } from "./unitOutcome";
 import { UnitGroup } from "./UnitGroup";
 import { UnitOutcomeFilter } from "./UnitOutcomeFilter";
@@ -183,26 +164,11 @@ const SHOW_ALL_LABEL = "Show all";
 const SEARCH_EMPTY_TITLE = "No items match your search";
 const CLEAR_QUERY_LABEL = "Clear filter";
 
-/** No section query. */
-const NO_QUERY = "";
-
 /** No config row to link to. */
 const NO_CONFIG_PATHS: ReadonlySet<string> = new Set();
 
 /** The section id an `Also=` member link navigates to (§ 6.11). */
 const UNITS_SECTION_ID = "units";
-
-/** No pinned branch. */
-const NO_PINS: ReadonlySet<OccurrenceKey> = new Set();
-
-/** Hands a toggleable row's element to the section, by occurrence key. */
-type RowRef = (el: HTMLDivElement | null) => void;
-
-/** Every group open. */
-const NONE_COLLAPSED = Object.fromEntries(GROUP_ORDER.map((id) => [id, false])) as Record<
-  GroupId,
-  boolean
->;
 
 const LEVEL_BORDER: Record<string, string> = {
   investigate: "3px solid var(--pf-t--global--color--status--danger--default)",
@@ -1186,7 +1152,7 @@ export function ServiceSection({
   onNavigateToConfig,
   revealItemId,
   onNavigateToItem,
-  filterText = NO_QUERY,
+  filterText,
   onResultCount,
   onClearQuery,
   registerFocusFirstRow,
@@ -1197,223 +1163,43 @@ export function ServiceSection({
 }: ServiceSectionProps) {
   const { pendingKeys, runGuarded } = pendingGuard;
 
-  // Keys are assigned once per view response, then grouped (§ 6.11, § 6.2).
-  const keyed = useMemo(
-    () =>
-      keyFields({
-        unit_states: services,
-        unit_dropins: dropins,
-        default_target: defaultTarget,
-        mount_findings: mountFindings,
-        manual_links: manualLinks,
-        undetermined_installs: undeterminedInstalls,
-      }),
-    [services, dropins, defaultTarget, mountFindings, manualLinks, undeterminedInstalls],
-  );
-  const groups = useMemo(() => groupUnits(keyed), [keyed]);
+  const {
+    keyed,
+    counts,
+    barDrawn,
+    filter,
+    changeFilter,
+    announcement,
+    shown,
+    emptyState,
+    collapsed,
+    toggleGroup,
+    tabStop,
+    rowRef,
+    handleFocus,
+    handleKeyDown,
+    sendInclude,
+  } = useUnitsSectionState({
+    fields: {
+      unit_states: services,
+      unit_dropins: dropins,
+      default_target: defaultTarget,
+      mount_findings: mountFindings,
+      manual_links: manualLinks,
+      undetermined_installs: undeterminedInstalls,
+    },
+    filterText,
+    revealItemId,
+    onResultCount,
+    onClearQuery,
+    registerFocusFirstRow,
+    runGuarded,
+    onViewUpdate,
+    onMutationError,
+  });
   const unitRowKeys = useMemo(
     () => new Set<RowKey>(keyed.unitStates.map((k) => k.rowKey)),
     [keyed],
-  );
-  const counts = useMemo(() => outcomeCounts(keyed), [keyed]);
-  const barDrawn = filterBarDrawn(counts);
-
-  // The filter is "All" on mount and lives only here: not in the URL or
-  // localStorage (§ 6.4 Persistence).
-  const [filter, setFilter] = useState<FilterValue>("all");
-  const [announcement, setAnnouncement] = useState("");
-  // The bar stopped being drawn: the filter returns to "All", and the live
-  // region starts empty when the bar returns. Adjusted during render, so
-  // no frame shows a filter with no bar.
-  if (!barDrawn && (filter !== "all" || announcement !== "")) {
-    setFilter("all");
-    setAnnouncement("");
-  }
-
-  // Pinned branches, by the occurrence key of the row heading each (§ 6.4,
-  // § 12). They go with the section on unmount. The filter's return to
-  // "All" above clears none: it follows a toggle.
-  const [pins, setPins] = useState<ReadonlySet<OccurrenceKey>>(NO_PINS);
-  // Each view keeps only the pins whose occurrence key it still holds.
-  const [pinsCheckedFor, setPinsCheckedFor] = useState(keyed);
-  if (pinsCheckedFor !== keyed) {
-    setPinsCheckedFor(keyed);
-    setPins((prev) => pinsInView(prev, keyed));
-  }
-  /** Clears every pin: a filter change, a query change or a reveal that changes either (§ 6.4). */
-  const clearPins = useCallback(() => setPins(NO_PINS), []);
-
-  // A query change clears every pin (§ 6.4), adjusted during render so no
-  // frame shows the new query with the old pins.
-  const [queryCheckedFor, setQueryCheckedFor] = useState(filterText);
-  if (queryCheckedFor !== filterText) {
-    setQueryCheckedFor(filterText);
-    setPins(NO_PINS);
-  }
-
-  const shown = useMemo(
-    () => showGroups(groups, { filter, query: filterText, pins }),
-    [groups, filter, filterText, pins],
-  );
-
-  // The search box's result count (§ 6.12).
-  useEffect(() => {
-    onResultCount?.(shownRowCount(shown));
-  }, [shown, onResultCount]);
-
-  const changeFilter = useCallback(
-    (value: FilterValue) => {
-      setFilter(value);
-      clearPins();
-      const next = showGroups(groups, { filter: value, query: filterText, pins: NO_PINS });
-      setAnnouncement(liveRegionText(value, shownRowCount(next)));
-    },
-    [groups, filterText, clearPins],
-  );
-
-  // Rows by occurrence key, so focus returns to the occurrence the operator
-  // toggled (§ 6.13), never to a twin with its row key, and ArrowDown from
-  // the search box reaches any kind of row.
-  const rowElements = useRef(new Map<OccurrenceKey, HTMLDivElement>());
-  const rowRef = useCallback(
-    (key: OccurrenceKey): RowRef =>
-      (el) => {
-        if (el) rowElements.current.set(key, el);
-        else rowElements.current.delete(key);
-      },
-    [],
-  );
-  const [focusRequest, setFocusRequest] = useState<{ key: OccurrenceKey } | null>(null);
-  // After the op settles, the toggled row gets focus back if focus was lost
-  // meanwhile (a browser blurs a control disabled while its request runs).
-  // Focus the operator moved elsewhere stays where it is.
-  useLayoutEffect(() => {
-    if (!focusRequest) return;
-    const active = document.activeElement;
-    if (active === null || active === document.body) {
-      rowElements.current.get(focusRequest.key)?.focus();
-    }
-  }, [focusRequest]);
-
-  // Every group opens on mount; the state goes with the section (§ 6.2).
-  const [collapsed, setCollapsed] = useState<Record<GroupId, boolean>>(NONE_COLLAPSED);
-  const toggleGroup = useCallback(
-    (id: GroupId) => setCollapsed((prev) => ({ ...prev, [id]: !prev[id] })),
-    [],
-  );
-
-  // The reveal (§ 6.11): undo whatever hides the destination, adjusted
-  // during render so the row is shown before App's reveal effect looks it
-  // up. revealPlan decides all three steps. Rechecked when the view
-  // changes, so a reveal sent before the view loaded still lands.
-  const [revealChecked, setRevealChecked] = useState<{
-    itemId: string | undefined;
-    groups: UnitGroupModel[];
-  }>({ itemId: undefined, groups });
-  // Step 1 clears MainContent's query text, which may not be set while this
-  // section renders, so it is handed over in a layout effect: still before
-  // App's reveal looks the row up. Handled once, then reset.
-  const [queryClearRequest, setQueryClearRequest] = useState<object | null>(null);
-  if (revealChecked.itemId !== revealItemId || revealChecked.groups !== groups) {
-    setRevealChecked({ itemId: revealItemId, groups });
-    const key = revealItemId === undefined ? null : rowKeyForItemId(revealItemId);
-    const plan =
-      key === null ? null : revealPlan(groups, key, { filter, query: filterText, pins, collapsed });
-    if (plan) {
-      if (plan.clearQuery) setQueryClearRequest({});
-      if (plan.filterToAll) {
-        setFilter("all");
-        const all = showGroups(groups, {
-          filter: "all",
-          query: plan.clearQuery ? NO_QUERY : filterText,
-          pins: NO_PINS,
-        });
-        setAnnouncement(liveRegionText("all", shownRowCount(all)));
-      }
-      if (plan.clearPins) clearPins();
-      const openGroup = plan.openGroup;
-      if (openGroup !== null) setCollapsed((prev) => ({ ...prev, [openGroup]: false }));
-    }
-  }
-  useLayoutEffect(() => {
-    if (!queryClearRequest) return;
-    setQueryClearRequest(null);
-    onClearQuery?.();
-  }, [queryClearRequest, onClearQuery]);
-
-  // The shown rows in section order (§ 6.13): the tab stop, the movement
-  // keys and ArrowDown from the search box all read it.
-  const order = useMemo(() => shownRowOrder(shown, collapsed), [shown, collapsed]);
-
-  // The one tab stop, held by occurrence key (§ 6.13). When the row holding
-  // it stops being shown it moves to the first shown row, adjusted during
-  // render so no frame shows a hidden tab stop.
-  const [heldTabStop, setHeldTabStop] = useState<OccurrenceKey | null>(null);
-  const tabStop = rovingTabStop(order, heldTabStop);
-  if (tabStop !== heldTabStop) setHeldTabStop(tabStop);
-
-  /** The occurrence key of a row element, read from the ref map: keys are never in the DOM. */
-  const rowKeyOfElement = useCallback((el: EventTarget): OccurrenceKey | null => {
-    for (const [key, row] of rowElements.current) {
-      if (row === el) return key;
-    }
-    return null;
-  }, []);
-
-  // The tab stop follows focus onto a row, however it got there (a movement
-  // key, a click, or App's reveal).
-  const handleFocus = useCallback(
-    (e: React.FocusEvent) => {
-      const key = rowKeyOfElement(e.target);
-      if (key !== null) setHeldTabStop(key);
-    },
-    [rowKeyOfElement],
-  );
-
-  // Movement keys act on a focused row only, as in DecisionList: never from
-  // a checkbox, link or button inside one.
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const from = rowKeyOfElement(e.target);
-      if (from === null) return;
-      const to = rowMoveTarget(order, from, e.key);
-      if (to === null) return;
-      e.preventDefault();
-      setHeldTabStop(to);
-      rowElements.current.get(to)?.focus();
-    },
-    [rowKeyOfElement, order],
-  );
-
-  // ArrowDown from the search box (§ 6.12): the first shown row, of any kind.
-  const focusFirstRow = useCallback(() => {
-    const key = order[0];
-    if (key !== undefined) rowElements.current.get(key)?.focus();
-  }, [order]);
-  useLayoutEffect(() => {
-    if (!registerFocusFirstRow) return;
-    registerFocusFirstRow(focusFirstRow);
-    return () => registerFocusFirstRow(null);
-  }, [registerFocusFirstRow, focusFirstRow]);
-
-  // Every toggle the operator makes pins the branch that holds the row
-  // (§ 6.4), before the op leaves, so a failed op leaves it shown too.
-  const sendInclude = useCallback(
-    (key: string, op: RefinementOp, toggled: OccurrenceKey) => {
-      const head = branchHeadOf(groups, toggled);
-      setPins((prev) => (prev.has(head) ? prev : new Set(prev).add(head)));
-      runGuarded(key, () =>
-        applyOp(op)
-          .then(onViewUpdate)
-          .catch((err) =>
-            onMutationError(
-              err instanceof Error ? err : new Error(String(err)),
-            ),
-          )
-          .finally(() => setFocusRequest({ key: toggled })),
-      );
-    },
-    [groups, runGuarded, onViewUpdate, onMutationError],
   );
 
   const handleToggleService = useCallback(
@@ -1454,9 +1240,6 @@ export function ServiceSection({
     },
     [sendInclude],
   );
-
-  // § 6.9, decided by emptyStateFor.
-  const emptyState = emptyStateFor(keyed, filter, filterText, shown);
 
   return (
     <div
