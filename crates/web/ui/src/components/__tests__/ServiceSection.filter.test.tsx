@@ -323,6 +323,32 @@ describe("U35 (a): filter counts over true duplicates", () => {
     const [all2, nf2, c2, e2] = countsOf(oneState);
     expect([all2, nf2, c2, e2]).toEqual([base[0] - 1, base[1], base[2] - 1, base[3]]);
   });
+
+  it("counts and shows each of two unit records with one row key by its own outcome", async () => {
+    const base = countsOf(loadUnitFields("planted"));
+    // The second dup-state-demo.service record excluded, the first still carried.
+    const split = loadUnitFields("planted");
+    const twins = split.unit_states.filter((u) => u.unit === "dup-state-demo.service");
+    expect(twins.map((u) => [u.include, u.declined])).toEqual([
+      [true, undefined],
+      [true, undefined],
+    ]);
+    twins[1].include = false;
+    expect(countsOf(split)).toEqual([base[0], base[1], base[2] - 1, base[3] + 1]);
+
+    renderUnits(split);
+    const shownTwins = () =>
+      screen
+        .queryAllByTestId("service-item-dup-state-demo.service")
+        .map((row) => (within(row).getByRole("checkbox") as HTMLInputElement).checked);
+    expect(shownTwins()).toEqual([true, false]);
+    await select("Excluded");
+    expect(shownTwins()).toEqual([false]);
+    await select("Carried");
+    expect(shownTwins()).toEqual([true]);
+    await select("Needs follow-up");
+    expect(shownTwins()).toEqual([]);
+  });
 });
 
 describe("U23: the filter's empty states (§ 6.9 rows 1 and 4)", () => {

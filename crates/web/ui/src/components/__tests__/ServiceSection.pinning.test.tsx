@@ -49,6 +49,9 @@ let setQuery: (query: string) => void = () => {
   throw new Error("Harness not rendered");
 };
 
+/** The section's result counts, as the search box receives them (§ 6.12). */
+const resultCounts = vi.fn<(n: number) => void>();
+
 /** Sends a reveal to the section, as App does for an item id; `undefined` ends it, as App does after its lookup. */
 let reveal: (itemId: string | undefined) => void = () => {
   throw new Error("Harness not rendered");
@@ -76,6 +79,7 @@ function Harness({ initial, onMutationError }: { initial: UnitFields; onMutation
       filterText={query}
       onClearQuery={() => setQueryState("")}
       revealItemId={revealItemId}
+      onResultCount={resultCounts}
       onViewUpdate={(view) => setFields(fieldsOf(view))}
       onMutationError={onMutationError}
     />
@@ -83,6 +87,7 @@ function Harness({ initial, onMutationError }: { initial: UnitFields; onMutation
 }
 
 function renderUnits(fields: UnitFields) {
+  resultCounts.mockReset();
   const onMutationError = vi.fn();
   render(<Harness initial={fields} onMutationError={onMutationError} />);
   return { onMutationError };
@@ -337,6 +342,43 @@ async function toggleCupsUnderQuery(filter: string) {
     expect(screen.getByRole("checkbox", { name: "Toggle cups.service" })).not.toBeChecked(),
   );
 }
+
+describe("the section's result count with a pin (§ 6.12, § 6.4)", () => {
+  /** Words of cups.service's declined text only: no other field of any row holds them. */
+  const REASON_ONLY = "also enables cups.socket";
+  const CUPS_DROPIN = "/etc/systemd/system/cups.service.d/override.conf";
+
+  /** These fields with a drop-in nested under cups.service. */
+  function withCupsDropin(fields: UnitFields): UnitFields {
+    const dropin = { ...fields.unit_dropins[0], unit: "cups.service", path: CUPS_DROPIN };
+    return { ...fields, unit_dropins: [...fields.unit_dropins, dropin] };
+  }
+
+  it("counts the pinned branch head and not its drop-in, and drops it when the query changes", async () => {
+    renderUnits(withCupsDropin(loadUnitFields("kitchen-sink")));
+    act(() => setQuery(REASON_ONLY));
+    const shown = () =>
+      Array.from(screen.getByTestId("service-section").querySelectorAll('[role="row"]')).map((r) =>
+        r.getAttribute("data-testid"),
+      );
+    expect(shown()).toEqual(["service-item-cups.service", `dropin-item-${CUPS_DROPIN}`]);
+    expect(resultCounts).toHaveBeenLastCalledWith(1);
+
+    respondWith(withCupsDropin(cupsExcluded()));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Toggle cups.service" }));
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "Toggle cups.service" })).not.toBeChecked(),
+    );
+    // The declined text is gone, so the query no longer matches: only the pin shows the branch.
+    expect(shown()).toEqual(["service-item-cups.service", `dropin-item-${CUPS_DROPIN}`]);
+    expect(resultCounts).toHaveBeenLastCalledWith(1);
+
+    // A query change clears every pin (§ 6.4), and nothing matches this one.
+    act(() => setQuery(`${REASON_ONLY}s`));
+    expect(shown()).toEqual([]);
+    expect(resultCounts).toHaveBeenLastCalledWith(0);
+  });
+});
 
 describe("U8 (c): toggling a row under a section query keeps it shown", () => {
   it("keeps cups.service, which no longer matches the query, shown", async () => {

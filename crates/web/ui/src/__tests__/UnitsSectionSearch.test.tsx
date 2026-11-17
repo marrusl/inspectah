@@ -300,6 +300,29 @@ describe("U24: section search in the units section (§ 6.12, § 9.2)", () => {
     expect(followUp).toHaveFocus();
   });
 
+  it("finds each of two links on one row key by its own advisory sentinel (§ 6.12 true duplicates)", async () => {
+    const FIRST = "first-twin-sentinel";
+    const SECOND = "second-twin-sentinel";
+    const fields = loadUnitFields("planted");
+    const twins = fields.manual_links.filter((l) => l.unit === "dup-link-demo.service");
+    expect(twins).toHaveLength(2);
+    twins[0].advisories = [...twins[0].advisories, `# ${FIRST}`];
+    twins[1].advisories = [...twins[1].advisories, `# ${SECOND}`];
+    const key = JSON.stringify(["manual_link", "wants", "multi-user.target", "dup-link-demo.service"]);
+    await openUnits(fields);
+    for (const [own, twin] of [
+      [FIRST, SECOND],
+      [SECOND, FIRST],
+    ]) {
+      await search(own);
+      const shown = rows();
+      expect(shown.map((r) => r.getAttribute("data-unit-key")), own).toEqual([key]);
+      expect(shown[0].textContent).toContain(own);
+      expect(shown[0].textContent).not.toContain(twin);
+      expect(resultCount()).toBe(1);
+    }
+  });
+
   it("combines with the filter: a carried row's query under Needs follow-up shows only the empty state", async () => {
     await openUnits(kitchenSink);
     await selectFilter("Needs follow-up");

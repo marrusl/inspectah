@@ -309,6 +309,38 @@ describe("U25: true duplicates (§ 6.12)", () => {
   });
 });
 
+describe("true duplicates that differ outside their identity (§ 6.12)", () => {
+  const FIRST = "first-twin-sentinel";
+  const SECOND = "second-twin-sentinel";
+
+  /** Planted, with each dup-link-demo.service link given its own advisory line. */
+  function twinsWithSentinels(): UnitFields {
+    const fields = loadUnitFields("planted");
+    const twins = fields.manual_links.filter((l) => l.unit === "dup-link-demo.service");
+    expect(twins).toHaveLength(2);
+    twins[0].advisories = [...twins[0].advisories, `# ${FIRST}`];
+    twins[1].advisories = [...twins[1].advisories, `# ${SECOND}`];
+    return fields;
+  }
+
+  it("finds each link's own entry by its own sentinel, and either result reveals the first link row", async () => {
+    await openUnits(twinsWithSentinels());
+    const title = "dup-link-demo.service (wants multi-user.target)";
+    const key = JSON.stringify(["manual_link", "wants", "multi-user.target", "dup-link-demo.service"]);
+    const testId = `manual-link-${JSON.stringify(["wants", "multi-user.target", "dup-link-demo.service"])}`;
+    for (const sentinel of [FIRST, SECOND]) {
+      const results = await globalSearch(sentinel);
+      // One entry each: an entry carrying its twin's text would find two, or none.
+      expect(results.map((r) => [r.label, r.title]), sentinel).toEqual([[UNITS_LABEL, title]]);
+      await selectAndExpectFocus(results[0], key);
+      const [firstRow, secondRow] = screen.getAllByTestId(testId);
+      expect(document.activeElement).toBe(firstRow);
+      expect(firstRow.textContent).toContain(FIRST);
+      expect(secondRow.textContent).toContain(SECOND);
+    }
+  });
+});
+
 describe("selecting a units result leaves no pending focus behind", () => {
   it.each<[string, string, string, string]>([
     ["a drop-in", "limits-demo", LIMITS_DROPIN, JSON.stringify(["dropin", LIMITS_DROPIN])],

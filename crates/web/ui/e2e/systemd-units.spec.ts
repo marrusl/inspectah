@@ -4,13 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { applyMockApi, clearMocks, mockSequence } from "./helpers/mock-api";
-import {
-  FILTER_LABELS,
-  FILTER_VALUES,
-  keyFields,
-  outcomeCounts,
-  type UnitFields,
-} from "../src/components/unitOutcome";
+import type { UnitFields } from "../src/components/unitOutcome";
 
 // The Systemd units section in a real browser (spec § 10.3, P1 to P8).
 //
@@ -46,10 +40,6 @@ const GROUPS_BODY = path.join(
 
 /** Bound on Tab and `j` presses while walking to a target, so a miss fails instead of looping. */
 const MAX_KEY_PRESSES = 60;
-
-function readView(view: keyof typeof VIEW_BODIES): UnitFields {
-  return JSON.parse(fs.readFileSync(VIEW_BODIES[view], "utf-8")) as UnitFields;
-}
 
 /** The WCAG tags and impacts `expectNoAxeViolations` checks. */
 const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
@@ -330,15 +320,23 @@ test.describe("Systemd units section", () => {
 
     const opSent = page.waitForRequest((r) => r.url().endsWith("/api/op") && r.method() === "POST");
     await page.keyboard.press("x");
-    await opSent;
+    const op = await opSent;
+    expect(op.postDataJSON()).toEqual({
+      kind: "Op",
+      op: "SetInclude",
+      target: { item_id: { kind: "Unit", key: { unit: "tmp.mount" } }, include: false },
+    });
 
-    // The post-exclude body's counts, by the same rules the bar uses.
-    const afterBody = JSON.parse(fs.readFileSync(AFTER_EXCLUDE_TMP_MOUNT, "utf-8")) as UnitFields;
-    const counts = outcomeCounts(keyFields(afterBody));
+    // Counted by hand from the recorded post-exclude body, not by the
+    // section's own helpers. Before the op the bar read All 23, Needs
+    // follow-up 9, Carried 14, Excluded 0 (P1): 19 unit rows, the default
+    // target and 3 reported rows; 6 declined unit rows and the 3 reported
+    // rows need follow-up. In the body tmp.mount is include false with no
+    // declined: it moves from Needs follow-up to Excluded, and the 14
+    // carried rows and the total are unchanged.
     await expect
       .poll(() => filterTexts(page))
-      .toEqual(FILTER_VALUES.map((value) => `${FILTER_LABELS[value]} ${counts[value]}`));
-    expect(counts).not.toEqual(outcomeCounts(keyFields(readView("kitchen-sink"))));
+      .toEqual(["All 23", "Needs follow-up 8", "Carried 14", "Excluded 1"]);
 
     await expect(tmpMount).toBeFocused();
     await expect(tmpMount.getByRole("checkbox")).not.toBeChecked();

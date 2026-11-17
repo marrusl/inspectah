@@ -172,6 +172,26 @@ describe("§ 6.11 keys", () => {
       expect(keyed.defaultTarget?.ordinal).toBe(0);
     });
 
+    it("numbers an A, B, A source list A#0, B#0, A#1, in source order", () => {
+      const a = '["unit_state","order-a.service"]';
+      const b = '["unit_state","order-b.service"]';
+      const units = keyFields({
+        ...planted,
+        unit_states: [unitState("order-a.service"), unitState("order-b.service"), unitState("order-a.service")],
+      }).unitStates;
+      expect(units.map((k) => k.occurrenceKey)).toEqual([`${a}#0`, `${b}#0`, `${a}#1`]);
+      expect(units.map((k) => k.ordinal)).toEqual([0, 0, 1]);
+
+      const la = '["manual_link","wants","multi-user.target","order-a.service"]';
+      const lb = '["manual_link","wants","multi-user.target","order-b.service"]';
+      const linkOf = (unit: string): ManualLinkView => ({ ...link, unit });
+      const links = keyFields({
+        ...planted,
+        manual_links: [linkOf("order-a.service"), linkOf("order-b.service"), linkOf("order-a.service")],
+      }).manualLinks;
+      expect(links.map((k) => k.occurrenceKey)).toEqual([`${la}#0`, `${lb}#0`, `${la}#1`]);
+    });
+
     it("keys the default target", () => {
       expect(keyed.defaultTarget?.rowKey).toBe('["default_target"]');
       expect(keyed.defaultTarget?.occurrenceKey).toBe('["default_target"]#0');
