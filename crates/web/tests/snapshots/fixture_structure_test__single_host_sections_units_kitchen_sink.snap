@@ -218,13 +218,6 @@ expression: value
         "title": "cleanup.sh"
       },
       {
-        "detail": null,
-        "id": "cron:var/spool/cron/appuser",
-        "searchable_text": "appuser spool/cron (appuser) cron var/spool/cron/appuser",
-        "subtitle": "spool/cron (appuser)",
-        "title": "appuser"
-      },
-      {
         "detail": "Daily backup job\n/usr/local/bin/backup.sh",
         "id": "timer:etc/systemd/system/driftify-backup.timer",
         "searchable_text": "driftify-backup *-*-* 03:00:00 Daily backup job\n/usr/local/bin/backup.sh timer",
@@ -424,14 +417,6 @@ expression: value
         "searchable_text": "cron-daily-cleanup-sh @daily etc/cron.daily/cleanup.sh\n/etc/cron.daily/cleanup.sh generated-timer",
         "subtitle": "@daily",
         "title": "cron-daily-cleanup-sh"
-      },
-      {
-        "detail": "var/spool/cron/appuser\n/opt/myapp/scripts/health-check.sh >> /var/log/myapp/health.log 2>&1",
-        "generated_timer": "cron-appuser",
-        "id": "generated:4:cron-appuser",
-        "searchable_text": "cron-appuser */15 * * * * var/spool/cron/appuser\n/opt/myapp/scripts/health-check.sh >> /var/log/myapp/health.log 2>&1 generated-timer",
-        "subtitle": "*/15 * * * *",
-        "title": "cron-appuser"
       }
     ]
   }

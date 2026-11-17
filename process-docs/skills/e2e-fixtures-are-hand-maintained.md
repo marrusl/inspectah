@@ -119,10 +119,13 @@ with every list outside the six unit fields emptied),
 to excluding `tmp.mount`) and `single-host/view-units-stock10.json` (the
 view with a stock host's unit fields). Rules for taking or changing one:
 
-- Check the body before committing. A recorded sections body carries each
-  `at` job's owner account and home directory (`subtitle`, `detail`,
-  `searchable_text`); leave such a row out. The sensitive-tarball hook
-  checks tarballs only, so nothing else catches it.
+- Check the body before committing, and leave out every row that names
+  an account of the scanned machine. In a sections body these are an `at`
+  job (its owner and home directory), a per-user crontab (its spool path
+  `var/spool/cron/<account>`) and the timer generated from that crontab;
+  the account is in the `id`, `title`, `subtitle`, `detail` or
+  `searchable_text`. The sensitive-tarball hook checks tarballs only, so
+  nothing else catches it.
 - `/api/health` returns an empty hostname at schema 28, so a test that
   searches for the host name needs the scan's output directory name.
 - `view-units-stock10.json` is coherent for the units section only: it

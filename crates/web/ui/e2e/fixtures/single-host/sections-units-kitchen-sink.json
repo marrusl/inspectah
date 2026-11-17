@@ -214,13 +214,6 @@
         "searchable_text": "cleanup.sh cron.daily cron etc/cron.daily/cleanup.sh"
       },
       {
-        "id": "cron:var/spool/cron/appuser",
-        "title": "appuser",
-        "subtitle": "spool/cron (appuser)",
-        "detail": null,
-        "searchable_text": "appuser spool/cron (appuser) cron var/spool/cron/appuser"
-      },
-      {
         "id": "timer:etc/systemd/system/driftify-backup.timer",
         "title": "driftify-backup",
         "subtitle": "*-*-* 03:00:00",
@@ -420,14 +413,6 @@
         "detail": "etc/cron.daily/cleanup.sh\n/etc/cron.daily/cleanup.sh",
         "searchable_text": "cron-daily-cleanup-sh @daily etc/cron.daily/cleanup.sh\n/etc/cron.daily/cleanup.sh generated-timer",
         "generated_timer": "cron-daily-cleanup-sh"
-      },
-      {
-        "id": "generated:4:cron-appuser",
-        "title": "cron-appuser",
-        "subtitle": "*/15 * * * *",
-        "detail": "var/spool/cron/appuser\n/opt/myapp/scripts/health-check.sh >> /var/log/myapp/health.log 2>&1",
-        "searchable_text": "cron-appuser */15 * * * * var/spool/cron/appuser\n/opt/myapp/scripts/health-check.sh >> /var/log/myapp/health.log 2>&1 generated-timer",
-        "generated_timer": "cron-appuser"
       }
     ]
   }
