@@ -173,6 +173,11 @@ function shownCountedRows(page: Page) {
     .locator('[role="row"]:visible:not([data-testid^="dropin-item-"])');
 }
 
+/** Shown orphan drop-in rows: shown rows with no outcome, which the bar does not count. */
+function shownOrphanRows(page: Page) {
+  return page.getByTestId("service-section").locator('[data-testid="dropin-orphans"] [role="row"]:visible');
+}
+
 test.describe("Systemd units section", () => {
   test.beforeEach(() => {
     pageErrors = [];
@@ -213,20 +218,27 @@ test.describe("Systemd units section", () => {
     await expect(filterButtons(page).filter({ hasText: "Excluded" })).toBeDisabled();
   });
 
-  test("P2: Needs follow-up leaves 9 rows, All restores 23", async ({ page }) => {
+  test("P2: Needs follow-up leaves 9 rows, All restores 24 beside the bar's All 23", async ({ page }) => {
     await setupUnits(page);
     const section = await openUnits(page);
     const live = section.locator('[aria-live="polite"]');
 
     await filterButtons(page).filter({ hasText: "Needs follow-up" }).click();
     await expect(shownCountedRows(page)).toHaveCount(9);
+    await expect(shownOrphanRows(page)).toHaveCount(0);
     expect(
       (await groupHeaders(page)).map((name) => name.replace(/ \d.*$/, "")),
     ).toEqual(["Services", "Other units", "Reported, not carried"]);
     await expect(live).toHaveText("Showing 9 rows that need follow-up.");
 
     await filterButtons(page).filter({ hasText: "All" }).click();
+    // 24 rows shown: the 23 with an outcome and sshd.service's orphan drop-in.
     await expect(shownCountedRows(page)).toHaveCount(23);
+    await expect(shownOrphanRows(page)).toHaveCount(1);
+    await expect(
+      page.getByTestId("service-section").locator('[data-testid="dropin-orphan-group-sshd.service"] [role="row"]'),
+    ).toBeVisible();
+    await expect(filterButtons(page).filter({ hasText: "All" })).toHaveText("All 23");
     expect(await groupHeaders(page)).toHaveLength(6);
     await expect(live).toHaveText("Showing all 24 rows.");
   });
