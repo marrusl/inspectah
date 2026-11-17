@@ -55,7 +55,7 @@ export function resolveShadowOwner(
           }
         : null,
       explanation:
-        "The Service Drop-ins row for this same path carries the file into " +
+        "The Systemd units row for this same path carries the file into " +
         "the image. Decide it there.",
       // The drop-in's row key (spec § 6.11), not its bare path: a bare
       // id names a unit row.

@@ -98,7 +98,9 @@ describe("resolveShadowOwner", () => {
       configEntry({ shadowed_by: "units" }),
       [dropin()],
     );
-    expect(services!.explanation).toContain("Service Drop-ins");
+    expect(services!.explanation).toBe(
+      "The Systemd units row for this same path carries the file into the image. Decide it there.",
+    );
   });
 });
 

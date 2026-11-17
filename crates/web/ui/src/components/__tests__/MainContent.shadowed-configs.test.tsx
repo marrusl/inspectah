@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MainContent } from "../MainContent";
 import type {
@@ -120,6 +120,14 @@ describe("shadowed config rows in the configs section", () => {
     expect(screen.getByTestId("shadow-owner-state")).toHaveTextContent(
       "Owner excluded",
     );
+    const row = screen.getByTestId("shadow-owner-badge").closest('[data-testid^="decision-item-"]');
+    expect(row).not.toBeNull();
+    expect(
+      within(row as HTMLElement).getByTestId(/^shadow-owner-explanation-/),
+    ).toHaveTextContent(
+      "The Systemd units row for this same path carries the file into the image. Decide it there.",
+    );
+    expect(row!.textContent).not.toContain("Service Drop-ins");
   });
 
   it("routes to the owning drop-in row", async () => {
