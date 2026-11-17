@@ -461,55 +461,61 @@ function isBranch(value: UnitBranch | Keyed): value is UnitBranch {
   return "head" in value;
 }
 
-/** Section search text (§ 6.12) of a branch or one row, lowercased. */
-export function sectionSearchText(branchOrRow: UnitBranch | Keyed): string {
-  if (isBranch(branchOrRow)) {
-    const { head, dropins } = branchOrRow;
-    return searchText([...unitStateFields(head.record.data), ...dropins.map((d) => d.record.data.path)]);
-  }
-  const record = branchOrRow.record;
+/**
+ * One record's search fields (§ 6.12), the one list per row kind both
+ * search texts are built from: the fields that identify the row and the
+ * words it shows.
+ */
+function recordFields(record: UnitRecord): (string | null | undefined)[] {
   switch (record.kind) {
     case "unit_state":
-      return searchText(unitStateFields(record.data));
+      return unitStateFields(record.data);
     case "default_target":
-      return searchText([record.data.target]);
+      return [record.data.target];
     case "dropin":
-      return searchText([record.data.path, record.data.unit]);
+      return [record.data.path, record.data.unit];
     case "manual_link":
-      return searchText([record.data.unit, record.data.parent, record.data.relation, ...record.data.advisories]);
+      return [
+        record.data.unit,
+        record.data.parent,
+        record.data.relation,
+        RELATION_LABELS[record.data.relation],
+        ...record.data.advisories,
+      ];
     case "undetermined_install":
-      return searchText([record.data.unit, ...record.data.install_files, ...record.data.advisories]);
-    case "mount_finding":
-      return searchText([record.data.unit, ...record.data.advisories]);
-  }
-}
-
-/** Global search text of one record (§ 6.12's table), lowercased. */
-export function globalSearchText(record: UnitRecord): string {
-  switch (record.kind) {
-    case "unit_state":
-      return searchText(unitStateFields(record.data));
-    case "default_target":
-      return searchText([record.data.target, "default target"]);
-    case "dropin":
-      return searchText([record.data.path, record.data.unit]);
-    case "manual_link":
-      return searchText([record.data.unit, record.data.parent, record.data.relation, ...record.data.advisories]);
-    case "undetermined_install":
-      return searchText([
+      return [
         record.data.unit,
         reasonWords(record.data.reason),
         ...record.data.install_files,
         ...record.data.advisories,
-      ]);
+      ];
     case "mount_finding":
-      return searchText([
-        record.data.unit,
-        record.data.kind,
-        record.data.mount_point,
-        ...record.data.advisories,
-      ]);
+      return [record.data.unit, record.data.kind, record.data.mount_point, ...record.data.advisories];
   }
+}
+
+/** The words global search adds to the default target's text (§ 6.12 table). */
+const DEFAULT_TARGET_SEARCH_WORDS = "default target";
+
+/**
+ * Section search text (§ 6.12) of a branch or one row, lowercased: the
+ * record's fields, and for a unit row its drop-ins' paths.
+ */
+export function sectionSearchText(branchOrRow: UnitBranch | Keyed): string {
+  if (isBranch(branchOrRow)) {
+    const { head, dropins } = branchOrRow;
+    return searchText([...recordFields(head.record), ...dropins.map((d) => d.record.data.path)]);
+  }
+  return searchText(recordFields(branchOrRow.record));
+}
+
+/**
+ * Global search text of one record (§ 6.12's table), lowercased: the
+ * record's fields, and for the default target the words `default target`.
+ */
+export function globalSearchText(record: UnitRecord): string {
+  const extra = record.kind === "default_target" ? [DEFAULT_TARGET_SEARCH_WORDS] : [];
+  return searchText([...recordFields(record), ...extra]);
 }
 
 /**

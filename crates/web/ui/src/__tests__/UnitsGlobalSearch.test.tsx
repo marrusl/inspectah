@@ -265,6 +265,13 @@ describe("U25: several links for one unit (§ 6.12 Duplicates)", () => {
     expect(linkTitles(await globalSearch("requires"))).toEqual([`${UNIT} (requires multi-user.target)`]);
   });
 
+  it("lists only the requires link for its relation phrase, required by (§ 6.12)", async () => {
+    await openUnits(planted);
+    const results = await globalSearch("required by");
+    expect(linkTitles(results)).toEqual([`${UNIT} (requires multi-user.target)`]);
+    expect(titles(results).filter((t) => t.includes("(wants "))).toEqual([]);
+  });
+
   it("focuses each link's own row", async () => {
     await openUnits(planted);
     for (const [title, key] of LINKS) {

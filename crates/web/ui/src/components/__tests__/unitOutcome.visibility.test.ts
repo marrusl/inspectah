@@ -291,6 +291,51 @@ describe("U24: section search matching (§ 6.12)", () => {
     }
   });
 
+  it("holds the words a reported row shows: relation phrase, reason words, kind and mount point (§ 2 item 10)", () => {
+    const keyed = keyFields({
+      ...kitchenSink,
+      manual_links: [{ ...FIELD_LINK, relation: "requires" }],
+      undetermined_installs: [{ ...FIELD_INSTALL, reason: "foreign_name" }],
+      mount_findings: [FIELD_MOUNT],
+    });
+    expect(sectionSearchText(keyed.manualLinks[0])).toContain("required by");
+    expect(sectionSearchText(keyed.undeterminedInstalls[0])).toContain("foreign name");
+    const mount = sectionSearchText(keyed.mountFindings[0]);
+    expect(mount).toContain("fieldmountkind");
+    expect(mount).toContain(FIELD_MOUNT.mount_point!);
+  });
+
+  it.each([
+    ["kitchen-sink", ksGroups],
+    ["planted", plantedGroups],
+  ] as const)("equals global search's text for every row of %s, a unit row adding its drop-ins' paths", (_, groups) => {
+    let checked = 0;
+    for (const g of groups) {
+      if (g.target) {
+        // The one other difference: global search adds the words "default target".
+        expect(globalSearchText(g.target.record)).toContain(sectionSearchText(g.target));
+        expect(sectionSearchText(g.target)).not.toContain("default target");
+        checked += 1;
+      }
+      for (const branch of g.branches) {
+        const global = globalSearchText(branch.head.record);
+        expect(sectionSearchText(branch.head)).toBe(global);
+        const section = sectionSearchText(branch);
+        expect(section.startsWith(global)).toBe(true);
+        expect(section.slice(global.length).split("\n").filter((l) => l !== "")).toEqual(
+          branch.dropins.map((d) => d.record.data.path.toLowerCase()),
+        );
+        checked += 1;
+      }
+      const singles = [...g.orphans.flatMap((o) => o.dropins), ...g.reported.flatMap((b) => b.rows)];
+      for (const row of singles) {
+        expect(sectionSearchText(row)).toBe(globalSearchText(row.record));
+        checked += 1;
+      }
+    }
+    expect(checked).toBeGreaterThan(20);
+  });
+
   it("gives a drop-in's unit even when its path does not hold it", () => {
     const dropin = keyFields({ ...kitchenSink, unit_dropins: [FIELD_DROPIN] }).dropins[0];
     expect(sectionSearchText(dropin)).toContain("fielddropinunit.service");
@@ -379,6 +424,9 @@ describe("U25: global search text (§ 6.12 table)", () => {
     expect(links).toHaveLength(3);
     expect(links.filter((t) => t.includes("graphical"))).toHaveLength(1);
     expect(links.filter((t) => t.includes("requires"))).toHaveLength(1);
+    const requiredBy = links.filter((t) => t.includes("required by"));
+    expect(requiredBy).toHaveLength(1);
+    expect(requiredBy[0]).toContain("requires");
   });
 
   it("leaves drop-in paths out of a unit row's text", () => {

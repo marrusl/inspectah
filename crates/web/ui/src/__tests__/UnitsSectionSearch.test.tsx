@@ -33,7 +33,11 @@ const ADVISORY_WORDS = "restart loop";
 /** sshd.service's orphan full shadow: its path, which no other row's text holds. */
 const SSHD_ORPHAN_PATH = "/etc/systemd/system/sshd.service";
 const SSHD_ORPHAN_KEY = JSON.stringify(["dropin", SSHD_ORPHAN_PATH]);
-const UPHELD_LINK_KEY =JSON.stringify(["manual_link", "upholds", "multi-user.target", "driftify-upheld.service"]);
+const planted = loadUnitFields("planted");
+const REQUIRES_LINK_KEY = JSON.stringify(["manual_link", "requires", "multi-user.target", "multi-link-demo.service"]);
+const FOREIGN_INSTALL_KEY = JSON.stringify(["undetermined_install", "demo.service"]);
+const DATA_MOUNT_KEY = JSON.stringify(["mount_finding", "data-demo.mount"]);
+const UPHELD_LINK_KEY = JSON.stringify(["manual_link", "upholds", "multi-user.target", "driftify-upheld.service"]);
 
 const HEALTH = {
   status: "ready",
@@ -153,6 +157,10 @@ function rows(): HTMLElement[] {
   );
 }
 
+function rowKeys(): string[] {
+  return rows().map((r) => r.getAttribute("data-unit-key") ?? "");
+}
+
 function groupTitles(): string[] {
   return Array.from(document.querySelectorAll('[id^="unit-group-title-"]')).map(
     (el) => el.textContent ?? "",
@@ -223,6 +231,26 @@ describe("U24: section search in the units section (§ 6.12, § 9.2)", () => {
     await search("sshd");
     expect(rows()).toHaveLength(1);
     expect(resultCount()).toBe(1);
+  });
+
+  it("finds a link by its relation phrase: required by shows the requires link and no wants link", async () => {
+    await openUnits(planted);
+    await search("required by");
+    const keys = rowKeys();
+    expect(keys).toContain(REQUIRES_LINK_KEY);
+    expect(keys.filter((k) => k.startsWith('["manual_link","wants"'))).toEqual([]);
+  });
+
+  it("finds an undetermined install by its reason words as the row shows them", async () => {
+    await openUnits(planted);
+    await search("foreign name");
+    expect(rowKeys()).toContain(FOREIGN_INSTALL_KEY);
+  });
+
+  it("finds the administrator's mount finding by its mount point", async () => {
+    await openUnits(planted);
+    await search("/data/demo");
+    expect(rowKeys()).toContain(DATA_MOUNT_KEY);
   });
 
   it("drops the Services badge while only the orphan drop-in is shown, and brings it back (U37 b)", async () => {
