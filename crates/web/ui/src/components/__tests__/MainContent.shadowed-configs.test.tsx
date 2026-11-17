@@ -102,7 +102,7 @@ describe("shadowed config rows in the configs section", () => {
     vi.restoreAllMocks();
   });
 
-  it("names the Service Drop-ins owner and its state instead of 'Inventory'", () => {
+  it("names the Systemd units owner and its state instead of 'Inventory'", () => {
     render(
       <MainContent
         {...props}
@@ -114,8 +114,9 @@ describe("shadowed config rows in the configs section", () => {
     );
     expect(screen.queryByTestId("inventory-badge")).toBeNull();
     expect(screen.getByTestId("shadow-owner-badge")).toHaveTextContent(
-      "Controlled in Service Drop-ins",
+      "Controlled in Systemd units",
     );
+    expect(document.body.textContent).not.toContain("Controlled in Service Drop-ins");
     expect(screen.getByTestId("shadow-owner-state")).toHaveTextContent(
       "Owner excluded",
     );

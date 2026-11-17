@@ -17,7 +17,7 @@ const SERVICES_SECTION_ID = "units";
  * way to tell which control replaced the one that vanished.
  */
 export interface ShadowOwner {
-  /** Names the owning surface, e.g. "Controlled in Service Drop-ins". */
+  /** Names the owning surface, e.g. "Controlled in Systemd units". */
   label: string;
   /**
    * The owning row's current state. Null when no owning row is present
@@ -46,7 +46,8 @@ export function resolveShadowOwner(
   if (entry.shadowed_by === "units") {
     const owner = dropins.find((d) => d.path === entry.path);
     return {
-      label: "Controlled in Service Drop-ins",
+      // Spec § 7 string 26: the units section's name (§ 6.14).
+      label: "Controlled in Systemd units",
       state: owner
         ? {
             text: owner.include ? "Owner included" : "Owner excluded",
