@@ -1500,7 +1500,7 @@ export function ServiceSection({
           key={group.id}
           groupId={group.id}
           title={GROUP_TITLES[group.id]}
-          count={group.id === "default_target" ? undefined : group.count}
+          count={group.count}
           followUpText={group.followUp === null ? null : followUpFlagText(group.followUp)}
           description={group.id === "reported" ? REPORTED_DESCRIPTION : undefined}
           expanded={!collapsed[group.id]}

@@ -418,7 +418,11 @@ export interface ShownGroup {
   branches: UnitBranch[];
   orphans: OrphanBlock[];
   reported: ReportedBlock[];
-  /** § 6.3 item 3: shown unit rows and reported rows; 0 for the default target. */
+  /**
+   * § 6.3 item 3: shown unit rows and reported rows, and the group's badge
+   * when above 0. It is 0, so no badge, for the default target and for a
+   * kind group whose shown rows are only orphan drop-ins (§ 2 item 9).
+   */
   count: number;
   /** § 6.3 item 4: `null` unless the filter is "All" and N > 0. */
   followUp: number | null;

@@ -105,6 +105,18 @@ describe("UnitGroup structure (U32)", () => {
     expect(button.querySelector(".pf-v6-c-badge")).toBeNull();
   });
 
+  it("shows no count badge when count is 0, and names the button by the title alone", () => {
+    render(<Harness count={0} followUpText={null} />);
+    const button = screen.getByRole("button", { name: "Services" });
+    expect(button.querySelector(".pf-v6-c-badge")).toBeNull();
+  });
+
+  it.each([undefined, 0])("names a button with no badge (count %s) by the title, a comma and the flag", (count) => {
+    render(<Harness count={count} followUpText="5 need follow-up" />);
+    const button = screen.getByRole("button", { name: "Services, 5 need follow-up" });
+    expect(button.querySelector(".pf-v6-c-badge")).toBeNull();
+  });
+
   it("shows the description between the header and the grid", () => {
     render(<Harness count={3} description="A description." />);
     const desc = screen.getByText("A description.");

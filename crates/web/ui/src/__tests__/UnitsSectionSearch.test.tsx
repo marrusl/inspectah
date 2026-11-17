@@ -30,7 +30,10 @@ const STRING_14 = "No units match this filter.";
 const DECLINED_WORD = "socket";
 /** Words of the upholds link's advisory line, and of no other row. */
 const ADVISORY_WORDS = "restart loop";
-const UPHELD_LINK_KEY = JSON.stringify(["manual_link", "upholds", "multi-user.target", "driftify-upheld.service"]);
+/** sshd.service's orphan full shadow: its path, which no other row's text holds. */
+const SSHD_ORPHAN_PATH = "/etc/systemd/system/sshd.service";
+const SSHD_ORPHAN_KEY = JSON.stringify(["dropin", SSHD_ORPHAN_PATH]);
+const UPHELD_LINK_KEY =JSON.stringify(["manual_link", "upholds", "multi-user.target", "driftify-upheld.service"]);
 
 const HEALTH = {
   status: "ready",
@@ -150,6 +153,25 @@ function rows(): HTMLElement[] {
   );
 }
 
+function groupTitles(): string[] {
+  return Array.from(document.querySelectorAll('[id^="unit-group-title-"]')).map(
+    (el) => el.textContent ?? "",
+  );
+}
+
+function header(title: string): HTMLElement {
+  const titleEl = Array.from(document.querySelectorAll('[id^="unit-group-title-"]')).find(
+    (el) => el.textContent === title,
+  );
+  expect(titleEl, `no group titled ${title}`).toBeDefined();
+  return titleEl!.closest("button") as HTMLElement;
+}
+
+/** The count badge's text in a header, or null when it has none. */
+function headerCount(title: string): string | null {
+  return header(title).querySelector(".pf-v6-c-badge")?.textContent ?? null;
+}
+
 function follows(a: Node, b: Node): boolean {
   return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 }
@@ -201,6 +223,20 @@ describe("U24: section search in the units section (§ 6.12, § 9.2)", () => {
     await search("sshd");
     expect(rows()).toHaveLength(1);
     expect(resultCount()).toBe(1);
+  });
+
+  it("drops the Services badge while only the orphan drop-in is shown, and brings it back (U37 b)", async () => {
+    await openUnits(kitchenSink);
+    const box = await search(SSHD_ORPHAN_PATH);
+    // Asserted first: the query matches the orphan's path and nothing else.
+    expect(rows().map((r) => r.getAttribute("data-unit-key"))).toEqual([SSHD_ORPHAN_KEY]);
+    expect(groupTitles()).toEqual(["Services"]);
+    expect(headerCount("Services")).toBeNull();
+    expect(header("Services")).toHaveAccessibleName("Services, 5 need follow-up");
+
+    await userEvent.clear(box);
+    expect(headerCount("Services")).toBe("11");
+    expect(header("Services")).toHaveAccessibleName("Services 11, 5 need follow-up");
   });
 
   it("shows the search empty state, not string 14, when a query matches nothing under a filter", async () => {

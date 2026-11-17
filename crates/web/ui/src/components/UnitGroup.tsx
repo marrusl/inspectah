@@ -5,7 +5,7 @@ import type { GroupId } from "./unitOutcome";
 export interface UnitGroupProps {
   groupId: GroupId;
   title: string;
-  /** Shown rows (§ 6.3 item 3); no badge when undefined. */
+  /** Shown rows (§ 6.3 item 3); no badge when undefined or 0. */
   count?: number;
   /** § 7 string 10, or null for no flag. */
   followUpText?: string | null;
@@ -16,12 +16,18 @@ export interface UnitGroupProps {
   children: React.ReactNode;
 }
 
+/** The badge is drawn for a count above 0 (§ 6.3 item 3). */
+function hasBadge(count?: number): count is number {
+  return count !== undefined && count > 0;
+}
+
 /**
  * The button's accessible name, "Services 11, 5 need follow-up" (§ 6.3):
- * the badge and the label render as adjacent text with no separator.
+ * the badge and the label render as adjacent text with no separator. With
+ * no badge, the title alone, or the title, a comma and the flag.
  */
 function headerName(title: string, count?: number, followUpText?: string | null): string {
-  let name = count === undefined ? title : `${title} ${count}`;
+  let name = hasBadge(count) ? `${title} ${count}` : title;
   if (followUpText) name += `, ${followUpText}`;
   return name;
 }
@@ -72,7 +78,7 @@ export function UnitGroup({
       >
         {expanded ? <AngleDownIcon /> : <AngleRightIcon />}
         <span id={titleId}>{title}</span>
-        {count !== undefined && <Badge isRead>{count}</Badge>}
+        {hasBadge(count) && <Badge isRead>{count}</Badge>}
         {followUpText && (
           <Label color="orange" variant="outline" isCompact>
             {followUpText}

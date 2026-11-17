@@ -242,6 +242,19 @@ describe("ServiceSection orphan drop-ins (U21)", () => {
     },
   );
 
+  it("draws an orphan-only Services group with no count badge, named by its title (U37 a)", () => {
+    const ks = loadUnitFields("kitchen-sink");
+    const fields = loadUnitFields("stock10");
+    fields.default_target = ks.default_target;
+    fields.unit_dropins = ks.unit_dropins.filter((d) => d.unit === "sshd.service");
+    expect(fields.unit_dropins).toHaveLength(1);
+    renderUnits(fields);
+    expect(groupTitles()).toEqual(["Default target", "Services"]);
+    expect(within(groupGrid("Services")).getByTestId("dropin-orphan-group-sshd.service")).toBeInTheDocument();
+    expect(headerCount("Services")).toBeNull();
+    expect(header("Services")).toHaveAccessibleName("Services");
+  });
+
   it("puts planted's orphan with no kind in Other units", () => {
     const planted = loadUnitFields("planted");
     const orphan = planted.unit_dropins.find((d) => d.kind === undefined)!;

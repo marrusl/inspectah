@@ -312,6 +312,20 @@ describe("§ 6.3 counts under filter and search", () => {
     });
   });
 
+  it("gives a kind group whose shown rows are only orphan drop-ins the count 0: no badge (§ 6.3, § 2 item 9)", () => {
+    const fields = loadUnitFields("stock10");
+    fields.default_target = kitchenSink.default_target;
+    fields.unit_dropins = kitchenSink.unit_dropins.filter((d) => d.unit === "sshd.service");
+    const alone = showGroups(groupUnits(keyFields(fields)), state());
+    expect(shownGroup(alone, "services").count).toBe(0);
+
+    const underQuery = shownGroup(showGroups(ksGroups, state({ query: "/etc/systemd/system/sshd.service" })), "services");
+    expect(underQuery.branches).toEqual([]);
+    expect(underQuery.orphans).toHaveLength(1);
+    expect(underQuery.count).toBe(0);
+    expect(underQuery.followUp).toBe(5);
+  });
+
   it("counts each reported row of a duplicate once", () => {
     const shown = showGroups(plantedGroups, state({ query: "dup-link-demo.service" }));
     expect(shownGroup(shown, "reported").count).toBe(2);
