@@ -151,10 +151,13 @@ exclude it. The groups and rows work as follows:
   name would be. Kind shows as a chip only in Other units, which mixes
   kinds. A row inspectah flagged shows why, for example a package updater
   that is excluded by default, and one row shows one reason.
-- **Outcome labels.** When the export will not write the row's command,
-  the row shows "FIXME", "Advisory" or "Omitted", the same word as the
-  Containerfile's `# FIXME:`, `# Advisory:` or `# Omitted:` comment, and
-  the reason under the row in the Containerfile's words.
+- **Outcome labels.** When inspectah declines to carry a unit's command,
+  or the default target's, the row shows "FIXME", "Advisory" or "Omitted",
+  the same word as the Containerfile's `# FIXME:`, `# Advisory:` or
+  `# Omitted:` comment, and the reason under the row in the Containerfile's
+  words. A row you excluded writes no command either, but it shows no
+  label, only its unchecked box. A row under "Reported, not carried" shows
+  a label for its cause instead.
 - **Links.** An `Also=` member that has its own row in the section is a
   link to that row. A path a unit needs that has a Configuration Files
   row links to it.
