@@ -330,7 +330,7 @@ describe("ServiceSection parent-child cascade", () => {
     );
   });
 
-  it("reduced opacity on drop-in rows when parent excluded", () => {
+  it("dims a drop-in's toggle and name cells, not its row, when parent excluded", () => {
     const services = [makeService({ unit: "httpd.service", include: false })];
     const dropins = [
       makeDropin({
@@ -349,7 +349,10 @@ describe("ServiceSection parent-child cascade", () => {
     const dropinRow = screen.getByTestId(
       "dropin-item-/etc/systemd/system/httpd.service.d/override.conf",
     );
-    expect(dropinRow.style.opacity).toBe("0.55");
+    expect(dropinRow.style.opacity).toBe("");
+    for (const cell of ["toggle", "name"]) {
+      expect(dropinRow.querySelector(`.inspectah-decision-row__${cell}`)).toHaveClass("inspectah-unit-dimmed");
+    }
   });
 
   it("Space on disabled drop-in is a no-op", async () => {

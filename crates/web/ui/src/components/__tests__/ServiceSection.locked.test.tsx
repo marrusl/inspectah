@@ -119,3 +119,62 @@ describe("U28: a locked row's label (§ 9.3)", () => {
     );
   });
 });
+
+/**
+ * Dimmed rows keep a full-strength focus outline (WCAG 1.4.11; rows are
+ * keyboard stops, § 6.13): the row element carries no opacity, and the
+ * dimming sits on its toggle and name cells only, so the outline and the
+ * status badges stay at full strength.
+ */
+describe("a dimmed row keeps its outline and badges at full strength", () => {
+  const DIMMED = "inspectah-unit-dimmed";
+
+  function expectDimmedCells(row: HTMLElement) {
+    expect(row.style.opacity).toBe("");
+    expect(row).not.toHaveClass(DIMMED);
+    const main = row.querySelector(":scope > .inspectah-decision-row__main")!;
+    expect(main.querySelector(":scope > .inspectah-decision-row__toggle")).toHaveClass(DIMMED);
+    expect(main.querySelector(":scope > .inspectah-decision-row__name")).toHaveClass(DIMMED);
+    for (const badge of Array.from(main.querySelectorAll(":scope > .inspectah-decision-row__badge"))) {
+      expect(badge).not.toHaveClass(DIMMED);
+    }
+    expect(row.querySelectorAll(`.${DIMMED}`)).toHaveLength(2);
+  }
+
+  it("dims a locked unit row's toggle and name cells, not the row", () => {
+    const planted = loadUnitFields("planted");
+    renderUnits(planted);
+    expectDimmedCells(screen.getByTestId("service-item-packagekit.service"));
+  });
+
+  it("dims the toggle and name cells of a drop-in under an excluded parent, not the row", () => {
+    const parent = makeUnit({ unit: "httpd.service", locked: false, include: false });
+    const dropin = makeDropin({ locked: false });
+    renderUnits({ ...EMPTY, unit_states: [parent], unit_dropins: [dropin] });
+    const row = screen.getByTestId(`dropin-item-${dropin.path}`);
+    expect(within(row).getByText("Unit excluded")).toBeInTheDocument();
+    expectDimmedCells(row);
+  });
+
+  it("dims a locked drop-in and a locked default target the same way", () => {
+    const dropin = makeDropin({ attention_reason: "held by the base image" });
+    renderUnits({
+      ...EMPTY,
+      unit_dropins: [dropin],
+      default_target: { target: "graphical.target", include: true, locked: true, declined: null },
+    });
+    expectDimmedCells(screen.getByTestId(`dropin-item-${dropin.path}`));
+    expectDimmedCells(screen.getByTestId("default-target"));
+  });
+
+  it("dims nothing on a row that is neither locked nor under an excluded parent", () => {
+    const parent = makeUnit({ unit: "httpd.service", locked: false, include: true });
+    const dropin = makeDropin({ locked: false });
+    renderUnits({ ...EMPTY, unit_states: [parent], unit_dropins: [dropin] });
+    for (const id of ["service-item-httpd.service", `dropin-item-${dropin.path}`]) {
+      const row = screen.getByTestId(id);
+      expect(row.style.opacity).toBe("");
+      expect(row.querySelectorAll(".inspectah-unit-dimmed")).toHaveLength(0);
+    }
+  });
+});

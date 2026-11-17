@@ -75,9 +75,10 @@ const UNBROKEN = "x".repeat(UNBROKEN_LENGTH);
 
 /** The planted Vitest fixture's mount finding: the record with every field shown. */
 const PLANTED_UNITS = path.join(HERE, "..", "src", "__tests__", "fixtures", "systemd-units", "planted.units.json");
-const PLANTED_MOUNT_FINDING = (
-  JSON.parse(fs.readFileSync(PLANTED_UNITS, "utf-8")) as UnitFields
-).mount_findings[0];
+const PLANTED = JSON.parse(fs.readFileSync(PLANTED_UNITS, "utf-8")) as UnitFields;
+const PLANTED_MOUNT_FINDING = PLANTED.mount_findings[0];
+/** The planted fixture's locked unit row, `packagekit.service`. */
+const PLANTED_LOCKED_UNIT = PLANTED.unit_states.find((u) => u.locked)!;
 
 /** Axe over the given parts of the page; fails on any critical or serious violation. */
 async function expectNoBlockingViolations(
@@ -401,6 +402,75 @@ test.describe("Systemd units section", () => {
     const section = await openUnits(page);
     await expect(page.getByTestId("default-target")).toBeVisible();
     await expect(section.getByRole("group", { name: "Show" })).toHaveCount(0);
+    await expectNoBlockingViolations(page, [SECTION_SELECTOR]);
+  });
+
+  test("P6: a locked row and an excluded parent's drop-in keep a full-strength row when focused", async ({
+    page,
+  }) => {
+    await setupUnits(page);
+    // The kitchen-sink view has no locked row: add planted's, and exclude
+    // httpd.service so its drop-ins sit under an excluded parent.
+    const view = JSON.parse(fs.readFileSync(VIEW_BODIES["kitchen-sink"], "utf-8"));
+    view.unit_states.push(PLANTED_LOCKED_UNIT);
+    const httpd = view.unit_states.find((u: { unit: string }) => u.unit === "httpd.service");
+    httpd.include = false;
+    const dropin = view.unit_dropins.find((d: { unit: string }) => d.unit === "httpd.service");
+    // Registered last, so it answers before the preset route.
+    await page.route("**/api/view", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(view) }),
+    );
+    await openUnits(page);
+    await expect(filterButtons(page).filter({ hasText: "All" })).toHaveAttribute("aria-pressed", "true");
+
+    const locked = page.getByTestId(`service-item-${PLANTED_LOCKED_UNIT.unit}`);
+    const underExcluded = page.getByTestId(`dropin-item-${dropin.path}`);
+    await expect(locked.getByText("Incompatible with image mode")).toBeVisible();
+    await expect(underExcluded.getByText("Unit excluded")).toBeVisible();
+    // The name colour of a row that is not dimmed, and the subtle text token's.
+    const colours = await page.evaluate((selector) => {
+      const section = document.querySelector(selector)!;
+      const probe = document.createElement("span");
+      probe.style.color = "var(--pf-t--global--text--color--subtle)";
+      section.appendChild(probe);
+      const subtle = getComputedStyle(probe).color;
+      probe.remove();
+      const plain = section.querySelector(
+        '[data-testid="service-item-nginx.service"] > .inspectah-decision-row__main > .inspectah-decision-row__name',
+      )!;
+      return { subtle, plain: getComputedStyle(plain).color };
+    }, SECTION_SELECTOR);
+    expect(colours.subtle).not.toBe(colours.plain);
+    for (const row of [locked, underExcluded]) {
+      // A key press first, so the browser draws the focus outline
+      // (:focus-visible) on the row focused next, as a keyboard user sees it.
+      await page.keyboard.press("Shift");
+      await row.focus();
+      await expect(row).toBeFocused();
+      const style = await row.evaluate((el) => {
+        const main = el.querySelector(":scope > .inspectah-decision-row__main")!;
+        const cell = (name: string) => getComputedStyle(main.querySelector(`:scope > .inspectah-decision-row__${name}`)!);
+        return {
+          row: getComputedStyle(el).opacity,
+          focusVisible: el.matches(":focus-visible"),
+          outline: getComputedStyle(el).outlineStyle,
+          toggle: cell("toggle").opacity,
+          name: { opacity: cell("name").opacity, color: cell("name").color },
+          badges: Array.from(main.querySelectorAll(":scope > .inspectah-decision-row__badge")).map(
+            (b) => getComputedStyle(b).opacity,
+          ),
+        };
+      });
+      // The row, its outline and its status badges at full strength; the
+      // toggle cell keeps the dimmed look and the name the subtle text.
+      expect(style.row).toBe("1");
+      expect(style.focusVisible).toBe(true);
+      expect(style.outline).toBe("solid");
+      expect(style.badges.length).toBeGreaterThan(0);
+      for (const badge of style.badges) expect(badge).toBe("1");
+      expect(Number(style.toggle)).toBeLessThan(1);
+      expect(style.name).toEqual({ opacity: "1", color: colours.subtle });
+    }
     await expectNoBlockingViolations(page, [SECTION_SELECTOR]);
   });
 

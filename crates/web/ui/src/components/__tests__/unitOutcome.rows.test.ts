@@ -217,6 +217,7 @@ describe("a drop-in row (§ 6.6 items 3 and 6, string 23)", () => {
   it("shows Unit excluded while its parent is excluded, with no triage badge, and cannot toggle", () => {
     const p = dropinRowPresentation(dropin({ triage: UNKNOWN_ORIGIN }), unit({ include: false }));
     expect(p.parentExcluded).toBe(true);
+    expect(p.dimmed).toBe(true);
     expect(p.unitExcluded).toBe(true);
     expect(p.triageBadge).toBeNull();
     expect(p.toggleable).toBe(false);
@@ -233,11 +234,13 @@ describe("a drop-in row (§ 6.6 items 3 and 6, string 23)", () => {
   it("is locked by its own lock or its parent's, showing its reason as given", () => {
     const own = dropinRowPresentation(dropin({ locked: true, attention_reason: "a prose reason" }), parent);
     expect(own.locked).toBe(true);
+    expect(own.dimmed).toBe(true);
     expect(own.toggleable).toBe(false);
     expect(own.lockedLabel).toBe("a prose reason");
     expect(own.toggleLabel).toBe(`${httpdDropin.path} (locked: a prose reason)`);
     const byParent = dropinRowPresentation(dropin({ locked: false, attention_reason: null }), unit({ locked: true }));
     expect(byParent.locked).toBe(true);
+    expect(byParent.dimmed).toBe(true);
     expect(byParent.lockedLabel).toBe("LOCKED");
     expect(byParent.toggleLabel).toBe(`${httpdDropin.path} (locked: cannot toggle)`);
   });
@@ -251,6 +254,7 @@ describe("a drop-in row (§ 6.6 items 3 and 6, string 23)", () => {
   it("names an unlocked drop-in Toggle <path>", () => {
     const p = dropinRowPresentation(dropin({}), parent);
     expect(p.toggleable).toBe(true);
+    expect(p.dimmed).toBe(false);
     expect(p.lockedLabel).toBeNull();
     expect(p.toggleLabel).toBe(`Toggle ${httpdDropin.path}`);
   });

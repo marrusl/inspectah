@@ -120,6 +120,17 @@ const DEFAULT_TARGET_EXPLANATION =
 const UNIT_EXCLUDED = "Unit excluded";
 
 /**
+ * The class that dims a dimmed row's toggle and name cells. The row keeps
+ * full opacity, so its focus outline and badges keep theirs (§ 6.13).
+ */
+const DIMMED_CELL = "inspectah-unit-dimmed";
+
+/** A row cell's class, with the dimming class when the row is dimmed. */
+function cellClass(base: string, dimmed: boolean): string {
+  return dimmed ? `${base} ${DIMMED_CELL}` : base;
+}
+
+/**
  * Subtle text for the preset beside a row's state (§ 6.6 item 1), an
  * Also= member's links and a mount finding's state.
  */
@@ -288,8 +299,7 @@ function DropInRow({
           ? `color-mix(in srgb, ${backgroundColor} 10%, transparent)`
           : undefined,
         paddingLeft: "calc(var(--pf-t--global--spacer--md) + 16px)",
-        opacity: parentExcluded ? 0.55 : 1,
-        transition: "opacity 200ms ease, background-color 150ms ease",
+        transition: "background-color 150ms ease",
       }}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget || rowKeyIgnored(e)) return;
@@ -302,7 +312,7 @@ function DropInRow({
     >
       <div className="inspectah-service-dropin__connector" aria-hidden="true" />
       <div className="inspectah-decision-row__main">
-        <div role="gridcell" className="inspectah-decision-row__toggle">
+        <div role="gridcell" className={cellClass("inspectah-decision-row__toggle", p.dimmed)}>
           <input
             type="checkbox"
             role="checkbox"
@@ -319,7 +329,7 @@ function DropInRow({
             style={{ minWidth: 20, minHeight: 20 }}
           />
         </div>
-        <div role="gridcell" className="inspectah-decision-row__name">
+        <div role="gridcell" className={cellClass("inspectah-decision-row__name", p.dimmed)}>
           <span style={{ fontSize: "var(--pf-t--global--font--size--sm)" }}>
             {di.path}
           </span>
@@ -762,7 +772,7 @@ function DefaultTargetRow({ target: t, unitKey, isPending, onToggle, rowRef, tab
       }}
     >
       <div className="inspectah-decision-row__main">
-        <div role="gridcell" className="inspectah-decision-row__toggle">
+        <div role="gridcell" className={cellClass("inspectah-decision-row__toggle", p.locked)}>
           <input
             type="checkbox"
             role="checkbox"
@@ -775,7 +785,7 @@ function DefaultTargetRow({ target: t, unitKey, isPending, onToggle, rowRef, tab
             style={{ minWidth: 20, minHeight: 20 }}
           />
         </div>
-        <div role="gridcell" className="inspectah-decision-row__name">
+        <div role="gridcell" className={cellClass("inspectah-decision-row__name", p.locked)}>
           <span data-testid="default-target-name">{t.target}</span>
         </div>
         {p.outcome && <OutcomeLabel label={p.outcome} />}
@@ -878,7 +888,7 @@ function UnitBranchView({
         }}
       >
         <div className="inspectah-decision-row__main">
-          <div role="gridcell" className="inspectah-decision-row__toggle">
+          <div role="gridcell" className={cellClass("inspectah-decision-row__toggle", svcLocked)}>
             <input
               type="checkbox"
               role="checkbox"
@@ -898,7 +908,7 @@ function UnitBranchView({
               style={{ minWidth: 20, minHeight: 20 }}
             />
           </div>
-          <div role="gridcell" className="inspectah-decision-row__name">
+          <div role="gridcell" className={cellClass("inspectah-decision-row__name", svcLocked)}>
             <span>{svc.unit}</span>
             {p.kindChip !== null && (
               <span
@@ -910,9 +920,9 @@ function UnitBranchView({
             )}
             {/* The package, or with none the fragment word (§ 6.6 item 9). */}
             <span
+              className="inspectah-unit-package"
               style={{
                 fontSize: "var(--pf-t--global--font--size--xs)",
-                opacity: 0.6,
                 marginLeft: "var(--pf-t--global--spacer--xs)",
               }}
             >

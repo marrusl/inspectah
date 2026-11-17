@@ -721,6 +721,39 @@ body,
   cursor: not-allowed;
 }
 
+/* Systemd units: a dimmed row (locked, or a drop-in under an excluded
+   parent) is a keyboard stop (spec § 6.13), and dimming the whole row
+   dimmed its focus outline below the 3:1 a focus indicator needs (WCAG
+   1.4.11). In the units section the row stays at full opacity, so its
+   outline and its status badges keep full strength, and only the toggle
+   and name cells are dimmed. The disabled checkbox's cell takes the
+   locked rule's opacity; the name cell takes the subtle text colour,
+   since text at that opacity falls below 4.5:1 (WCAG 1.4.3) and the
+   subtle token holds it in both themes. The shared locked rule above,
+   used by other sections, is unchanged. */
+.inspectah-units-section .inspectah-decision-row--locked {
+  opacity: 1;
+}
+
+.inspectah-units-section .inspectah-decision-row__toggle.inspectah-unit-dimmed {
+  opacity: 0.55;
+}
+
+.inspectah-units-section .inspectah-decision-row__name.inspectah-unit-dimmed {
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+/* The package word is lighter than the name beside it. In a dimmed name
+   cell it is already in the subtle colour, and lighter still it would
+   fall below 4.5:1, so there it keeps full opacity. */
+.inspectah-units-section .inspectah-unit-package {
+  opacity: 0.6;
+}
+
+.inspectah-units-section .inspectah-unit-dimmed .inspectah-unit-package {
+  opacity: 1;
+}
+
 .aggregate-item-row--locked {
   opacity: 0.55;
 }

@@ -549,6 +549,8 @@ export interface DropInRowPresentation {
   parentExcluded: boolean;
   /** Locked by its own lock or its parent's. */
   locked: boolean;
+  /** Drawn dimmed: locked, or under an excluded parent. */
+  dimmed: boolean;
   /** Not while the parent is excluded or the drop-in is locked. */
   toggleable: boolean;
   /** The checkbox's accessible name; a locked drop-in's reason is prose, as given (§ 9.3). */
@@ -585,6 +587,7 @@ export function dropinRowPresentation(
   return {
     parentExcluded,
     locked,
+    dimmed: parentExcluded || locked,
     toggleable: !parentExcluded && !locked,
     toggleLabel: locked
       ? `${dropin.path} (locked: ${dropin.attention_reason ?? "cannot toggle"})`
