@@ -1,6 +1,6 @@
 import { Badge, Label } from "@patternfly/react-core";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
-import type { GroupId } from "./unitOutcome";
+import { groupHeader, type GroupId } from "./unitOutcome";
 
 export interface UnitGroupProps {
   groupId: GroupId;
@@ -14,22 +14,6 @@ export interface UnitGroupProps {
   expanded: boolean;
   onToggle: () => void;
   children: React.ReactNode;
-}
-
-/** The badge is drawn for a count above 0 (§ 6.3 item 3). */
-function hasBadge(count?: number): count is number {
-  return count !== undefined && count > 0;
-}
-
-/**
- * The button's accessible name, "Services 11, 5 need follow-up" (§ 6.3):
- * the badge and the label render as adjacent text with no separator. With
- * no badge, the title alone, or the title, a comma and the flag.
- */
-function headerName(title: string, count?: number, followUpText?: string | null): string {
-  let name = hasBadge(count) ? `${title} ${count}` : title;
-  if (followUpText) name += `, ${followUpText}`;
-  return name;
 }
 
 /**
@@ -49,6 +33,7 @@ export function UnitGroup({
   onToggle,
   children,
 }: UnitGroupProps) {
+  const header = groupHeader(title, count, followUpText);
   const titleId = `unit-group-title-${groupId}`;
   const gridId = `unit-group-grid-${groupId}`;
   return (
@@ -61,7 +46,7 @@ export function UnitGroup({
         onClick={onToggle}
         aria-expanded={expanded}
         aria-controls={gridId}
-        aria-label={headerName(title, count, followUpText)}
+        aria-label={header.name}
         style={{
           background: "none",
           border: "none",
@@ -78,7 +63,7 @@ export function UnitGroup({
       >
         {expanded ? <AngleDownIcon /> : <AngleRightIcon />}
         <span id={titleId}>{title}</span>
-        {hasBadge(count) && <Badge isRead>{count}</Badge>}
+        {header.badge !== null && <Badge isRead>{header.badge}</Badge>}
         {followUpText && (
           <Label color="orange" variant="outline" isCompact>
             {followUpText}

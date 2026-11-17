@@ -13,6 +13,7 @@ import {
   UNDETERMINED_CAUSE_LABEL,
   causeLabel,
   followUpFlagText,
+  groupHeader,
   groupUnits,
   keyFields,
   outcomeCounts,
@@ -228,6 +229,19 @@ describe("U5: the follow-up flag (§ 6.3 item 4)", () => {
     [0, null],
   ])("followUpFlagText(%i)", (n, expected) => {
     expect(followUpFlagText(n)).toBe(expected);
+  });
+});
+
+describe("the group header's badge and accessible name (§ 6.3)", () => {
+  it.each<[string, number | undefined, string | null | undefined, number | null, string]>([
+    ["the title alone, with no count", undefined, undefined, null, "Services"],
+    ["the title alone, at count 0", 0, null, null, "Services"],
+    ["the title and the count", 11, null, 11, "Services 11"],
+    ["the title, a comma and the flag, at count 0", 0, "5 need follow-up", null, "Services, 5 need follow-up"],
+    ["the title, a comma and the flag, with no count", undefined, "1 needs follow-up", null, "Services, 1 needs follow-up"],
+    ["the title, the count, a comma and the flag", 11, "5 need follow-up", 11, "Services 11, 5 need follow-up"],
+  ])("%s", (_form, count, flag, badge, name) => {
+    expect(groupHeader("Services", count, flag)).toEqual({ badge, name });
   });
 });
 

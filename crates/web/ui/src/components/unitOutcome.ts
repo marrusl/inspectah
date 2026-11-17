@@ -391,6 +391,27 @@ export function followUpFlagText(n: number): string | null {
   return n === 1 ? `${n} needs follow-up` : `${n} need follow-up`;
 }
 
+/** What a group header draws and is named by (§ 6.3). */
+export interface GroupHeader {
+  /** The count badge's number; `null` for no badge, at 0 or with no count. */
+  badge: number | null;
+  /**
+   * The header button's accessible name: the title, then the count after
+   * a space when the badge is drawn, then a comma and the flag's text when
+   * the flag is drawn ("Services 11, 5 need follow-up"). The badge and
+   * the label render as adjacent text with no separator.
+   */
+  name: string;
+}
+
+/** A group header's badge and accessible name (§ 6.3 items 3 and 4). */
+export function groupHeader(title: string, count?: number, followUpText?: string | null): GroupHeader {
+  const badge = count !== undefined && count > 0 ? count : null;
+  let name = badge === null ? title : `${title} ${badge}`;
+  if (followUpText) name += `, ${followUpText}`;
+  return { badge, name };
+}
+
 // --- Filter, search and pins (§ 6.3 item 3, § 6.4, § 6.11, § 6.12) ---
 
 export type FilterValue = "all" | Outcome;
