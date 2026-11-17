@@ -5,7 +5,7 @@
  * U35 (a) filter counts.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ServiceSection } from "../ServiceSection";
 import type { PendingGuard } from "../../hooks/usePendingGuard";
@@ -358,6 +358,27 @@ describe("U23: the filter's empty states (§ 6.9 rows 1 and 4)", () => {
     expect(selected()).toBe("All");
     expect(screen.getByTestId("default-target")).toBeInTheDocument();
     expect(screen.queryByText(STRING_14)).not.toBeInTheDocument();
+  });
+
+  it("Show all hands its focus to the bar's All button (§ 6.13)", async () => {
+    const { rerender } = renderUnits(stock10WithTarget({ include: false }));
+    await select("Excluded");
+    rerender(section(stock10WithTarget(plantedDeclinedTarget())));
+    await userEvent.click(screen.getByRole("button", { name: "Show all" }));
+    expect(screen.queryByRole("button", { name: "Show all" })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(filterButton("All"));
+  });
+
+  it("Show all leaves focus where it is when it did not have it", async () => {
+    const { rerender } = renderUnits(stock10WithTarget({ include: false }));
+    await select("Excluded");
+    rerender(section(stock10WithTarget(plantedDeclinedTarget())));
+    const followUp = filterButton("Needs follow-up");
+    act(() => followUp.focus());
+    // A pointer that does not move focus, as Safari's click on a button.
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    expect(selected()).toBe("All");
+    expect(document.activeElement).toBe(followUp);
   });
 
   it("a kind group left empty shows string 14 on kitchen-sink after an Undo", async () => {

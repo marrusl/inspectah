@@ -1,9 +1,9 @@
 /**
  * The units section's state, apart from its rendering (spec § 8, § 2 item
  * 12): the filter value, the live region text, the pins, collapse state,
- * the reveal's steps as applied, the roving tab stop and focus after a
- * toggle. It holds React state and calls `unitOutcome.ts` for every rule;
- * it decides none itself.
+ * the reveal's steps as applied, the roving tab stop, and focus after a
+ * toggle or a removal. It holds React state and calls `unitOutcome.ts`
+ * for every rule; it decides none itself.
  *
  * Order matters. The state adjustments made during render run in this
  * order, each reading the effective values the one before left, not the
@@ -22,10 +22,12 @@ import type { RefinementOp, ViewResponse } from "../api/types";
 import { applyOp } from "../api/client";
 import type { PendingGuard } from "./usePendingGuard";
 import {
+  FILTER_VALUES,
   GROUP_ORDER,
   branchHeadOf,
   emptyStateFor,
   filterBarDrawn,
+  focusAfterRemoval,
   groupUnits,
   keyFields,
   liveRegionText,
@@ -41,6 +43,8 @@ import {
   shownRowOrder,
   type EmptyStates,
   type FilterValue,
+  type FocusLoss,
+  type FocusTarget,
   type GroupId,
   type KeyedFields,
   type OccurrenceKey,
@@ -48,6 +52,8 @@ import {
   type ShownGroup,
   type UnitFields,
 } from "../components/unitOutcome";
+import { unitGroupHeaderId } from "../components/UnitGroup";
+import { unitFilterButtonId } from "../components/UnitOutcomeFilter";
 
 /** No section query. */
 const NO_QUERY = "";
@@ -88,6 +94,8 @@ export interface UnitsSectionStateInput {
   onResultCount?: (n: number) => void;
   /** Clears the section query: reveal step 1 (§ 6.11). */
   onClearQuery?: () => void;
+  /** Focuses the section search box, where "Clear filter" hands its focus (§ 6.13). */
+  onFocusSearch?: () => void;
   /** Receives the function that focuses the first shown row, and `null` on unmount. */
   registerFocusFirstRow?: (focusFirstRow: (() => void) | null) => void;
   /** Sends a toggle's op under its guard key. */
@@ -118,6 +126,8 @@ export interface UnitsSectionState {
   rowRef: (key: OccurrenceKey) => RowRef;
   /** The section's `onFocus`: the tab stop follows focus onto a row. */
   handleFocus: (e: React.FocusEvent) => void;
+  /** The section's `onBlur`: focus left a row or the bar while it was still drawn. */
+  handleBlur: (e: React.FocusEvent) => void;
   /** The section's `onKeyDown`: row movement keys (§ 6.13). */
   handleKeyDown: (e: React.KeyboardEvent) => void;
   /**
@@ -125,6 +135,16 @@ export interface UnitsSectionState {
    * the toggled row first (§ 6.4), and returns focus to that row after.
    */
   sendInclude: (key: string, op: RefinementOp, toggled: OccurrenceKey) => void;
+  /**
+   * "Clear filter" (§ 6.9 row 5): clears the query, and hands focus on
+   * when `focusInside`, the button having held it (§ 6.13).
+   */
+  clearQueryFromEmptyState: (focusInside: boolean) => void;
+  /**
+   * "Show all" (§ 6.9 row 4): sets the filter to "All", and hands focus on
+   * when `focusInside`, the button having held it (§ 6.13).
+   */
+  showAllFromEmptyState: (focusInside: boolean) => void;
 }
 
 /** The units section's state; `ServiceSection` renders what it returns. */
@@ -134,6 +154,7 @@ export function useUnitsSectionState({
   revealItemId,
   onResultCount,
   onClearQuery,
+  onFocusSearch,
   registerFocusFirstRow,
   runGuarded,
   onViewUpdate,
@@ -343,6 +364,10 @@ export function useUnitsSectionState({
     return found === null ? null : found.key;
   }, []);
 
+  // The focused element when it is a row, a control inside one, or a
+  // filter button: if a commit removes it, focus is handed on (§ 6.13).
+  const focusHolder = useRef<HTMLElement | null>(null);
+
   // The tab stop follows focus onto a row or a control inside one, however
   // it got there (a movement key, Tab, a click, or App's reveal), so
   // Shift+Tab returns to the row being worked on (§ 6.13).
@@ -350,9 +375,24 @@ export function useUnitsSectionState({
     (e: React.FocusEvent) => {
       const key = rowKeyContaining(e.target);
       if (key !== null) setHeldTabStop(key);
+      const target = e.target as HTMLElement;
+      const inBar = FILTER_VALUES.some((value) => target.id === unitFilterButtonId(value));
+      focusHolder.current = key !== null || inBar ? target : null;
     },
     [rowKeyContaining],
   );
+
+  // Focus left the element while it is still drawn: the operator moved it,
+  // so no removal takes it. Checked after the event, not in it: Chromium
+  // fires focusout on a focused element as it removes it, while the element
+  // still reports itself connected, and that removal must keep the holder
+  // for the commit's check below.
+  const handleBlur = useCallback((e: React.FocusEvent) => {
+    const left = e.target;
+    queueMicrotask(() => {
+      if (focusHolder.current === left && left.isConnected) focusHolder.current = null;
+    });
+  }, []);
 
   // Movement keys act on a focused row only, as in DecisionList: never from
   // a checkbox, link or button inside one.
@@ -380,6 +420,67 @@ export function useUnitsSectionState({
     registerFocusFirstRow(focusFirstRow);
     return () => registerFocusFirstRow(null);
   }, [registerFocusFirstRow, focusFirstRow]);
+
+  // Focus after a removal (§ 6.13): focusAfterRemoval decides where; this
+  // finds the element and focuses it.
+  const focusOn = useCallback(
+    (target: FocusTarget | null) => {
+      if (target === null) return;
+      switch (target.kind) {
+        case "search":
+          onFocusSearch?.();
+          return;
+        case "filter_all":
+          document.getElementById(unitFilterButtonId("all"))?.focus();
+          return;
+        case "row":
+          rowElements.current.get(target.key)?.focus();
+          return;
+        case "group_header":
+          document.getElementById(unitGroupHeaderId(target.groupId))?.focus();
+          return;
+      }
+    },
+    [onFocusSearch],
+  );
+
+  // A removal the operator asked for ("Clear filter", "Show all"), handled
+  // once the commit that removes the button has run, against what it draws.
+  const [removalRequest, setRemovalRequest] = useState<{ loss: FocusLoss; focusInside: boolean } | null>(
+    null,
+  );
+  useLayoutEffect(() => {
+    if (!removalRequest) return;
+    setRemovalRequest(null);
+    focusOn(focusAfterRemoval({ ...removalRequest, barDrawn, order, tabStop, shown }));
+  }, [removalRequest, barDrawn, order, tabStop, shown, focusOn]);
+
+  // After every commit: a row or filter button that held focus and is no
+  // longer in the document took focus with it, which fell to the page.
+  useLayoutEffect(() => {
+    const held = focusHolder.current;
+    if (held === null || held.isConnected) return;
+    focusHolder.current = null;
+    const active = document.activeElement;
+    const focusInside = active === null || active === document.body;
+    focusOn(focusAfterRemoval({ loss: "row_or_bar", focusInside, barDrawn, order, tabStop, shown }));
+  });
+
+  const clearQueryFromEmptyState = useCallback(
+    (focusInside: boolean) => {
+      setRemovalRequest({ loss: "clear_query", focusInside });
+      onClearQuery?.();
+    },
+    [onClearQuery],
+  );
+
+  const showAllFromEmptyState = useCallback(
+    (focusInside: boolean) => {
+      setRemovalRequest({ loss: "show_all", focusInside });
+      changeFilter("all");
+    },
+    [changeFilter],
+  );
 
   // Every toggle the operator makes pins the branch that holds the row
   // (§ 6.4), before the op leaves, so a failed op leaves it shown too.
@@ -418,7 +519,10 @@ export function useUnitsSectionState({
     tabStop,
     rowRef,
     handleFocus,
+    handleBlur,
     handleKeyDown,
     sendInclude,
+    clearQueryFromEmptyState,
+    showAllFromEmptyState,
   };
 }

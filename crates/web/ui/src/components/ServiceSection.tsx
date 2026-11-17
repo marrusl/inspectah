@@ -67,6 +67,8 @@ export interface ServiceSectionProps {
    * state's "Clear filter" button. The owner of the text clears it.
    */
   onClearQuery?: () => void;
+  /** Focuses the section search box, where "Clear filter" hands its focus (§ 6.13). */
+  onFocusSearch?: () => void;
   /**
    * Receives the function that focuses the first shown row, which
    * `MainContent`'s `handleArrowDown` calls from the search box (§ 6.12),
@@ -1103,6 +1105,7 @@ export function ServiceSection({
   filterText,
   onResultCount,
   onClearQuery,
+  onFocusSearch,
   registerFocusFirstRow,
   configPaths = NO_CONFIG_PATHS,
   onViewUpdate,
@@ -1125,8 +1128,11 @@ export function ServiceSection({
     tabStop,
     rowRef,
     handleFocus,
+    handleBlur,
     handleKeyDown,
     sendInclude,
+    clearQueryFromEmptyState,
+    showAllFromEmptyState,
   } = useUnitsSectionState({
     fields: {
       unit_states: services,
@@ -1140,6 +1146,7 @@ export function ServiceSection({
     revealItemId,
     onResultCount,
     onClearQuery,
+    onFocusSearch,
     registerFocusFirstRow,
     runGuarded,
     onViewUpdate,
@@ -1193,6 +1200,7 @@ export function ServiceSection({
       aria-label={SECTION_NAME}
       data-testid="service-section"
       onFocus={handleFocus}
+      onBlur={handleBlur}
       onKeyDown={handleKeyDown}
     >
       {barDrawn && (
@@ -1207,7 +1215,10 @@ export function ServiceSection({
       {emptyState.notice === "search" && (
         <EmptyState titleText={SEARCH_EMPTY_TITLE} headingLevel="h3">
           <EmptyStateBody>
-            <Button variant="link" onClick={() => onClearQuery?.()}>
+            <Button
+              variant="link"
+              onClick={(e) => clearQueryFromEmptyState(e.currentTarget.contains(document.activeElement))}
+            >
               {CLEAR_QUERY_LABEL}
             </Button>
           </EmptyStateBody>
@@ -1217,7 +1228,11 @@ export function ServiceSection({
       {emptyState.notice === "filter" && (
         <p className="inspectah-unit-filter__empty" style={{ padding: "var(--pf-t--global--spacer--md)" }}>
           {FILTER_EMPTY}{" "}
-          <Button variant="link" isInline onClick={() => changeFilter("all")}>
+          <Button
+            variant="link"
+            isInline
+            onClick={(e) => showAllFromEmptyState(e.currentTarget.contains(document.activeElement))}
+          >
             {SHOW_ALL_LABEL}
           </Button>
         </p>

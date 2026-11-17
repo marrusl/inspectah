@@ -1155,6 +1155,61 @@ export function rovingTabStop(order: readonly OccurrenceKey[], held: OccurrenceK
   return order[0] ?? null;
 }
 
+/** What removed the control that held focus (§ 6.9 rows 4 and 5, § 6.13). */
+export type FocusLoss =
+  /** "Clear filter", in section search's empty state, removed itself. */
+  | "clear_query"
+  /** "Show all", in the filter's empty state, removed itself. */
+  | "show_all"
+  /** A view, or a change of what is shown, removed the focused row or the bar. */
+  | "row_or_bar";
+
+/** Where focus goes after a removal. */
+export type FocusTarget =
+  | { kind: "search" }
+  | { kind: "filter_all" }
+  | { kind: "row"; key: OccurrenceKey }
+  | { kind: "group_header"; groupId: GroupId };
+
+/** A removal, and the section as it is drawn after it. */
+export interface FocusRemoval {
+  loss: FocusLoss;
+  /** Focus was inside what was removed; when it was not, it stays where it is. */
+  focusInside: boolean;
+  barDrawn: boolean;
+  /** `shownRowOrder` after the removal. */
+  order: readonly OccurrenceKey[];
+  /** `rovingTabStop` after the removal. */
+  tabStop: OccurrenceKey | null;
+  /** The groups drawn after the removal. */
+  shown: readonly ShownGroup[];
+}
+
+function firstGroupHeader(shown: readonly ShownGroup[]): FocusTarget | null {
+  return shown.length > 0 ? { kind: "group_header", groupId: shown[0].id } : null;
+}
+
+/**
+ * Where focus goes when the control holding it is removed, so it never
+ * falls to the page (§ 6.13): "Clear filter" to the section search box;
+ * "Show all" to the bar's "All" button, or with no bar the first shown
+ * row; a removed row or bar to the row holding the tab stop. With no row
+ * to go to, the first group header; with none, `null`. `null` too when
+ * focus was elsewhere: it is left where it is.
+ */
+export function focusAfterRemoval(removal: FocusRemoval): FocusTarget | null {
+  if (!removal.focusInside) return null;
+  switch (removal.loss) {
+    case "clear_query":
+      return { kind: "search" };
+    case "show_all":
+      if (removal.barDrawn) return { kind: "filter_all" };
+      return removal.order.length > 0 ? { kind: "row", key: removal.order[0] } : firstGroupHeader(removal.shown);
+    case "row_or_bar":
+      return removal.tabStop !== null ? { kind: "row", key: removal.tabStop } : firstGroupHeader(removal.shown);
+  }
+}
+
 /** The modifier keys of a key press, as a keyboard event carries them. */
 export interface KeyModifiers {
   ctrlKey: boolean;

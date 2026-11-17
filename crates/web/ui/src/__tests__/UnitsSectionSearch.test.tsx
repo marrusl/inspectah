@@ -6,7 +6,7 @@
  * section, and opens section search with `/` as an operator does.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "../App";
 import type { ReferenceSection, ViewResponse } from "../api/types";
@@ -278,6 +278,26 @@ describe("U24: section search in the units section (§ 6.12, § 9.2)", () => {
     expect(box.value).toBe("");
     expect(screen.queryByText(NO_MATCH_TITLE)).not.toBeInTheDocument();
     expect(screen.getByTestId("service-item-cups.service")).toBeInTheDocument();
+  });
+
+  it("Clear filter hands its focus to the search box (§ 6.13)", async () => {
+    await openUnits(kitchenSink);
+    const box = await search("zzz-matches-nothing");
+    await userEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    expect(box.value).toBe("");
+    expect(screen.queryByRole("button", { name: "Clear filter" })).not.toBeInTheDocument();
+    expect(box).toHaveFocus();
+  });
+
+  it("Clear filter leaves focus where it is when it did not have it", async () => {
+    await openUnits(kitchenSink);
+    const box = await search("zzz-matches-nothing");
+    const followUp = within(bar()).getByRole("button", { name: /^Needs follow-up \d+$/ });
+    act(() => followUp.focus());
+    // A pointer that does not move focus, as Safari's click on a button.
+    fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    expect(box.value).toBe("");
+    expect(followUp).toHaveFocus();
   });
 
   it("combines with the filter: a carried row's query under Needs follow-up shows only the empty state", async () => {

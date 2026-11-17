@@ -9,6 +9,11 @@ export interface UnitOutcomeFilterProps {
   announcement: string;
 }
 
+/** A filter button's DOM id: filter values are fixed words. */
+export function unitFilterButtonId(value: FilterValue): string {
+  return `unit-filter-${value}`;
+}
+
 /** § 7 string 7: the bar's label and the toggle group's accessible name. */
 const SHOW_LABEL = "Show";
 
@@ -38,6 +43,7 @@ export function UnitOutcomeFilter({ counts, value, onChange, announcement }: Uni
           {bar.items.map((item) => (
             <ToggleGroupItem
               key={item.value}
+              buttonId={unitFilterButtonId(item.value)}
               text={
                 <>
                   {item.label} <Badge isRead>{item.count}</Badge>

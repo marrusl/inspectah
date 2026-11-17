@@ -2,6 +2,11 @@ import { Badge, Label } from "@patternfly/react-core";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import { groupHeader, type GroupId } from "./unitOutcome";
 
+/** A group header button's DOM id: group ids are fixed words, so it holds no host data. */
+export function unitGroupHeaderId(groupId: GroupId): string {
+  return `unit-group-header-${groupId}`;
+}
+
 export interface UnitGroupProps {
   groupId: GroupId;
   title: string;
@@ -43,6 +48,7 @@ export function UnitGroup({
     >
       <button
         type="button"
+        id={unitGroupHeaderId(groupId)}
         onClick={onToggle}
         aria-expanded={expanded}
         aria-controls={gridId}

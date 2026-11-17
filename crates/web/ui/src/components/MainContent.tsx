@@ -254,6 +254,13 @@ export function MainContent({
     focusFirstUnitRow.current = focus;
   }, []);
   const clearFilterText = useCallback(() => setFilterText(""), []);
+  // The units section's search box, which "Clear filter" hands its focus
+  // to (§ 6.13); registered by the box while it is open.
+  const focusUnitsSearch = useRef<(() => void) | null>(null);
+  const registerFocusUnitsSearch = useCallback((focus: (() => void) | null) => {
+    focusUnitsSearch.current = focus;
+  }, []);
+  const handleFocusUnitsSearch = useCallback(() => focusUnitsSearch.current?.(), []);
 
   // Reset filter when section changes or search closes
   const handleSearchClose = useCallback(() => {
@@ -805,6 +812,7 @@ export function MainContent({
             onClose={handleSearchClose}
             onArrowDown={handleArrowDown}
             resultCount={unitsResultCount}
+            registerFocus={registerFocusUnitsSearch}
           />
         )}
         <ServiceSection
@@ -822,6 +830,7 @@ export function MainContent({
           filterText={filterText}
           onResultCount={setUnitsResultCount}
           onClearQuery={clearFilterText}
+          onFocusSearch={handleFocusUnitsSearch}
           registerFocusFirstRow={registerFocusFirstUnitRow}
           configPaths={configPaths}
           onViewUpdate={onViewUpdate}

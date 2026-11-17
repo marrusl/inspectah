@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useState } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ServiceSectionWithGuard as ServiceSection } from "../../test-utils/withPendingGuard";
 import type { DropInDecisionDto, ViewResponse } from "../../api/types";
@@ -488,5 +488,103 @@ describe("U36: keyboard over true duplicates (§ 6.13)", () => {
     expect(JSON.stringify(sentOp(0))).toContain("dup-state-demo.service");
     const secondNow = screen.getAllByTestId("service-item-dup-state-demo.service")[1];
     expectFocusedStop(secondNow);
+  });
+});
+
+describe("focus after a view removes the focused row or the bar (§ 6.13)", () => {
+  const planted = loadUnitFields("planted");
+
+  it("hands a removed row's focus to the row holding the tab stop", () => {
+    renderUnits(planted);
+    act(() => screen.getByTestId("service-item-cockpit.socket").focus());
+    act(() =>
+      pushView({ ...planted, unit_states: planted.unit_states.filter((r) => r.unit !== "cockpit.socket") }),
+    );
+    expect(screen.queryByTestId("service-item-cockpit.socket")).toBeNull();
+    expectFocusedStop(screen.getByTestId("default-target"));
+  });
+
+  it("hands it on when the browser fires focusout as it removes the row, as Chromium does", () => {
+    renderUnits(planted);
+    const row = screen.getByTestId("service-item-cockpit.socket");
+    act(() => row.focus());
+    act(() => {
+      // Chromium's focusout on removal, while the row is still in the document.
+      fireEvent.blur(row);
+      pushView({ ...planted, unit_states: planted.unit_states.filter((r) => r.unit !== "cockpit.socket") });
+    });
+    expectFocusedStop(screen.getByTestId("default-target"));
+  });
+
+  it("leaves focus on the page when the operator moved it there before the row was removed", async () => {
+    renderUnits(planted);
+    const row = screen.getByTestId("service-item-cockpit.socket");
+    act(() => row.focus());
+    // A click on the page outside any control: focus leaves the row while it is drawn.
+    act(() => row.blur());
+    await act(() => Promise.resolve());
+    expect(document.activeElement).toBe(document.body);
+    act(() =>
+      pushView({ ...planted, unit_states: planted.unit_states.filter((r) => r.unit !== "cockpit.socket") }),
+    );
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("hands the focus of a control inside a removed row to the row holding the tab stop", () => {
+    renderUnits(planted);
+    act(() => within(screen.getByTestId("service-item-cockpit.socket")).getByRole("checkbox").focus());
+    act(() =>
+      pushView({ ...planted, unit_states: planted.unit_states.filter((r) => r.unit !== "cockpit.socket") }),
+    );
+    expectFocusedStop(screen.getByTestId("default-target"));
+  });
+
+  it("hands a removed bar's focus to the row holding the tab stop", () => {
+    const bluetooth = planted.unit_states.find((r) => r.unit === "bluetooth.service")!;
+    const withBluetooth = (include: boolean): UnitFields => ({
+      ...planted,
+      default_target: { ...planted.default_target!, declined: null, include: true },
+      unit_states: [{ ...bluetooth, include }],
+      unit_dropins: [],
+      mount_findings: [],
+      manual_links: [],
+      undetermined_installs: [],
+    });
+    renderUnits(withBluetooth(false));
+    const bar = screen.getByRole("group", { name: "Show" });
+    act(() => within(bar).getByRole("button", { name: /^All \d+$/ }).focus());
+    // A new view includes the unit: nothing needs follow-up or is excluded, so the bar goes.
+    act(() => pushView(withBluetooth(true)));
+    expect(screen.queryByRole("group", { name: "Show" })).toBeNull();
+    expectFocusedStop(screen.getByTestId("default-target"));
+  });
+
+  it("hands it to the first group header when no row holds the tab stop", async () => {
+    const two: UnitFields = {
+      ...planted,
+      default_target: undefined,
+      unit_states: planted.unit_states.filter((r) => ["bluetooth.service", "myapp-report.timer"].includes(r.unit)),
+      unit_dropins: [],
+      mount_findings: [],
+      manual_links: [],
+      undetermined_installs: [],
+    };
+    renderUnits(two);
+    await userEvent.click(header("Services"));
+    act(() => screen.getByTestId("service-item-myapp-report.timer").focus());
+    act(() => pushView({ ...two, unit_states: two.unit_states.filter((r) => r.unit !== "myapp-report.timer") }));
+    expect(screen.queryByTestId("service-item-myapp-report.timer")).toBeNull();
+    expect(rows().filter((r) => r.tabIndex === 0)).toEqual([]);
+    expect(document.activeElement).toBe(header("Services"));
+  });
+
+  it("leaves focus where it is when it was not on the removed row", () => {
+    renderUnits(planted);
+    act(() => screen.getByTestId("service-item-cockpit.socket").focus());
+    act(() => header("Timers").focus());
+    act(() =>
+      pushView({ ...planted, unit_states: planted.unit_states.filter((r) => r.unit !== "cockpit.socket") }),
+    );
+    expect(document.activeElement).toBe(header("Timers"));
   });
 });

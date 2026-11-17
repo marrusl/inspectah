@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import { SearchInput } from "@patternfly/react-core";
 
 export interface SectionSearchProps {
@@ -12,6 +12,8 @@ export interface SectionSearchProps {
   onArrowDown: () => void;
   /** Count of matching items shown to the user. */
   resultCount: number;
+  /** Receives the function that focuses the input, and `null` on unmount. */
+  registerFocus?: (focus: (() => void) | null) => void;
 }
 
 /**
@@ -24,8 +26,15 @@ export function SectionSearch({
   onClose,
   onArrowDown,
   resultCount,
+  registerFocus,
 }: SectionSearchProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useLayoutEffect(() => {
+    if (!registerFocus) return;
+    registerFocus(() => inputRef.current?.focus());
+    return () => registerFocus(null);
+  }, [registerFocus]);
 
   // Auto-focus on mount
   useEffect(() => {
