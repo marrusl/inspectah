@@ -9,12 +9,20 @@ import type {
   DefaultTargetView,
   DropInDecisionDto,
   LinkRelation,
+  MemberLinks,
   ManualLinkCause,
   ManualLinkView,
   MountFindingDto,
   ServiceDecisionDto,
+  TriageTag,
   UndeterminedInstallView,
 } from "../api/types";
+import {
+  attentionLabelColor,
+  formatTriageReason,
+  lockedReasonLabel,
+  triageBucketToAttention,
+} from "./attentionUtils";
 
 export type RowKind =
   | "unit_state"
@@ -410,6 +418,230 @@ export function groupHeader(title: string, count?: number, followUpText?: string
   let name = badge === null ? title : `${title} ${badge}`;
   if (followUpText) name += `, ${followUpText}`;
   return { badge, name };
+}
+
+/** § 7 string 6, the one line under a group's header; only Reported, not carried has one (§ 6.7). */
+export const GROUP_DESCRIPTIONS: Partial<Record<GroupId, string>> = {
+  reported:
+    "inspectah reports these and does not carry them. No toggle: the lines under each row are the Containerfile's comments for it.",
+};
+
+// --- What a row shows (§ 6.5, § 6.6, § 6.7, § 9.3) ---
+
+/** A compact label as a row draws it: its words and its PatternFly colour. */
+export interface RowLabel {
+  text: string;
+  color: "orange" | "blue" | "grey" | "red" | "green";
+}
+
+/** The outcome label's colour, by `declined.renders` (§ 6.6 item 2). */
+export const OUTCOME_COLORS: Record<DeclinedView["renders"], "orange" | "blue" | "grey"> = {
+  fixme: "orange",
+  advisory: "blue",
+  omitted: "grey",
+};
+
+/** A declined row's outcome label (§ 6.6 item 2, § 7 string 15). */
+export function outcomeLabel(declined: DeclinedView): RowLabel {
+  return { text: OUTCOME_LABELS[declined.renders], color: OUTCOME_COLORS[declined.renders] };
+}
+
+/** The triage reason a unit row shows no badge for (§ 6.6 item 3). */
+const NON_DEFAULT_STATE_REASON = "service_non_default_state";
+
+/** A row's triage badge as other sections draw it: none at the routine level. */
+function triageBadge(triage: TriageTag): RowLabel | null {
+  const level = triageBucketToAttention(triage);
+  if (level === "routine") return null;
+  return { text: formatTriageReason(triage.primary_reason), color: attentionLabelColor(level) };
+}
+
+/** A path under a row, and whether it links to its config row. */
+export interface RowPath {
+  path: string;
+  linked: boolean;
+}
+
+/** A member on a unit row's `Also=` line, and whether it links to its own row. */
+export interface AlsoMember {
+  unit: string;
+  links: MemberLinks;
+  linked: boolean;
+}
+
+/** What a unit row's choices read beyond the row itself. */
+export interface UnitRowContext {
+  /** The group the row is drawn in. */
+  groupId: GroupId;
+  /** `unitRowKeySet` of the view: an `Also=` member links only to one of these. */
+  unitRowKeys: ReadonlySet<RowKey>;
+  /** The paths `config_files` holds. */
+  configPaths: ReadonlySet<string>;
+}
+
+/** What a unit row shows, decided from its data (§ 6.6, § 9.3). */
+export interface UnitRowPresentation {
+  locked: boolean;
+  /** Whether Space, `x` or its checkbox may change it: not while locked. */
+  toggleable: boolean;
+  /** The checkbox's accessible name (§ 6.13 Labels, § 9.3). */
+  toggleLabel: string;
+  /** The locked badge's words (§ 9.3); `null` on an unlocked row. */
+  lockedLabel: string | null;
+  /** The triage badge: none for the non-default state or on a locked row (§ 6.6 item 3). */
+  triageBadge: RowLabel | null;
+  /** The outcome label, on a declined row (§ 6.6 item 2). */
+  outcome: RowLabel | null;
+  /** `attention_reason` under the row: never on a declined or locked row (§ 6.6 item 4). */
+  attentionNote: string | null;
+  /** The word in parentheses: the package, else the fragment word (§ 6.6 item 9). */
+  packageWord: string;
+  /** The kind chip: only in Other units (§ 6.6 item 10). */
+  kindChip: string | null;
+  /** The `Also=` members, each linked when it has a unit row (§ 6.6 item 5). */
+  alsoMembers: AlsoMember[];
+  /** `required_config`, each linked when `config_files` holds it (§ 6.6 item 7). */
+  requiredConfig: RowPath[];
+  /** `data_paths`, never linked: nothing in the export holds them (§ 6.6 item 7). */
+  dataPaths: RowPath[];
+}
+
+/** The row keys of the view's unit rows, which an `Also=` member may link to (§ 6.6 item 5). */
+export function unitRowKeySet(keyed: KeyedFields): ReadonlySet<RowKey> {
+  return new Set(keyed.unitStates.map((k) => k.rowKey));
+}
+
+/** A unit row's checkbox name (§ 9.3): a locked row's slug shows its words. */
+function unitToggleLabel(row: ServiceDecisionDto): string {
+  if (!row.locked) return `Toggle ${row.unit}`;
+  const reason = row.attention_reason ? lockedReasonLabel(row.attention_reason) : "cannot toggle";
+  return `${row.unit} (locked: ${reason})`;
+}
+
+/** What a unit row shows (§ 6.6 items 2 to 5, 7, 9 and 10, § 9.3). */
+export function unitRowPresentation(row: ServiceDecisionDto, context: UnitRowContext): UnitRowPresentation {
+  const locked = row.locked === true;
+  return {
+    locked,
+    toggleable: !locked,
+    toggleLabel: unitToggleLabel(row),
+    lockedLabel: locked ? lockedReasonLabel(row.attention_reason) : null,
+    triageBadge:
+      locked || row.triage.primary_reason === NON_DEFAULT_STATE_REASON ? null : triageBadge(row.triage),
+    outcome: row.declined ? outcomeLabel(row.declined) : null,
+    attentionNote: locked || row.declined ? null : (row.attention_reason ?? null),
+    packageWord: row.owning_package ?? row.fragment,
+    kindChip: context.groupId === "other_units" ? row.kind : null,
+    alsoMembers: (row.also ?? []).map((m) => {
+      // A bare member name reveals `["unit_state", member]`, so it links
+      // only when that row exists (§ 6.11).
+      const key = rowKeyForItemId(m.unit);
+      return { unit: m.unit, links: m.links, linked: key !== null && context.unitRowKeys.has(key) };
+    }),
+    requiredConfig: row.required_config.map((path) => ({ path, linked: context.configPaths.has(path) })),
+    dataPaths: row.data_paths.map((path) => ({ path, linked: false })),
+  };
+}
+
+/** What a drop-in row shows, decided from it and its parent unit row (§ 6.6 items 3 and 6). */
+export interface DropInRowPresentation {
+  /** The parent unit row is excluded, so the drop-in cannot apply. */
+  parentExcluded: boolean;
+  /** Locked by its own lock or its parent's. */
+  locked: boolean;
+  /** Not while the parent is excluded or the drop-in is locked. */
+  toggleable: boolean;
+  /** The checkbox's accessible name; a locked drop-in's reason is prose, as given (§ 9.3). */
+  toggleLabel: string;
+  /** The locked badge's words; `null` when unlocked. */
+  lockedLabel: string | null;
+  /** The "Unit excluded" badge (string 23): while the parent is excluded, unless locked. */
+  unitExcluded: boolean;
+  /** The triage badge, any reason: none while the parent is excluded or the drop-in is locked. */
+  triageBadge: RowLabel | null;
+  /** One of the parent unit's install drop-ins: the "[Install]" badge. */
+  installDropIn: boolean;
+  /** A full shadow: the "Shadow override" badge. */
+  fullShadow: boolean;
+  /** A full shadow's rationale, under the row, when it has one. */
+  shadowRationale: string | null;
+}
+
+/** A locked drop-in with no reason. */
+const LOCKED_DROPIN_NO_REASON = "LOCKED";
+
+/**
+ * What a drop-in row shows (§ 6.6 items 3 and 6). `parent` is its unit
+ * row, or `null` for an orphan drop-in (§ 6.8), which no parent excludes
+ * or locks.
+ */
+export function dropinRowPresentation(
+  dropin: DropInDecisionDto,
+  parent: ServiceDecisionDto | null,
+): DropInRowPresentation {
+  const parentExcluded = parent !== null && !parent.include;
+  const locked = dropin.locked === true || parent?.locked === true;
+  const fullShadow = dropin.shadow_type === "full_shadow";
+  return {
+    parentExcluded,
+    locked,
+    toggleable: !parentExcluded && !locked,
+    toggleLabel: locked
+      ? `${dropin.path} (locked: ${dropin.attention_reason ?? "cannot toggle"})`
+      : `Toggle ${dropin.path}`,
+    lockedLabel: locked ? (dropin.attention_reason ?? LOCKED_DROPIN_NO_REASON) : null,
+    unitExcluded: parentExcluded && !locked,
+    triageBadge: parentExcluded || locked ? null : triageBadge(dropin.triage),
+    installDropIn: parent?.install_drop_ins?.includes(dropin.path) ?? false,
+    fullShadow,
+    shadowRationale: fullShadow && dropin.shadow_rationale ? dropin.shadow_rationale : null,
+  };
+}
+
+/** What the default target's row shows (§ 6.5). */
+export interface DefaultTargetPresentation {
+  locked: boolean;
+  /** Whether Space, `x` or its checkbox may change it: not while locked. */
+  toggleable: boolean;
+  /** The checkbox's accessible name. */
+  toggleLabel: string;
+  /** The outcome label, when the target is declined (§ 6.5, § 6.6 item 2). */
+  outcome: RowLabel | null;
+}
+
+/** What the default target's row shows (§ 6.5): no kind chip, the group title says what it is. */
+export function defaultTargetPresentation(target: DefaultTargetView): DefaultTargetPresentation {
+  return {
+    locked: target.locked,
+    toggleable: !target.locked,
+    toggleLabel: target.locked ? `${target.target} (locked)` : `Toggle ${target.target}`,
+    outcome: target.declined ? outcomeLabel(target.declined) : null,
+  };
+}
+
+/** The words a reported row shows beside its unit, and its cause label (§ 6.6 item 12). */
+export interface ReportedRowLabels {
+  /** A link's relation phrase, an undetermined install's reason words, a mount finding's kind. */
+  detail: string;
+  /** The cause label in the badge cell; a mount finding has none. */
+  cause: string | null;
+}
+
+/** What a reported row shows beside its unit, and its cause label (§ 6.6 item 12, § 6.7). */
+export function reportedRowLabels(record: ReportedRow["record"]): ReportedRowLabels {
+  switch (record.kind) {
+    case "manual_link":
+      return { detail: RELATION_LABELS[record.data.relation], cause: causeLabel(record.data.cause) };
+    case "undetermined_install":
+      return { detail: reasonWords(record.data.reason), cause: UNDETERMINED_CAUSE_LABEL };
+    case "mount_finding":
+      return { detail: record.data.kind, cause: null };
+  }
+}
+
+/** A link's cause by its wire word; `undetermined` is served as an object carrying its reason. */
+export function causeName(cause: ManualLinkCause): string {
+  return typeof cause === "string" ? cause : "undetermined";
 }
 
 // --- Filter, search and pins (§ 6.3 item 3, § 6.4, § 6.11, § 6.12) ---
@@ -808,6 +1040,12 @@ export type EmptyNotice = "search" | "filter";
 
 /** § 6.9 rows 1 and 2: the sentence for a host with no row but, at most, the default target. */
 export type QuietHost = "with_target" | "without_target";
+
+/** § 7 strings 12 and 13, by quiet host (§ 6.9 rows 1 and 2). */
+export const QUIET_HOST_SENTENCES: Record<QuietHost, string> = {
+  with_target: "No other unit differs from its preset, and no drop-in was found.",
+  without_target: "No unit differs from its preset, and no drop-in was found.",
+};
 
 export interface EmptyStates {
   notice: EmptyNotice | null;
