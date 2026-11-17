@@ -156,8 +156,9 @@ exclude it. The groups and rows work as follows:
   the same word as the Containerfile's `# FIXME:`, `# Advisory:` or
   `# Omitted:` comment, and the reason under the row in the Containerfile's
   words. A row you excluded writes no command either, but it shows no
-  label, only its unchecked box. A row under "Reported, not carried" shows
-  a label for its cause instead.
+  label, only its unchecked box. A link row or an undetermined-install row
+  under "Reported, not carried" shows a cause label instead, and a mount
+  unit's row there shows none.
 - **Links.** An `Also=` member that has its own row in the section is a
   link to that row. A path a unit needs that has a Configuration Files
   row links to it.
@@ -175,7 +176,9 @@ exclude it. The groups and rows work as follows:
   and a mount unit's row links to its unit file's Configuration Files
   row.
   A link row reads, for example, "wanted by" or "upheld by" its parent,
-  with a label for why it is reported.
+  with a cause label for why it is reported. An undetermined-install row
+  shows the reason in words and a cause label. A mount unit's row shows its
+  kind, a link to its file and its advisory lines, and no cause label.
 - **Drop-ins and files.** A drop-in's badge reads "Unit excluded" while
   its unit is excluded. A configuration file or drop-in that the export
   does not write, because another file claims the same path, shows why
