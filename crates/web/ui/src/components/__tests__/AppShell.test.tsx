@@ -261,6 +261,16 @@ describe("AppShell", () => {
     );
   });
 
+  // The pair of the case above: it fails if AppShell stops passing its mode.
+  it("shows the fleet Containerfile footer in aggregate mode", () => {
+    const { container } = renderAppShell({ containerfilePreview: "FROM ubi9\n", isAggregateMode: true });
+    const footer = container.querySelector(".inspectah-cf-panel__footer-note");
+    expect(footer).not.toBeNull();
+    expect(footer!.textContent!.replace(/\s+/g, " ").trim()).toBe(
+      "Preview reflects package and config decisions. Context sections are included as-is.",
+    );
+  });
+
   it("toggles ContainerfilePanel on Ctrl+E", async () => {
     renderAppShell({
       containerfilePreview: "FROM ubi9\nRUN echo hello",
