@@ -126,7 +126,9 @@ model.
 
 A configuration file that a unit drop-in already carries is Inventory,
 so the decision is made once. Its badge reads "Controlled in Systemd
-units", with the owning row's state beside it and a "Go to owner" link.
+units", with the owning row's state beside it and a "Go to owner" link. The
+explanation beside it reads "The Systemd units row for this same path
+carries the file into the image. Decide it there."
 A unit at its preset state that has a drop-in is listed under "Other
 drop-in overrides" at the end of the group for its kind in the Systemd
 units section.
@@ -134,7 +136,9 @@ units section.
 The Systemd units section groups its rows by kind: Default target,
 Services, Sockets, Timers, Paths and Other units, in that order. A kind
 with no row is not shown. Each group has a header you can collapse, with
-a count of the rows it shows. Under All, a kind group's header also
+a count badge of the unit rows or reported rows it shows (drop-ins are
+not counted). The Default target group has no count, and neither has a
+kind group that shows only orphan drop-ins. Under All, a kind group's header also
 flags the rows that need follow-up, for example "5 need follow-up". Rows
 are sorted by unit name, and a row stays where it is when you include or
 exclude it. The groups and rows work as follows:

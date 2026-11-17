@@ -309,7 +309,7 @@ owner instead of a control:
 
 | Badge | When | Where the decision lives |
 |---|---|---|
-| Controlled in Systemd units | The file's path is also a Service Drop-ins entry (a `<unit>.d/*.conf` drop-in for a unit of any kind, or a full unit shadow). | The Service Drop-ins row for the same path, shown in the Systemd units section. |
+| Controlled in Systemd units | The file's path is also a Service Drop-ins entry (a `<unit>.d/*.conf` drop-in for a unit of any kind, or a full unit shadow). | In single-host refine, the explanation reads "The Systemd units row for this same path carries the file into the image. Decide it there." The row is the drop-in's row in the Systemd units section. |
 
 The badge links to the owning row. An advisory entry is never converted this
 way, so the warning is not lost.

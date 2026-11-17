@@ -206,7 +206,9 @@ notes, while test ids stay shared with the first. Never look a note up by
 its text on the entry (`searchText`), never in `searchTextMap`, whose bare
 and `sectionId:itemId` keys could hand one entry another's text.
 
-Every rule of the section (keys, outcomes, counts, group order, what is
+Every rule of the section (keys, outcomes, counts, group order, the group
+header's badge and accessible name (`groupHeader`), which key presses a
+row ignores (`rowKeyIgnored`), what is
 visible under the filter, query and pins, the reveal plan, the empty
 states, the filter bar's presentation and the order of shown rows) lives
 in `unitOutcome.ts`. `useUnitsSectionState.ts` holds the React state and

@@ -155,7 +155,7 @@ React/TypeScript UI embedded into the Rust binary via `rust-embed`:
   - Single-host components at top level (DecisionList, PackageList, ContainerfilePanel, etc.)
   - `LanguagePackageList.tsx` — Language Packages decision section (pip/npm/gem environments)
   - `UnmanagedFileList.tsx` — Unmanaged Files decision section (directory grouping, provenance signals)
-  - `ServiceSection.tsx`, `UnitGroup.tsx`, `UnitOutcomeFilter.tsx`: the Systemd units section (single-host only) and its collapsible group and outcome filter bar; they render, and `unitOutcome.ts` decides row keys, outcomes, counts, groups, labels, what the filter and search show and the reveal plan
+  - `ServiceSection.tsx`, `UnitGroup.tsx`, `UnitOutcomeFilter.tsx`: the Systemd units section (single-host only) and its collapsible group and outcome filter bar; they render, and `unitOutcome.ts` decides row keys, outcomes, counts, groups, labels, what the filter and search show and the reveal plan, the group header's badge and name and which key presses a row ignores. The section's scoped styles in `App.css` hang off the `.inspectah-units-section` class, because the `.inspectah-decision-row` rules are shared with other sections and the fleet view: change the units section's layout there, never in the shared rules
   - `SystemTuningSection.tsx`: System Tuning section, the tuned decision rows and `SysctlPanel`
   - `SysctlPanel.tsx`, `sysctlCopy.ts`: the read-only sysctl panel and its copy, which mirrors `render/sysctl_report.rs` character for character
   - `RpmUploadModal.tsx` — Single-RPM upload modal with NEVRA validation
