@@ -128,6 +128,10 @@ item id: ids are host data, and a unit name can hold a literal backslash
 (`backup\x2djob.timer`), which a selector reads as an escape, so the link
 opens the section and focuses nothing.
 
+The `units` section is the exception: it finds its row by `data-unit-key`
+(section 1c), and `REVEAL_TESTID_PREFIXES` does not apply to it. The
+prefixes stay for every other section.
+
 ## 1c. Units: link rows, records and the default target
 
 `/api/view` passes the projection's unit views through untouched
@@ -166,17 +170,75 @@ wrong:
   `not_applied` lists the files the export leaves out, absent while the
   advisory applies.
 
-**Row identity in the Services grid.** A unit name can hold `-`, even
-`.service-` (`a.service-b.service` is a valid name), so a link row's React
-key and `data-testid` are the JSON-encoded `[relation, parent, unit]`
-(`linkIdentity`), never the three joined with a separator, which can give
-two links one id and make reveal focus the wrong row. An undetermined
-record's key is `["undetermined", unit]`: its bare unit name is the key a
-unit row or mount finding beside it may already use. The default target's
-pending-guard key is `["default_target"]`.
+**Row identity in the Systemd units section.** Two identities, each built
+by one function in `unitOutcome.ts` and spelled nowhere else:
 
-The services bulk toggle does not send `DefaultTarget`: the target has its
-own toggle. The fleet view shows none of these rows.
+- **Row key**, `rowKey(record)`: `JSON.stringify([kind, ...identity])`,
+  the row's logical identity. Unit state `["unit_state", unit]`, drop-in
+  `["dropin", path]`, default target `["default_target"]`, link
+  `["manual_link", relation, parent, unit]`, undetermined install
+  `["undetermined_install", unit]`, mount finding
+  `["mount_finding", unit]`. JSON, never a joined string, because a unit
+  name can hold `-`, even `.service-` (`a.service-b.service`), and a
+  joined key gives two links one id. Every row carries it in
+  `data-unit-key`, on the element that carries its row test id. Global
+  search entries and "Go to owner" send it as the item id.
+- **Occurrence key**: the row key, `#`, and the record's ordinal among
+  records of its own list with the same row key. A snapshot can hold a
+  true duplicate (two records with one row key), and React reconciles
+  repeated sibling keys wrongly, so the occurrence key is the React key,
+  the pin, the roving tab stop and the focus key. It never reaches a DOM
+  id, a URL, `data-unit-key`, a search entry or a test id, and nothing
+  parses one.
+
+The `units` reveal resolves the item id through `rowKeyForItemId`: a bare
+unit name is always the `unit_states` row, and an id that starts with `[`
+resolves only when it is exactly the bytes `JSON.stringify` writes for a
+known kind and identity length, so a lookalike names no row. It then finds
+the first row in document order whose `data-unit-key` equals the key,
+compared as a string (`elementByUnitKey` in `App.tsx`). Anything that
+navigates into the section sends a row key or a bare unit name.
+
+A later occurrence of a duplicated row gets DOM ids of its own (a
+generated suffix on today's ids), so its `aria-describedby` names its own
+notes, while test ids stay shared with the first. Never look a note up by
+`<prefix>-<unit>` id; use the test id. A units global search entry carries
+its text on the entry (`searchText`), never in `searchTextMap`, whose bare
+and `sectionId:itemId` keys could hand one entry another's text.
+
+Every rule of the section (keys, outcomes, counts, group order, what is
+visible under the filter, query and pins, the reveal plan, the empty
+states, the filter bar's presentation and the order of shown rows) lives
+in `unitOutcome.ts`. `useUnitsSectionState.ts` holds the React state and
+calls those functions; `ServiceSection.tsx`, `UnitGroup.tsx` and
+`UnitOutcomeFilter.tsx` render. A rule added to a component cannot be
+tested without React and drifts from search and reveal, which share the
+same functions.
+
+The default target's pending-guard key is `["default_target"]`.
+
+**Testing the units section in Vitest.**
+
+- A test that loads a JSON fixture uses `import.meta.glob`:
+  `tsconfig.json` has no `resolveJsonModule`, so a direct import fails
+  `tsc`.
+- `localStorage` is not defined in this jsdom environment; stub it with
+  `vi.stubGlobal("localStorage", ...)`, as `Sidebar.test.tsx` does.
+- PatternFly 6 `Label color="grey"` renders no `pf-m-grey` class; assert
+  grey as the absence of a colour modifier.
+- State set in an `onFocus` handler needs `act(() => el.focus())`.
+  `blur()` on a disabled, focused checkbox does not move focus in jsdom,
+  so a test of focus during a pending op starts from a focused row.
+- Opening a section moves focus to its first `role="row"` a frame later;
+  a test that presses `/` right after opening waits two animation frames.
+- A child that must change state its parent owns cannot call the setter
+  during render (React warns). Set a request state in render and hand it
+  over in a `useLayoutEffect` that resets it; the parent's update then
+  flushes before paint and before a `requestAnimationFrame` lookup.
+- Vitest does not process CSS, so a style a jsdom test must see is inline.
+
+The Systemd units bulk toggle does not send `DefaultTarget`: the target has its
+own toggle. The fleet view shows none of these rows and still calls its section Services.
 
 ## 2. The hand-built decision DTOs — still `include: bool`
 

@@ -217,9 +217,14 @@ not listed have no triage bucket.
 |---|---|---|---|
 | Packages | RPM packages | In base image manifest | User-added, version upgraded |
 | Config Files | Files under `/etc/` | RPM default, baseline match | Modified, unowned, orphaned |
-| Services | systemd units and drop-ins | (none, no baseline data) | Non-default state, drop-in present |
+| Systemd units (the fleet view calls it Services) | systemd units and drop-ins | (none, no baseline data) | Non-default state, drop-in present |
 | Containers | Quadlet units, Flatpaks | (none) | User-deployed, provisioned at first boot |
 | Kernel/Boot | tuned profile | (none, no baseline data) | Non-default or custom tuned profile |
+
+In the single-host refine view, the Systemd units section shows no triage
+badge for the non-default-state reason. Other reasons, such as Unknown
+Origin, show as in any section. The fleet view's
+Services section is unchanged.
 
 Loaded kernel modules, network findings, and the other reference sections
 carry a disposition but no bucket. Scheduled tasks and non-RPM software have no
@@ -304,7 +309,7 @@ owner instead of a control:
 
 | Badge | When | Where the decision lives |
 |---|---|---|
-| Controlled in Service Drop-ins | The file's path is also a Service Drop-ins entry (a `<unit>.d/*.conf` drop-in for a unit of any kind, or a full unit shadow). | The Service Drop-ins row for the same path. |
+| Controlled in Systemd units | The file's path is also a Service Drop-ins entry (a `<unit>.d/*.conf` drop-in for a unit of any kind, or a full unit shadow). | The Service Drop-ins row for the same path, shown in the Systemd units section. |
 
 The badge links to the owning row. An advisory entry is never converted this
 way, so the warning is not lost.

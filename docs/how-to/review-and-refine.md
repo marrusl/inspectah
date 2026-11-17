@@ -48,7 +48,7 @@ expandable, and its sections are listed beneath it.
 |-------|----------|------------------|
 | Packages | Packages | RPM packages, the Repositories bar, package groups, and a Version Changes panel |
 | System Configuration | Configuration Files, Kernel & Boot, System Tuning, Security & Access Control | Modified files under `/etc` (sysctl files among them), kernel and boot settings, the tuned profile and a read-only sysctl explanation, and SELinux |
-| Services & Scheduling | Services, Scheduled Tasks, Containers | systemd units and drop-ins, cron, at, and timer jobs, Quadlet units, and Flatpaks |
+| Services & Scheduling | Systemd units, Scheduled Tasks, Containers | systemd units and drop-ins, cron, at, and timer jobs, Quadlet units, and Flatpaks |
 | Users & Identity | Users & Groups | Local non-system user accounts |
 | Network | Network | Reference only |
 | Storage | Storage | Reference only, including the `/var` directory summary |
@@ -56,7 +56,7 @@ expandable, and its sections are listed beneath it.
 | Secrets & Subscription | Secrets, Subscription | Placeholders today: each says "Not yet implemented." |
 
 Every section is always in the sidebar. A section with nothing to show says
-so in the content area, for example "No service state changes detected."
+so in the content area, for example "No unit differs from its preset, and no drop-in was found."
 Software & Files also tells you when the scan did not collect unmanaged
 files and to re-run with `--include-unmanaged` to review them.
 
@@ -125,23 +125,63 @@ model.
 | "Inventory", or a badge naming the row that owns the decision | Inventory. The row is shown for reference. There is no checkbox. |
 
 A configuration file that a unit drop-in already carries is Inventory,
-so the decision is made once. Its badge reads "Controlled in Service
-Drop-ins", with the owning row's state beside it and a "Go to owner" link.
+so the decision is made once. Its badge reads "Controlled in Systemd
+units", with the owning row's state beside it and a "Go to owner" link.
 A unit at its preset state that has a drop-in is listed under "Other
-drop-in overrides" in Services.
+drop-in overrides" at the end of the group for its kind in the Systemd
+units section.
 
-Each row in Services shows the unit's kind (service, socket, timer, and
-so on). When the export will not write the row's command, the reason
-shows under the row, in the same words as the Containerfile's
-`# Omitted:` or `# FIXME:` line. An unlocked row that inspectah flagged
-shows why, for example a package updater that is excluded by default.
-The administrator's mount, automount and swap units follow the unit
-rows, with their mount point and advisory lines and no checkbox: the
-export never writes a command for them, and their unit file is decided
-on its Configuration Files row, which the row links to. A configuration
-file or drop-in that the export does not write, because another file
-claims the same path, shows why under its row. The fleet (aggregate)
-refine view does not yet show unit kinds, the reason a command is
+The Systemd units section groups its rows by kind: Default target,
+Services, Sockets, Timers, Paths and Other units, in that order. A kind
+with no row is not shown. Each group has a header you can collapse, with
+a count of the rows it shows. Under All, a kind group's header also
+flags the rows that need follow-up, for example "5 need follow-up". Rows
+are sorted by unit name, and a row stays where it is when you include or
+exclude it. The groups and rows work as follows:
+
+- **Default target.** The target the source host boots to has its own
+  group, with a line saying that, included, the image boots to it too.
+- **Rows.** A row shows the unit's current state, then `preset:` and the
+  preset's state, then whether the export carries it. A unit with no
+  package shows `(local)`, `(shadowed)` or `(absent)` where the package
+  name would be. Kind shows as a chip only in Other units, which mixes
+  kinds. A row inspectah flagged shows why, for example a package updater
+  that is excluded by default, and one row shows one reason.
+- **Outcome labels.** When the export will not write the row's command,
+  the row shows "FIXME", "Advisory" or "Omitted", the same word as the
+  Containerfile's `# FIXME:`, `# Advisory:` or `# Omitted:` comment, and
+  the reason under the row in the Containerfile's words.
+- **Links.** An `Also=` member that has its own row in the section is a
+  link to that row. A path a unit needs that has a Configuration Files
+  row links to it.
+- **Filter.** When a row needs follow-up or is excluded, a Show bar above
+  the groups offers All, Needs follow-up, Carried and Excluded, each with
+  its count. "Needs follow-up" means the Containerfile writes a comment
+  for the row and no command. Choosing a value hides the other rows and
+  announces how many rows are shown. A row you toggle stays visible,
+  with its drop-ins, until you change the filter or the search.
+- **Reported, not carried.** The last group lists what inspectah reports
+  and does not carry: links a unit's `[Install]` section does not make,
+  units whose `[Install]` cannot be relied on, and the administrator's
+  mount, automount and swap units. Rows have no toggle. Each shows the
+  Containerfile's comment lines for it, rows for one unit sit together,
+  and a mount unit's row links to its unit file's Configuration Files
+  row.
+  A link row reads, for example, "wanted by" or "upheld by" its parent,
+  with a label for why it is reported.
+- **Drop-ins and files.** A drop-in's badge reads "Unit excluded" while
+  its unit is excluded. A configuration file or drop-in that the export
+  does not write, because another file claims the same path, shows why
+  under its row.
+- **Search and keys.** `/` searches the section for the words a row shows.
+  The rows are one tab stop; `j` and `k` or the arrow keys move between
+  rows across groups, and `g` and `G` go to the first and last. Following
+  a link, "Go to owner" or a search result opens a collapsed group and
+  clears a filter that would hide the row it lands on.
+
+The sidebar and the section heading say "Systemd units", and the fleet
+(aggregate) refine view still calls its section "Services" and does not
+yet show unit kinds, groups, the outcome filter, the reason a command is
 declined, withheld files or mount findings: they appear in the
 single-host view and in the Containerfile preview.
 

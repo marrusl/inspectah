@@ -155,6 +155,7 @@ React/TypeScript UI embedded into the Rust binary via `rust-embed`:
   - Single-host components at top level (DecisionList, PackageList, ContainerfilePanel, etc.)
   - `LanguagePackageList.tsx` — Language Packages decision section (pip/npm/gem environments)
   - `UnmanagedFileList.tsx` — Unmanaged Files decision section (directory grouping, provenance signals)
+  - `ServiceSection.tsx`, `UnitGroup.tsx`, `UnitOutcomeFilter.tsx`: the Systemd units section (single-host only) and its collapsible group and outcome filter bar; they render, and `unitOutcome.ts` decides row keys, outcomes, counts, groups, labels, what the filter and search show and the reveal plan
   - `SystemTuningSection.tsx`: System Tuning section, the tuned decision rows and `SysctlPanel`
   - `SysctlPanel.tsx`, `sysctlCopy.ts`: the read-only sysctl panel and its copy, which mirrors `render/sysctl_report.rs` character for character
   - `RpmUploadModal.tsx` — Single-RPM upload modal with NEVRA validation
@@ -163,6 +164,7 @@ React/TypeScript UI embedded into the Rust binary via `rust-embed`:
   - `useRpmUpload.ts` — 5-state RPM upload row machine wired to POST /api/upload-rpm
   - `useKeyboard.ts`: keyboard shortcuts (number keys 1-8 jump to section groups from `/api/groups`; without groups, 1-9 jump to flat sections)
   - `useView.ts`, `useMutation.ts` — view data and mutation hooks
+  - `useUnitsSectionState.ts`: the Systemd units section's state (filter, pins, collapse, reveal steps, tab stop, focus after a toggle); it calls `unitOutcome.ts` for every rule
 - `api/types.ts` — TypeScript types (LanguagePackageEnv, UnmanagedFileItem, ProvenanceSignals, RpmUploadRowState)
 - `utils/` — utility functions
 - `test-utils/` — test fixtures

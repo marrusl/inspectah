@@ -108,6 +108,30 @@ of these recordings as `/api/view` and override only the fields it
 varies, as `e2e/not-carried.spec.ts` does with `files-no-tuned`; its
 `.groups.json` also gives the sidebar real section links to click.
 
+**The recorded units bodies are the other kind of recording.**
+`e2e/systemd-units.spec.ts` and the units Vitest tests load four bodies
+taken from one refine session over a driftify kitchen-sink scan, not
+written by hand: `single-host/view-units-kitchen-sink.json` (the view
+with every list outside the six unit fields emptied),
+`single-host/sections-units-kitchen-sink.json` (the sections body cut to
+`units` and `scheduled_tasks`),
+`sequences/units-exclude-tmp-mount/01-after-exclude.json` (the response
+to excluding `tmp.mount`) and `single-host/view-units-stock10.json` (the
+view with a stock host's unit fields). Rules for taking or changing one:
+
+- Check the body before committing. A recorded sections body carries each
+  `at` job's owner account and home directory (`subtitle`, `detail`,
+  `searchable_text`); leave such a row out. The sensitive-tarball hook
+  checks tarballs only, so nothing else catches it.
+- `/api/health` returns an empty hostname at schema 28, so a test that
+  searches for the host name needs the scan's output directory name.
+- `view-units-stock10.json` is coherent for the units section only: it
+  keeps another view's Containerfile preview and stats, so a test of
+  anything else must not read it.
+- The preset `single-host/view.json` and `sections.json` cannot serve the
+  units section: the view's rows crash the app and the sections lack
+  `scheduled_tasks`.
+
 ## See Also
 
 - `process-docs/skills/full-workspace-verification-gates.md` — the
