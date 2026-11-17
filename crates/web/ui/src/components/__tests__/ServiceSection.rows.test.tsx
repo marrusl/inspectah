@@ -358,3 +358,30 @@ describe("U22: Unit excluded (§ 6.6 item 6, string 23)", () => {
     expect(screen.queryByText("Service excluded")).toBeNull();
   });
 });
+
+/**
+ * The selectors of App.css's units-only narrow-width rules (§ 6.13 Narrow
+ * widths), as written there. Vitest serves CSS, `?raw` included, as an
+ * empty string, so they are listed here; P7 proves the rules themselves.
+ */
+const UNITS_SCOPE = ".inspectah-units-section";
+const UNITS_SCOPED_SELECTORS = [
+  ".inspectah-units-section .inspectah-decision-row__main",
+  ".inspectah-units-section .inspectah-decision-row__name",
+  ".inspectah-units-section .inspectah-decision-row__name > *",
+  ".inspectah-units-section .inspectah-unit-filter .pf-v6-c-toggle-group",
+];
+
+describe("narrow widths: the rules that reflow rows and the bar keep applying (§ 6.13)", () => {
+  it("draws the section, every row's main line and the bar under the selectors of its scoped rules", () => {
+    renderUnits(kitchenSink);
+    const section = screen.getByTestId("service-section");
+    expect(section).toHaveClass(UNITS_SCOPE.slice(1));
+    for (const selector of UNITS_SCOPED_SELECTORS) {
+      expect(section.querySelectorAll(selector.slice(UNITS_SCOPE.length + 1)).length, selector).toBeGreaterThan(0);
+    }
+    for (const row of Array.from(section.querySelectorAll('[role="row"]'))) {
+      expect(row.querySelector(":scope > .inspectah-decision-row__main"), row.getAttribute("data-testid") ?? "").not.toBeNull();
+    }
+  });
+});

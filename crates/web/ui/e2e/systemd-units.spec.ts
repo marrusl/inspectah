@@ -59,6 +59,8 @@ const SECTION_SELECTOR = '[data-testid="service-section"]';
 /** The viewport `responsive.spec.ts` uses for a narrow layout, and a desktop one. */
 const NARROW = { width: 768, height: 1024 };
 const DESKTOP = { width: 1280, height: 800 };
+/** A phone width, where the section is narrower than the bar's one-line width (WCAG 1.4.10 reflow). */
+const PHONE = { width: 320, height: 800 };
 
 /** A long row for the narrow layout: a 200-character unit name and a long reason. */
 const LONG_NAME_LENGTH = 200;
@@ -113,6 +115,26 @@ function barButtonsInsideSection(page: Page): Promise<boolean> {
         return r.left >= section.left && r.right <= section.right;
       })
     );
+  }, SECTION_SELECTOR);
+}
+
+/** Whether the section itself scrolls sideways. */
+function sectionScrollsSideways(page: Page): Promise<boolean> {
+  return page.evaluate((selector) => {
+    const section = document.querySelector(selector)!;
+    return section.scrollWidth > section.clientWidth;
+  }, SECTION_SELECTOR);
+}
+
+/** The test ids of shown rows whose name cell clips its content. */
+function rowsWithClippedNames(page: Page): Promise<string[]> {
+  return page.evaluate((selector) => {
+    const cells = document.querySelectorAll<HTMLElement>(
+      `${selector} [role="row"] > .inspectah-decision-row__main > .inspectah-decision-row__name`,
+    );
+    return Array.from(cells)
+      .filter((cell) => cell.closest("[hidden]") === null && cell.scrollWidth > cell.clientWidth)
+      .map((cell) => cell.closest('[role="row"]')!.getAttribute("data-testid") ?? "");
   }, SECTION_SELECTOR);
 }
 
@@ -383,14 +405,13 @@ test.describe("Systemd units section", () => {
 
     await page.setViewportSize(NARROW);
     await expect.poll(() => pageScrollsSideways(page)).toBe(false);
+    expect(await sectionScrollsSideways(page)).toBe(false);
     expect(await barButtonsInsideSection(page)).toBe(true);
-    // The spec's "the bar wraps at 768" is not asserted: in the recorded
-    // view the bar fits on one line at this width. Measured: the section is
-    // 700 px wide at 768 x 1024 (660 px at 1280 x 800, beside the sidebar
-    // and Containerfile panel) and the bar's buttons span 425 px.
+    // The bar fits on one line at 768 when the Containerfile panel is closed (section 700 px,
+    // buttons 428 px) and wraps when the section is narrower than the bar, as here with the panel open.
   });
 
-  test("P7: a long unit name and reason cause no horizontal scroll at 768 x 1024", async ({
+  test("P7: a long unit name and reason are laid out in full, with no horizontal scroll, at 768 x 1024", async ({
     page,
   }) => {
     await setupUnits(page);
@@ -410,6 +431,48 @@ test.describe("Systemd units section", () => {
     await expect(longRow).toBeVisible();
     await expect(longRow).toContainText(LONG_DECLINED_TEXT);
     await expect.poll(() => pageScrollsSideways(page)).toBe(false);
+    expect(await sectionScrollsSideways(page)).toBe(false);
+
+    // The name cell clips nothing, and the whole name is laid out inside the section.
+    const nameCell = longRow.locator(":scope > .inspectah-decision-row__main > .inspectah-decision-row__name");
+    const layout = await nameCell.evaluate((cell, selector) => {
+      const section = document.querySelector(selector)!.getBoundingClientRect();
+      const name = cell.firstElementChild as HTMLElement;
+      const box = name.getBoundingClientRect();
+      const badge = cell.parentElement!.querySelector(":scope > .inspectah-decision-row__badge");
+      return {
+        clipped: cell.scrollWidth > cell.clientWidth,
+        text: name.textContent,
+        inside: box.left >= section.left && box.right <= section.right,
+        firstLineBottom: name.getClientRects()[0].bottom,
+        badgeTop: badge ? badge.getBoundingClientRect().top : null,
+      };
+    }, SECTION_SELECTOR);
+    expect(layout.clipped).toBe(false);
+    expect(layout.text).toBe(LONG_UNIT);
+    expect(layout.inside).toBe(true);
+    // The row's badge cell sits below the name's first line.
+    expect(layout.badgeTop).not.toBeNull();
+    expect(layout.badgeTop!).toBeGreaterThanOrEqual(layout.firstLineBottom);
+  });
+
+  test("P7: at 320 x 800 the bar wraps, no row name is clipped and nothing scrolls sideways", async ({
+    page,
+  }) => {
+    await setupUnits(page);
+    // Loaded at this width, as on a phone: the Containerfile panel starts
+    // closed and the sections are behind the navigation button.
+    await page.setViewportSize(PHONE);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    await sidebarEntry(page, /^Systemd units /).click();
+    await expect(page.getByTestId("service-section")).toBeVisible();
+
+    await expect.poll(() => pageScrollsSideways(page)).toBe(false);
+    expect(await sectionScrollsSideways(page)).toBe(false);
+    expect(await rowsWithClippedNames(page)).toEqual([]);
+    expect(await barButtonsInsideSection(page)).toBe(true);
+    expect(await barLineCount(page)).toBeGreaterThan(1);
   });
 
   test("P8: dark theme keeps contrast on outcome labels, the follow-up flag and the preset", async ({

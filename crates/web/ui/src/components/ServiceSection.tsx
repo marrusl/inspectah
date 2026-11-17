@@ -1243,7 +1243,7 @@ export function ServiceSection({
 
   return (
     <div
-      className="inspectah-service-section"
+      className="inspectah-service-section inspectah-units-section"
       role="region"
       aria-label={SECTION_NAME}
       data-testid="service-section"

@@ -659,6 +659,43 @@ body,
   padding-left: calc(var(--pf-t--global--spacer--sm) + 18px);
 }
 
+/* ─── Systemd units: reflow at narrow widths ───────────────────────────
+   Spec § 6.13 Narrow widths (WCAG 1.4.10): in the units section a row's
+   main line wraps, the name cell breaks a long name instead of clipping
+   it, badge cells drop under the name when the line is full, and the
+   outcome bar wraps between its buttons when the section is narrower
+   than the bar. Scoped to the units section's own class: the shared
+   decision-row rules above, used by other sections and the fleet view,
+   are unchanged. The name cell keeps the line beside the toggle (the
+   checkbox's 20px minimum, as ServiceSection sets it), so a long name
+   wraps beside its checkbox rather than under it. */
+.inspectah-units-section .inspectah-decision-row__main {
+  flex-wrap: wrap;
+}
+
+.inspectah-units-section .inspectah-decision-row__name {
+  flex: 1 1 auto;
+  max-width: calc(100% - 20px - var(--pf-t--global--spacer--sm));
+  flex-wrap: wrap;
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.inspectah-units-section .inspectah-decision-row__name > * {
+  min-width: 0;
+}
+
+/* Each button after the first overlaps its neighbour by one border width
+   (PatternFly's negative inline-start margin on toggle group items), so a
+   button that starts a wrapped line would sit that far outside the
+   section: the padding takes it back. */
+.inspectah-units-section .inspectah-unit-filter .pf-v6-c-toggle-group {
+  flex-wrap: wrap;
+  row-gap: var(--pf-t--global--spacer--xs);
+  padding-inline-start: var(--pf-t--global--border--width--control--default);
+}
+
 /* ─── Locked item styling ─────────────────────────────────────────────── */
 
 .inspectah-decision-row--locked {
