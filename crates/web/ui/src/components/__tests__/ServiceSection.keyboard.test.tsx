@@ -341,6 +341,32 @@ describe("U32: the roving tab stop (§ 6.13)", () => {
     expect(theStop()).toBe(screen.getByTestId("default-target"));
   });
 
+  it("stays on the focused row that stays shown when the bar stops being drawn", async () => {
+    const planted = loadUnitFields("planted");
+    const bluetooth = planted.unit_states.find((r) => r.unit === "bluetooth.service")!;
+    const withBluetooth = (include: boolean): UnitFields => ({
+      ...planted,
+      default_target: { ...planted.default_target!, declined: null, include: true },
+      unit_states: [{ ...bluetooth, include }],
+      unit_dropins: [],
+      mount_findings: [],
+      manual_links: [],
+      undetermined_installs: [],
+    });
+    // A carried default target and one excluded unit.
+    renderUnits(withBluetooth(false));
+    await select("Excluded");
+    const row = screen.getByTestId("service-item-bluetooth.service");
+    act(() => row.focus());
+    expectFocusedStop(row);
+    // A new view includes the unit: nothing needs follow-up or is excluded, so the bar goes.
+    act(() => pushView(withBluetooth(true)));
+    expect(screen.queryByRole("group", { name: "Show" })).toBeNull();
+    expect(screen.getByTestId("default-target")).toBeInTheDocument();
+    expect(screen.getByTestId("service-item-bluetooth.service")).toBe(row);
+    expectFocusedStop(row);
+  });
+
   it("leaves filter buttons, headers and in-row links as tab stops, and checkboxes focusable", () => {
     renderUnits(loadUnitFields("planted"));
     const section = screen.getByTestId("service-section");

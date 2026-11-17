@@ -14,7 +14,8 @@
  * collapse state as (1) to (3) leave them. The query it reads is the one
  * after a global search navigation's reset: `MainContent` clears its
  * text during its own render, before this section renders with the new
- * reveal. (5) The tab stop moves to a shown row. Keep them in this order.
+ * reveal. (5) The tab stop moves to a shown row of the order computed
+ * from those same effective values. Keep them in this order.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RefinementOp, ViewResponse } from "../api/types";
@@ -252,9 +253,11 @@ export function useUnitsSectionState({
   /** Clears every pin: a filter change (§ 6.4). */
   const clearPins = useCallback(() => setPins(NO_PINS), []);
 
+  // Everything below reads the effective values, never the stored state
+  // this pass has just replaced, so nothing is stored from a discarded one.
   const shown = useMemo(
-    () => showGroups(groups, { filter, query: filterText, pins }),
-    [groups, filter, filterText, pins],
+    () => showGroups(groups, { filter: effectiveFilter, query: effectiveQuery, pins: effectivePins }),
+    [groups, effectiveFilter, effectiveQuery, effectivePins],
   );
 
   // The search box's result count (§ 6.12).
@@ -309,7 +312,7 @@ export function useUnitsSectionState({
 
   // The shown rows in section order (§ 6.13): the tab stop, the movement
   // keys and ArrowDown from the search box all read it.
-  const order = useMemo(() => shownRowOrder(shown, collapsed), [shown, collapsed]);
+  const order = useMemo(() => shownRowOrder(shown, effectiveCollapsed), [shown, effectiveCollapsed]);
 
   // The one tab stop, held by occurrence key (§ 6.13). When the row holding
   // it stops being shown it moves to the first shown row, adjusted during
@@ -383,18 +386,18 @@ export function useUnitsSectionState({
   );
 
   // § 6.9, decided by emptyStateFor.
-  const emptyState = emptyStateFor(keyed, filter, filterText, shown);
+  const emptyState = emptyStateFor(keyed, effectiveFilter, effectiveQuery, shown);
 
   return {
     keyed,
     counts,
     barDrawn,
-    filter,
+    filter: effectiveFilter,
     changeFilter,
-    announcement,
+    announcement: effectiveAnnouncement,
     shown,
     emptyState,
-    collapsed,
+    collapsed: effectiveCollapsed,
     toggleGroup,
     tabStop,
     rowRef,
