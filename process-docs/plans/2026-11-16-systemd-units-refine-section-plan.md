@@ -1,10 +1,14 @@
 # Systemd units refine section: implementation plan
 
-> ## Not started (2026-11-16)
+> ## Executed (2026-11-17)
 >
-> **Checkbox state below is not evidence** — the boxes were never ticked.
+> **Checkbox state below is not evidence** — most boxes were never ticked.
 > Classified from the tree:
-> - No implementation commit yet. The branch `feat/systemd-units-refine-section` does not exist.
+> - Merged to `main` on 2026-11-17: `feat/systemd-units-refine-section`
+>   fast-forwarded into it at `bef94948`.
+> - `crates/web/ui/src/components/unitOutcome.ts` and
+>   `crates/web/ui/e2e/systemd-units.spec.ts` are in the tree.
+> - The spec is in `process-docs/specs/implemented/`.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking. Every task is test-first: write the failing test the task names, run it and see it fail for the stated reason, then implement.
 
@@ -14,7 +18,7 @@
 
 **Tech stack:** React 18, TypeScript, PatternFly 6 (`ToggleGroup`, `Badge`, `Label`, `EmptyState`, all already dependencies), Vitest with Testing Library, Playwright with `@axe-core/playwright`; Rust for the label, its test and the fixture tests (insta). No new dependency.
 
-**Spec:** `process-docs/specs/proposed/2026-11-16-systemd-units-refine-section.md` at `a47faa1d`, as amended on 2026-11-16 after the mid-way gate of Task 4.5 (§ 2 items 9 to 13). The spec is the contract. Section numbers (§), string numbers (§ 7, "string N", 1 to 26) and test ids (U1 to U37, P1 to P8) are the spec's. The spec read source at `e6591669`; between that commit and `a47faa1d` no file under `crates/web` or `crates/pipeline/src/section_group.rs` changed, so its file references hold. The symbol name is the identifier; a line number is a convenience.
+**Spec:** `process-docs/specs/implemented/2026-11-16-systemd-units-refine-section.md` at `a47faa1d`, as amended on 2026-11-16 after the mid-way gate of Task 4.5 (§ 2 items 9 to 13). The spec is the contract. Section numbers (§), string numbers (§ 7, "string N", 1 to 26) and test ids (U1 to U37, P1 to P8) are the spec's. The spec read source at `e6591669`; between that commit and `a47faa1d` no file under `crates/web` or `crates/pipeline/src/section_group.rs` changed, so its file references hold. The symbol name is the identifier; a line number is a convenience.
 
 **Branch and worktree:** all work happens on `feat/systemd-units-refine-section`, cut from `main` by Task 1.1 in its own git worktree beside the main checkout (`../inspectah-systemd-units-refine-section`). This plan stays on `main`; the branch never edits it. The branch merges to `main` once, at the end, by the project owner (Task 9.3).
 
@@ -654,7 +658,7 @@ Spec: § 10.1 (setup), § 10.3, § 10.2's e2e label paragraph. Tests: P1 to P8. 
 
 ### Task 9.3: Merge (project owner)
 
-- [ ] With review gate B passed, the project owner merges `feat/systemd-units-refine-section` to `main` and removes the worktree.
+- [x] With review gate B passed, the project owner merges `feat/systemd-units-refine-section` to `main` and removes the worktree.
 - [ ] The merge's follow-up, on `main`: move the spec from `process-docs/specs/proposed/` to `process-docs/specs/implemented/` (updating its Metadata status and the links that name its path), replace this plan's status marker with the executed form and evidence, and update its row in `process-docs/plans/README.md`, per that file's rule. Update the backlog items named above, outside this repository.
 
 ---

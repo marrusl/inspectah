@@ -34,7 +34,7 @@ Implementers ran the work and never came back to tick them.
 | [2026-08-15-usr-walk-presentation-plan.md](2026-08-15-usr-walk-presentation-plan.md) | **Superseded — do not execute** | 2026-11-04 |
 | [2026-10-27-refine-ui-fixup-phase-0.md](2026-10-27-refine-ui-fixup-phase-0.md) | Executed (phase 0 only) | 2026-11-04 |
 | [2026-11-13-unified-systemd-units-plan.md](2026-11-13-unified-systemd-units-plan.md) | Executed (phases 1 to 5) | 2026-11-16 |
-| [2026-11-16-systemd-units-refine-section-plan.md](2026-11-16-systemd-units-refine-section-plan.md) | Not started | 2026-11-16 |
+| [2026-11-16-systemd-units-refine-section-plan.md](2026-11-16-systemd-units-refine-section-plan.md) | Executed | 2026-11-17 |
 | [ansible-role-inspectah-plan.md](ansible-role-inspectah-plan.md) | Executed (in the role repo) | 2026-11-04 |
 | [crates-reorganization.md](crates-reorganization.md) | Executed | 2026-11-04 |
 

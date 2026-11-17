@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-16 |
-| Status | Approved (Mark Russell, 2026-11-16). Amended 2026-11-16 after the mid-way implementation gate (§ 2 items 9 to 13). Built, and merged to `main` on 2026-11-17 at `bef94948`; this file states what `main` does. Scope and fourteen design choices are decided (§ 2). The rest is the spec author's design; each such call is listed in § 14. No question is open (§ 13). |
+| Status | Implemented. Landed on main on 2026-11-17 from `feat/systemd-units-refine-section`, at `bef94948`; this file states what `main` does. Approved (Mark Russell, 2026-11-16). Amended 2026-11-16 after the mid-way implementation gate (§ 2 items 9 to 13). Scope and fourteen design choices are decided (§ 2). The rest is the spec author's design; each such call is listed in § 14. No question is open (§ 13). |
 | Plan | `process-docs/plans/2026-11-16-systemd-units-refine-section-plan.md` |
 | Scope | Single-host refine only: the "Systemd units" section (today "Services"), and five defects in the refine UI around it. Grouping and presentation. No field added to the view response, no snapshot or schema change, no change to what the Containerfile renders. |
 | Parent | Phase 6 of `process-docs/specs/implemented/2026-11-13-unified-systemd-units.md`, which recommends a section design in § 11.2 and leaves it to a frontend design pass. This spec is that pass's result. |

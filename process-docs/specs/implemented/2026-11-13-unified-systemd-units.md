@@ -3581,7 +3581,7 @@ The design pass owns grouping and presentation only. Every field and
 string key the frontend reads is migrated before it starts (§ 9.1).
 
 The design pass's result is
-`process-docs/specs/proposed/2026-11-16-systemd-units-refine-section.md`.
+`process-docs/specs/implemented/2026-11-16-systemd-units-refine-section.md`.
 
 ### 11.3 Orphan-shadow synthesis is retired
 
