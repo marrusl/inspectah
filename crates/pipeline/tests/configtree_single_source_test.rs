@@ -7,13 +7,10 @@
 //! against a second writer for the paths they cover: a kernel-side path
 //! rule that materializes a `config.files` entry the decision excluded.
 //!
-//! **Scope.** That is a claim about these paths, not about the function.
-//! `write_config_tree` does still hold another ungated `/etc` writer: the
-//! `systemd_timers` loop writes `etc/systemd/system/<name>.timer` and
-//! `.service` for every `source == "local"` timer with no disposition
-//! check at all. These fixtures carry no `scheduled_tasks` section and
-//! would not catch it. Backlog:
-//! `inspectah-configtree-writes-local-timers-with-no-decision`.
+//! **Scope.** The kernel/boot claim above is about those paths, not about
+//! the function. Local timer files under `etc/systemd/system/` are covered
+//! separately, by `a_local_timers_file_is_written_from_its_own_row_only`
+//! in this file: their only writer is their own `config.files` row.
 //!
 //! Their teeth were measured by mutation, not by a red run — reintroducing a
 //! path-rule writer inside the kernel/boot block turns
