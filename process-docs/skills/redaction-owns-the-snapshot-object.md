@@ -181,6 +181,19 @@ directory. Getting it wrong in the narrow direction costs false findings;
 in the wide direction it leaks, so widen only with a table row in
 `test_non_hash_markers_exempt_only_where_they_are_comment_syntax`.
 
+## A `key = value` pattern stays on its line
+
+In `redaction/patterns.rs`, whitespace around a delimiter is `[ \t]*`,
+never `\s*`. `\s` matches a newline, so after an empty value the match
+runs on into the next line: the stock RHEL `rhsm.conf` has
+`proxy_password =` followed by a blank line and a comment, and the
+generic pattern took the key, the blank line and the comment's `#`,
+leaving a line with no `=` that `configparser` rejects. With `[ \t]*`
+the value class (`\S+`) must start on the key's own line, so an empty
+value does not match at all. A test that only checks the secret is gone
+passes over this; check that the redacted file still parses
+(`test_redact_leaves_stock_rhsm_conf_parseable`).
+
 ## Content parsed after redaction is unknown when the pass changed it
 
 Some content is parsed *after* `redact()` has run: the sysctl

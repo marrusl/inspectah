@@ -68,9 +68,13 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // Uses (?:^|\b|_) instead of bare \b so compound forms like
         // iscsi_password= or db_password= are caught (underscore is a word
         // character, so \b alone misses mid-identifier boundaries).
+        // Whitespace around the delimiter is `[ \t]*`, never `\s*`: `\s`
+        // matches a newline, so after an empty value (`proxy_password =` in
+        // the stock rhsm.conf) the match ran on into the next line and the
+        // token replaced it. `\S+` then requires a value on the same line.
         SecretPattern {
             regex: Regex::new(
-                r"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)\s*[=:]\s*\S+",
+                r"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)[ \t]*[=:][ \t]*\S+",
             )
             .unwrap(),
             finding_kind: FindingKind::Password,
@@ -131,7 +135,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         },
         // WireGuard private key (base64, 44 chars including trailing =)
         SecretPattern {
-            regex: Regex::new(r"(?i)(?:PrivateKey|PreSharedKey)\s*=\s*[A-Za-z0-9+/]{43}=").unwrap(),
+            regex: Regex::new(r"(?i)(?:PrivateKey|PreSharedKey)[ \t]*=[ \t]*[A-Za-z0-9+/]{43}=").unwrap(),
             finding_kind: FindingKind::WireguardKey,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
@@ -140,7 +144,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         },
         // WiFi PSK in wpa_supplicant or NetworkManager config
         SecretPattern {
-            regex: Regex::new(r"(?i)(?:psk|wpa-psk|wifi\.psk)\s*=\s*\S+").unwrap(),
+            regex: Regex::new(r"(?i)(?:psk|wpa-psk|wifi\.psk)[ \t]*=[ \t]*\S+").unwrap(),
             finding_kind: FindingKind::WifiPsk,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
@@ -362,6 +366,50 @@ mod tests {
             !pat.regex.is_match("cache_key = abc"),
             "cache_key should not match (not security-related)"
         );
+    }
+
+    /// Index of each line-oriented `key = value` pattern in `PATTERNS`.
+    const GENERIC_PASSWORD: usize = 3;
+    const WIREGUARD_KEY: usize = 9;
+    const WIFI_PSK: usize = 10;
+
+    #[test]
+    fn test_key_value_patterns_never_cross_a_newline() {
+        let wg_key = "A".repeat(43) + "=";
+        let cases: Vec<(usize, String)> = vec![
+            // Empty value followed by a comment: the rhsm.conf case.
+            (
+                GENERIC_PASSWORD,
+                "proxy_password =\n\n# host/domain suffix".into(),
+            ),
+            (GENERIC_PASSWORD, "proxy_password =   \nno_proxy =".into()),
+            (GENERIC_PASSWORD, "token:\n  - item".into()),
+            // Newline between key and delimiter.
+            (GENERIC_PASSWORD, "password\n= hunter2".into()),
+            (WIFI_PSK, "psk=\n[ipv4]".into()),
+            (WIFI_PSK, "psk\n=secret".into()),
+            (WIREGUARD_KEY, format!("PrivateKey =\n{wg_key}")),
+            (WIREGUARD_KEY, format!("PrivateKey\n= {wg_key}")),
+        ];
+        for (idx, text) in &cases {
+            assert!(
+                !PATTERNS[*idx].regex.is_match(text),
+                "pattern {idx} must not match across a newline or on an empty value: {text:?}"
+            );
+        }
+        // The same keys with a value on the same line still match.
+        let same_line: Vec<(usize, String)> = vec![
+            (GENERIC_PASSWORD, "proxy_password = hunter2".into()),
+            (GENERIC_PASSWORD, "proxy_password =\thunter2".into()),
+            (WIFI_PSK, "psk=secret".into()),
+            (WIREGUARD_KEY, format!("PrivateKey = {wg_key}")),
+        ];
+        for (idx, text) in &same_line {
+            assert!(
+                PATTERNS[*idx].regex.is_match(text),
+                "pattern {idx} must match a value on the same line: {text:?}"
+            );
+        }
     }
 
     #[test]

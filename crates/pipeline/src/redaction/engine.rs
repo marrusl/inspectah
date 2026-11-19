@@ -1936,6 +1936,109 @@ mod tests {
         );
     }
 
+    /// The `[server]` section of the `rhsm.conf` that subscription-manager
+    /// ships on RHEL: the proxy credential keys are present with empty values.
+    const STOCK_RHSM_CONF: &str = "\
+# Red Hat Subscription Manager Configuration File:
+
+# Unified Entitlement Platform Configuration
+[server]
+# Server hostname:
+hostname = subscription.rhsm.redhat.com
+
+# Server prefix:
+prefix = /subscription
+
+# Server port:
+port = 443
+
+# Set to 1 to disable certificate validation:
+insecure = 0
+
+# an http proxy server to use
+proxy_hostname =
+
+# The scheme to use for the proxy when updating repo definitions, if needed
+# e.g. http or https
+proxy_scheme = http
+
+# port for http proxy server
+proxy_port =
+
+# user name for authenticating to an http proxy, if needed
+proxy_user =
+
+# password for basic http proxy auth, if needed
+proxy_password =
+
+# host/domain suffix blocklist for proxy, if needed
+no_proxy =
+
+[rhsm]
+# Content base URL:
+baseurl = https://cdn.redhat.com
+";
+
+    /// Keys of every `key = value` line in INI text, in order. Panics on a
+    /// line Python's `configparser` would reject: anything that is not
+    /// blank, a `#`/`;` comment, a `[section]` header or a line with a
+    /// non-empty key before `=`.
+    fn ini_keys(text: &str) -> Vec<String> {
+        let mut keys = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') || t.starts_with(';') {
+                continue;
+            }
+            if t.starts_with('[') && t.ends_with(']') {
+                continue;
+            }
+            let key = t
+                .split_once('=')
+                .map(|(k, _)| k.trim())
+                .filter(|k| !k.is_empty())
+                .unwrap_or_else(|| panic!("line {} is not valid INI: {line:?}", n + 1));
+            keys.push(key.to_string());
+        }
+        keys
+    }
+
+    #[test]
+    fn test_redact_leaves_stock_rhsm_conf_parseable() {
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/rhsm/rhsm.conf".to_string(),
+                content: STOCK_RHSM_CONF.to_string(),
+                ..Default::default()
+            }],
+        });
+        redact(&mut snap, &RedactOptions::default());
+        let out = &snap.config.as_ref().unwrap().files[0].content;
+        assert_eq!(
+            ini_keys(out),
+            ini_keys(STOCK_RHSM_CONF),
+            "redaction must keep every key line of rhsm.conf"
+        );
+        assert_eq!(
+            out, STOCK_RHSM_CONF,
+            "an empty credential value is not a secret: nothing to redact"
+        );
+    }
+
+    #[test]
+    fn test_credential_value_redaction_stays_on_its_line() {
+        // A set value is still redacted, and only on its own line: the
+        // blank line and comment after it survive.
+        let content = "proxy_password = hunter2\n\n# host/domain suffix blocklist\nno_proxy =\n";
+        let out = redact_string(content);
+        assert!(!out.contains("hunter2"), "set value must be redacted");
+        assert!(
+            out.ends_with("\n\n# host/domain suffix blocklist\nno_proxy =\n"),
+            "lines after the match must be untouched, got {out:?}"
+        );
+    }
+
     #[test]
     fn test_redact_scans_repo_file_content() {
         use inspectah_core::types::rpm::{RepoFile, RpmSection};
