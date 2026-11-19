@@ -2486,7 +2486,7 @@ baseurl = https://cdn.redhat.com
         "@h",
         "zqi",
     ];
-    const PROP_SEPARATORS: &[&str] = &["", " ", "&", "@", ":", "\n"];
+    const PROP_SEPARATORS: &[&str] = &["", " ", "&", "@", ":", "\n", "\"", "'", ">", "<"];
     const PROP_MARKER: &str = "zq";
     /// A bridge needs a few pieces in a particular order. At the default
     /// 256 cases this test missed the merge panic in most runs; at this
@@ -4773,6 +4773,109 @@ baseurl = https://cdn.redhat.com
                 "{input:?}"
             );
         }
+    }
+
+    /// A JDBC URL inside quotes or XML element text is replaced up to its
+    /// closing quote or tag, which stays, so the file around it still
+    /// parses. An unquoted URL is replaced up to the next whitespace, so a
+    /// following assignment stays too.
+    #[test]
+    fn test_a_jdbc_url_keeps_the_quotes_and_tags_around_it() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            (
+                "<url>jdbc:mysql://u:zsecret@db/app</url>",
+                "<url>jdbc:mysql://REDACTED_JDBCPASSWORD_1</url>",
+                &["zsecret"],
+            ),
+            (
+                r#"<db url="jdbc:mysql://u:zsecret@db/app" pool="4"/>"#,
+                r#"<db url="jdbc:mysql://REDACTED_JDBCPASSWORD_1" pool="4"/>"#,
+                &["zsecret"],
+            ),
+            (
+                r#"url="jdbc:mysql://u:zsecret@db/app" pool=4"#,
+                r#"url="jdbc:mysql://REDACTED_JDBCPASSWORD_1" pool=4"#,
+                &["zsecret"],
+            ),
+            (
+                "url='jdbc:mysql://u:zsecret@db/app' pool=4",
+                "url='jdbc:mysql://REDACTED_JDBCPASSWORD_1' pool=4",
+                &["zsecret"],
+            ),
+            (
+                "url=jdbc:mysql://u:zsecret@db/app pool=4",
+                "url=jdbc:mysql://REDACTED_JDBCPASSWORD_1 pool=4",
+                &["zsecret"],
+            ),
+            // Inside quotes or element text a space does not end the URL.
+            (
+                r#"url="jdbc:mysql://app:ztwo zsecret@db" pool=4"#,
+                r#"url="jdbc:mysql://REDACTED_JDBCPASSWORD_1" pool=4"#,
+                &["ztwo", "zsecret"],
+            ),
+            (
+                "<url>jdbc:mysql://db/app?password=ztwo zsecret</url>",
+                "<url>jdbc:mysql://REDACTED_JDBCPASSWORD_1</url>",
+                &["ztwo", "zsecret"],
+            ),
+            // A quoted URL with no credential is left alone, and the `@` in
+            // a later attribute does not pull it in.
+            (
+                r#"<db url="jdbc:mysql://db/app" owner="ops@example.com"/>"#,
+                r#"<db url="jdbc:mysql://db/app" owner="ops@example.com"/>"#,
+                &[],
+            ),
+            // The cost of keeping a whitespace-holding authority password
+            // covered: an unquoted URL reaches the line's last marker, so a
+            // later `password=` takes the assignment between with it.
+            (
+                "url=jdbc:mysql://u:zsecret@db/app pool=4 password=x tail=5",
+                "url=jdbc:mysql://REDACTED_JDBCPASSWORD_1 tail=5",
+                &["zsecret"],
+            ),
+        ];
+        for (input, want, secrets) in cases {
+            let once = redact_string(input).into_owned();
+            assert_eq!(&once, want, "{input:?}");
+            assert_eq!(
+                redact_string(&once),
+                once.as_str(),
+                "second pass of {input:?}"
+            );
+
+            let mut snap = config_snapshot("/etc/app/app.conf", input);
+            redact(&mut snap, &RedactOptions::default());
+            assert_eq!(&snap.config.as_ref().unwrap().files[0].content, want);
+            let written = serde_json::to_string(&snap).unwrap();
+            for secret in *secrets {
+                assert!(!written.contains(secret), "{secret:?} from {input:?}");
+            }
+            let findings = scan_content(input, "/etc/app.conf");
+            assert_eq!(
+                findings.len(),
+                usize::from(!secrets.is_empty()),
+                "{input:?}"
+            );
+        }
+    }
+
+    /// The redacted text of a quoted JDBC URL still parses as the format
+    /// it came in, with the token as the value and its neighbours intact.
+    #[test]
+    fn test_a_redacted_quoted_jdbc_url_still_parses() {
+        const TOKEN_URL: &str = "jdbc:mysql://REDACTED_JDBCPASSWORD_1";
+
+        let toml_in = "[db]\nurl = \"jdbc:mysql://u:zsecret@db/app\"\n\
+                       literal = 'jdbc:mysql://u:zsecret@db/app'\npool = 4\n";
+        let toml_out: toml::Value = toml::from_str(&redact_string(toml_in)).unwrap();
+        assert_eq!(toml_out["db"]["url"].as_str(), Some(TOKEN_URL));
+        assert_eq!(toml_out["db"]["literal"].as_str(), Some(TOKEN_URL));
+        assert_eq!(toml_out["db"]["pool"].as_integer(), Some(4));
+
+        let json_in = r#"{"url": "jdbc:mysql://u:p\"zsecret@db/app", "pool": 4}"#;
+        let json_out: serde_json::Value = serde_json::from_str(&redact_string(json_in)).unwrap();
+        assert_eq!(json_out["url"].as_str(), Some(TOKEN_URL));
+        assert_eq!(json_out["pool"].as_i64(), Some(4));
     }
 
     /// The generic match wins on `password=postgres://u:p w@db` (its whole

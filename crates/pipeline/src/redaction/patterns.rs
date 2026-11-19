@@ -24,6 +24,18 @@ pub(crate) struct SecretPattern {
 /// only when the whole match is the secret (a PEM block, a hash).
 pub(crate) const SECRET_GROUP: &str = "secret";
 
+/// One of the JDBC URL patterns in [`PATTERNS`]. They differ only in what
+/// opens the URL, which decides where it ends.
+fn jdbc_pattern(regex: &str) -> SecretPattern {
+    SecretPattern {
+        regex: Regex::new(regex).unwrap(),
+        finding_kind: FindingKind::JdbcPassword,
+        detection_method: DetectionMethod::Pattern,
+        confidence: Confidence::High,
+        remediation: "Use connection pooling with externalized credentials",
+    }
+}
+
 /// All compiled patterns. `LazyLock` ensures they compile exactly once.
 pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
     vec![
@@ -100,22 +112,52 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         },
         // JDBC URL carrying a credential: an `@` (a user and password in
         // the authority) or a non-empty `password=` anywhere after the
-        // scheme. The secret is everything after `scheme://` through the
-        // last such marker on the line and on to the next whitespace, so the
-        // authority, host, database and query string go together. Naming
-        // only part of it left the rest to parsing a URL whose password can
-        // hold `?`, `@` or nothing before the `:` (`jdbc:mysql://:pw@db`,
+        // scheme. Only the scheme stays: the secret is the rest of the URL,
+        // authority, host, database and query string together. Naming only
+        // part of it left the rest to parsing a URL whose password can hold
+        // `?`, `@` or nothing before the `:` (`jdbc:mysql://:pw@db`,
         // `jdbc:mysql://u:pa?ss@db`), and each part it got wrong shipped.
-        // Only the scheme stays. No class here admits a line break, so a URL
-        // with no credential cannot pair with an `@` on a later line; spaces
-        // and tabs are allowed, as a host's malformed URL can hold them.
-        SecretPattern {
-            regex: Regex::new(r"jdbc:[a-z]+://(?P<secret>[^\r\n]*(?:@|password=[^&\s])\S*)").unwrap(),
-            finding_kind: FindingKind::JdbcPassword,
-            detection_method: DetectionMethod::Pattern,
-            confidence: Confidence::High,
-            remediation: "Use connection pooling with externalized credentials",
-        },
+        //
+        // Where the URL ends depends on what comes right before `jdbc:`, so
+        // there is one pattern per opener, and they exclude one another, so
+        // only one can claim a URL:
+        //
+        // - after `"` or `'`, the quoted scalar, up to its closing quote or
+        //   the end of the line; a backslash escape, or `''` inside single
+        //   quotes, does not close it. After `>`, XML element text, up to
+        //   the next `<`. The marker must sit inside, and the closing quote
+        //   or tag stays as written. Running on to the next whitespace
+        //   instead took `"` and `</url>` with the URL.
+        // - after anything else, the line's last marker and on to the next
+        //   whitespace. This reach crosses whitespace on purpose, for an
+        //   authority password holding a space (`jdbc:mysql://u:two
+        //   words@db`), so it also takes a later `password=` or `@` on the
+        //   line and what lies between: `url=jdbc:mysql://u:pw@db pool=4
+        //   password=x` loses `pool=4`. Stopping before ` key=` would keep
+        //   it and ship the end of a password such as `p@ss w=x`, and the
+        //   two cannot be told apart. This pattern recognises its case by
+        //   consuming the character before `jdbc:`, so its match starts
+        //   there: a URL right after a comment marker (`#jdbc:`) is
+        //   redacted rather than exempt.
+        //
+        // A quoted URL with no marker inside its quotes matches none of
+        // them, so a `password="..."` after it is the generic pattern's and
+        // does not pull the URL's closing quote into this one. No class
+        // here admits a line break, so a URL with no credential cannot pair
+        // with an `@` on a later line; spaces and tabs are allowed, as a
+        // host's malformed URL can hold them.
+        jdbc_pattern(
+            r#"(?:(?m:^)|[^"'>\r\n])jdbc:[a-z]+://(?P<secret>[^\r\n]*(?:@|password=[^&\s])\S*)"#,
+        ),
+        jdbc_pattern(
+            r#""jdbc:[a-z]+://(?P<secret>(?:[^"\\\r\n]|\\[^\r\n])*(?:@|password=[^&\s"])(?:[^"\\\r\n]|\\[^\r\n])*)"#,
+        ),
+        jdbc_pattern(
+            r#"'jdbc:[a-z]+://(?P<secret>(?:[^'\r\n]|'')*(?:@|password=[^&\s'])(?:[^'\r\n]|'')*)"#,
+        ),
+        jdbc_pattern(
+            r#">jdbc:[a-z]+://(?P<secret>[^<\r\n]*(?:@|password=[^&\s<])[^<\r\n]*)"#,
+        ),
         // PostgreSQL connection URI with password. Only the password is
         // replaced; the scheme, user and `@host` stay. The user and
         // password classes exclude CR and LF: with `[^:]+` / `[^@]+` a
@@ -381,11 +423,14 @@ mod tests {
     /// Index of each line-oriented `key = value` pattern in `PATTERNS`.
     const GENERIC_PASSWORD: usize = 3;
     const JDBC: usize = 5;
-    const POSTGRES: usize = 6;
-    const MONGODB: usize = 7;
-    const REDIS: usize = 8;
-    const WIREGUARD_KEY: usize = 9;
-    const WIFI_PSK: usize = 10;
+    const JDBC_DOUBLE_QUOTED: usize = 6;
+    const JDBC_SINGLE_QUOTED: usize = 7;
+    const JDBC_XML_TEXT: usize = 8;
+    const POSTGRES: usize = 9;
+    const MONGODB: usize = 10;
+    const REDIS: usize = 11;
+    const WIREGUARD_KEY: usize = 12;
+    const WIFI_PSK: usize = 13;
 
     #[test]
     fn test_key_value_patterns_never_cross_a_newline() {
@@ -453,6 +498,18 @@ mod tests {
                         "primary=jdbc:mysql://db/one{nl}secondary=jdbc:mysql://db/two?password=hunter2"
                     ),
                 ),
+                (
+                    JDBC_DOUBLE_QUOTED,
+                    format!("url=\"jdbc:mysql://db/app{nl}contact: ops@example.com\""),
+                ),
+                (
+                    JDBC_SINGLE_QUOTED,
+                    format!("url='jdbc:mysql://db/app{nl}contact: ops@example.com'"),
+                ),
+                (
+                    JDBC_XML_TEXT,
+                    format!("<url>jdbc:mysql://db/app{nl}contact: ops@example.com</url>"),
+                ),
             ];
             for (idx, text) in &cases {
                 for m in PATTERNS[*idx].regex.find_iter(text) {
@@ -506,6 +563,80 @@ mod tests {
                 .captures(text)
                 .unwrap_or_else(|| panic!("pattern {idx} must match {text:?}"));
             assert_eq!(&caps[SECRET_GROUP], secret, "pattern {idx} on {text:?}");
+        }
+    }
+
+    /// What opens a JDBC URL decides where it ends, and exactly one of the
+    /// four JDBC patterns claims it. A quoted URL or XML text leaves its
+    /// closing quote or tag outside the secret, and the unquoted pattern
+    /// never takes a URL that an opener's pattern declined.
+    #[test]
+    fn test_one_jdbc_pattern_claims_a_url_by_what_opens_it() {
+        let jdbc = [JDBC, JDBC_DOUBLE_QUOTED, JDBC_SINGLE_QUOTED, JDBC_XML_TEXT];
+        let cases: &[(&str, Option<(usize, &str)>)] = &[
+            (
+                "url=jdbc:mysql://u:pw@db/app pool=4",
+                Some((JDBC, "u:pw@db/app")),
+            ),
+            ("jdbc:mysql://u:pw@db/app", Some((JDBC, "u:pw@db/app"))),
+            ("a\njdbc:mysql://u:pw@db/app", Some((JDBC, "u:pw@db/app"))),
+            (
+                r#"url="jdbc:mysql://u:pw@db/app" pool=4"#,
+                Some((JDBC_DOUBLE_QUOTED, "u:pw@db/app")),
+            ),
+            (
+                r#"url="jdbc:mysql://app:two words@db" pool=4"#,
+                Some((JDBC_DOUBLE_QUOTED, "app:two words@db")),
+            ),
+            // A backslash escape does not close a double-quoted value.
+            (
+                r#"{"url": "jdbc:mysql://u:p\"w@db/app"}"#,
+                Some((JDBC_DOUBLE_QUOTED, r#"u:p\"w@db/app"#)),
+            ),
+            (
+                "url='jdbc:mysql://u:pw@db/app' pool=4",
+                Some((JDBC_SINGLE_QUOTED, "u:pw@db/app")),
+            ),
+            // Nor does YAML's doubled quote close a single-quoted one.
+            (
+                "url: 'jdbc:mysql://u:it''s@db/app'",
+                Some((JDBC_SINGLE_QUOTED, "u:it''s@db/app")),
+            ),
+            (
+                "<url>jdbc:mysql://u:pw@db/app</url>",
+                Some((JDBC_XML_TEXT, "u:pw@db/app")),
+            ),
+            (
+                "<url>jdbc:mysql://db/app?password=two words</url>",
+                Some((JDBC_XML_TEXT, "db/app?password=two words")),
+            ),
+            // An unterminated quote runs to the end of the line.
+            (
+                r#"url="jdbc:mysql://u:pw@db/app pool=4"#,
+                Some((JDBC_DOUBLE_QUOTED, "u:pw@db/app pool=4")),
+            ),
+            // No marker inside the quotes or the element: no JDBC pattern
+            // matches, so none reaches the `@` after the closing quote.
+            (
+                r#"<db url="jdbc:mysql://db/app" owner="ops@example.com"/>"#,
+                None,
+            ),
+            (
+                "<url>jdbc:mysql://db/app</url><owner>ops@example.com</owner>",
+                None,
+            ),
+        ];
+        for (input, want) in cases {
+            let got: Vec<(usize, &str)> = jdbc
+                .iter()
+                .flat_map(|&idx| {
+                    PATTERNS[idx]
+                        .regex
+                        .captures_iter(input)
+                        .map(move |c| (idx, c.name(SECRET_GROUP).unwrap().as_str()))
+                })
+                .collect();
+            assert_eq!(got, want.iter().copied().collect::<Vec<_>>(), "{input:?}");
         }
     }
 

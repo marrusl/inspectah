@@ -235,10 +235,26 @@ Absorbing is the backstop, not the design. A pattern whose context can
 hold other credentials makes its secret cover them. The JDBC pattern
 fires on a URL that carries a credential anywhere, an `@` or a non-empty
 `password=` after `scheme://`, and its secret is everything after
-`scheme://` through the last such marker on the line and on to the next
-whitespace: authority, host, database and query string together. So a
+`scheme://`: authority, host, database and query string together. So a
 second `password=`, a `token=`, a nested URI and an authority password
-are all inside it. Splitting the URL into an authority pattern and a
+are all inside it.
+
+Where that secret ends is decided by the character before `jdbc:`, one
+pattern per case, and they exclude one another so only one claims a URL.
+After `"` or `'` it is the quoted scalar, to the closing quote (a
+backslash escape or YAML's `''` does not close it); after `>` it is XML
+element text, to the next `<`; the marker must sit inside, and the
+closing quote or tag stays. Running on to the next whitespace took them
+with the URL, and the file no longer parsed
+(`test_a_jdbc_url_keeps_the_quotes_and_tags_around_it`). After anything
+else the secret runs through the line's last marker and on to the next
+whitespace. That reach is what covers an authority password with a space
+in it, and its cost is that a later `password=` or `@` on the same line
+takes the assignments in between: stopping before ` key=` would ship the
+end of a password such as `p@ss w=x`, which reads the same as
+`p@db w=x@host`. The unquoted pattern recognises its case by consuming
+the character before `jdbc:`, so its match starts there, and a URL right
+after a comment marker (`#jdbc:`) is no longer exempt as a comment line. Splitting the URL into an authority pattern and a
 query pattern was tried and shipped what the split got wrong: a password
 with no user before it (`jdbc:mysql://:pw@db`) and the part of one before
 a `?` (`jdbc:mysql://u:pa?ss@db`). The cost is the host and database
