@@ -87,6 +87,17 @@ oci-archive`, and podman releases older than 5.8.2.
 `baseline_local_image_without_digest_returns_digest_failed` pins the
 empty-digest contract for the local branch with a mock.
 
+## Errors after the image is in hand
+
+A `podman create`, `start` or `exec` failure returns
+`ExtractionError::ContainerFailed`, which carries the `ContainerStep` and the
+`ImageSource`. `scan.rs` formats every extraction error through
+`format_baseline_error` in `pull_failure.rs`, and only `PullFailed` goes
+through the pull classifier. Do not route another variant through
+`format_pull_error`: on the local branch nothing was pulled, and its registry
+advice sends an operator on a disconnected host after a cause that cannot
+apply. All extraction failures still exit 3.
+
 ## Test consequence
 
 `MockExecutor` returns exit 127 for an unregistered command (see

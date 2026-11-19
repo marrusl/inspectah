@@ -538,14 +538,13 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
                             }
                             extracted
                         }
-                        Err(_e) => {
+                        Err(e) => {
                             if ring_pos > 0 {
                                 pull_progress::viewport_cleanup(viewport_lines);
                             }
                             let stderr_combined = collected_lines.join("\n");
-                            let kind = super::pull_failure::classify_pull_failure(&stderr_combined);
-                            let msg = super::pull_failure::format_pull_error(
-                                &kind,
+                            let msg = super::pull_failure::format_baseline_error(
+                                &e,
                                 norm.as_str(),
                                 &stderr_combined,
                             );
@@ -567,11 +566,10 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
                     };
                     match result {
                         Ok(extracted) => extracted,
-                        Err(_e) => {
+                        Err(e) => {
                             let stderr_combined = collected_lines.join("\n");
-                            let kind = super::pull_failure::classify_pull_failure(&stderr_combined);
-                            let msg = super::pull_failure::format_pull_error(
-                                &kind,
+                            let msg = super::pull_failure::format_baseline_error(
+                                &e,
                                 norm.as_str(),
                                 &stderr_combined,
                             );
@@ -590,11 +588,10 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
                 };
                 match result {
                     Ok(extracted) => extracted,
-                    Err(_e) => {
+                    Err(e) => {
                         let stderr_combined = collected_lines.join("\n");
-                        let kind = super::pull_failure::classify_pull_failure(&stderr_combined);
-                        let msg = super::pull_failure::format_pull_error(
-                            &kind,
+                        let msg = super::pull_failure::format_baseline_error(
+                            &e,
                             norm.as_str(),
                             &stderr_combined,
                         );

@@ -4,7 +4,7 @@
 //! including happy path, command ordering, cleanup behavior,
 //! digest capture, and mixed-arch keying.
 
-use inspectah_collect::baseline::{ExtractionError, ImageSource, extract_baseline};
+use inspectah_collect::baseline::{ContainerStep, ExtractionError, ImageSource, extract_baseline};
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_core::baseline::NormalizedImageRef;
 use inspectah_core::traits::executor::ExecResult;
@@ -224,8 +224,11 @@ fn baseline_create_fails_no_rm_attempted() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ExtractionError::CreateFailed(_) => {}
-        other => panic!("expected CreateFailed, got {:?}", other),
+        ExtractionError::ContainerFailed {
+            step: ContainerStep::Create,
+            ..
+        } => {}
+        other => panic!("expected ContainerFailed at Create, got {:?}", other),
     }
 
     let log = mock.command_log();
@@ -255,8 +258,11 @@ fn baseline_start_fails_rm_runs() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ExtractionError::StartFailed(_) => {}
-        other => panic!("expected StartFailed, got {:?}", other),
+        ExtractionError::ContainerFailed {
+            step: ContainerStep::Start,
+            ..
+        } => {}
+        other => panic!("expected ContainerFailed at Start, got {:?}", other),
     }
 
     let log = mock.command_log();
@@ -287,8 +293,11 @@ fn baseline_exec_fails_rm_runs() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        ExtractionError::ExecFailed(_) => {}
-        other => panic!("expected ExecFailed, got {:?}", other),
+        ExtractionError::ContainerFailed {
+            step: ContainerStep::Exec,
+            ..
+        } => {}
+        other => panic!("expected ContainerFailed at Exec, got {:?}", other),
     }
 
     let log = mock.command_log();
@@ -539,4 +548,53 @@ fn baseline_local_image_without_digest_returns_digest_failed() {
         "both digest lookups should run before giving up, got: {:?}",
         log
     );
+}
+
+/// Each container step that can fail after the image is in hand, with the
+/// happy-mock prefix that runs it.
+const CONTAINER_STEPS: &[(ContainerStep, &str)] = &[
+    (
+        ContainerStep::Create,
+        "nsenter -t 1 -m -u -i -n -- podman create --name inspectah-baseline-",
+    ),
+    (
+        ContainerStep::Start,
+        "nsenter -t 1 -m -u -i -n -- podman start inspectah-baseline-",
+    ),
+    (
+        ContainerStep::Exec,
+        "nsenter -t 1 -m -u -i -n -- podman exec inspectah-baseline-",
+    ),
+];
+
+#[test]
+fn baseline_container_step_failure_names_the_step_and_image_source() {
+    for (exists, expected_source) in [
+        (ok_result(), ImageSource::Local),
+        (absent_result(), ImageSource::Pulled),
+    ] {
+        for (step, prefix) in CONTAINER_STEPS {
+            let mock = happy_mock()
+                .with_command(&format!("{IMAGE_EXISTS_KEY} {TEST_IMAGE}"), exists.clone())
+                .with_command_prefix(prefix, fail_result("Error: step broke"));
+            let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
+
+            match extract_baseline(&mock, &normalized, &mut |_| {}) {
+                Err(ExtractionError::ContainerFailed {
+                    step: got_step,
+                    image_ref,
+                    image_source,
+                    reason,
+                }) => {
+                    assert_eq!(got_step, *step);
+                    assert_eq!(image_source, expected_source, "step {step:?}");
+                    assert_eq!(image_ref, TEST_IMAGE);
+                    assert_eq!(reason, "Error: step broke");
+                }
+                other => panic!(
+                    "{step:?} failing with {expected_source:?} image: expected ContainerFailed, got {other:?}"
+                ),
+            }
+        }
+    }
 }

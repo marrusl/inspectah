@@ -7,9 +7,13 @@
 //!
 //! The classifier and formatter are called from `scan.rs` on pull failure
 //! (exit 3) and resolution failure (exit 1). The sanitizer is also used
-//! by `pull_progress` callbacks.
+//! by `pull_progress` callbacks. [`format_baseline_error`] is the entry point
+//! for any baseline extraction failure: it sends only a real pull failure
+//! through the pull classifier.
 
 use std::fmt;
+
+use inspectah_collect::baseline::{ExtractionError, ImageSource};
 
 /// Classified pull failure categories, ordered by diagnostic priority.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,6 +299,77 @@ pub fn format_pull_error(kind: &PullFailureKind, image_ref: &str, raw_stderr: &s
     msg
 }
 
+/// Format the message for any baseline extraction failure (exit 3).
+///
+/// Only [`ExtractionError::PullFailed`] goes through the pull classifier,
+/// with `pull_stderr` holding the pull output the progress callback
+/// collected. A container step that fails on an image already in local
+/// storage says nothing was pulled and gives no registry advice: on a
+/// disconnected host that advice points at a cause that cannot apply.
+pub fn format_baseline_error(err: &ExtractionError, image_ref: &str, pull_stderr: &str) -> String {
+    let (step, image_source, reason) = match err {
+        ExtractionError::PullFailed { .. } => {
+            let kind = classify_pull_failure(pull_stderr);
+            return format_pull_error(&kind, image_ref, pull_stderr);
+        }
+        ExtractionError::ContainerFailed {
+            step,
+            image_source,
+            reason,
+            ..
+        } => (step, image_source, reason),
+        other => {
+            return format!(
+                "Error: cannot extract packages from the baseline image\n\n  \
+                 Image:  {image_ref}\n  \
+                 Cause:  {other}\n"
+            );
+        }
+    };
+
+    let mut msg = String::new();
+    match image_source {
+        ImageSource::Local => {
+            msg.push_str("Error: cannot use the local baseline image\n\n");
+            msg.push_str(&format!("  Image:  {image_ref}\n"));
+            msg.push_str(&format!(
+                "  Cause:  {step} failed on the image already in local storage; nothing was pulled\n\n"
+            ));
+        }
+        ImageSource::Pulled => {
+            msg.push_str("Error: cannot extract packages from the baseline image\n\n");
+            msg.push_str(&format!("  Image:  {image_ref}\n"));
+            msg.push_str(&format!(
+                "  Cause:  {step} failed after the image was pulled\n\n"
+            ));
+        }
+    }
+
+    let excerpt = truncate_stderr(&sanitize_stderr(reason), 3);
+    if !excerpt.is_empty() {
+        msg.push_str("  podman reported:\n");
+        for line in excerpt.lines() {
+            msg.push_str(&format!("    {line}\n"));
+        }
+        msg.push('\n');
+    }
+
+    match image_source {
+        ImageSource::Local => {
+            msg.push_str("  The stored image may be damaged or incomplete. Check it with:\n");
+            msg.push_str(&format!("    podman image inspect {image_ref}\n"));
+            msg.push_str("  To replace it, remove it and load or pull it again:\n");
+            msg.push_str(&format!("    podman rmi {image_ref}\n"));
+        }
+        ImageSource::Pulled => {
+            msg.push_str("  Try the extraction by hand to diagnose:\n");
+            msg.push_str(&format!("    podman run --rm {image_ref} rpm -qa\n"));
+        }
+    }
+
+    msg
+}
+
 /// Format an error message for when the target image cannot be resolved.
 ///
 /// Guides the user to provide `--base-image` explicitly with example references.
@@ -313,6 +388,7 @@ pub fn format_resolution_error(cause: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_collect::baseline::{ContainerStep, ImageSource};
 
     // ── Classifier tests ──────────────────────────────────────────
 
@@ -640,5 +716,85 @@ mod tests {
             registry_from_ref("myhost:5000/image:tag"),
             Some("myhost:5000")
         );
+    }
+
+    // ── Baseline extraction errors ────────────────────────────────
+
+    const IMG: &str = "quay.io/centos-bootc/centos-bootc:stream10";
+
+    fn container_failed(step: ContainerStep, image_source: ImageSource) -> ExtractionError {
+        ExtractionError::ContainerFailed {
+            step,
+            image_ref: IMG.to_string(),
+            image_source,
+            reason: "Error: OCI runtime error: crun: exec failed".to_string(),
+        }
+    }
+
+    #[test]
+    fn local_image_step_failure_is_not_reported_as_a_pull() {
+        for (step, command) in [
+            (ContainerStep::Create, "podman create"),
+            (ContainerStep::Start, "podman start"),
+            (ContainerStep::Exec, "podman exec"),
+        ] {
+            let err = container_failed(step, ImageSource::Local);
+            let msg = format_baseline_error(&err, IMG, "");
+            assert!(
+                msg.starts_with("Error: cannot use the local baseline image\n"),
+                "{step:?}: {msg}"
+            );
+            assert!(
+                msg.contains(&format!("{command} failed")),
+                "{step:?}: {msg}"
+            );
+            assert!(msg.contains("nothing was pulled"), "{step:?}: {msg}");
+            assert!(msg.contains("OCI runtime error"), "{step:?}: {msg}");
+            for pull_hint in ["cannot pull", "registry", "Disconnected?"] {
+                assert!(
+                    !msg.contains(pull_hint),
+                    "{step:?}: local-image failure must not say {pull_hint:?}: {msg}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pulled_image_step_failure_names_the_step_not_the_pull() {
+        let err = container_failed(ContainerStep::Start, ImageSource::Pulled);
+        let msg = format_baseline_error(&err, IMG, "");
+        assert!(
+            msg.starts_with("Error: cannot extract packages from the baseline image\n"),
+            "{msg}"
+        );
+        assert!(msg.contains("podman start failed"), "{msg}");
+        assert!(!msg.contains("cannot pull"), "{msg}");
+    }
+
+    #[test]
+    fn real_pull_failure_still_reports_as_a_pull() {
+        let stderr = "Error: initializing source docker://x: pinging container registry \
+                      registry.redhat.io: dial tcp: lookup registry.redhat.io: no such host";
+        let err = ExtractionError::PullFailed {
+            image_ref: IMG.to_string(),
+            reason: stderr.to_string(),
+        };
+        let msg = format_baseline_error(&err, IMG, stderr);
+        assert_eq!(
+            msg,
+            format_pull_error(&classify_pull_failure(stderr), IMG, stderr)
+        );
+        assert!(
+            msg.starts_with("Error: cannot pull baseline image\n"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn other_extraction_errors_are_not_reported_as_a_pull() {
+        let err = ExtractionError::PodmanNotFound;
+        let msg = format_baseline_error(&err, IMG, "");
+        assert!(!msg.contains("cannot pull"), "{msg}");
+        assert!(msg.contains("podman is not installed"), "{msg}");
     }
 }

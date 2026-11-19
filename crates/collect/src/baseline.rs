@@ -16,14 +16,39 @@ pub enum ExtractionError {
     PodmanNotFound,
     #[error("failed to pull image {image_ref}: {reason}")]
     PullFailed { image_ref: String, reason: String },
-    #[error("failed to create baseline container: {0}")]
-    CreateFailed(String),
-    #[error("failed to start baseline container: {0}")]
-    StartFailed(String),
-    #[error("failed to extract packages: {0}")]
-    ExecFailed(String),
+    /// A container step failed after the image was in hand. `image_source`
+    /// says whether a pull ran, so a failure on a stored image is not
+    /// reported as a registry problem.
+    #[error("{step} failed on baseline image {image_ref} ({}): {reason}", image_source.describe())]
+    ContainerFailed {
+        step: ContainerStep,
+        image_ref: String,
+        image_source: ImageSource,
+        reason: String,
+    },
     #[error("failed to capture image digest: {0}")]
     DigestFailed(String),
+}
+
+/// The container step of baseline extraction, after the image is in hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerStep {
+    /// `podman create` of the baseline container.
+    Create,
+    /// `podman start` of the baseline container.
+    Start,
+    /// `podman exec` of `rpm -qa` in the baseline container.
+    Exec,
+}
+
+impl std::fmt::Display for ContainerStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Create => "podman create",
+            Self::Start => "podman start",
+            Self::Exec => "podman exec",
+        })
+    }
 }
 
 /// Where the baseline image came from on this scan.
@@ -36,6 +61,16 @@ pub enum ImageSource {
     Local,
     /// Pulled from the registry during this scan.
     Pulled,
+}
+
+impl ImageSource {
+    /// Short phrase for error messages: where the image came from.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Local => "already in local storage, not pulled",
+            Self::Pulled => "pulled during this scan",
+        }
+    }
 }
 
 /// A successful baseline extraction: the snapshot data plus where the image
@@ -162,8 +197,11 @@ pub fn extract_baseline(
         ],
     );
     if !create_result.success() {
-        return Err(ExtractionError::CreateFailed(
-            create_result.stderr.trim().to_string(),
+        return Err(container_failed(
+            ContainerStep::Create,
+            image_ref,
+            source,
+            &create_result,
         ));
     }
     // Container exists now — arm the guard.
@@ -173,8 +211,11 @@ pub fn extract_baseline(
     let start_result = run_nsenter(executor, &["podman", "start", &ctr_name]);
     if !start_result.success() {
         // Guard will rm on drop.
-        return Err(ExtractionError::StartFailed(
-            start_result.stderr.trim().to_string(),
+        return Err(container_failed(
+            ContainerStep::Start,
+            image_ref,
+            source,
+            &start_result,
         ));
     }
 
@@ -193,8 +234,11 @@ pub fn extract_baseline(
     );
     if !exec_result.success() {
         // Guard will rm on drop.
-        return Err(ExtractionError::ExecFailed(
-            exec_result.stderr.trim().to_string(),
+        return Err(container_failed(
+            ContainerStep::Exec,
+            image_ref,
+            source,
+            &exec_result,
         ));
     }
 
@@ -220,6 +264,21 @@ pub fn extract_baseline(
         },
         source,
     })
+}
+
+/// Build the error for a failed container step.
+fn container_failed(
+    step: ContainerStep,
+    image_ref: &str,
+    image_source: ImageSource,
+    result: &ExecResult,
+) -> ExtractionError {
+    ExtractionError::ContainerFailed {
+        step,
+        image_ref: image_ref.to_string(),
+        image_source,
+        reason: result.stderr.trim().to_string(),
+    }
 }
 
 /// Run a command through the nsenter prefix.
