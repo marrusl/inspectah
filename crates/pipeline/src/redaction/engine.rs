@@ -325,8 +325,10 @@ fn collect_eligible_matches(
             // No filter skips a value spelled like a redaction token. The
             // spelling is not provenance: `password=REDACTED_COMPANY_2026`
             // can be the host's real password. `redact()` runs once per
-            // snapshot; a second pass over its output reports the tokens
-            // again and replaces each with a token, usually itself.
+            // snapshot; a second pass over its output reports most tokens
+            // again and replaces each with a token, usually itself, and can
+            // change the text around one (see
+            // `test_a_second_pass_is_not_guaranteed_to_return_the_same_text`).
 
             // Filter 2: skip Password matches whose value is a known
             // NSS/PAM false-positive token
@@ -2555,7 +2557,9 @@ baseurl = https://cdn.redhat.com
     /// spelling does not show the engine wrote it. A second pass over
     /// redacted output therefore reports the tokens again. When it meets
     /// the same matches in the same order, as here, it rewrites each token
-    /// to itself and the text does not change.
+    /// to itself and the text does not change. That is this input's
+    /// property, not a guarantee; the test after this one shows inputs
+    /// where it does not hold.
     #[test]
     fn test_second_pass_rewrites_each_token_to_itself() {
         let input = "DB_PASSWORD=x\npsk=abc\npostgres://u:pw@db/app\n\
@@ -2578,6 +2582,43 @@ baseurl = https://cdn.redhat.com
         let first = snap.config.clone();
         redact(&mut snap, &RedactOptions::default());
         assert_eq!(snap.config, first, "a second snapshot pass changes no text");
+    }
+
+    /// No production path runs a second pass, and a second pass is not
+    /// guaranteed to return the same text. A token sits in a context the
+    /// host's value did not have, and patterns can match it differently
+    /// there: the generic `\S+` value runs from the token on through an
+    /// `@db` the first pass left, and a JDBC URL reduced to its scheme has
+    /// no `@` or `password=` left to be found. A second pass can change the
+    /// text around a token and can report fewer findings; it never brings
+    /// a secret back, as it only replaces.
+    #[test]
+    fn test_a_second_pass_is_not_guaranteed_to_return_the_same_text() {
+        // (input, first pass, second pass, findings on the first pass's output)
+        let cases = [
+            (
+                "password=postgres://u:p w@db",
+                "password=REDACTED_PASSWORD_1@db",
+                "password=REDACTED_PASSWORD_1",
+                1,
+            ),
+            (
+                "jdbc:mysql://u:pw@db/app?password=x",
+                "jdbc:mysql://REDACTED_JDBCPASSWORD_1",
+                "jdbc:mysql://REDACTED_JDBCPASSWORD_1",
+                0,
+            ),
+        ];
+        for (input, first, second, refound) in cases {
+            let once = redact_string(input).into_owned();
+            assert_eq!(once, first, "{input:?}");
+            assert_eq!(redact_string(&once), second, "{input:?}");
+            assert_eq!(
+                scan_content(&once, "/etc/app.conf").len(),
+                refound,
+                "{once:?}"
+            );
+        }
     }
 
     #[test]

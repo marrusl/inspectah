@@ -262,13 +262,18 @@ password a host can have, and that filter shipped it with no finding
 under `FullyRedacted`. Nothing runs a second pass in production either:
 `redact()` runs once, in `scan` and in `run_pipeline`, and `refine` and
 `aggregate` load the redacted snapshot without calling it. So a second
-pass reports the tokens again and replaces each with a token. It meets
-the same matches in the same order and rewrites each token to itself,
-except where it matches fewer secrets of one kind: a replaced JDBC query
-string has no `password=` left, so a JDBC authority token after it is
-renumbered. To make a second pass quiet, carry provenance (the
-snapshot's redaction state, or the tokens a run issued) rather than
-reading it off the text.
+pass reports most tokens again and replaces each with a token, usually
+itself, but it is **not** guaranteed to return the same text. A token
+sits in a context the host's value did not have, and a pattern can match
+it differently there: `password=postgres://u:p w@db` becomes
+`password=REDACTED_PASSWORD_1@db`, and a second pass lets the generic
+`\S+` value run on through `@db` and gives `password=REDACTED_PASSWORD_1`.
+A pass can also find fewer secrets than the one before: a JDBC URL
+reduced to its scheme has nothing left to match. What a repeat pass
+cannot do is bring a secret back, since it only replaces
+(`test_a_second_pass_is_not_guaranteed_to_return_the_same_text`). To
+make a second pass quiet, carry provenance (the snapshot's redaction
+state, or the tokens a run issued) rather than reading it off the text.
 
 Two consumers depended on the key going with the value, and a third
 change of this kind must check them:
