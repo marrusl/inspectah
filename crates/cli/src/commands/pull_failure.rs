@@ -118,14 +118,7 @@ pub fn sanitize_stderr(s: &str) -> String {
     }));
 
     // Userinfo in URLs: `https://user:pass@host` -> `https://[REDACTED]@host`.
-    // The authority runs to the first `/` or whitespace; everything before
-    // its last `@` is the userinfo.
-    spans.extend(value_spans(s, "://", |tail| {
-        let authority_len = tail
-            .find(|c: char| c == '/' || c.is_whitespace())
-            .unwrap_or(tail.len());
-        (0, tail[..authority_len].rfind('@').unwrap_or(0))
-    }));
+    spans.extend(value_spans(s, "://", |tail| (0, userinfo_len(tail))));
 
     // Query strings: `https://host/blob?token=x` -> `https://host/blob?[REDACTED]`.
     // Go's HTTP errors keep a URL's query, which can carry a download
@@ -159,6 +152,18 @@ pub fn sanitize_stderr(s: &str) -> String {
     }));
 
     replace_spans(s, spans)
+}
+
+/// Length of the userinfo at the start of `tail`, the text after a URL's
+/// `://`: everything before the last `@` of the authority, or 0 when the
+/// authority has none. The authority runs to the first `/` or line break.
+/// A space or tab does not end it: a password written with one is still a
+/// password, and stopping there shipped all of `https://u:two words@host`.
+/// The cost is that an `@` later on the same line, with no `/` before it,
+/// takes the text up to it.
+fn userinfo_len(tail: &str) -> usize {
+    let authority_len = tail.find(['/', '\n', '\r']).unwrap_or(tail.len());
+    tail[..authority_len].rfind('@').unwrap_or(0)
 }
 
 /// Characters that end a URL in stderr because they enclose it.
@@ -996,7 +1001,8 @@ pub(crate) mod tests {
 
     /// Query strings and token response bodies that a failed pull prints,
     /// the first four with each credential twice, then token values
-    /// holding JSON escapes and credentials nested inside another form:
+    /// holding JSON escapes, credentials nested inside another form, and
+    /// URL userinfo with a space or tab in it:
     /// the scrubber, the Unknown pull excerpt and a container step's
     /// excerpt all drop every copy.
     pub(crate) const QUERY_AND_BODY_CREDENTIALS: &[(&str, &str, &[&str])] = &[
@@ -1057,6 +1063,16 @@ pub(crate) mod tests {
             r#"body: {"token":"Authorization: Basic dXNlcjpwYXNz"}"#,
             &["dXNlcjpwYXNz"],
         ),
+        (
+            "URL password with a space",
+            "Get https://u:two zwords@registry.example/x: denied",
+            &["u:two", "zwords"],
+        ),
+        (
+            "URL password with a tab",
+            "Get https://u:tab\tzsecret@registry.example/x: denied",
+            &["u:tab", "zsecret"],
+        ),
     ];
 
     #[test]
@@ -1100,6 +1116,20 @@ pub(crate) mod tests {
         assert_eq!(
             sanitize_stderr(r#"{"token":"Authorization: Basic dXNlcjpwYXNz"}"#),
             r#"{"token":"[REDACTED]"#
+        );
+        // URL userinfo runs to the `@` across spaces and tabs, never
+        // across a line break.
+        assert_eq!(
+            sanitize_stderr("https://u:two words@registry.example/x"),
+            "https://[REDACTED]@registry.example/x"
+        );
+        assert_eq!(
+            sanitize_stderr("https://u:tab\tsecret@registry.example/x"),
+            "https://[REDACTED]@registry.example/x"
+        );
+        assert_eq!(
+            sanitize_stderr("Get https://registry.example\nops@corp.example/x"),
+            "Get https://registry.example\nops@corp.example/x"
         );
         // The word "token" in prose is not a JSON field.
         assert_eq!(
