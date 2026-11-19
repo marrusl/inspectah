@@ -622,7 +622,7 @@ Compose files get two passes. The compose scrubber rewrites credentials by its o
   keeps its scheme, user and host, and only the password is replaced. A
   JDBC URL that carries a credential keeps only its scheme:
   `jdbc:mysql://REDACTED_JDBCPASSWORD_1`. A credential value is replaced
-  up to the next whitespace, and a JSON string with its quotes, so a
+  up to the next whitespace, and a quoted value or JSON string whole with its quotes, so a
   quoted, JSON or XML value can lose its closing quote, brace or tag. See [Known limitations](known-limitations.html).
 - **Inspector hints**: inspectors emit `RedactionHint` values to flag
   content they know is sensitive (e.g., sudoers env vars matching secret

@@ -2523,6 +2523,8 @@ baseurl = https://cdn.redhat.com
         "password=\"zqj\"",
         "secret='zqk'",
         "\"token\": \"zql\"",
+        "password: \"zqm zqn\"",
+        "secret='zqo zqp'",
         "@h",
         "zqi",
     ];
@@ -5212,6 +5214,40 @@ baseurl = https://cdn.redhat.com
                 r#"{"password": REDACTED_PASSWORD_1"#,
                 &[r#""files""#],
             ),
+            // A quoted value under an unquoted key: `\S+` stopped at the
+            // first space inside the quotes.
+            (
+                r#"password: "two words""#,
+                "password: REDACTED_PASSWORD_1",
+                &["two w", "o words"],
+            ),
+            (
+                "password='two words'",
+                "password=REDACTED_PASSWORD_1",
+                &["two w", "o words"],
+            ),
+            (
+                r#"secret = "a b c""#,
+                "secret = REDACTED_PASSWORD_1",
+                &["a b", "b c"],
+            ),
+            (
+                r#"DB_PASSWORD="x y" tail=1"#,
+                "DB_PASSWORD=REDACTED_PASSWORD_1 tail=1",
+                &["x y", "y\""],
+            ),
+            (
+                r#"password: "files""#,
+                "password: REDACTED_PASSWORD_1",
+                &[r#""files""#],
+            ),
+            // Unterminated: to the end of the line.
+            ("password: \"a b", "password: REDACTED_PASSWORD_1", &["a b"]),
+            (
+                "password: \"a\tb c\"",
+                "password: REDACTED_PASSWORD_1",
+                &["a\tb", "b c"],
+            ),
         ];
         for (input, want, secrets) in cases {
             let once = redact_string(input).into_owned();
@@ -5279,6 +5315,15 @@ baseurl = https://cdn.redhat.com
             (
                 r#"{"password": "zsecret", "pool": 4}"#,
                 r#"{"password": REDACTED_PASSWORD_1 "pool": 4}"#,
+            ),
+            // A quoted value under an unquoted key, YAML and shell
+            (
+                r#"password: "zsecret two""#,
+                "password: REDACTED_PASSWORD_1",
+            ),
+            (
+                "DB_PASSWORD='zsecret two' export=1",
+                "DB_PASSWORD=REDACTED_PASSWORD_1 export=1",
             ),
         ];
         for (input, want) in cases {

@@ -395,7 +395,10 @@ less than `\S+` would from the opening quote. A value that loses its
 quotes is not reread as `files` and exempted, and the JSON stops parsing,
 which costs syntax, not a secret. The cost to findings: a one-line PEM
 key in a JSON string now takes the longer match and a password token
-rather than a private-key one.
+rather than a private-key one. The second such pattern, last after it,
+takes a quoted value under an unquoted key (`password: "two words"`)
+whole, where `\S+` stopped at the space. Like the JSON one, it can only
+lengthen a span that `\S+` starts at the same quote.
 
 `SecretPattern::accept` exists for a condition the regex cannot state
 because the `regex` crate has no lookahead: the AWS pattern's check that

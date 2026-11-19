@@ -56,7 +56,9 @@ redaction replaced a secret. Tomcat's `<Resource password="p"/>` becomes
 `url="jdbc:mysql://u:pw@db/app" pool=4` becomes
 `url="jdbc:mysql://REDACTED_JDBCPASSWORD_1 pool=4`. A JSON string under a
 credential key is replaced with its quotes, so `{"password": "p"}` becomes
-`{"password": REDACTED_PASSWORD_1`.
+`{"password": REDACTED_PASSWORD_1`, and so is a quoted value under any
+other credential key: `password: "p q"` becomes
+`password: REDACTED_PASSWORD_1`.
 
 **Cause.** Redaction does not yet read a file by its format. A value is
 replaced up to the next whitespace, and a JDBC URL that carries a

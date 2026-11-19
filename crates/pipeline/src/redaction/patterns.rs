@@ -217,6 +217,33 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             remediation:
                 "Use environment variables or a secrets manager instead of inline passwords",
         },
+        // A double- or single-quoted value under an unquoted credential key,
+        // as in YAML's `password: "two words"` or a shell's
+        // `DB_PASSWORD='x y'`. The generic pattern's `\S+` stops at the
+        // first space inside the quotes and shipped the rest. Same keys and
+        // delimiter as the generic pattern; the secret is the whole value,
+        // quotes included, through the next whitespace after its closing
+        // quote, so it never takes less than `\S+` from the opening quote
+        // and overlapping secrets absorb one another. A backslash keeps the
+        // next character inside double quotes, and `''` stays inside single
+        // quotes, as YAML writes a quote there. An unterminated value runs
+        // to the end of the line; an empty `""` or `''` is left alone, and
+        // `""hunter2` is left to the generic pattern. Keeping the quotes in
+        // the secret means a quoted `files` is not read as the NSS keyword.
+        // This pattern is last, so it changes no other pattern's index or
+        // its tie order.
+        SecretPattern {
+            regex: Regex::new(
+                r#"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)[ \t]*[=:][ \t]*(?P<secret>"(?:[^"\\\r\n]|\\[^\r\n]?)+"?\S*|'(?:[^'\r\n]|'')+'?\S*)"#,
+            )
+            .unwrap(),
+            finding_kind: FindingKind::Password,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Confidence::High,
+            accept: None,
+            remediation:
+                "Use environment variables or a secrets manager instead of inline passwords",
+        },
     ]
 });
 
@@ -443,6 +470,7 @@ mod tests {
     const WIREGUARD_KEY: usize = 9;
     const WIFI_PSK: usize = 10;
     const JSON_PASSWORD: usize = 11;
+    const QUOTED_PASSWORD: usize = 12;
 
     #[test]
     fn test_key_value_patterns_never_cross_a_newline() {
@@ -461,6 +489,8 @@ mod tests {
             (WIFI_PSK, "psk\n=secret".into()),
             (JSON_PASSWORD, "\"password\": \"\nnext\"".into()),
             (JSON_PASSWORD, "\"password\":\n\"hunter2\"".into()),
+            (QUOTED_PASSWORD, "password: \"\nnext\"".into()),
+            (QUOTED_PASSWORD, "password:\n'hunter2'".into()),
             (WIREGUARD_KEY, format!("PrivateKey =\n{wg_key}")),
             (WIREGUARD_KEY, format!("PrivateKey\n= {wg_key}")),
         ];
@@ -476,6 +506,7 @@ mod tests {
             (GENERIC_PASSWORD, "proxy_password =\thunter2".into()),
             (WIFI_PSK, "psk=secret".into()),
             (JSON_PASSWORD, "\"password\": \"hunter2".into()),
+            (QUOTED_PASSWORD, "password: \"hunter2".into()),
             (WIREGUARD_KEY, format!("PrivateKey = {wg_key}")),
         ];
         for (idx, text) in &same_line {
@@ -589,6 +620,39 @@ mod tests {
         ];
         for (input, want) in cases {
             let got = PATTERNS[JSON_PASSWORD]
+                .regex
+                .captures(input)
+                .map(|c| c.name(SECRET_GROUP).unwrap().as_str());
+            assert_eq!(got, *want, "{input:?}");
+        }
+    }
+
+    /// The quoted pattern's secret is the whole quoted value and on to the
+    /// next whitespace, so it never takes less than `\S+` from the opening
+    /// quote. An empty value, an unquoted one and a quoted key are not
+    /// taken.
+    #[test]
+    fn test_a_quoted_credential_value_takes_its_quotes() {
+        let cases: &[(&str, Option<&str>)] = &[
+            (r#"password: "two words""#, Some(r#""two words""#)),
+            ("password='two words'", Some("'two words'")),
+            (r#"secret = "a b c""#, Some(r#""a b c""#)),
+            (r#"DB_PASSWORD="x y" tail=1"#, Some(r#""x y""#)),
+            (r#"token: "a\" b""#, Some(r#""a\" b""#)),
+            ("password: 'it''s a b'", Some("'it''s a b'")),
+            (r#"password="ab"cd ef"#, Some(r#""ab"cd"#)),
+            ("password: \"a\tb\"", Some("\"a\tb\"")),
+            // Unterminated: to the end of the line.
+            ("password: \"a b\nnext", Some("\"a b")),
+            (r#"password: """#, None),
+            ("password: ''", None),
+            (r#"DB_PASSWORD=""hunter2"#, None),
+            ("password: hunter2", None),
+            (r#""password": "x""#, None),
+            (r#"password_hint: "x""#, None),
+        ];
+        for (input, want) in cases {
+            let got = PATTERNS[QUOTED_PASSWORD]
                 .regex
                 .captures(input)
                 .map(|c| c.name(SECRET_GROUP).unwrap().as_str());
