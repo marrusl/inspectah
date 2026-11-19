@@ -221,6 +221,16 @@ where a pattern's value class overreaches (the generic `\S+` value can
 run past the end of a URI password into its `@host`); the cost of
 dropping is a credential in the export.
 
+A match can overlap two kept secrets that do not overlap each other, and
+so bridge them: in `db_password=postgres://u:a token=b@host` the URI
+password `a token=b` touches both generic values. Everything connected
+becomes one span, from the smallest start to the largest end, and its
+text is read from the content, never stitched from the pieces. Stitching
+assumes each pair overlaps; merging the two kept spans before the bridge
+broke that and panicked on every redaction path
+(`test_a_bridge_between_kept_secrets_merges_all_of_them`,
+`prop_redaction_covers_every_captured_secret_without_panicking`).
+
 Absorbing is the backstop, not the design. A pattern whose context can
 hold other credentials makes its secret cover them: the JDBC pattern's
 secret is the whole query string after `?`, so a second `password=`, a

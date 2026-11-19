@@ -28,3 +28,7 @@ tempfile.workspace = true
 # Parses the blueprint TOML fragment in tests, to prove a snapshot value
 # cannot add a key. Already in the workspace through inspectah-core.
 toml = "0.8"
+# Joins pattern fragments at random to check that redaction never panics
+# and covers every captured secret. Already in the workspace through
+# inspectah-core.
+proptest = "1"

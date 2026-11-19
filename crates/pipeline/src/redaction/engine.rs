@@ -358,7 +358,8 @@ fn collect_eligible_matches(
 
 /// Resolve overlapping matches from different patterns so no two replaced
 /// spans overlap, without losing any secret byte. Input must be the combined
-/// matches from ALL patterns for a single content blob.
+/// matches from ALL patterns for a single content blob, and `content` must be
+/// that blob: a merged span's text is read from it.
 ///
 /// Two matches conflict when their secret spans (what gets replaced; see
 /// [`EligibleMatch`]) overlap. The conflict goes to the larger whole match,
@@ -371,7 +372,13 @@ fn collect_eligible_matches(
 /// secret. A match whose secret overlaps nothing is kept as it is, even when
 /// it sits inside another pattern's whole match. Output is ordered by secret
 /// start.
-fn dedup_overlapping_matches(matches: &mut Vec<(usize, EligibleMatch)>) {
+///
+/// A candidate can overlap several kept spans that do not overlap each
+/// other: it bridges them. All of them become one span, from the smallest
+/// start to the largest end, and its text is taken from `content` rather
+/// than stitched from the pieces. Stitching assumed each pair overlapped,
+/// and a bridge merged after the spans it joined broke that and panicked.
+fn dedup_overlapping_matches(content: &str, matches: &mut Vec<(usize, EligibleMatch)>) {
     let mut by_priority: Vec<(usize, EligibleMatch)> = std::mem::take(matches);
     // Stable sort: equal keys keep input (pattern) order.
     by_priority.sort_by(|a, b| {
@@ -393,30 +400,29 @@ fn dedup_overlapping_matches(matches: &mut Vec<(usize, EligibleMatch)>) {
             matches.push((pat_idx, candidate));
             continue;
         };
+        // Every span here overlaps the candidate, so together they cover
+        // one contiguous range.
+        let mut start = candidate.start;
+        let mut end = candidate.end;
+        let mut claim = candidate.claim;
+        for &i in &overlapping {
+            let kept = &matches[i].1;
+            start = start.min(kept.start);
+            end = end.max(kept.end);
+            claim = claim.start.min(kept.claim.start)..claim.end.max(kept.claim.end);
+        }
         // Highest index first, so each removal leaves `winner` in place.
         for &i in others.iter().rev() {
-            let (_, absorbed) = matches.remove(i);
-            absorb(&mut matches[winner].1, absorbed);
+            matches.remove(i);
         }
-        absorb(&mut matches[winner].1, candidate);
+        // The winner keeps its line number and pattern.
+        let kept = &mut matches[winner].1;
+        kept.start = start;
+        kept.end = end;
+        kept.claim = claim;
+        kept.text = content[start..end].to_string();
     }
     matches.sort_by_key(|(_, em)| em.start);
-}
-
-/// Grow `into` to cover `other`'s secret too. The two secrets overlap, so
-/// the union is one span, and its text is `into`'s extended by whatever of
-/// `other` lies on either side. `into` keeps its line number and pattern.
-fn absorb(into: &mut EligibleMatch, other: EligibleMatch) {
-    if other.start < into.start {
-        into.text
-            .insert_str(0, &other.text[..into.start - other.start]);
-        into.start = other.start;
-    }
-    if other.end > into.end {
-        into.text.push_str(&other.text[into.end - other.start..]);
-        into.end = other.end;
-    }
-    into.claim = into.claim.start.min(other.claim.start)..into.claim.end.max(other.claim.end);
 }
 
 /// Build the replacement for a matched secret: the token for its text.
@@ -455,7 +461,7 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
             all_matches.push((idx, em));
         }
     }
-    dedup_overlapping_matches(&mut all_matches);
+    dedup_overlapping_matches(&result, &mut all_matches);
     if all_matches.is_empty() {
         // Regex matched but all hits were filtered (comment lines, false
         // positives, etc.) — no actual redaction needed.
@@ -605,7 +611,7 @@ pub fn scan_content(content: &str, path: &str) -> Vec<RedactionFinding> {
             all_matches.push((idx, em));
         }
     }
-    dedup_overlapping_matches(&mut all_matches);
+    dedup_overlapping_matches(content, &mut all_matches);
     for (pat_idx, em) in all_matches {
         let pat = &PATTERNS[pat_idx];
         findings.push(RedactionFinding {
@@ -735,7 +741,7 @@ fn scan_and_redact_field(
             all_matches.push((idx, em));
         }
     }
-    dedup_overlapping_matches(&mut all_matches);
+    dedup_overlapping_matches(content, &mut all_matches);
     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
     for (pat_idx, em) in all_matches {
         let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
@@ -895,7 +901,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&mut all_matches);
+                dedup_overlapping_matches(&content, &mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
@@ -920,7 +926,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&mut all_matches);
+                dedup_overlapping_matches(&content, &mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
@@ -943,7 +949,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&mut all_matches);
+                dedup_overlapping_matches(&content, &mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
@@ -972,7 +978,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&mut all_matches);
+                dedup_overlapping_matches(&content, &mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
@@ -1042,7 +1048,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                     all_matches.push((idx, em));
                 }
             }
-            dedup_overlapping_matches(&mut all_matches);
+            dedup_overlapping_matches(&content, &mut all_matches);
             all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
             for (pat_idx, em) in all_matches {
                 let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
@@ -1183,7 +1189,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&mut all_matches);
+                dedup_overlapping_matches(&content, &mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
@@ -1207,7 +1213,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                             all_matches.push((idx, em));
                         }
                     }
-                    dedup_overlapping_matches(&mut all_matches);
+                    dedup_overlapping_matches(&content, &mut all_matches);
                     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                     for (pat_idx, em) in all_matches {
                         let kind_label =
@@ -1248,7 +1254,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&mut all_matches);
+                dedup_overlapping_matches(&content, &mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
@@ -1276,7 +1282,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&mut all_matches);
+                dedup_overlapping_matches(&content, &mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
@@ -1322,7 +1328,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&mut all_matches);
+                dedup_overlapping_matches(&content, &mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
@@ -1435,7 +1441,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                             all_matches.push((idx, em));
                         }
                     }
-                    dedup_overlapping_matches(&mut all_matches);
+                    dedup_overlapping_matches(&content, &mut all_matches);
                     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                     for (pat_idx, em) in all_matches {
                         let kind_label =
@@ -2235,12 +2241,205 @@ baseurl = https://cdn.redhat.com
             (2, em(6..12, 7..11)),
             (3, em(18..20, 19..20)),
         ];
-        dedup_overlapping_matches(&mut matches);
+        dedup_overlapping_matches(content, &mut matches);
         let got: Vec<(usize, Range<usize>, &str)> = matches
             .iter()
             .map(|(p, em)| (*p, em.start..em.end, em.text.as_str()))
             .collect();
         assert_eq!(got, vec![(0, 7..18, "789abcdefgh"), (3, 19..20, "j")]);
+    }
+
+    /// A candidate can overlap two kept secrets that do not overlap each
+    /// other. All of them become one span, whichever side the winner is on
+    /// and however long the chain of bridges is, and the span's text is
+    /// the content under it.
+    #[test]
+    fn test_a_bridge_between_kept_secrets_merges_all_of_them() {
+        let content = "0123456789abcdefghijklmnopqrstuvwxyz";
+        let em = |claim: Range<usize>, secret: Range<usize>| EligibleMatch {
+            claim,
+            start: secret.start,
+            end: secret.end,
+            text: content[secret].to_string(),
+            line_num: 1,
+        };
+        type Case = (
+            &'static str,
+            Vec<(usize, EligibleMatch)>,
+            Vec<(usize, Range<usize>)>,
+        );
+        let cases: Vec<Case> = vec![
+            (
+                "winner left of the bridge",
+                vec![
+                    (0, em(0..30, 2..5)),
+                    (1, em(0..20, 8..11)),
+                    (2, em(0..10, 4..9)),
+                ],
+                vec![(0, 2..11)],
+            ),
+            (
+                "winner right of the bridge",
+                vec![
+                    (0, em(0..30, 8..11)),
+                    (1, em(0..20, 2..5)),
+                    (2, em(0..10, 4..9)),
+                ],
+                vec![(0, 2..11)],
+            ),
+            (
+                "one bridge across three kept secrets",
+                vec![
+                    (0, em(0..30, 12..15)),
+                    (1, em(0..25, 2..5)),
+                    (2, em(0..20, 7..10)),
+                    (3, em(0..5, 4..13)),
+                    (4, em(0..3, 20..22)),
+                ],
+                vec![(0, 2..15), (4, 20..22)],
+            ),
+            (
+                "a chain of bridges across four kept secrets",
+                vec![
+                    (0, em(0..35, 15..18)),
+                    (1, em(0..34, 0..3)),
+                    (2, em(0..33, 5..8)),
+                    (3, em(0..32, 10..13)),
+                    (4, em(0..12, 2..6)),
+                    (5, em(0..11, 12..16)),
+                    (6, em(0..10, 7..11)),
+                ],
+                vec![(0, 0..18)],
+            ),
+        ];
+        for (name, mut matches, want) in cases {
+            dedup_overlapping_matches(content, &mut matches);
+            let got: Vec<(usize, Range<usize>)> = matches
+                .iter()
+                .map(|(p, em)| (*p, em.start..em.end))
+                .collect();
+            assert_eq!(got, want, "{name}");
+            for (_, em) in &matches {
+                assert_eq!(em.text, &content[em.start..em.end], "{name}");
+            }
+        }
+    }
+
+    /// The two host strings that first showed a bridge: each has a match
+    /// overlapping two secrets that were kept separately, and merging them
+    /// in the wrong order panicked on every public path.
+    #[test]
+    fn test_a_match_bridging_two_secrets_is_redacted_on_every_path() {
+        let cases = [
+            (
+                "db_password=postgres://u:a token=b@abcdefghijklmnopqrstuvwxyz",
+                "db_password=REDACTED_PASSWORD_1",
+                &["a token=b", "abcdefghijklmnopqrstuvwxyz"][..],
+            ),
+            (
+                "postgres://longusername:token=a@redis://:b longsecret@h",
+                "postgres://longusername:REDACTED_POSTGRESPASSWORD_1@h",
+                &["token=a", "b longsecret", "redis"][..],
+            ),
+        ];
+        for (input, want, secrets) in cases {
+            assert_eq!(redact_string(input), want);
+            assert_eq!(scan_content(input, "/etc/app.conf").len(), 1, "{input:?}");
+
+            let mut snap = config_snapshot("/etc/app/app.conf", input);
+            redact(&mut snap, &RedactOptions::default());
+            assert_eq!(snap.config.as_ref().unwrap().files[0].content, want);
+            let written = serde_json::to_string(&snap).unwrap();
+            for secret in secrets {
+                assert!(!written.contains(secret), "{secret:?} in {written}");
+            }
+            assert!(matches!(
+                snap.redaction_state,
+                Some(RedactionState::FullyRedacted { .. })
+            ));
+        }
+    }
+
+    /// Fragments of every URI and key pattern, each carrying the marker
+    /// `zq` only where a secret goes, so that joining them at random
+    /// builds the overlaps and bridges that hand-picked cases miss.
+    const PROP_PIECES: &[&str] = &[
+        "password=zqa",
+        "token=zqb",
+        "postgres://u:zqc",
+        "redis://:zqd",
+        "mongodb://u:zqe@h",
+        "jdbc:mysql://u:zqf@db/app?password=zqg",
+        "AKIAABCDEFGHIJKLMNOP",
+        "psk=zqh",
+        "@h",
+        "zqi",
+    ];
+    const PROP_SEPARATORS: &[&str] = &["", " ", "&", "@", ":", "\n"];
+    const PROP_MARKER: &str = "zq";
+    /// A bridge needs a few pieces in a particular order. At the default
+    /// 256 cases this test missed the merge panic in most runs; at this
+    /// count it found it in most. The named bridge tests are the
+    /// deterministic guard.
+    const PROP_CASES: u32 = 10_000;
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(PROP_CASES))]
+
+        /// Over random joins of the pieces above: matching and redaction
+        /// never panic, the kept spans are disjoint and cover every
+        /// eligible secret, and every marker inside an eligible secret is
+        /// gone from the output while every other marker is still there.
+        #[test]
+        fn prop_redaction_covers_every_captured_secret_without_panicking(
+            parts in proptest::collection::vec(
+                (0..PROP_PIECES.len(), 0..PROP_SEPARATORS.len()),
+                1..6,
+            )
+        ) {
+            let input: String = parts
+                .iter()
+                .map(|&(p, s)| format!("{}{}", PROP_PIECES[p], PROP_SEPARATORS[s]))
+                .collect();
+
+            let mut matches: Vec<(usize, EligibleMatch)> = Vec::new();
+            for (idx, pat) in PATTERNS.iter().enumerate() {
+                for em in collect_eligible_matches(pat, &input, None) {
+                    matches.push((idx, em));
+                }
+            }
+            let secrets: Vec<Range<usize>> =
+                matches.iter().map(|(_, em)| em.start..em.end).collect();
+            dedup_overlapping_matches(&input, &mut matches);
+            for pair in matches.windows(2) {
+                proptest::prop_assert!(pair[0].1.end <= pair[1].1.start, "{input:?}");
+            }
+            for (_, em) in &matches {
+                proptest::prop_assert_eq!(&em.text, &input[em.start..em.end]);
+            }
+            for s in &secrets {
+                proptest::prop_assert!(
+                    matches.iter().any(|(_, em)| em.start <= s.start && s.end <= em.end),
+                    "secret {s:?} of {input:?} is not covered"
+                );
+            }
+
+            let outside = input
+                .match_indices(PROP_MARKER)
+                .filter(|(i, m)| {
+                    !secrets.iter().any(|s| *i < s.end && s.start < i + m.len())
+                })
+                .count();
+            let out = redact_string(&input);
+            proptest::prop_assert_eq!(
+                out.matches(PROP_MARKER).count(),
+                outside,
+                "{:?} -> {:?}",
+                input,
+                out
+            );
+            scan_content(&input, "/etc/app.conf");
+        }
     }
 
     /// A value spelled like a token is redacted like any other: the

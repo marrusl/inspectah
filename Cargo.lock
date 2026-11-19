@@ -1219,6 +1219,7 @@ dependencies = [
  "inspectah-core",
  "insta",
  "minijinja",
+ "proptest",
  "regex",
  "serde",
  "serde_json",
