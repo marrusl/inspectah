@@ -79,6 +79,14 @@ because `/opt/app` would also hide `/opt/app-data`. Any new site that tests a
 walked path against one of these lists uses the helper, in both walks, so
 the two detectors keep the same exclusion semantics.
 
+The same holds for every other path-list test in `nonrpm.rs`:
+`is_on_writable_mount()` (longest containing mount point wins, so
+`/srv/data-old` never selects a `/srv/data` mount), `is_under_service_workdir()`
+against systemd `WorkingDirectory=` values, and `filter_ostree_var_paths()`
+against `OSTREE_VAR_INTERNALS`, which compares stored relative paths, so
+`var/lib/ostree-extra` is kept. Each has a table test with a sibling path
+that must not match.
+
 ## History
 
 The nit list recorded this backwards — it named `strip_prefix` as the

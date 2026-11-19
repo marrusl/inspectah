@@ -1814,7 +1814,7 @@ fn filter_ostree_var_paths(section: &mut NonRpmSoftwareSection) {
     section.items.retain(|item| {
         !OSTREE_VAR_INTERNALS
             .iter()
-            .any(|internal| item.path.starts_with(internal))
+            .any(|internal| path_is_within(&item.path, internal))
     });
 }
 
@@ -2011,18 +2011,15 @@ fn parse_mount_rw_flags(exec: &dyn Executor) -> HashMap<String, bool> {
     mounts
 }
 
-/// Check if a file path is on a writable mount by finding the
-/// longest-prefix mount point match.
+/// Check if a file path is on a writable mount by finding the longest
+/// mount point that contains it on a path boundary, so `/srv/data-old`
+/// never selects a `/srv/data` mount.
 fn is_on_writable_mount(path: &str, mounts: &HashMap<String, bool>) -> bool {
-    let mut best_match_len = 0;
-    let mut best_rw = false;
-    for (mount_point, is_rw) in mounts {
-        if path.starts_with(mount_point.as_str()) && mount_point.len() > best_match_len {
-            best_match_len = mount_point.len();
-            best_rw = *is_rw;
-        }
-    }
-    best_rw
+    mounts
+        .iter()
+        .filter(|(mount_point, _)| path_is_within(path, mount_point))
+        .max_by_key(|(mount_point, _)| mount_point.trim_end_matches('/').len())
+        .is_some_and(|(_, is_rw)| *is_rw)
 }
 
 /// Collect all WorkingDirectory= values from systemd unit files.
@@ -2046,9 +2043,9 @@ fn collect_service_working_dirs(exec: &dyn Executor) -> Vec<String> {
     dirs
 }
 
-/// Check if a file path is under any service's WorkingDirectory.
+/// Check if a file path is any service's WorkingDirectory or lies under one.
 fn is_under_service_workdir(path: &str, workdirs: &[String]) -> bool {
-    workdirs.iter().any(|wd| path.starts_with(wd.as_str()))
+    workdirs.iter().any(|wd| path_is_within(path, wd))
 }
 
 /// Classify a file's type by reading its magic bytes / shebang.
@@ -2172,10 +2169,12 @@ pub fn scan_unmanaged_files(
 ///
 /// Both unmanaged walks match `exclude_paths` and `language_env_paths`
 /// with this, so an entry such as `/opt/app` hides `/opt/app/bin/x` but
-/// not the sibling `/opt/app-data`. A trailing slash on `prefix` is
-/// ignored, since shell completion spells directories that way. Callers
-/// pass host-absolute paths: an empty or `/` prefix matches every
-/// absolute path, but no relative one.
+/// not the sibling `/opt/app-data`. The writable-mount and service
+/// working directory provenance checks and the ostree `/var` filter use
+/// it for the same reason. A trailing slash on `prefix` is ignored, since
+/// shell completion spells directories that way. An empty or `/` prefix
+/// matches every absolute path, but no relative one; the ostree filter
+/// compares stored relative paths against relative entries.
 fn path_is_within(path: &str, prefix: &str) -> bool {
     let prefix = prefix.trim_end_matches('/');
     path == prefix
@@ -4288,6 +4287,78 @@ mod tests {
                 expected,
                 "{path} within {prefix}"
             );
+        }
+    }
+
+    #[test]
+    fn test_is_on_writable_mount_respects_path_boundaries() {
+        let mounts: HashMap<String, bool> = [
+            ("/".to_string(), false),
+            ("/srv/data".to_string(), true),
+            ("/opt/app".to_string(), true),
+        ]
+        .into_iter()
+        .collect();
+        let cases = [
+            ("/srv/data", true),
+            ("/srv/data/file", true),
+            ("/srv/data-old/file", false),
+            ("/opt/app", true),
+            ("/opt/app/bin/x", true),
+            ("/opt/application/bin/x", false),
+            ("/opt/app-data", false),
+            ("/usr/bin/x", false),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(is_on_writable_mount(path, &mounts), expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn test_is_under_service_workdir_respects_path_boundaries() {
+        let workdirs = vec!["/opt/app".to_string(), "/srv/www/".to_string()];
+        let cases = [
+            ("/opt/app", true),
+            ("/opt/app/bin/x", true),
+            ("/opt/application", false),
+            ("/opt/application/bin/x", false),
+            ("/opt/app-data/x", false),
+            ("/srv/www", true),
+            ("/srv/www/index.html", true),
+            ("/srv/www2/index.html", false),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                is_under_service_workdir(path, &workdirs),
+                expected,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_filter_ostree_var_paths_respects_path_boundaries() {
+        let cases = [
+            ("var/lib/ostree", false),
+            ("var/lib/ostree/repo/x", false),
+            ("var/lib/ostree-extra/x", true),
+            ("var/lib/rpm-ostree/x", false),
+            ("var/lib/rpm-ostree-cache/x", true),
+            ("var/lib/flatpak", false),
+            ("var/lib/flatpak/app", false),
+            ("var/lib/flatpak2/app", true),
+            ("opt/app/bin/x", true),
+        ];
+        for (path, kept) in cases {
+            let mut section = NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    path: path.to_string(),
+                    ..Default::default()
+                }],
+                env_files: Vec::new(),
+            };
+            filter_ostree_var_paths(&mut section);
+            assert_eq!(section.items.len() == 1, kept, "{path}");
         }
     }
 
