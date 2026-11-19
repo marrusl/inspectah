@@ -242,17 +242,46 @@ fn validate_sensitivity_flags(args: &ScanArgs) -> Result<()> {
     Ok(())
 }
 
+/// Why a user-supplied path cannot be a scan root.
+#[derive(Debug, PartialEq, Eq)]
+enum RootRejection {
+    /// The path does not start with `/`.
+    Relative,
+    /// The path has a `..` segment.
+    ParentSegment,
+}
+
+/// Lexically normalize a user-supplied scan root.
+///
+/// Collapses repeated slashes and drops `.` segments and trailing slashes, so
+/// `/srv//app/./` becomes `/srv/app` and `/.` becomes `/`. The filesystem is
+/// not consulted: the scan may target a mounted root, so canonicalizing here
+/// would resolve symlinks on the wrong host. For the same reason a `..`
+/// segment is refused rather than resolved, since `a/..` is not `.` when `a`
+/// is a symlink.
+fn normalize_scan_root(path: &str) -> Result<String, RootRejection> {
+    if !path.starts_with('/') {
+        return Err(RootRejection::Relative);
+    }
+    let mut segments = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => return Err(RootRejection::ParentSegment),
+            name => segments.push(name),
+        }
+    }
+    Ok(format!("/{}", segments.join("/")))
+}
+
 /// Turn a passwd home field into a scan root, or `None` when it cannot be one.
 ///
-/// Trailing slashes are trimmed so walks join children with one separator.
-/// `/`, an empty home, and a relative home are rejected: `nobody`'s home is
-/// `/`, and adding it would walk the whole filesystem.
+/// The home is normalized by [`normalize_scan_root`]. A home that is or
+/// normalizes to `/`, an empty home, a relative home, and a home with a `..`
+/// segment are rejected: `nobody`'s home is `/`, and adding it would walk the
+/// whole filesystem.
 fn home_scan_root(home: &str) -> Option<String> {
-    let trimmed = home.trim_end_matches('/');
-    if trimmed.is_empty() || !trimmed.starts_with('/') {
-        return None;
-    }
-    Some(trimmed.to_string())
+    normalize_scan_root(home).ok().filter(|root| root != "/")
 }
 
 /// Resolve home directory users from a `--scan-home` spec.
@@ -352,18 +381,27 @@ fn build_scan_roots(
     }
 
     // --scan-path (with validation)
-    for path in &args.scan_path {
-        // Reject relative paths
-        if !path.starts_with('/') {
-            eprintln!(
-                "Warning: --scan-path requires absolute paths, skipping '{}'",
-                path
-            );
-            continue;
-        }
+    for raw_path in &args.scan_path {
+        let path = match normalize_scan_root(raw_path) {
+            Ok(path) => path,
+            Err(RootRejection::Relative) => {
+                eprintln!(
+                    "Warning: --scan-path requires absolute paths, skipping '{}'",
+                    raw_path
+                );
+                continue;
+            }
+            Err(RootRejection::ParentSegment) => {
+                eprintln!(
+                    "Warning: --scan-path '{}' contains '..', skipping; give the path without it",
+                    raw_path
+                );
+                continue;
+            }
+        };
 
         // Warn on broad paths (fewer than 2 meaningful path segments).
-        let normal_components = std::path::Path::new(path)
+        let normal_components = std::path::Path::new(&path)
             .components()
             .filter(|c| matches!(c, std::path::Component::Normal(_)))
             .count();
@@ -375,13 +413,13 @@ fn build_scan_roots(
         }
 
         // Check existence via executor (works in container context).
-        if !exec.file_exists(std::path::Path::new(path)) {
+        if !exec.file_exists(std::path::Path::new(&path)) {
             eprintln!("Warning: --scan-path '{}' does not exist, skipping", path);
             continue;
         }
 
         extra_paths.push(path.clone());
-        let scan_path = Path::new(path);
+        let scan_path = Path::new(&path);
         if !roots.iter().any(|r| scan_path.starts_with(r.as_str())) {
             roots.push(path.clone());
         }
@@ -1949,6 +1987,61 @@ VARIANT_ID="workstation"
             roots.contains(&"/home/bob".to_string()),
             "trailing slash must be trimmed so child paths join cleanly, got {roots:?}"
         );
+    }
+
+    #[test]
+    fn user_supplied_roots_are_normalized_at_the_cli_boundary() {
+        // (spelling, root it must become, or None when it must add no root).
+        // A home that resolves to `/` is refused like `/` itself; a scan path
+        // that resolves to `/` is kept as `/`, which --scan-path allows with
+        // a warning. `..` is refused for both flags.
+        let cases: &[(&str, Option<&str>, Option<&str>)] = &[
+            // (spelling, as --scan-home, as --scan-path)
+            ("/", None, Some("/")),
+            ("//", None, Some("/")),
+            ("/.", None, Some("/")),
+            ("/./", None, Some("/")),
+            ("/var/..", None, None),
+            ("/home/..", None, None),
+            ("/data/app/../", None, None),
+            ("/data/app/", Some("/data/app"), Some("/data/app")),
+            ("/data//app/./", Some("/data/app"), Some("/data/app")),
+            ("/data/./app", Some("/data/app"), Some("/data/app")),
+            ("/data/app", Some("/data/app"), Some("/data/app")),
+        ];
+        for (spelling, as_home, as_path) in cases {
+            let line = format!("svc:x:1500:1500:svc:{spelling}:/bin/bash\n");
+            let exec = ScanTestExecutor::new()
+                .with_command("getent passwd svc", getent_ok(&line))
+                .with_existing_dir("/")
+                .with_existing_dir("/data/app");
+
+            let home_args = ScanArgs {
+                scan_home: Some("svc".to_string()),
+                ..base_args()
+            };
+            let (roots, _, _) = build_scan_roots(&home_args, &exec).unwrap();
+            let added: Vec<&String> = roots
+                .iter()
+                .filter(|r| !default_scan_roots().contains(r))
+                .collect();
+            assert_eq!(
+                added.first().map(|r| r.as_str()),
+                *as_home,
+                "--scan-home with home {spelling:?}: roots {roots:?}"
+            );
+
+            let path_args = ScanArgs {
+                scan_path: vec![spelling.to_string()],
+                ..base_args()
+            };
+            let (_, _, extra_paths) = build_scan_roots(&path_args, &exec).unwrap();
+            assert_eq!(
+                extra_paths.first().map(|p| p.as_str()),
+                *as_path,
+                "--scan-path {spelling:?}: extra paths {extra_paths:?}"
+            );
+        }
     }
 
     // =========================================================================

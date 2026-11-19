@@ -59,10 +59,15 @@ root, and a root can be `/` (`--scan-path /`) or carry a trailing slash, so
 resolves that, so the walk still works and the doubled path reaches warnings
 and output; `MockExecutor` does not, so a fixture rooted at `/` silently finds
 nothing. Join walk children with `child_path()` in `nonrpm.rs`, which trims the
-trailing slash first. `--scan-home` homes are trimmed when selected
-(`home_scan_root()` in `crates/cli/src/commands/scan.rs`), which also refuses
-a home of `/`: `nobody`'s home on RHEL is `/`, and as a scan root it turns
-every non-RPM walk into a walk of the whole host.
+trailing slash first. `--scan-home` homes and `--scan-path` values are
+normalized once at the CLI boundary by `normalize_scan_root()` in
+`crates/cli/src/commands/scan.rs`: lexically, collapsing `//`, dropping `.`
+and trailing slashes, and refusing any `..` segment rather than resolving it,
+because the scan may target a mounted root and `a/..` differs from `.` when
+`a` is a symlink. `home_scan_root()` then refuses a home that normalizes to
+`/`: `nobody`'s home on RHEL is `/`, and as a scan root it turns every non-RPM
+walk into a walk of the whole host. `--scan-path /` stays allowed, with a
+warning.
 
 ## Path Lists Match by Containment, Not Prefix
 
