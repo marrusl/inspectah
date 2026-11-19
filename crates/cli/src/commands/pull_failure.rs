@@ -12,6 +12,7 @@
 //! through the pull classifier.
 
 use std::fmt;
+use std::ops::Range;
 
 use inspectah_collect::baseline::{ExtractionError, ImageSource};
 
@@ -100,26 +101,31 @@ pub fn classify_pull_failure(stderr: &str) -> PullFailureKind {
 ///
 /// This prevents credential leakage in error output shown to users or
 /// collected in diagnostic bundles. Every occurrence of each form is
-/// redacted, not only the first.
+/// redacted, not only the first. Every form is found in the original
+/// text and the spans are merged before any is replaced, so one form's
+/// replacement never hides another's keyword: a query string or token
+/// value holding `Authorization: Basic ...` loses the credential too.
 pub fn sanitize_stderr(s: &str) -> String {
+    let mut spans = Vec::new();
+
     // Bearer tokens: `Bearer <token>`, token up to the next whitespace.
-    let result = redact_each(s, "bearer ", |tail| {
+    spans.extend(value_spans(s, "bearer ", |tail| {
         let start = horizontal_ws_len(tail);
         let len = tail[start..]
             .find(char::is_whitespace)
             .unwrap_or(tail.len() - start);
         (start, start + len)
-    });
+    }));
 
     // Userinfo in URLs: `https://user:pass@host` -> `https://[REDACTED]@host`.
     // The authority runs to the first `/` or whitespace; everything before
     // its last `@` is the userinfo.
-    let result = redact_each(&result, "://", |tail| {
+    spans.extend(value_spans(s, "://", |tail| {
         let authority_len = tail
             .find(|c: char| c == '/' || c.is_whitespace())
             .unwrap_or(tail.len());
         (0, tail[..authority_len].rfind('@').unwrap_or(0))
-    });
+    }));
 
     // Query strings: `https://host/blob?token=x` -> `https://host/blob?[REDACTED]`.
     // Go's HTTP errors keep a URL's query, which can carry a download
@@ -127,7 +133,7 @@ pub fn sanitize_stderr(s: &str) -> String {
     // parameter names that covers them all, so the whole query goes. The
     // URL ends at whitespace or at a quote, backslash or angle bracket that
     // encloses it.
-    let result = redact_each(&result, "://", |tail| {
+    spans.extend(value_spans(s, "://", |tail| {
         let url_len = tail
             .find(|c: char| c.is_whitespace() || URL_ENCLOSERS.contains(&c))
             .unwrap_or(tail.len());
@@ -135,32 +141,35 @@ pub fn sanitize_stderr(s: &str) -> String {
             Some(q) => (q + 1, url_len),
             None => (0, 0),
         }
-    });
+    }));
 
     // Token fields in a token response body, which containers/image quotes
     // when it cannot decode one: `"token":"x"` and `"access_token": "x"`,
     // plain or with Go's escaped quotes (`\"token\":\"x\"`).
-    let result = redact_each(&result, "token\"", json_string_value);
-    let result = redact_each(&result, "token\\\"", json_string_value);
+    spans.extend(value_spans(s, "token\"", json_string_value));
+    spans.extend(value_spans(s, "token\\\"", json_string_value));
 
     // Authorization headers: `Authorization: <value>`, value to end of line.
-    redact_each(&result, "authorization:", |tail| {
+    spans.extend(value_spans(s, "authorization:", |tail| {
         let start = horizontal_ws_len(tail);
         let len = tail[start..]
             .find(['\n', '\r'])
             .unwrap_or(tail.len() - start);
         (start, start + len)
-    })
+    }));
+
+    replace_spans(s, spans)
 }
 
 /// Characters that end a URL in stderr because they enclose it.
 const URL_ENCLOSERS: &[char] = &['"', '\'', '\\', '<', '>', '`'];
 
 /// The value of a JSON string field whose key's closing quote `tail`
-/// follows: past `:` and an opening `"` or `\"`, up to the next quote,
-/// backslash, comma, brace or whitespace. A body cut short ends the value
-/// at the end of the text. Without a `:` there is no value, so the word
-/// `token` in prose is left alone.
+/// follows: past `:` and an opening `"` or `\"`, up to the quote that
+/// closes the string (see [`json_string_end`]). Without an opening quote
+/// the value runs to the next quote, backslash, comma, brace or
+/// whitespace. Without a `:` there is no value, so the word `token` in
+/// prose is left alone.
 fn json_string_value(tail: &str) -> (usize, usize) {
     let mut i = horizontal_ws_len(tail);
     if !tail[i..].starts_with(':') {
@@ -169,44 +178,118 @@ fn json_string_value(tail: &str) -> (usize, usize) {
     i += 1;
     i += horizontal_ws_len(&tail[i..]);
     let rest = &tail[i..];
-    let open = if rest.starts_with("\\\"") {
-        2
+    if rest.starts_with("\\\"") {
+        let start = i + 2;
+        (start, json_string_end(tail, start, Quoting::GoEscaped))
     } else if rest.starts_with('"') {
-        1
+        let start = i + 1;
+        (start, json_string_end(tail, start, Quoting::Plain))
     } else {
-        0
-    };
-    let start = i + open;
-    let len = tail[start..]
-        .find(|c: char| matches!(c, '"' | '\\' | ',' | '}') || c.is_whitespace())
-        .unwrap_or(tail.len() - start);
-    (start, start + len)
+        let len = rest
+            .find(|c: char| matches!(c, '"' | '\\' | ',' | '}') || c.is_whitespace())
+            .unwrap_or(rest.len());
+        (i, i + len)
+    }
+}
+
+/// How a JSON body appears in stderr.
+#[derive(Clone, Copy)]
+enum Quoting {
+    /// As written: `{"token":"x"}`.
+    Plain,
+    /// Inside a Go `%q` string, so every `"` and `\` of the JSON carries a
+    /// backslash of its own: `{\"token\":\"x\"}`.
+    GoEscaped,
+}
+
+/// Byte offset in `s` of the quote that closes the JSON string whose
+/// contents start at `start`, or the end of the line when there is none:
+/// a body cut short, or a Go-quoted body whose own quoting ends first,
+/// keeps nothing after its opening quote on that line.
+///
+/// A JSON backslash escapes the next character, so `\/` and `\"` do not
+/// end the string. In a Go-quoted body the JSON characters are read
+/// through Go's escapes first: `\\` is a JSON backslash, `\"` a JSON
+/// quote, and any other escape is an ordinary character.
+fn json_string_end(s: &str, start: usize, quoting: Quoting) -> usize {
+    let line_end = s[start..].find(['\n', '\r']).map_or(s.len(), |i| start + i);
+    let bytes = &s.as_bytes()[..line_end];
+    let mut i = start;
+    let mut escaped = false;
+    while i < line_end {
+        let at = i;
+        let c = match quoting {
+            Quoting::Plain => {
+                i += 1;
+                bytes[at]
+            }
+            Quoting::GoEscaped => match (bytes[at], bytes.get(at + 1)) {
+                (b'\\', Some(&next)) => {
+                    i += 2;
+                    if matches!(next, b'\\' | b'"') {
+                        next
+                    } else {
+                        b'x'
+                    }
+                }
+                // A bare quote ends the Go string, and the JSON with it.
+                (b'"', _) => return line_end,
+                (b, _) => {
+                    i += 1;
+                    b
+                }
+            },
+        };
+        match (escaped, c) {
+            (true, _) => escaped = false,
+            (false, b'\\') => escaped = true,
+            (false, b'"') => return at,
+            (false, _) => {}
+        }
+    }
+    line_end
 }
 
 /// Placeholder that replaces a redacted credential.
 const REDACTED: &str = "[REDACTED]";
 
-/// Redact the value after every case-insensitive match of the ASCII
-/// `keyword` in `s`.
+/// The byte range of the value after every case-insensitive match of the
+/// ASCII `keyword` in `s`, in `s`'s offsets.
 ///
 /// `value` receives the text after the keyword and returns the value's
-/// `(start, end)` byte range within it; an empty range redacts nothing.
+/// `(start, end)` byte range within it; an empty range is no value.
 /// Matching runs on an ASCII-lowercased copy, which keeps byte offsets
 /// identical to `s` (full Unicode lowercasing can change them).
-fn redact_each(s: &str, keyword: &str, value: impl Fn(&str) -> (usize, usize)) -> String {
+fn value_spans(
+    s: &str,
+    keyword: &str,
+    value: impl Fn(&str) -> (usize, usize),
+) -> Vec<Range<usize>> {
     let lower = s.to_ascii_lowercase();
+    lower
+        .match_indices(keyword)
+        .filter_map(|(found, _)| {
+            let after = found + keyword.len();
+            let (start, end) = value(&s[after..]);
+            (end > start).then_some(after + start..after + end)
+        })
+        .collect()
+}
+
+/// `s` with each run of overlapping or touching `spans` replaced by one
+/// [`REDACTED`].
+fn replace_spans(s: &str, mut spans: Vec<Range<usize>>) -> String {
+    spans.sort_by_key(|span| span.start);
     let mut out = String::with_capacity(s.len());
     let mut cursor = 0;
-    while let Some(found) = lower[cursor..].find(keyword) {
-        let after = cursor + found + keyword.len();
-        let (start, end) = value(&s[after..]);
-        if end > start {
-            out.push_str(&s[cursor..after + start]);
-            out.push_str(REDACTED);
-        } else {
-            out.push_str(&s[cursor..after + end]);
+    let mut spans = spans.into_iter().peekable();
+    while let Some(mut span) = spans.next() {
+        while let Some(next) = spans.next_if(|next| next.start <= span.end) {
+            span.end = span.end.max(next.end);
         }
-        cursor = after + end;
+        out.push_str(&s[cursor..span.start]);
+        out.push_str(REDACTED);
+        cursor = span.end;
     }
     out.push_str(&s[cursor..]);
     out
@@ -912,8 +995,10 @@ pub(crate) mod tests {
     }
 
     /// Query strings and token response bodies that a failed pull prints,
-    /// each with its credential twice: the scrubber, the Unknown pull
-    /// excerpt and a container step's excerpt all drop every copy.
+    /// the first four with each credential twice, then token values
+    /// holding JSON escapes and credentials nested inside another form:
+    /// the scrubber, the Unknown pull excerpt and a container step's
+    /// excerpt all drop every copy.
     pub(crate) const QUERY_AND_BODY_CREDENTIALS: &[(&str, &str, &[&str])] = &[
         (
             "query token in a Go HTTP error",
@@ -937,6 +1022,41 @@ pub(crate) mod tests {
             "body: {\"token\": \"plain-secret\", \"access_token\":\"plain-secret-2\"} and {\"token\":\"plain-secret\"",
             &["plain-secret", "plain-secret-2"],
         ),
+        (
+            "token value opening with an escaped slash, plain JSON",
+            r#"body: {"token":"\/full-secret"}"#,
+            &["full-secret"],
+        ),
+        (
+            "token value opening with an escaped slash, Go-escaped",
+            r#"body start "{\"token\":\"\\/full-secret\"}": bad"#,
+            &["full-secret"],
+        ),
+        (
+            "token value with an escaped slash inside",
+            r#"body: {"access_token":"head\/tail-secret"}"#,
+            &["head", "tail-secret"],
+        ),
+        (
+            "token value with a Unicode escape",
+            r#"body: {"token":"\u0041uni-secret"} start "{\"token\":\"\\u0041uni-secret-2\"}""#,
+            &["uni-secret", "uni-secret-2"],
+        ),
+        (
+            "Go-escaped token body cut short",
+            r#"body start "{\"token\":\"cut-secret"): bad"#,
+            &["cut-secret"],
+        ),
+        (
+            "Authorization header inside a query string",
+            "Get https://cdn.example/x?note=Authorization: Basic dXNlcjpwYXNz",
+            &["dXNlcjpwYXNz"],
+        ),
+        (
+            "Authorization header inside a token value",
+            r#"body: {"token":"Authorization: Basic dXNlcjpwYXNz"}"#,
+            &["dXNlcjpwYXNz"],
+        ),
     ];
 
     #[test]
@@ -956,6 +1076,30 @@ pub(crate) mod tests {
         assert_eq!(
             sanitize_stderr("{\\\"token\\\":\\\"x\\\",\\\"expires_in\\\":60}"),
             "{\\\"token\\\":\\\"[REDACTED]\\\",\\\"expires_in\\\":60}"
+        );
+        // A JSON escape does not end a token value, plain or Go-escaped.
+        assert_eq!(
+            sanitize_stderr(r#"{"access_token":"head\/tail-secret","expires_in":60}"#),
+            r#"{"access_token":"[REDACTED]","expires_in":60}"#
+        );
+        assert_eq!(
+            sanitize_stderr(r#"{\"token\":\"\\/x\\\"y\",\"expires_in\":60}"#),
+            r#"{\"token\":\"[REDACTED]\",\"expires_in\":60}"#
+        );
+        // A value with no closing quote runs to the end of its line.
+        assert_eq!(
+            sanitize_stderr("{\"token\":\"cut-secret\nnext line"),
+            "{\"token\":\"[REDACTED]\nnext line"
+        );
+        // One form inside another: every span is found in the original
+        // text, so a replacement cannot hide the `Authorization:` keyword.
+        assert_eq!(
+            sanitize_stderr("https://cdn.example/x?note=Authorization: Basic dXNlcjpwYXNz"),
+            "https://cdn.example/x?[REDACTED] [REDACTED]"
+        );
+        assert_eq!(
+            sanitize_stderr(r#"{"token":"Authorization: Basic dXNlcjpwYXNz"}"#),
+            r#"{"token":"[REDACTED]"#
         );
         // The word "token" in prose is not a JSON field.
         assert_eq!(
