@@ -277,13 +277,19 @@ change of this kind must check them:
   resolved when its keyword (`password`, `DB_PASSWORD`) was gone from
   the redacted text. The key now stays, so it asks
   `keyword_survives_with_its_value` instead: every occurrence's whole
-  value, past spacing and one `=` or `:` and up to the next whitespace,
-  must be a token this run's `CounterRegistry` issued. Both halves
-  matter. A token-spelled prefix is not enough:
-  `DB_KEY=REDACTED_PASSWORD_1/hunter2` in a collected `.env` matches no
-  pattern and was resolved over `hunter2`. Nor is the spelling: only the
-  registry knows what this run replaced
+  value, past spacing and one `=` or `:`, must be a token this run's
+  `CounterRegistry` issued. Both halves matter. A token-spelled prefix is
+  not enough: `DB_KEY=REDACTED_PASSWORD_1/hunter2` in a collected `.env`
+  matches no pattern and was resolved over `hunter2`. Nor is the
+  spelling: only the registry knows what this run replaced
   (`test_hint_with_a_token_prefixed_value_stays_unresolved`).
+  Where the value ends depends on the file (`HintValueEnd`). On the
+  kernel command line whitespace separates parameters, so the token must
+  run to the next whitespace. Anywhere else the value runs to the end of
+  the line, so only whitespace or a `#` comment may follow the token:
+  `DB_KEY=REDACTED_PASSWORD_1 still-secret` is a `.env` value of two
+  words, the second one never replaced. Add a path to the whitespace
+  side only when its parser is known to end a value there.
 - **Tokens are keyed by the secret's text**, so the same value under two
   keys gets one token, as `CounterRegistry` intends.
 

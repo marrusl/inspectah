@@ -478,27 +478,74 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
     Cow::Owned(result)
 }
 
+/// The path of the kernel command line, where a high-confidence hint is
+/// raised for each sensitive parameter.
+const KERNEL_CMDLINE_PATH: &str = "/proc/cmdline";
+
+/// Where a hinted value ends, which is what must have been replaced for the
+/// hint to count as handled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HintValueEnd {
+    /// At the next whitespace: the kernel command line, whose parameters
+    /// are separated by whitespace.
+    Whitespace,
+    /// At the end of the line, or at a `#` comment after whitespace: a
+    /// `.env` file, where the value runs to the end of the line.
+    EndOfLine,
+}
+
+impl HintValueEnd {
+    /// The end that applies to content collected at `path`. Only the
+    /// kernel command line is known to end a value at whitespace; anywhere
+    /// else the conservative end is the end of the line.
+    fn for_path(path: &str) -> Self {
+        if path == KERNEL_CMDLINE_PATH {
+            Self::Whitespace
+        } else {
+            Self::EndOfLine
+        }
+    }
+}
+
 /// Returns true if `keyword` appears in `content` anywhere its value was
 /// not replaced by this run.
 ///
 /// Redaction keeps the key and replaces only the value, so a hint's keyword
 /// (`password`, `DB_PASSWORD`, `key=`) survives a successful pass. An
-/// occurrence counts as handled only when its whole value, past optional
-/// spacing and one `=` or `:` and up to the next whitespace, is a token in
-/// `issued`: one this run's registry handed out. A value that only starts
-/// with a token (`REDACTED_PASSWORD_1/hunter2`) or is only spelled like one
-/// is the host's, and so is anything else (a value left in place, a longer
-/// identifier such as `tokenizer`, a comment mentioning the word); any of
-/// these leaves the hint unresolved.
-fn keyword_survives_with_its_value(content: &str, keyword: &str, issued: &HashSet<String>) -> bool {
+/// occurrence counts as handled only when its value, past optional spacing
+/// and one `=` or `:`, is a token in `issued` (one this run's registry
+/// handed out) up to the next whitespace, and, under
+/// [`HintValueEnd::EndOfLine`], nothing but whitespace or a `#` comment
+/// follows it on the line. A value that only starts with a token
+/// (`REDACTED_PASSWORD_1/hunter2`, `REDACTED_PASSWORD_1 still-secret` in a
+/// `.env` file) or is only spelled like one is the host's, and so is
+/// anything else (a value left in place, a longer identifier such as
+/// `tokenizer`, a comment mentioning the word); any of these leaves the
+/// hint unresolved.
+fn keyword_survives_with_its_value(
+    content: &str,
+    keyword: &str,
+    issued: &HashSet<String>,
+    value_end: HintValueEnd,
+) -> bool {
     content.match_indices(keyword).any(|(i, _)| {
         let rest = content[i + keyword.len()..].trim_start_matches([' ', '\t']);
         let rest = rest
             .strip_prefix(['=', ':'])
             .unwrap_or(rest)
             .trim_start_matches([' ', '\t']);
-        let value_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-        !issued.contains(&rest[..value_end])
+        let token_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        if !issued.contains(&rest[..token_end]) {
+            return true;
+        }
+        match value_end {
+            HintValueEnd::Whitespace => false,
+            HintValueEnd::EndOfLine => {
+                let after = &rest[token_end..];
+                let line_rest = after[..after.find('\n').unwrap_or(after.len())].trim_start();
+                !(line_rest.is_empty() || line_rest.starts_with('#'))
+            }
+        }
     })
 }
 
@@ -1651,7 +1698,12 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                     // Every place the hint's keyword appears now carries,
                     // as its whole value, a token this run issued → the
                     // regex pass handled it.
-                    !keyword_survives_with_its_value(content, kw, &registry.issued)
+                    !keyword_survives_with_its_value(
+                        content,
+                        kw,
+                        &registry.issued,
+                        HintValueEnd::for_path(&hint.path),
+                    )
                 } else {
                     // No extractable keyword — fall back to checking if
                     // ANY regex finding exists at this path.
@@ -2111,40 +2163,96 @@ baseurl = https://cdn.redhat.com
         let mut registry = CounterRegistry::default();
         registry.token_for("password", "a");
         registry.token_for("password", "b");
+        // (content, keyword, survives to the end of the line, survives to
+        // the next whitespace)
         let cases = [
-            ("proxy_password = REDACTED_PASSWORD_1", "password", false),
-            ("DB_PASSWORD=REDACTED_PASSWORD_2", "DB_PASSWORD", false),
+            (
+                "proxy_password = REDACTED_PASSWORD_1",
+                "password",
+                false,
+                false,
+            ),
+            (
+                "DB_PASSWORD=REDACTED_PASSWORD_2",
+                "DB_PASSWORD",
+                false,
+                false,
+            ),
             (
                 "DB_PASSWORD=REDACTED_PASSWORD_2 # rotated",
                 "DB_PASSWORD",
                 false,
+                false,
             ),
-            ("access_key=REDACTED_PASSWORD_1", "key=", false),
-            ("quiet password=REDACTED_PASSWORD_1 ro", "password", false),
-            ("password: files", "password", true),
-            ("rd.luks.key=/path/to/key", "rd.luks.key", true),
-            ("tokenizer = REDACTED_PASSWORD_1", "token", true),
-            ("# password for basic http proxy auth", "password", true),
+            (
+                "DB_PASSWORD=REDACTED_PASSWORD_2 \t\r\nnext=1",
+                "DB_PASSWORD",
+                false,
+                false,
+            ),
+            ("access_key=REDACTED_PASSWORD_1", "key=", false, false),
+            // On the kernel command line `ro` is the next parameter; in a
+            // `.env` file it is more of the value.
+            (
+                "quiet password=REDACTED_PASSWORD_1 ro",
+                "password",
+                true,
+                false,
+            ),
+            ("password: files", "password", true, true),
+            ("rd.luks.key=/path/to/key", "rd.luks.key", true, true),
+            ("tokenizer = REDACTED_PASSWORD_1", "token", true, true),
+            (
+                "# password for basic http proxy auth",
+                "password",
+                true,
+                true,
+            ),
             (
                 "a_password = REDACTED_PASSWORD_1\nb_password = left",
                 "password",
                 true,
+                true,
             ),
             // A token followed by more of the value is not a replacement.
-            ("DB_KEY=REDACTED_PASSWORD_1/hunter2", "DB_KEY", true),
-            ("DB_KEY=REDACTED_PASSWORD_1:still-secret", "DB_KEY", true),
-            ("password=REDACTED_PASSWORD_1&ssl=1", "password", true),
+            ("DB_KEY=REDACTED_PASSWORD_1/hunter2", "DB_KEY", true, true),
+            (
+                "DB_KEY=REDACTED_PASSWORD_1:still-secret",
+                "DB_KEY",
+                true,
+                true,
+            ),
+            ("password=REDACTED_PASSWORD_1&ssl=1", "password", true, true),
+            (
+                "DB_KEY=REDACTED_PASSWORD_1 still-secret",
+                "DB_KEY",
+                true,
+                false,
+            ),
             // Spelled like a token, but this run never issued it.
-            ("DB_KEY=REDACTED_PASSWORD_3", "DB_KEY", true),
-            ("DB_KEY=REDACTED_COMPANY_2026", "DB_KEY", true),
+            ("DB_KEY=REDACTED_PASSWORD_3", "DB_KEY", true, true),
+            ("DB_KEY=REDACTED_COMPANY_2026", "DB_KEY", true, true),
         ];
-        for (content, kw, survives) in cases {
-            assert_eq!(
-                keyword_survives_with_its_value(content, kw, &registry.issued),
-                survives,
-                "{kw:?} in {content:?}"
-            );
+        for (content, kw, to_line_end, to_whitespace) in cases {
+            for (end, survives) in [
+                (HintValueEnd::EndOfLine, to_line_end),
+                (HintValueEnd::Whitespace, to_whitespace),
+            ] {
+                assert_eq!(
+                    keyword_survives_with_its_value(content, kw, &registry.issued, end),
+                    survives,
+                    "{kw:?} in {content:?} under {end:?}"
+                );
+            }
         }
+        assert_eq!(
+            HintValueEnd::for_path(KERNEL_CMDLINE_PATH),
+            HintValueEnd::Whitespace
+        );
+        assert_eq!(
+            HintValueEnd::for_path("opt/app/.env"),
+            HintValueEnd::EndOfLine
+        );
     }
 
     #[test]
@@ -4639,44 +4747,68 @@ baseurl = https://cdn.redhat.com
         assert_eq!(findings.len(), 1, "{findings:?}");
     }
 
-    /// A collected `.env` value that starts with a token and goes on is not
-    /// redacted: no pattern handles `DB_KEY`, so the high-confidence hint
-    /// the collector raises for it stays unresolved.
+    /// A high-confidence hint on a collected `.env` file is resolved only
+    /// when every value of its variable, to the end of the line or a `#`
+    /// comment, is a token this run issued. Each file also has
+    /// `password=seed`, so `REDACTED_PASSWORD_1` is issued and the check
+    /// cannot pass merely because the token is unknown. No pattern handles
+    /// `DB_KEY`, so its line comes through as written and its hint stays
+    /// unresolved, whatever follows the token: a `/`, a `:` or a space.
     #[test]
     fn test_hint_with_a_token_prefixed_value_stays_unresolved() {
         use inspectah_core::types::nonrpm::NonRpmSoftwareSection;
-        for content in [
-            "DB_KEY=REDACTED_PASSWORD_1/hunter2\n",
-            "DB_KEY=REDACTED_PASSWORD_1:still-secret\n",
-        ] {
+        let seeded = "password=seed\n";
+        let redacted_seed = "password=REDACTED_PASSWORD_1\n";
+        let cases = [
+            ("DB_KEY", "DB_KEY=REDACTED_PASSWORD_1/hunter2\n", false),
+            ("DB_KEY", "DB_KEY=REDACTED_PASSWORD_1:still-secret\n", false),
+            ("DB_KEY", "DB_KEY=REDACTED_PASSWORD_1 still-secret\n", false),
+            (
+                "DB_KEY",
+                "DB_KEY=REDACTED_PASSWORD_1\tstill-secret\n",
+                false,
+            ),
+            // The generic `\S+` value stops at the space, so ` words` is
+            // left; the hint says so.
+            ("DB_PASSWORD", "DB_PASSWORD=two words\n", false),
+            // A replaced value followed by a comment or nothing is handled.
+            ("DB_PASSWORD", "DB_PASSWORD=hunter2 # rotated\n", true),
+            ("DB_PASSWORD", "DB_PASSWORD=hunter2  \r\n", true),
+        ];
+        for (var, line, resolved) in cases {
+            let content = format!("{line}{seeded}");
             let mut snap = InspectionSnapshot::new();
             snap.non_rpm_software = Some(NonRpmSoftwareSection {
                 env_files: vec![ConfigFileEntry {
                     path: "opt/app/.env".to_string(),
-                    content: content.to_string(),
+                    content: content.clone(),
                     ..Default::default()
                 }],
                 ..Default::default()
             });
             snap.redaction_hints = vec![RedactionHint {
                 path: "opt/app/.env".into(),
-                reason: "environment variable 'DB_KEY' in .env file may contain a secret".into(),
+                reason: format!("environment variable '{var}' in .env file may contain a secret"),
                 confidence: Some(Confidence::High),
             }];
             redact(&mut snap, &RedactOptions::default());
-            assert_eq!(
-                snap.non_rpm_software.as_ref().unwrap().env_files[0].content,
-                content,
-                "nothing in {content:?} is a pattern match"
-            );
-            match &snap.redaction_state {
-                Some(RedactionState::PartiallyRedacted {
-                    unresolved_hints, ..
-                }) => assert!(
+            let out = &snap.non_rpm_software.as_ref().unwrap().env_files[0].content;
+            assert!(out.ends_with(redacted_seed), "{out:?}");
+            if var == "DB_KEY" {
+                assert!(out.starts_with(line), "no pattern handles DB_KEY: {out:?}");
+            }
+            match (&snap.redaction_state, resolved) {
+                (Some(RedactionState::FullyRedacted { .. }), true) => {}
+                (
+                    Some(RedactionState::PartiallyRedacted {
+                        unresolved_hints, ..
+                    }),
+                    false,
+                ) => assert!(
                     unresolved_hints.iter().any(|h| h.path == "opt/app/.env"),
                     "{unresolved_hints:?}"
                 ),
-                other => panic!("{content:?}: expected PartiallyRedacted, got {other:?}"),
+                (other, _) => panic!("{line:?}: resolved should be {resolved}, got {other:?}"),
             }
         }
     }
