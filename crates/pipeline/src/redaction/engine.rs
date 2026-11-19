@@ -281,12 +281,38 @@ fn comment_markers(path: Option<&str>) -> Vec<&'static str> {
     markers
 }
 
-/// Returns true if the match at `pos` falls on a comment line.
-/// A comment line is one whose trimmed content (before `pos`) starts
-/// with one of `markers` (see [`comment_markers`]).
-fn is_comment_line(content: &str, pos: usize, markers: &[&str]) -> bool {
-    let line_start = content[..pos].rfind('\n').map_or(0, |i| i + 1);
-    let prefix = content[line_start..pos].trim_start();
+/// Byte offset of the start of the line holding `pos`.
+fn line_start(content: &str, pos: usize) -> usize {
+    content[..pos].rfind('\n').map_or(0, |i| i + 1)
+}
+
+/// The 1-based number of the line holding byte `pos`: one more than the
+/// newlines before it. `str::lines` on the text before `pos` counts the
+/// partial line too, which put every match not at column 0 one line low.
+fn line_number(content: &str, pos: usize) -> usize {
+    content[..pos].matches('\n').count() + 1
+}
+
+/// Returns true if a match whose secret starts at `secret_start` and whose
+/// whole match starts at `claim_start` falls on a comment line: the text
+/// of the secret's line before the match, trimmed, starts with one of
+/// `markers` (see [`comment_markers`]).
+///
+/// The line is the secret's, never the line the match starts on. A
+/// pattern can consume a boundary byte before its secret, and when that
+/// byte is the newline ending a comment, reading the match's line took the
+/// comment above for the secret's own line and exempted it. Context the
+/// match consumed on the secret's own line is not part of the prefix, so a
+/// marker the pattern took as its boundary (`#AKIA...`, `#jdbc:`) does not
+/// make the line a comment.
+fn is_comment_line(
+    content: &str,
+    claim_start: usize,
+    secret_start: usize,
+    markers: &[&str],
+) -> bool {
+    let start = line_start(content, secret_start);
+    let prefix = content[start..claim_start.max(start)].trim_start();
     markers.iter().any(|m| prefix.starts_with(m))
 }
 
@@ -325,7 +351,7 @@ fn collect_eligible_matches(
             }
 
             // Filter 1: skip matches on comment lines
-            if is_comment_line(content, whole.start(), &markers) {
+            if is_comment_line(content, whole.start(), secret.start(), &markers) {
                 return None;
             }
 
@@ -352,7 +378,7 @@ fn collect_eligible_matches(
                 return None;
             }
 
-            let line_num = content[..whole.start()].lines().count() + 1;
+            let line_num = line_number(content, secret.start());
 
             Some(EligibleMatch {
                 claim: whole.range(),
@@ -3330,6 +3356,126 @@ baseurl = https://cdn.redhat.com
             Some(2),
             "password on second line must report line 2"
         );
+    }
+
+    /// A finding's line is the line its secret starts on, wherever the
+    /// match starts in that line and whatever context before it the
+    /// pattern consumed.
+    #[test]
+    fn test_finding_line_is_the_secret_line() {
+        let cases: &[(&str, i32)] = &[
+            ("password=x", 1),
+            ("x password=y", 1),
+            ("  password=x", 1),
+            ("a\n  password=x", 2),
+            ("a\nproxy_password = x", 2),
+            ("a\r\nb password=x", 2),
+            ("a\n\nkey AKIAABCDEFGHIJKLMNOP", 3),
+            // The AWS pattern consumes the newline before the key.
+            ("a\nAKIAABCDEFGHIJKLMNOP", 2),
+            ("url=jdbc:mysql://u:pw@db", 1),
+        ];
+        for (input, line) in cases {
+            let findings = scan_content(input, "/etc/app.conf");
+            assert_eq!(findings.len(), 1, "{input:?}: {findings:?}");
+            assert_eq!(findings[0].line, Some(*line), "{input:?}");
+        }
+    }
+
+    /// An AWS key id is a comment only when its own line is: the newline
+    /// the pattern consumes before the key does not make the line above it
+    /// the key's line. `#AKIA...` on its own line stays redacted, as it was
+    /// before keys kept their context: the `#` is the boundary the pattern
+    /// consumes, so its match starts at the line's start, like `#jdbc:`.
+    #[test]
+    fn test_aws_key_after_a_comment_line_is_redacted() {
+        let cases: &[(&str, &str, usize)] = &[
+            (
+                "# note\nAKIAABCDEFGHIJKLMNOP",
+                "# note\nREDACTED_AWSKEY_1",
+                1,
+            ),
+            (
+                "; note\nAKIAABCDEFGHIJKLMNOP",
+                "; note\nREDACTED_AWSKEY_1",
+                1,
+            ),
+            ("#AKIAABCDEFGHIJKLMNOP", "#REDACTED_AWSKEY_1", 1),
+            // A comment line holding a key is still exempt.
+            ("# AKIAABCDEFGHIJKLMNOP", "# AKIAABCDEFGHIJKLMNOP", 0),
+            (
+                "# old AKIAABCDEFGHIJKLMNOP\nAKIAQRSTUVWXYZ234567",
+                "# old AKIAABCDEFGHIJKLMNOP\nREDACTED_AWSKEY_1",
+                1,
+            ),
+        ];
+        for (input, want, n) in cases {
+            let mut snap = config_snapshot("/etc/app/app.ini", input);
+            redact(&mut snap, &RedactOptions::default());
+            assert_eq!(
+                &snap.config.as_ref().unwrap().files[0].content,
+                want,
+                "{input:?}"
+            );
+            assert_eq!(snap.redactions.len(), *n, "{input:?}");
+            assert!(
+                matches!(
+                    snap.redaction_state,
+                    Some(RedactionState::FullyRedacted { .. })
+                ),
+                "{input:?}"
+            );
+            assert_eq!(
+                scan_content(input, "/etc/app/app.ini").len(),
+                *n,
+                "{input:?}"
+            );
+        }
+    }
+
+    /// Two AWS key ids one separator apart are both found: the boundary
+    /// after the first key is checked, not consumed, so it is still there
+    /// to start the second match. `redact_string` replaces from the end,
+    /// so the later key gets the lower number.
+    #[test]
+    fn test_adjacent_aws_keys_are_each_redacted() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "AKIA1111111111111111\nAKIA2222222222222222",
+                "REDACTED_AWSKEY_2\nREDACTED_AWSKEY_1",
+            ),
+            (
+                "AKIA1111111111111111 AKIA2222222222222222",
+                "REDACTED_AWSKEY_2 REDACTED_AWSKEY_1",
+            ),
+            (
+                "keys=AKIA1111111111111111,AKIA2222222222222222,AKIA1111111111111111",
+                "keys=REDACTED_AWSKEY_1,REDACTED_AWSKEY_2,REDACTED_AWSKEY_1",
+            ),
+            // Still a boundary on each side: a longer run is not a key id.
+            (
+                "AKIA11111111111111112 XAKIA2222222222222222",
+                "AKIA11111111111111112 XAKIA2222222222222222",
+            ),
+        ];
+        for (input, want) in cases {
+            assert_eq!(redact_string(input), *want, "{input:?}");
+            let lines: Vec<Option<i32>> = scan_content(input, "/etc/app.conf")
+                .iter()
+                .map(|f| f.line)
+                .collect();
+            assert_eq!(
+                lines.len(),
+                want.matches("REDACTED_AWSKEY_").count(),
+                "{input:?}"
+            );
+        }
+        let findings = scan_content(
+            "AKIA1111111111111111\nAKIA2222222222222222",
+            "/etc/app.conf",
+        );
+        let lines: Vec<Option<i32>> = findings.iter().map(|f| f.line).collect();
+        assert_eq!(lines, vec![Some(1), Some(2)]);
     }
 
     // --- Comment-line filtering tests (Gap 1) ---

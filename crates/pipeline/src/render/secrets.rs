@@ -261,6 +261,26 @@ mod tests {
         assert!(md.contains("/etc/shadow"));
     }
 
+    /// The Line column is the line the secret is on, also when the key
+    /// is indented or follows other text on its line.
+    #[test]
+    fn test_secrets_review_line_is_the_secret_line() {
+        use crate::redaction::{RedactOptions, redact};
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/app/app.conf".to_string(),
+                content: "[db]\n  password = hunter2\n# note\nAKIAABCDEFGHIJKLMNOP\n".to_string(),
+                ..Default::default()
+            }],
+        });
+        redact(&mut snap, &RedactOptions::default());
+        let md = render_secrets_review(&snap);
+        assert!(md.contains("| /etc/app/app.conf | 2 | password |"), "{md}");
+        assert!(md.contains("| /etc/app/app.conf | 4 | awskey |"), "{md}");
+    }
+
     #[test]
     fn test_secrets_review_subscription_only() {
         use inspectah_core::types::subscription::SubscriptionSection;

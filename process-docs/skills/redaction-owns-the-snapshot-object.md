@@ -181,11 +181,33 @@ directory. Getting it wrong in the narrow direction costs false findings;
 in the wide direction it leaks, so widen only with a table row in
 `test_non_hash_markers_exempt_only_where_they_are_comment_syntax`.
 
+A match is on a comment line when the **secret's** line starts with a
+marker before the match does (`is_comment_line`). Never read the line
+the whole match starts on: the AWS pattern consumes the byte before the
+key as its boundary, and when that byte was the newline ending a
+`# note` line, the comment above exempted the key below it, which shipped
+with no finding. Context the match consumed on the secret's own line is
+not part of the prefix either, so `#AKIA...` and `#jdbc:...` stay
+redacted: the `#` there is the pattern's boundary, and both were redacted
+before keys kept their context
+(`test_aws_key_after_a_comment_line_is_redacted`). A finding's line is
+the secret's line too, counted as newlines before the secret plus one
+(`line_number`); `str::lines` on the text before a match counts the
+partial line and put every match not at column 0 one line low
+(`test_finding_line_is_the_secret_line`).
+
+A boundary after a secret is checked, not matched. The `regex` crate has
+no lookahead, and a trailing `(?:[^A-Z0-9]|$)` consumed the separator the
+next AWS key's match needed, so of two keys one character apart only the
+first was found. The AWS pattern matches up to the key and its `accept`
+check rejects a key followed by another key byte
+(`test_adjacent_aws_keys_are_each_redacted`).
+
 ## A pattern replaces the secret, not its key
 
 Every pattern in `redaction/patterns.rs` that matches anything besides
 the secret (a key and its delimiter, a URI's scheme and user, the
-boundary bytes either side of an AWS key id) names the secret with a
+boundary byte before an AWS key id) names the secret with a
 `(?P<secret>...)` group (`SECRET_GROUP`). Only that group is replaced, so
 `proxy_password = hunter2` becomes `proxy_password = REDACTED_PASSWORD_1`
 with its key, delimiter and spacing as written. A pattern without the

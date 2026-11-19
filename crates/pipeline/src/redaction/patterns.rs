@@ -21,7 +21,7 @@ pub(crate) struct SecretPattern {
 /// Name of the capture group holding the secret itself.
 ///
 /// A pattern that matches context around the secret (a key and its
-/// delimiter, a URI's scheme and user, the bytes either side of an AWS key
+/// delimiter, a URI's scheme and user, the byte before an AWS key
 /// id) puts the secret in `(?P<secret>...)`. The engine replaces only that
 /// group, filters on that group's text, and leaves the rest of the match as
 /// written. A pattern without the group is replaced whole, which is right
@@ -106,6 +106,12 @@ fn gt_context(content: &str, caps: &Captures<'_>) -> GtContext {
     }
 }
 
+/// Returns true if `b` can be part of an AWS access key id, so a key id
+/// next to it is part of a longer run and not a key id.
+fn is_aws_key_byte(b: u8) -> bool {
+    b.is_ascii_uppercase() || b.is_ascii_digit()
+}
+
 /// The query-string key that marks a JDBC URL as carrying a credential.
 const JDBC_PASSWORD_MARKER: &str = "password=";
 
@@ -177,16 +183,22 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             remediation:
                 "Use environment variables or a secrets manager instead of inline passwords",
         },
-        // AWS access key ID (AKIA...). The boundary characters either side
-        // are context, not secret: replacing them ate the `=` before the key
-        // and the newline after it.
+        // AWS access key ID (AKIA...). The boundary character before the
+        // key is context, not secret: replacing it ate the `=` before the
+        // key. The boundary after it is checked by `accept`, not matched:
+        // matching it consumed the separator the next key's match starts
+        // on, so of `AKIA...\nAKIA...` only the first was found.
         SecretPattern {
-            regex: Regex::new(r"(?:^|[^A-Z0-9])(?P<secret>AKIA[0-9A-Z]{16})(?:[^A-Z0-9]|$)").unwrap(),
+            regex: Regex::new(r"(?:^|[^A-Z0-9])(?P<secret>AKIA[0-9A-Z]{16})").unwrap(),
+            accept: Some(|content, caps| {
+                caps.name(SECRET_GROUP).is_some_and(|key| {
+                    !content.as_bytes().get(key.end()).is_some_and(|&b| is_aws_key_byte(b))
+                })
+            }),
             finding_kind: FindingKind::AwsKey,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
-            accept: None,
-            remediation: "Rotate the AWS access key and use IAM roles",
+                        remediation: "Rotate the AWS access key and use IAM roles",
         },
         // JDBC URL carrying a credential: an `@` (a user and password in
         // the authority) or a non-empty `password=` anywhere after the
