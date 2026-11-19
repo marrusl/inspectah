@@ -246,7 +246,15 @@ backslash escape or YAML's `''` does not close it); after `>` it is XML
 element text, to the next `<`; the marker must sit inside, and the
 closing quote or tag stays. Running on to the next whitespace took them
 with the URL, and the file no longer parsed
-(`test_a_jdbc_url_keeps_the_quotes_and_tags_around_it`). After anything
+(`test_a_jdbc_url_keeps_the_quotes_and_tags_around_it`). Find the end of
+the quoted value first and look for the marker inside it second, never
+both in one regex: escape handling that decides where a value ends must
+not decide whether a marker is there. The double-quoted pattern did both,
+read `\@` as one escaped unit, found no bare `@`, and in an XML attribute,
+where a backslash is no escape, shipped the whole credential. Its
+`accept` check (`SecretPattern::accept`) now sets backslashes aside
+before it looks
+(`test_an_escaped_marker_in_a_quoted_jdbc_url_is_still_a_credential`). After anything
 else the secret runs through the line's last marker and on to the next
 whitespace. That reach is what covers an authority password with a space
 in it, and its cost is that a later `password=` or `@` on the same line

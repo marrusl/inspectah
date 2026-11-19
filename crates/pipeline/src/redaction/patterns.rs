@@ -1,7 +1,7 @@
 use inspectah_core::types::redaction::{
     Confidence, DetectionMethod, FindingKind, RedactionFinding, RedactionKind,
 };
-use regex::Regex;
+use regex::{Captures, Regex};
 use std::sync::LazyLock;
 
 /// A compiled pattern with its metadata for secret detection.
@@ -12,6 +12,10 @@ pub(crate) struct SecretPattern {
     pub confidence: Confidence,
     /// Human-readable remediation advice.
     pub remediation: &'static str,
+    /// A condition on a match that the regex cannot state, checked against
+    /// the content the match came from. A match it refuses is not a
+    /// finding. `None` accepts every match.
+    pub accept: Option<fn(&str, &Captures<'_>) -> bool>,
 }
 
 /// Name of the capture group holding the secret itself.
@@ -26,15 +30,40 @@ pub(crate) const SECRET_GROUP: &str = "secret";
 
 /// One of the JDBC URL patterns in [`PATTERNS`]. They differ only in what
 /// opens the URL, which decides where it ends.
-fn jdbc_pattern(regex: &str) -> SecretPattern {
+fn jdbc_pattern(regex: &str, accept: Option<fn(&str, &Captures<'_>) -> bool>) -> SecretPattern {
     SecretPattern {
         regex: Regex::new(regex).unwrap(),
         finding_kind: FindingKind::JdbcPassword,
         detection_method: DetectionMethod::Pattern,
         confidence: Confidence::High,
         remediation: "Use connection pooling with externalized credentials",
+        accept,
     }
 }
+
+/// Returns true if the double-quoted JDBC URL in `caps` carries a
+/// credential: an `@`, or a `password=` with a value, anywhere between
+/// its quotes once backslashes are set aside. The regex finds where the
+/// quoted value ends, honouring `\"`; this decides whether it holds a
+/// credential. A backslash is an escape in JSON and TOML but not in an XML
+/// attribute, so `\@` may be a backslash and an `@`, and either way the
+/// `@` is there.
+fn quoted_jdbc_url_carries_a_credential(_content: &str, caps: &Captures<'_>) -> bool {
+    let Some(url) = caps.name(SECRET_GROUP) else {
+        return false;
+    };
+    let plain: String = url.as_str().chars().filter(|&c| c != '\\').collect();
+    plain.contains('@')
+        || plain.match_indices(JDBC_PASSWORD_MARKER).any(|(i, m)| {
+            plain[i + m.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c != '&' && !c.is_whitespace())
+        })
+}
+
+/// The query-string key that marks a JDBC URL as carrying a credential.
+const JDBC_PASSWORD_MARKER: &str = "password=";
 
 /// All compiled patterns. `LazyLock` ensures they compile exactly once.
 pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
@@ -48,6 +77,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             finding_kind: FindingKind::PrivateKey,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
+            accept: None,
             remediation: "Remove private key or exclude file from snapshot",
         },
         // PEM certificate blocks (full BEGIN...END matching)
@@ -59,6 +89,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             finding_kind: FindingKind::Certificate,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
+            accept: None,
             remediation: "Review whether certificate exposure is intended; check for adjacent private keys",
         },
         // Modular crypt password hashes ($1$, $2b$, $5$, $6$, $y$, etc.)
@@ -73,6 +104,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             finding_kind: FindingKind::PasswordHash,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
+            accept: None,
             remediation: "Remove password hash or use a secrets manager",
         },
         // Generic password/credential in key=value config.
@@ -97,6 +129,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             finding_kind: FindingKind::Password,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
+            accept: None,
             remediation:
                 "Use environment variables or a secrets manager instead of inline passwords",
         },
@@ -108,6 +141,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             finding_kind: FindingKind::AwsKey,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
+            accept: None,
             remediation: "Rotate the AWS access key and use IAM roles",
         },
         // JDBC URL carrying a credential: an `@` (a user and password in
@@ -127,7 +161,11 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         //   quotes, does not close it. After `>`, XML element text, up to
         //   the next `<`. The marker must sit inside, and the closing quote
         //   or tag stays as written. Running on to the next whitespace
-        //   instead took `"` and `</url>` with the URL.
+        //   instead took `"` and `</url>` with the URL. In double quotes
+        //   the regex only finds where the value ends, and
+        //   `quoted_jdbc_url_carries_a_credential` looks for the marker
+        //   with backslashes set aside: in an XML attribute `\@` is a
+        //   backslash and an `@`, and reading it as one escape hid the `@`.
         // - after anything else, the line's last marker and on to the next
         //   whitespace. This reach crosses whitespace on purpose, for an
         //   authority password holding a space (`jdbc:mysql://u:two
@@ -148,15 +186,19 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // host's malformed URL can hold them.
         jdbc_pattern(
             r#"(?:(?m:^)|[^"'>\r\n])jdbc:[a-z]+://(?P<secret>[^\r\n]*(?:@|password=[^&\s])\S*)"#,
+            None,
         ),
         jdbc_pattern(
-            r#""jdbc:[a-z]+://(?P<secret>(?:[^"\\\r\n]|\\[^\r\n])*(?:@|password=[^&\s"])(?:[^"\\\r\n]|\\[^\r\n])*)"#,
+            r#""jdbc:[a-z]+://(?P<secret>(?:[^"\\\r\n]|\\[^\r\n]?)+)"#,
+            Some(quoted_jdbc_url_carries_a_credential),
         ),
         jdbc_pattern(
             r#"'jdbc:[a-z]+://(?P<secret>(?:[^'\r\n]|'')*(?:@|password=[^&\s'])(?:[^'\r\n]|'')*)"#,
+            None,
         ),
         jdbc_pattern(
             r#">jdbc:[a-z]+://(?P<secret>[^<\r\n]*(?:@|password=[^&\s<])[^<\r\n]*)"#,
+            None,
         ),
         // PostgreSQL connection URI with password. Only the password is
         // replaced; the scheme, user and `@host` stay. The user and
@@ -169,6 +211,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             finding_kind: FindingKind::PostgresPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
+            accept: None,
             remediation: "Use .pgpass or environment variables for PostgreSQL credentials",
         },
         // MongoDB connection URI with password; one line, as Postgres.
@@ -177,6 +220,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             finding_kind: FindingKind::MongodbPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
+            accept: None,
             remediation: "Use environment variables for MongoDB credentials",
         },
         // Redis connection URI with password; one line, as Postgres.
@@ -185,6 +229,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             finding_kind: FindingKind::RedisPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
+            accept: None,
             remediation: "Use environment variables for Redis credentials",
         },
         // WireGuard private key (base64, 44 chars including trailing =)
@@ -193,6 +238,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             finding_kind: FindingKind::WireguardKey,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
+            accept: None,
             remediation: "Regenerate WireGuard keys and use wg-quick with externalized key files",
         },
         // WiFi PSK in wpa_supplicant or NetworkManager config
@@ -201,6 +247,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             finding_kind: FindingKind::WifiPsk,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
+            accept: None,
             remediation: "Use 802.1X or externalize WiFi credentials",
         },
     ]
@@ -567,7 +614,7 @@ mod tests {
     }
 
     /// What opens a JDBC URL decides where it ends, and exactly one of the
-    /// four JDBC patterns claims it. A quoted URL or XML text leaves its
+    /// four JDBC patterns claims it, counting a pattern's `accept` check. A quoted URL or XML text leaves its
     /// closing quote or tag outside the secret, and the unquoted pattern
     /// never takes a URL that an opener's pattern declined.
     #[test]
@@ -610,6 +657,12 @@ mod tests {
                 "<url>jdbc:mysql://db/app?password=two words</url>",
                 Some((JDBC_XML_TEXT, "db/app?password=two words")),
             ),
+            // A backslash before a marker does not hide it: in an XML
+            // attribute it is no escape at all.
+            (
+                r#"<db url="jdbc:mysql://u:pw\@db/app"/>"#,
+                Some((JDBC_DOUBLE_QUOTED, r"u:pw\@db/app")),
+            ),
             // An unterminated quote runs to the end of the line.
             (
                 r#"url="jdbc:mysql://u:pw@db/app pool=4"#,
@@ -630,9 +683,10 @@ mod tests {
             let got: Vec<(usize, &str)> = jdbc
                 .iter()
                 .flat_map(|&idx| {
-                    PATTERNS[idx]
-                        .regex
+                    let pat = &PATTERNS[idx];
+                    pat.regex
                         .captures_iter(input)
+                        .filter(move |c| pat.accept.is_none_or(|accept| accept(input, c)))
                         .map(move |c| (idx, c.name(SECRET_GROUP).unwrap().as_str()))
                 })
                 .collect();

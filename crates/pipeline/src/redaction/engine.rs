@@ -317,6 +317,13 @@ fn collect_eligible_matches(
             let secret = caps.name(SECRET_GROUP).unwrap_or(whole);
             let text = secret.as_str();
 
+            // Filter 0: the pattern's own condition on the match
+            if let Some(accept) = pat.accept
+                && !accept(content, &caps)
+            {
+                return None;
+            }
+
             // Filter 1: skip matches on comment lines
             if is_comment_line(content, whole.start(), &markers) {
                 return None;
@@ -4855,6 +4862,73 @@ baseurl = https://cdn.redhat.com
                 findings.len(),
                 usize::from(!secrets.is_empty()),
                 "{input:?}"
+            );
+        }
+    }
+
+    /// A credential marker inside a quoted JDBC URL counts wherever it
+    /// sits, escaped or not. A backslash is no escape in an XML attribute
+    /// or a single-quoted scalar, and `\@` there is a backslash and an
+    /// `@`; treating `\@` as one escaped unit left no bare `@` to find,
+    /// and the whole credential shipped.
+    #[test]
+    fn test_an_escaped_marker_in_a_quoted_jdbc_url_is_still_a_credential() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            (
+                r#"<db url="jdbc:mysql://u:zsecret\@db/app"/>"#,
+                r#"<db url="jdbc:mysql://REDACTED_JDBCPASSWORD_1"/>"#,
+                &["zsecret"],
+            ),
+            (
+                r#"url="jdbc:mysql://db/app?pass\word=zsecret" pool=4"#,
+                r#"url="jdbc:mysql://REDACTED_JDBCPASSWORD_1" pool=4"#,
+                &["zsecret"],
+            ),
+            (
+                r"url='jdbc:mysql://u:zsecret\@db/app' pool=4",
+                r"url='jdbc:mysql://REDACTED_JDBCPASSWORD_1' pool=4",
+                &["zsecret"],
+            ),
+            // Unterminated: the value runs to the end of the line.
+            (
+                r#"url="jdbc:mysql://u:zsecret\@db/app"#,
+                r#"url="jdbc:mysql://REDACTED_JDBCPASSWORD_1"#,
+                &["zsecret"],
+            ),
+            (
+                r"url='jdbc:mysql://u:zsecret\@db/app",
+                r"url='jdbc:mysql://REDACTED_JDBCPASSWORD_1",
+                &["zsecret"],
+            ),
+            // An escaped quote is still not the end of a JSON string.
+            (
+                r#"{"url": "jdbc:mysql://u:p\"zsecret\@db/app", "pool": 4}"#,
+                r#"{"url": "jdbc:mysql://REDACTED_JDBCPASSWORD_1", "pool": 4}"#,
+                &["zsecret"],
+            ),
+            // No marker inside the quotes, escaped or not: left alone.
+            (
+                r#"<db url="jdbc:mysql://db/a\pp" owner="ops@example.com"/>"#,
+                r#"<db url="jdbc:mysql://db/a\pp" owner="ops@example.com"/>"#,
+                &[],
+            ),
+        ];
+        for (input, want, secrets) in cases {
+            let once = redact_string(input).into_owned();
+            assert_eq!(&once, want, "{input:?}");
+
+            let mut snap = config_snapshot("/etc/app/app.conf", input);
+            redact(&mut snap, &RedactOptions::default());
+            assert_eq!(&snap.config.as_ref().unwrap().files[0].content, want);
+            let written = serde_json::to_string(&snap).unwrap();
+            for secret in *secrets {
+                assert!(!written.contains(secret), "{secret:?} from {input:?}");
+            }
+            let findings = scan_content(input, "/etc/app.conf");
+            assert_eq!(
+                findings.len(),
+                usize::from(!secrets.is_empty()),
+                "{input:?}: {findings:?}"
             );
         }
     }
