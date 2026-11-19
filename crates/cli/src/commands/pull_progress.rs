@@ -464,6 +464,49 @@ mod tests {
         assert!(collected[0].contains("eyJsecrettoken"));
     }
 
+    /// Both live callbacks show a query string or token body scrubbed,
+    /// every copy, and keep the raw line for classification.
+    #[test]
+    fn callbacks_scrub_query_strings_and_token_bodies() {
+        use super::super::pull_failure::tests::QUERY_AND_BODY_CREDENTIALS;
+        for (name, input, secrets) in QUERY_AND_BODY_CREDENTIALS {
+            let mut collected = Vec::new();
+            let mut plain = Vec::new();
+            {
+                let mut cb = non_tty_callback(&mut collected, &mut plain);
+                for line in input.lines() {
+                    cb(line);
+                }
+            }
+            let mut tty_collected = Vec::new();
+            let mut ring: Vec<String> = (0..3).map(|_| String::new()).collect();
+            let mut ring_pos: usize = 0;
+            let mut tty = Vec::new();
+            {
+                let mut cb = tty_viewport_callback(
+                    &mut tty_collected,
+                    &mut ring,
+                    &mut ring_pos,
+                    400,
+                    &mut tty,
+                );
+                for line in input.lines() {
+                    cb(line);
+                }
+            }
+            for output in [
+                String::from_utf8_lossy(&plain),
+                String::from_utf8_lossy(&tty),
+            ] {
+                assert!(output.contains("[REDACTED]"), "{name}: {output}");
+                for secret in *secrets {
+                    assert!(!output.contains(secret), "{name}: {secret:?}: {output}");
+                }
+            }
+            assert_eq!(collected.join("\n"), *input, "{name}");
+        }
+    }
+
     #[test]
     fn viewport_height_scales_with_terminal() {
         assert_eq!(viewport_height(80), 16); // 80 * 0.3 = 24 -> capped at 16

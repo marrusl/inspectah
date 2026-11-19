@@ -94,7 +94,9 @@ pub fn classify_pull_failure(stderr: &str) -> PullFailureKind {
     PullFailureKind::Unknown
 }
 
-/// Sanitize stderr by redacting bearer tokens, basic auth, and authorization headers.
+/// Sanitize stderr by redacting bearer tokens, URL user information and
+/// query strings, token fields in a token response body, and
+/// authorization headers.
 ///
 /// This prevents credential leakage in error output shown to users or
 /// collected in diagnostic bundles. Every occurrence of each form is
@@ -119,6 +121,28 @@ pub fn sanitize_stderr(s: &str) -> String {
         (0, tail[..authority_len].rfind('@').unwrap_or(0))
     });
 
+    // Query strings: `https://host/blob?token=x` -> `https://host/blob?[REDACTED]`.
+    // Go's HTTP errors keep a URL's query, which can carry a download
+    // token or a signed URL's credentials, and there is no list of
+    // parameter names that covers them all, so the whole query goes. The
+    // URL ends at whitespace or at a quote, backslash or angle bracket that
+    // encloses it.
+    let result = redact_each(&result, "://", |tail| {
+        let url_len = tail
+            .find(|c: char| c.is_whitespace() || URL_ENCLOSERS.contains(&c))
+            .unwrap_or(tail.len());
+        match tail[..url_len].find('?') {
+            Some(q) => (q + 1, url_len),
+            None => (0, 0),
+        }
+    });
+
+    // Token fields in a token response body, which containers/image quotes
+    // when it cannot decode one: `"token":"x"` and `"access_token": "x"`,
+    // plain or with Go's escaped quotes (`\"token\":\"x\"`).
+    let result = redact_each(&result, "token\"", json_string_value);
+    let result = redact_each(&result, "token\\\"", json_string_value);
+
     // Authorization headers: `Authorization: <value>`, value to end of line.
     redact_each(&result, "authorization:", |tail| {
         let start = horizontal_ws_len(tail);
@@ -127,6 +151,36 @@ pub fn sanitize_stderr(s: &str) -> String {
             .unwrap_or(tail.len() - start);
         (start, start + len)
     })
+}
+
+/// Characters that end a URL in stderr because they enclose it.
+const URL_ENCLOSERS: &[char] = &['"', '\'', '\\', '<', '>', '`'];
+
+/// The value of a JSON string field whose key's closing quote `tail`
+/// follows: past `:` and an opening `"` or `\"`, up to the next quote,
+/// backslash, comma, brace or whitespace. A body cut short ends the value
+/// at the end of the text. Without a `:` there is no value, so the word
+/// `token` in prose is left alone.
+fn json_string_value(tail: &str) -> (usize, usize) {
+    let mut i = horizontal_ws_len(tail);
+    if !tail[i..].starts_with(':') {
+        return (0, 0);
+    }
+    i += 1;
+    i += horizontal_ws_len(&tail[i..]);
+    let rest = &tail[i..];
+    let open = if rest.starts_with("\\\"") {
+        2
+    } else if rest.starts_with('"') {
+        1
+    } else {
+        0
+    };
+    let start = i + open;
+    let len = tail[start..]
+        .find(|c: char| matches!(c, '"' | '\\' | ',' | '}') || c.is_whitespace())
+        .unwrap_or(tail.len() - start);
+    (start, start + len)
 }
 
 /// Placeholder that replaces a redacted credential.
@@ -394,7 +448,7 @@ pub fn format_resolution_error(cause: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use inspectah_collect::baseline::{ContainerStep, ImageSource};
 
@@ -852,6 +906,79 @@ mod tests {
                         !msg.contains(secret),
                         "{image_source:?}, {name}: {secret:?} survived: {msg}"
                     );
+                }
+            }
+        }
+    }
+
+    /// Query strings and token response bodies that a failed pull prints,
+    /// each with its credential twice: the scrubber, the Unknown pull
+    /// excerpt and a container step's excerpt all drop every copy.
+    pub(crate) const QUERY_AND_BODY_CREDENTIALS: &[(&str, &str, &[&str])] = &[
+        (
+            "query token in a Go HTTP error",
+            "Get \"https://cdn.example/blob?token=dl-secret-1\": EOF\n\
+             Get \"https://cdn.example/blob?token=dl-secret-1\": EOF",
+            &["dl-secret-1"],
+        ),
+        (
+            "signed blob URL",
+            "Get \"https://cdn.example/blob?X-Amz-Signature=sig-secret&X-Amz-Security-Token=sess-secret\": EOF; \
+             retry https://cdn.example/blob?X-Amz-Signature=sig-secret&X-Amz-Security-Token=sess-secret",
+            &["sig-secret", "sess-secret"],
+        ),
+        (
+            "token response body, Go-escaped",
+            "decoding bearer token (last URL \"https://auth.example/token\", body start \"{\\\"token\\\":\\\"body-secret\\\",\\\"access_token\\\":\\\"body-secret-2\\\",\\\"expires\"): bad",
+            &["body-secret", "body-secret-2"],
+        ),
+        (
+            "token response body, plain JSON",
+            "body: {\"token\": \"plain-secret\", \"access_token\":\"plain-secret-2\"} and {\"token\":\"plain-secret\"",
+            &["plain-secret", "plain-secret-2"],
+        ),
+    ];
+
+    #[test]
+    fn sanitize_scrubs_query_strings_and_token_bodies() {
+        for (name, input, secrets) in QUERY_AND_BODY_CREDENTIALS {
+            let out = sanitize_stderr(input);
+            for secret in *secrets {
+                assert!(!out.contains(secret), "{name}: {secret:?} survived: {out}");
+            }
+            assert!(out.contains(REDACTED), "{name}: {out}");
+        }
+        // The URL up to its query, and the text around it, stay.
+        assert_eq!(
+            sanitize_stderr("Get \"https://cdn.example/blob?token=x\": EOF"),
+            "Get \"https://cdn.example/blob?[REDACTED]\": EOF"
+        );
+        assert_eq!(
+            sanitize_stderr("{\\\"token\\\":\\\"x\\\",\\\"expires_in\\\":60}"),
+            "{\\\"token\\\":\\\"[REDACTED]\\\",\\\"expires_in\\\":60}"
+        );
+        // The word "token" in prose is not a JSON field.
+        assert_eq!(
+            sanitize_stderr("error decoding token response"),
+            "error decoding token response"
+        );
+    }
+
+    #[test]
+    fn excerpts_scrub_query_strings_and_token_bodies() {
+        for (name, input, secrets) in QUERY_AND_BODY_CREDENTIALS {
+            let pull = format_pull_error(&PullFailureKind::Unknown, IMG, input);
+            let err = ExtractionError::ContainerFailed {
+                step: ContainerStep::Exec,
+                image_ref: IMG.to_string(),
+                image_source: ImageSource::Pulled,
+                reason: input.to_string(),
+            };
+            let step = format_baseline_error(&err, IMG, "");
+            for msg in [&pull, &step] {
+                assert!(msg.contains("podman reported:"), "{name}: {msg}");
+                for secret in *secrets {
+                    assert!(!msg.contains(secret), "{name}: {secret:?} survived: {msg}");
                 }
             }
         }
