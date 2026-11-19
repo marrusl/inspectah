@@ -4312,6 +4312,31 @@ mod tests {
         for (path, expected) in cases {
             assert_eq!(is_on_writable_mount(path, &mounts), expected, "{path}");
         }
+
+        // The longest containing mount decides, in both directions: a
+        // writable root is the fallback, a read-only mount inside a
+        // writable one wins, and a trailing slash on a mount point still
+        // matches on its boundary.
+        let nested: HashMap<String, bool> = [
+            ("/".to_string(), true),
+            ("/srv".to_string(), false),
+            ("/srv/data/".to_string(), true),
+            ("/srv/data/cache".to_string(), false),
+        ]
+        .into_iter()
+        .collect();
+        let cases = [
+            ("/", true),
+            ("/usr/bin/x", true),
+            ("/srv/x", false),
+            ("/srv/data-old/x", false),
+            ("/srv/data", true),
+            ("/srv/data/file", true),
+            ("/srv/data/cache/x", false),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(is_on_writable_mount(path, &nested), expected, "{path}");
+        }
     }
 
     #[test]
