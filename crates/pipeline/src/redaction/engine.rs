@@ -49,11 +49,13 @@ static PROXY_CRED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(://[^:/@\s]+:)([^@\s]+)(@)").expect("proxy regex"));
 
 /// Compiled regex for bare `proxy_password=VALUE` lines in DNF/Yum configs.
+/// Spacing around `=` is `[ \t]*`, not `\s*`, so an empty value never takes
+/// the next line as the password (see the generic credential patterns).
 /// Captures two groups:
 ///   1. `proxy_password=` (the key prefix)
 ///   2. the password value
 static PROXY_PASSWORD_KV_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(proxy_password\s*=\s*)(\S+)").expect("proxy_password key-value regex")
+    Regex::new(r"(?i)(proxy_password[ \t]*=[ \t]*)(\S+)").expect("proxy_password key-value regex")
 });
 
 /// Compiled regex for username-only token remotes: `://token@host`.
@@ -3479,6 +3481,22 @@ baseurl = https://cdn.redhat.com
         );
         let lines: Vec<Option<i32>> = findings.iter().map(|f| f.line).collect();
         assert_eq!(lines, vec![Some(1), Some(2)]);
+    }
+
+    /// The proxy masker's `proxy_password =` stays on its line: with an
+    /// empty value it matches nothing, rather than taking the next line as
+    /// the password, as the generic credential pattern already does.
+    #[test]
+    fn test_proxy_password_masking_stays_on_its_line() {
+        for input in ["proxy_password =\nnext=1", "proxy_password\n= next"] {
+            let (out, finding) = mask_proxy_credentials(input, "/etc/dnf/dnf.conf");
+            assert_eq!(out, input, "{input:?}");
+            assert!(finding.is_none(), "{input:?}");
+        }
+        let (out, finding) =
+            mask_proxy_credentials("proxy_password =\thunter2", "/etc/dnf/dnf.conf");
+        assert_eq!(out, "proxy_password =\t[REDACTED]");
+        assert!(finding.is_some());
     }
 
     // --- Comment-line filtering tests (Gap 1) ---
