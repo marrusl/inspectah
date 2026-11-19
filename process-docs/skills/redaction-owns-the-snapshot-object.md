@@ -369,7 +369,11 @@ match a newline. The URI patterns use `[^:\r\n]`, `[^@\r\n]` and
 `contact: ops@host` line further down
 (`test_uri_patterns_never_cross_a_line_break`). Exclude CR and LF, not
 `\s`: a URI password with a space or tab in it is malformed but is still
-a password, and `[^@\s]` stopped redacting `postgres://u:two words@db`.
+a password, and `[^@\s]` stopped redacting `postgres://u:two words@db`. Do not exclude `/` either: a password written with a literal `/` reads
+the same as a password-less URI with an `@` in its query
+(`postgres://host:5432/db?u=a@b`), so excluding it ships the first to
+fix the second
+(`test_uri_password_with_a_slash_is_covered_at_the_cost_of_a_query_at`).
 Only the PEM patterns span lines, on purpose, with `(?s)`.
 
 ## A credential value keeps the quotes and tags around it

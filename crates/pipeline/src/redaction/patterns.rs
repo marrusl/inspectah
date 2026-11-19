@@ -326,7 +326,11 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // password classes exclude CR and LF: with `[^:]+` / `[^@]+` a
         // password-less URI paired with a `contact: ops@host` line below
         // it. They exclude nothing else, so a password with a space or tab
-        // in it (`postgres://u:two words@db`) is still redacted.
+        // in it (`postgres://u:two words@db`) is still redacted, and so is
+        // one with a literal `/`, at the cost of a password-less URI whose
+        // query holds an `@`: in `postgres://host:5432/db?u=a@b` the port,
+        // path and query up to the `@` are taken as the password. The two
+        // read the same.
         SecretPattern {
             regex: Regex::new(r"postgres(?:ql)?://[^:\r\n]+:(?P<secret>[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::PostgresPassword,

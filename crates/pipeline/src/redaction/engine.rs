@@ -5300,6 +5300,37 @@ baseurl = https://cdn.redhat.com
         assert_eq!(json_out["pool"].as_i64(), Some(4));
     }
 
+    /// A URI's user and password classes cross `/`. A password written
+    /// with a literal `/` (base64 passwords hold them) reads the same as a
+    /// password-less URI whose query has an `@`, so the patterns keep the
+    /// first covered and over-redact the second: the port, path and query
+    /// before the `@` go with it.
+    #[test]
+    fn test_uri_password_with_a_slash_is_covered_at_the_cost_of_a_query_at() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "postgres://u:pa/zsecret@host/db",
+                "postgres://u:REDACTED_POSTGRESPASSWORD_1@host/db",
+            ),
+            (
+                "mongodb://u:pa/zsecret@host/db",
+                "mongodb://u:REDACTED_MONGODBPASSWORD_1@host/db",
+            ),
+            // The cost.
+            (
+                "postgres://host:5432/db?u=a@b",
+                "postgres://host:REDACTED_POSTGRESPASSWORD_1@b",
+            ),
+            (
+                "mongodb://host:27017/db?authSource=a@b",
+                "mongodb://host:REDACTED_MONGODBPASSWORD_1@b",
+            ),
+        ];
+        for (input, want) in cases {
+            assert_eq!(redact_string(input), *want, "{input:?}");
+        }
+    }
+
     /// The redacted text of a quoted JDBC URL still parses as the format
     /// it came in, with the token as the value and its neighbours intact.
     #[test]
