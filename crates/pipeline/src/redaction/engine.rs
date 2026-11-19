@@ -2129,6 +2129,35 @@ baseurl = https://cdn.redhat.com
     }
 
     #[test]
+    fn test_uri_redaction_stays_on_its_line() {
+        for nl in ["\n", "\r\n"] {
+            // A password-less URI followed later by an `x: y@z` line is
+            // not a credential, and nothing changes.
+            let input =
+                format!("url = postgres://db.example.com/app{nl}contact: ops@example.com{nl}");
+            assert_eq!(redact_string(&input), input.as_str(), "{input:?}");
+
+            // The line before a JDBC credential survives byte for byte,
+            // and the credential is reported once, as JDBC.
+            let first = "primary=jdbc:mysql://db/one";
+            let input = format!("{first}{nl}secondary=jdbc:mysql://db/two?password=hunter2{nl}");
+            let out = redact_string(&input).into_owned();
+            assert_eq!(
+                out,
+                format!(
+                    "{first}{nl}secondary=jdbc:mysql://db/two?password=REDACTED_JDBCPASSWORD_1{nl}"
+                ),
+                "{input:?}"
+            );
+            let kinds: Vec<Option<FindingKind>> = scan_content(&input, "/etc/app.conf")
+                .into_iter()
+                .map(|f| f.finding_kind)
+                .collect();
+            assert_eq!(kinds, vec![Some(FindingKind::JdbcPassword)], "{input:?}");
+        }
+    }
+
+    #[test]
     fn test_a_match_inside_another_patterns_claim_is_still_redacted() {
         // A pattern's whole match can contain another pattern's secret
         // outside its own secret: both secrets must be replaced.

@@ -242,6 +242,12 @@ checks the secret is gone passes over this. The byte comparison in
 `assignment_keys` helper only catches a line with no key before `=` and
 is not a `configparser` model.
 
+The same holds for every negated class: `[^:]`, `[^@]` and `[^?]` all
+match a newline. The URI patterns use `[^:\s]`, `[^@\s]` and `[^?\s]`,
+or a password-less `postgres://db/app` pairs with a `contact: ops@host`
+line further down (`test_uri_patterns_never_cross_a_line_break`). Only
+the PEM patterns span lines, on purpose, with `(?s)`.
+
 ## Content parsed after redaction is unknown when the pass changed it
 
 Some content is parsed *after* `redact()` has run: the sysctl

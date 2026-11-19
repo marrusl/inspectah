@@ -99,34 +99,38 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             remediation: "Rotate the AWS access key and use IAM roles",
         },
         // JDBC connection string with password. Only the password value is
-        // replaced; the URL and its other parameters stay.
+        // replaced; the URL and its other parameters stay. No class here
+        // admits a line break (`.` stops at `\n`), so a URL with no
+        // password cannot pair with a `?password=` on a later line.
         SecretPattern {
-            regex: Regex::new(r"jdbc:[a-z]+://[^?]+\?.*password=(?P<secret>[^&\s]+)").unwrap(),
+            regex: Regex::new(r"jdbc:[a-z]+://[^?\s]+\?.*password=(?P<secret>[^&\s]+)").unwrap(),
             finding_kind: FindingKind::JdbcPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use connection pooling with externalized credentials",
         },
         // PostgreSQL connection URI with password. Only the password is
-        // replaced; the scheme, user and `@host` stay.
+        // replaced; the scheme, user and `@host` stay. The user and
+        // password classes exclude whitespace: with `[^:]+` / `[^@]+` a
+        // password-less URI paired with a `contact: ops@host` line below it.
         SecretPattern {
-            regex: Regex::new(r"postgres(?:ql)?://[^:]+:(?P<secret>[^@]+)@").unwrap(),
+            regex: Regex::new(r"postgres(?:ql)?://[^:\s]+:(?P<secret>[^@\s]+)@").unwrap(),
             finding_kind: FindingKind::PostgresPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use .pgpass or environment variables for PostgreSQL credentials",
         },
-        // MongoDB connection URI with password.
+        // MongoDB connection URI with password; one line, as Postgres.
         SecretPattern {
-            regex: Regex::new(r"mongodb(?:\+srv)?://[^:]+:(?P<secret>[^@]+)@").unwrap(),
+            regex: Regex::new(r"mongodb(?:\+srv)?://[^:\s]+:(?P<secret>[^@\s]+)@").unwrap(),
             finding_kind: FindingKind::MongodbPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use environment variables for MongoDB credentials",
         },
-        // Redis connection URI with password.
+        // Redis connection URI with password; one line, as Postgres.
         SecretPattern {
-            regex: Regex::new(r"redis://:(?P<secret>[^@]+)@").unwrap(),
+            regex: Regex::new(r"redis://:(?P<secret>[^@\s]+)@").unwrap(),
             finding_kind: FindingKind::RedisPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
@@ -367,6 +371,10 @@ mod tests {
 
     /// Index of each line-oriented `key = value` pattern in `PATTERNS`.
     const GENERIC_PASSWORD: usize = 3;
+    const JDBC: usize = 5;
+    const POSTGRES: usize = 6;
+    const MONGODB: usize = 7;
+    const REDIS: usize = 8;
     const WIREGUARD_KEY: usize = 9;
     const WIFI_PSK: usize = 10;
 
@@ -406,6 +414,58 @@ mod tests {
                 PATTERNS[*idx].regex.is_match(text),
                 "pattern {idx} must match a value on the same line: {text:?}"
             );
+        }
+    }
+
+    #[test]
+    fn test_uri_patterns_never_cross_a_line_break() {
+        for nl in ["\n", "\r\n"] {
+            let cases = [
+                // A URI with no password, then an `x: y@z` line later.
+                (
+                    POSTGRES,
+                    format!("url = postgres://db.example.com/app{nl}contact: ops@example.com"),
+                ),
+                (POSTGRES, format!("postgres://app:{nl}pw@db")),
+                (
+                    MONGODB,
+                    format!("mongodb://db.example.com{nl}user: x@example.com"),
+                ),
+                (MONGODB, format!("mongodb+srv://u:{nl}pw@h")),
+                (REDIS, format!("redis://:secretpw{nl}mail = a@b")),
+                (
+                    JDBC,
+                    format!(
+                        "primary=jdbc:mysql://db/one{nl}secondary=jdbc:mysql://db/two?password=hunter2"
+                    ),
+                ),
+            ];
+            for (idx, text) in &cases {
+                for m in PATTERNS[*idx].regex.find_iter(text) {
+                    assert!(
+                        !m.as_str().contains(['\n', '\r']),
+                        "pattern {idx} matched across a line break: {:?} in {text:?}",
+                        m.as_str()
+                    );
+                }
+            }
+        }
+        // Single-line URIs are still detected.
+        let same_line = [
+            (POSTGRES, "postgres://app:pw@db.example.com/app"),
+            (POSTGRES, "postgresql://app:pw@db:5432/app"),
+            (MONGODB, "mongodb://app:pw@db.example.com/app"),
+            (MONGODB, "mongodb+srv://app:pw@cluster.example.com"),
+            (REDIS, "redis://:pw@cache:6379/0"),
+            (JDBC, "jdbc:mysql://db:3306/app?user=u&password=pw"),
+            (JDBC, "jdbc:postgresql://db/app?ssl=true&password=pw\r"),
+        ];
+        for (idx, text) in same_line {
+            let caps = PATTERNS[idx]
+                .regex
+                .captures(text)
+                .unwrap_or_else(|| panic!("pattern {idx} must match {text:?}"));
+            assert_eq!(&caps[SECRET_GROUP], "pw", "pattern {idx} on {text:?}");
         }
     }
 
