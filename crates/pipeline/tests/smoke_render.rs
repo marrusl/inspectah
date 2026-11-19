@@ -1185,6 +1185,75 @@ fn selinux_install_precondition_renders_for_a_port_label_alone() {
     assert_precondition_present(&snap, "RUN semanage port -a");
 }
 
+/// A port label excluded in refine renders neither its `semanage port` line
+/// nor the precondition that installs `semanage` for it. The included case
+/// is the paired positive, and the mixed case keeps the install for the label
+/// that still renders.
+#[test]
+fn selinux_port_label_disposition_gates_the_line_and_the_precondition() {
+    let excluded_label = || {
+        let mut pl = sel::port_label("http_port_t", "tcp", "8443");
+        pl.disposition = FindingKind::excluded();
+        pl
+    };
+    let render = |ports| {
+        containerfile::render_containerfile(
+            &sel::snapshot(Vec::new(), FcontextSource::PolicyStore, ports),
+            None,
+            None,
+        )
+    };
+    const EXCLUDED_LINE: &str = "RUN semanage port -a -t http_port_t -p tcp 8443";
+    const INCLUDED_LINE: &str = "RUN semanage port -a -t ssh_port_t -p tcp 2222";
+
+    // Included: the line and the precondition both render.
+    let included = render(vec![sel::port_label("ssh_port_t", "tcp", "2222")]);
+    assert!(included.contains(INCLUDED_LINE), "{included}");
+    assert!(included.contains(sel::SEMANAGE_PACKAGE), "{included}");
+
+    // Excluded alone: no port line, no precondition, no port-label count.
+    let excluded = render(vec![excluded_label()]);
+    assert!(
+        !excluded.contains("semanage port"),
+        "an excluded port label rendered its command:\n{excluded}"
+    );
+    assert!(
+        !excluded.contains(sel::SEMANAGE_PACKAGE),
+        "an excluded port label pulled in the precondition:\n{excluded}"
+    );
+    assert!(
+        !excluded.contains("port label(s) detected"),
+        "an excluded port label was counted:\n{excluded}"
+    );
+
+    // Mixed: the included label renders with its precondition; the excluded
+    // one does not, and the count names only what the block carries.
+    let mixed = render(vec![
+        sel::port_label("ssh_port_t", "tcp", "2222"),
+        excluded_label(),
+    ]);
+    assert!(mixed.contains(INCLUDED_LINE), "{mixed}");
+    assert!(
+        !mixed.contains(EXCLUDED_LINE),
+        "the excluded label rendered beside the included one:\n{mixed}"
+    );
+    assert_precondition_present(
+        &sel::snapshot(
+            Vec::new(),
+            FcontextSource::PolicyStore,
+            vec![
+                sel::port_label("ssh_port_t", "tcp", "2222"),
+                excluded_label(),
+            ],
+        ),
+        "RUN semanage port -a",
+    );
+    assert!(
+        mixed.contains("# 1 custom SELinux port label(s) detected"),
+        "{mixed}"
+    );
+}
+
 #[test]
 fn selinux_install_precondition_absent_without_rules_or_port_labels() {
     // The fixture `containerfile.rs`'s section-ordering test uses: a block

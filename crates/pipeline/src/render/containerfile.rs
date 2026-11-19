@@ -2054,7 +2054,14 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // labels because it has to precede whichever `semanage` command the block
     // emits first (spec § 3.1).
     let fcontext = super::selinux::render_fcontext_rules(snap);
-    let ports_need_semanage = sel.port_labels.iter().any(port_label_renders);
+    // Only the port labels the operator kept in refine: an excluded label
+    // renders no command, so it must not pull in the install either.
+    let port_labels: Vec<_> = sel
+        .port_labels
+        .iter()
+        .filter(|pl| pl.disposition.is_included())
+        .collect();
+    let ports_need_semanage = port_labels.iter().any(|pl| port_label_renders(pl));
     body.extend(fcontext.preamble);
     if fcontext.emits_command || ports_need_semanage {
         body.extend(
@@ -2065,12 +2072,12 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
     body.extend(fcontext.rules);
 
-    if !sel.port_labels.is_empty() {
+    if !port_labels.is_empty() {
         body.push(format!(
             "# {} custom SELinux port label(s) detected",
-            sel.port_labels.len()
+            port_labels.len()
         ));
-        for pl in &sel.port_labels {
+        for pl in &port_labels {
             if port_label_renders(pl) {
                 body.push(format!(
                     "RUN semanage port -a -t {} -p {} {}",
