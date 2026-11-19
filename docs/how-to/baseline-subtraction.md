@@ -52,7 +52,7 @@ sudo inspectah scan --base-image quay.io/fedora/fedora-bootc:41
 # CentOS Stream example
 sudo inspectah scan --base-image quay.io/centos-bootc/centos-bootc:stream9
 
-# RHEL example (requires registry.redhat.io authentication)
+# RHEL example (requires registry.redhat.io authentication unless the image is in local storage)
 sudo inspectah scan --base-image registry.redhat.io/rhel9/rhel-bootc:9.6
 ```
 

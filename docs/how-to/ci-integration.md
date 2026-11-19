@@ -193,7 +193,7 @@ sudo inspectah scan \
   --progress flat \
   -o ./scan-output.tar.gz
 
-# RHEL example (requires registry.redhat.io authentication)
+# RHEL example (requires registry.redhat.io authentication unless the image is in local storage)
 sudo inspectah scan \
   --base-image registry.redhat.io/rhel9/rhel-bootc:9.6 \
   --progress flat \
