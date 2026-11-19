@@ -12,12 +12,17 @@ pub(crate) struct SecretPattern {
     pub confidence: Confidence,
     /// Human-readable remediation advice.
     pub remediation: &'static str,
-    /// Optional replacement template using capture-group references (`${1}`,
-    /// `${3}`, etc.). When set, the engine replaces only the password portion
-    /// (capture group 2) with the redaction token while preserving URL structure.
-    /// When `None`, the engine replaces the entire match.
-    pub replacement_template: Option<&'static str>,
 }
+
+/// Name of the capture group holding the secret itself.
+///
+/// A pattern that matches context around the secret (a key and its
+/// delimiter, a URI's scheme and user, the bytes either side of an AWS key
+/// id) puts the secret in `(?P<secret>...)`. The engine replaces only that
+/// group, filters on that group's text, and leaves the rest of the match as
+/// written. A pattern without the group is replaced whole, which is right
+/// only when the whole match is the secret (a PEM block, a hash).
+pub(crate) const SECRET_GROUP: &str = "secret";
 
 /// All compiled patterns. `LazyLock` ensures they compile exactly once.
 pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
@@ -32,7 +37,6 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Remove private key or exclude file from snapshot",
-            replacement_template: None,
         },
         // PEM certificate blocks (full BEGIN...END matching)
         SecretPattern {
@@ -44,7 +48,6 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Review whether certificate exposure is intended; check for adjacent private keys",
-            replacement_template: None,
         },
         // Modular crypt password hashes ($1$, $2b$, $5$, $6$, $y$, etc.)
         // anywhere in content. Shadow files are handled separately by
@@ -59,7 +62,6 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Remove password hash or use a secrets manager",
-            replacement_template: None,
         },
         // Generic password/credential in key=value config.
         // Covers password=, passwd=, db_password=, secret=, api_key=, token=,
@@ -72,9 +74,12 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // matches a newline, so after an empty value (`proxy_password =` in
         // the stock rhsm.conf) the match ran on into the next line and the
         // token replaced it. `\S+` then requires a value on the same line.
+        // Only the value is the secret: the key, delimiter and spacing stay,
+        // so `proxy_password = x` still parses as INI and
+        // `Environment=API_TOKEN=x` is still a valid assignment.
         SecretPattern {
             regex: Regex::new(
-                r"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)[ \t]*[=:][ \t]*\S+",
+                r"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)[ \t]*[=:][ \t]*(?P<secret>\S+)",
             )
             .unwrap(),
             finding_kind: FindingKind::Password,
@@ -82,74 +87,66 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             confidence: Confidence::High,
             remediation:
                 "Use environment variables or a secrets manager instead of inline passwords",
-            replacement_template: None,
         },
-        // AWS access key ID (AKIA...)
+        // AWS access key ID (AKIA...). The boundary characters either side
+        // are context, not secret: replacing them ate the `=` before the key
+        // and the newline after it.
         SecretPattern {
-            regex: Regex::new(r"(?:^|[^A-Z0-9])AKIA[0-9A-Z]{16}(?:[^A-Z0-9]|$)").unwrap(),
+            regex: Regex::new(r"(?:^|[^A-Z0-9])(?P<secret>AKIA[0-9A-Z]{16})(?:[^A-Z0-9]|$)").unwrap(),
             finding_kind: FindingKind::AwsKey,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Rotate the AWS access key and use IAM roles",
-            replacement_template: None,
         },
-        // JDBC connection string with password
+        // JDBC connection string with password. Only the password value is
+        // replaced; the URL and its other parameters stay.
         SecretPattern {
-            regex: Regex::new(r"jdbc:[a-z]+://[^?]+\?.*password=[^&\s]+").unwrap(),
+            regex: Regex::new(r"jdbc:[a-z]+://[^?]+\?.*password=(?P<secret>[^&\s]+)").unwrap(),
             finding_kind: FindingKind::JdbcPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use connection pooling with externalized credentials",
-            replacement_template: None,
         },
-        // PostgreSQL connection URI with password.
-        // Capture groups: (scheme://user:)(password)(@)
-        // The replacement template preserves the scheme prefix and @ delimiter.
+        // PostgreSQL connection URI with password. Only the password is
+        // replaced; the scheme, user and `@host` stay.
         SecretPattern {
-            regex: Regex::new(r"(postgres(?:ql)?://[^:]+:)([^@]+)(@)").unwrap(),
+            regex: Regex::new(r"postgres(?:ql)?://[^:]+:(?P<secret>[^@]+)@").unwrap(),
             finding_kind: FindingKind::PostgresPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use .pgpass or environment variables for PostgreSQL credentials",
-            replacement_template: Some("${1}REDACTED_TOKEN${3}"),
         },
         // MongoDB connection URI with password.
-        // Capture groups: (scheme://user:)(password)(@)
         SecretPattern {
-            regex: Regex::new(r"(mongodb(?:\+srv)?://[^:]+:)([^@]+)(@)").unwrap(),
+            regex: Regex::new(r"mongodb(?:\+srv)?://[^:]+:(?P<secret>[^@]+)@").unwrap(),
             finding_kind: FindingKind::MongodbPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use environment variables for MongoDB credentials",
-            replacement_template: Some("${1}REDACTED_TOKEN${3}"),
         },
         // Redis connection URI with password.
-        // Capture groups: (redis://:)(password)(@)
         SecretPattern {
-            regex: Regex::new(r"(redis://:)([^@]+)(@)").unwrap(),
+            regex: Regex::new(r"redis://:(?P<secret>[^@]+)@").unwrap(),
             finding_kind: FindingKind::RedisPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use environment variables for Redis credentials",
-            replacement_template: Some("${1}REDACTED_TOKEN${3}"),
         },
         // WireGuard private key (base64, 44 chars including trailing =)
         SecretPattern {
-            regex: Regex::new(r"(?i)(?:PrivateKey|PreSharedKey)[ \t]*=[ \t]*[A-Za-z0-9+/]{43}=").unwrap(),
+            regex: Regex::new(r"(?i)(?:PrivateKey|PreSharedKey)[ \t]*=[ \t]*(?P<secret>[A-Za-z0-9+/]{43}=)").unwrap(),
             finding_kind: FindingKind::WireguardKey,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Regenerate WireGuard keys and use wg-quick with externalized key files",
-            replacement_template: None,
         },
         // WiFi PSK in wpa_supplicant or NetworkManager config
         SecretPattern {
-            regex: Regex::new(r"(?i)(?:psk|wpa-psk|wifi\.psk)[ \t]*=[ \t]*\S+").unwrap(),
+            regex: Regex::new(r"(?i)(?:psk|wpa-psk|wifi\.psk)[ \t]*=[ \t]*(?P<secret>\S+)").unwrap(),
             finding_kind: FindingKind::WifiPsk,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use 802.1X or externalize WiFi credentials",
-            replacement_template: None,
         },
     ]
 });
@@ -408,6 +405,31 @@ mod tests {
             assert!(
                 PATTERNS[*idx].regex.is_match(text),
                 "pattern {idx} must match a value on the same line: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_every_pattern_with_context_declares_its_secret_group() {
+        // A pattern whose match is the secret alone is replaced whole; every
+        // other pattern must name the secret, or the key, delimiter or URI
+        // around it is replaced too.
+        let whole_match_is_secret = [
+            FindingKind::PrivateKey,
+            FindingKind::Certificate,
+            FindingKind::PasswordHash,
+        ];
+        for (idx, pat) in PATTERNS.iter().enumerate() {
+            let has_group = pat
+                .regex
+                .capture_names()
+                .flatten()
+                .any(|n| n == SECRET_GROUP);
+            assert_eq!(
+                has_group,
+                !whole_match_is_secret.contains(&pat.finding_kind),
+                "pattern {idx} ({:?})",
+                pat.finding_kind
             );
         }
     }

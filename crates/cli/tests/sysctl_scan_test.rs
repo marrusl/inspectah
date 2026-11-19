@@ -1412,10 +1412,13 @@ fn case_18_redaction_makes_the_explanation_unknown_snapshot() {
     ] {
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2, "{copy}: {content:?}");
-        let token = lines[0];
+        // Redaction keeps the key and replaces only the value.
+        let token = lines[0]
+            .strip_prefix("db_password = ")
+            .unwrap_or_else(|| panic!("{copy}: the key is kept: {:?}", lines[0]));
         assert!(
             token.starts_with("REDACTED_") && !token.contains(char::is_whitespace),
-            "{copy}: the password line is one token: {token:?}"
+            "{copy}: the value is one token: {token:?}"
         );
         assert_eq!(lines[1], "vm.swappiness = 60", "{copy}");
         assert_eq!(
@@ -2139,7 +2142,11 @@ fn case_18_redaction_makes_the_explanation_unknown_audit() {
                     "{layout}: no value is stated for vm.swappiness"
                 );
                 let content = &config_entry(&snap, APP_CONF).content;
-                let token = content.lines().next().expect("the password line");
+                let token = content
+                    .lines()
+                    .next()
+                    .and_then(|l| l.strip_prefix("db_password = "))
+                    .expect("the password line keeps its key");
                 assert!(token.starts_with("REDACTED_"), "{content:?}");
                 assert!(!md.contains(token), "{layout}: `{token}` is in the audit");
             }
@@ -2649,7 +2656,11 @@ fn case_18_redaction_makes_the_explanation_unknown_html() {
 
         if layout == "equal values under different keys" {
             let content = &config_entry(&snap, APP_CONF).content;
-            let token = content.lines().next().expect("the password line");
+            let token = content
+                .lines()
+                .next()
+                .and_then(|l| l.strip_prefix("db_password = "))
+                .expect("the password line keeps its key");
             assert!(token.starts_with("REDACTED_"), "{content:?}");
             assert!(
                 !html_text(&report).contains(token),
@@ -3160,7 +3171,11 @@ fn case_18_redaction_makes_the_explanation_unknown_view() {
 
         if layout == "equal values under different keys" {
             let content = &config_entry(&snap, APP_CONF).content;
-            let token = content.lines().next().expect("the password line");
+            let token = content
+                .lines()
+                .next()
+                .and_then(|l| l.strip_prefix("db_password = "))
+                .expect("the password line keeps its key");
             assert!(token.starts_with("REDACTED_"), "{content:?}");
             assert!(
                 !sysctl.to_string().contains(token),

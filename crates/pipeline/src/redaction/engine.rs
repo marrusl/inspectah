@@ -8,9 +8,10 @@ use inspectah_core::types::sysctl::{SysctlFileBody, SysctlSection};
 use regex::Regex;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::LazyLock;
 
-use crate::redaction::patterns::{PATTERNS, SecretPattern, scan_shadow};
+use crate::redaction::patterns::{PATTERNS, SECRET_GROUP, SecretPattern, scan_shadow};
 use crate::render::language_packages::scrub_manifest_auth;
 
 /// Paths that are known false-positive sources for credential scanning.
@@ -122,15 +123,19 @@ impl CounterRegistry {
 }
 
 /// A match that survived all eligibility filters.
-/// Contains byte offsets and the matched text, ready for replacement or finding generation.
+///
+/// `start..end` and `text` are the secret only: the pattern's
+/// [`SECRET_GROUP`] when it has one, otherwise the whole match. Every caller
+/// replaces exactly that span, so a key, delimiter or URI around the secret
+/// stays as written. `claim` is the whole match; it decides which of two
+/// matches with overlapping secrets wins (see
+/// [`dedup_overlapping_matches`]).
 struct EligibleMatch {
+    claim: Range<usize>,
     start: usize,
     end: usize,
     text: String,
     line_num: usize,
-    /// Captured groups for patterns with `replacement_template`.
-    /// Groups 1 and 3 are preserved, group 2 is the secret to redact.
-    captures: Option<(String, String, String)>,
 }
 
 /// Known non-secret values that appear after `password:` or `passwd:`
@@ -165,6 +170,28 @@ static FALSE_POSITIVE_VALUES: LazyLock<HashSet<&'static str>> = LazyLock::new(||
 /// Returns true if `value` is a known NSS/PAM token, not a real secret.
 fn is_false_positive_value(value: &str) -> bool {
     FALSE_POSITIVE_VALUES.contains(value.trim().to_lowercase().as_str())
+}
+
+/// Prefix of every token [`CounterRegistry::token_for`] produces.
+const TOKEN_PREFIX: &str = "REDACTED_";
+
+/// Returns true if `value` is a token this engine wrote
+/// (`REDACTED_<KIND>_<N>`). Since only the value is replaced, a second pass
+/// over redacted text sees `password=REDACTED_PASSWORD_1`, which the
+/// generic pattern matches; without this check it would report a finding
+/// and renumber the token.
+fn is_redaction_token(value: &str) -> bool {
+    value
+        .strip_prefix(TOKEN_PREFIX)
+        .and_then(|rest| rest.rsplit_once('_'))
+        .is_some_and(|(kind, n)| {
+            !kind.is_empty()
+                && kind
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                && !n.is_empty()
+                && n.chars().all(|c| c.is_ascii_digit())
+        })
 }
 
 /// Line-comment marker common to nearly every `/etc` file format.
@@ -281,10 +308,15 @@ fn is_comment_line(content: &str, pos: usize, markers: &[&str]) -> bool {
 
 /// Collect regex matches from `content` for a single `pat`, filtering out:
 /// - Matches on comment lines (`#`, plus `;` / `//` where `path` uses them)
-/// - (Gap 4, future) Password-pattern matches whose value is a known NSS/PAM token
-/// - (Gap 2, future) PasswordHash matches when `path` is a shadow file
+/// - Matches whose secret is already a redaction token (a second pass)
+/// - Password-pattern matches whose value is a known NSS/PAM token
+/// - PasswordHash matches when `path` is a shadow file
 ///
-/// This is the ONLY function that should call `pat.regex.find_iter()`.
+/// Every pattern goes through this one path, with or without a
+/// [`SECRET_GROUP`], so every filter applies to every pattern; the filters
+/// read the secret's text, never the key's.
+///
+/// This is the ONLY function that should run a pattern's regex over content.
 /// Callers must invoke this for EVERY pattern, merge the results into a
 /// single `Vec<(usize, EligibleMatch)>` (tagged with the pattern index),
 /// then run `dedup_overlapping_matches` on the merged list before
@@ -295,65 +327,30 @@ fn collect_eligible_matches(
     path: Option<&str>,
 ) -> Vec<EligibleMatch> {
     let markers = comment_markers(path);
-    // When the pattern has a replacement template, use captures_iter to
-    // extract the capture groups alongside the match offsets.
-    if pat.replacement_template.is_some() {
-        return pat
-            .regex
-            .captures_iter(content)
-            .filter_map(|caps| {
-                let mat = caps.get(0)?;
-                let start = mat.start();
-                let end = mat.end();
-                let text = mat.as_str();
-
-                if is_comment_line(content, start, &markers) {
-                    return None;
-                }
-
-                let line_num = content[..start].lines().count() + 1;
-
-                let captures = Some((
-                    caps.get(1).map_or("", |m| m.as_str()).to_string(),
-                    caps.get(2).map_or("", |m| m.as_str()).to_string(),
-                    caps.get(3).map_or("", |m| m.as_str()).to_string(),
-                ));
-
-                Some(EligibleMatch {
-                    start,
-                    end,
-                    text: text.to_string(),
-                    line_num,
-                    captures,
-                })
-            })
-            .collect();
-    }
-
     pat.regex
-        .find_iter(content)
-        .filter_map(|mat| {
-            let start = mat.start();
-            let end = mat.end();
-            let text = mat.as_str();
+        .captures_iter(content)
+        .filter_map(|caps| {
+            let whole = caps.get(0)?;
+            let secret = caps.name(SECRET_GROUP).unwrap_or(whole);
+            let text = secret.as_str();
 
             // Filter 1: skip matches on comment lines
-            if is_comment_line(content, start, &markers) {
+            if is_comment_line(content, whole.start(), &markers) {
                 return None;
             }
 
-            // Filter 2: skip Password matches whose value is a known
-            // NSS/PAM false-positive token
-            if pat.finding_kind == FindingKind::Password
-                && let Some(sep_pos) = text.find('=').or_else(|| text.find(':'))
-            {
-                let value = &text[sep_pos + 1..];
-                if is_false_positive_value(value) {
-                    return None;
-                }
+            // Filter 2: skip a value an earlier pass already replaced
+            if is_redaction_token(text) {
+                return None;
             }
 
-            // Filter 3: skip PasswordHash matches when path is a shadow
+            // Filter 3: skip Password matches whose value is a known
+            // NSS/PAM false-positive token
+            if pat.finding_kind == FindingKind::Password && is_false_positive_value(text) {
+                return None;
+            }
+
+            // Filter 4: skip PasswordHash matches when path is a shadow
             // file — scan_shadow owns those with richer classification
             if pat.finding_kind == FindingKind::PasswordHash
                 && let Some(p) = path
@@ -362,112 +359,58 @@ fn collect_eligible_matches(
                 return None;
             }
 
-            let line_num = content[..start].lines().count() + 1;
+            let line_num = content[..whole.start()].lines().count() + 1;
 
             Some(EligibleMatch {
-                start,
-                end,
+                claim: whole.range(),
+                start: secret.start(),
+                end: secret.end(),
                 text: text.to_string(),
                 line_num,
-                captures: None,
             })
         })
         .collect()
 }
 
-/// Remove matches that are entirely contained within a longer match.
-/// Input must be the combined matches from ALL patterns for a single content blob.
-/// Preserves the longer match when spans overlap. Ties broken by input order
-/// (earlier pattern in PATTERNS vec wins).
+/// Resolve overlapping matches from different patterns so no two replaced
+/// spans overlap. Input must be the combined matches from ALL patterns for a
+/// single content blob.
+///
+/// Two matches conflict when their secret spans (what gets replaced; see
+/// [`EligibleMatch`]) overlap. A conflict goes to the larger whole match,
+/// then the longer secret, then the earlier pattern in `PATTERNS`: so a
+/// JDBC URL beats the generic `password=` inside it, whose `\S+` value runs
+/// on over `&ssl=1`. A match whose secret overlaps nothing is kept even when
+/// it sits inside another pattern's whole match, so a second secret there
+/// is still replaced. Output is ordered by secret start.
 fn dedup_overlapping_matches(matches: &mut Vec<(usize, EligibleMatch)>) {
-    // Sort by start ascending, then by span length descending (longer first)
-    matches.sort_by(|a, b| {
-        a.1.start
-            .cmp(&b.1.start)
+    let mut by_priority: Vec<(usize, EligibleMatch)> = std::mem::take(matches);
+    // Stable sort: equal keys keep input (pattern) order.
+    by_priority.sort_by(|a, b| {
+        b.1.claim
+            .len()
+            .cmp(&a.1.claim.len())
             .then_with(|| (b.1.end - b.1.start).cmp(&(a.1.end - a.1.start)))
     });
-    let mut keep = vec![true; matches.len()];
-    for i in 0..matches.len() {
-        if !keep[i] {
-            continue;
-        }
-        for j in (i + 1)..matches.len() {
-            if !keep[j] {
-                continue;
-            }
-            // If j is entirely within i's span, drop j
-            if matches[j].1.start >= matches[i].1.start && matches[j].1.end <= matches[i].1.end {
-                keep[j] = false;
-            }
-            // Partial overlap: j starts inside i but extends past i's end.
-            // Keep the longer match, drop the shorter one.
-            else if matches[j].1.start < matches[i].1.end && matches[j].1.end > matches[i].1.end {
-                let len_i = matches[i].1.end - matches[i].1.start;
-                let len_j = matches[j].1.end - matches[j].1.start;
-                if len_i >= len_j {
-                    keep[j] = false;
-                } else {
-                    keep[i] = false;
-                    break; // i is dropped, stop comparing against it
-                }
-            }
-            // If j starts beyond i's end, no more overlaps possible
-            if matches[j].1.start >= matches[i].1.end {
-                break;
-            }
+    for candidate in by_priority {
+        let overlaps = matches
+            .iter()
+            .any(|(_, kept)| candidate.1.start < kept.end && kept.start < candidate.1.end);
+        if !overlaps {
+            matches.push(candidate);
         }
     }
-    let mut idx = 0;
-    matches.retain(|_| {
-        let k = keep[idx];
-        idx += 1;
-        k
-    });
-
-    // Safety net: assert no partial overlaps survive.
-    // Current patterns only produce subset overlaps, but a future pattern
-    // addition could introduce a partial overlap that corrupts content
-    // during descending-offset replacement. Catch it at test time.
-    #[cfg(debug_assertions)]
-    {
-        for i in 0..matches.len() {
-            for j in (i + 1)..matches.len() {
-                debug_assert!(
-                    matches[j].1.start >= matches[i].1.end
-                        || matches[i].1.start >= matches[j].1.end,
-                    "partial overlap detected between patterns {} and {} \
-                     (spans {}..{} and {}..{})",
-                    matches[i].0,
-                    matches[j].0,
-                    matches[i].1.start,
-                    matches[i].1.end,
-                    matches[j].1.start,
-                    matches[j].1.end,
-                );
-            }
-        }
-    }
+    matches.sort_by_key(|(_, em)| em.start);
 }
 
-/// Build the replacement string for a matched secret.
-///
-/// For patterns with `replacement_template` (connection-string URIs), preserves
-/// URL structure by replacing only the password portion (capture group 2) with
-/// the redaction token while keeping the scheme prefix and `@` delimiter.
-///
-/// For patterns without a template, replaces the entire match with the token.
+/// Build the replacement for a matched secret: the token for its text.
+/// It replaces `em.start..em.end`, which is the secret alone (see
+/// [`EligibleMatch`]), so the key or URI around it stays as written.
 fn build_replacement(
-    pat: &SecretPattern,
     em: &EligibleMatch,
     registry: &mut CounterRegistry,
     kind_label: &str,
 ) -> String {
-    if pat.replacement_template.is_some()
-        && let Some((ref prefix, ref secret, ref suffix)) = em.captures
-    {
-        let token = registry.token_for(kind_label, secret);
-        return format!("{prefix}{token}{suffix}");
-    }
     registry.token_for(kind_label, &em.text)
 }
 
@@ -506,11 +449,34 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
     for (pat_idx, em) in all_matches {
         let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-        let replacement = build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+        let replacement = build_replacement(&em, &mut registry, &kind_label);
         result.replace_range(em.start..em.end, &replacement);
     }
 
     Cow::Owned(result)
+}
+
+/// Returns true if `keyword` appears in `content` anywhere its value was
+/// not replaced by a redaction token.
+///
+/// Redaction keeps the key and replaces only the value, so a hint's keyword
+/// (`password`, `DB_PASSWORD`, `key=`) survives a successful pass. An
+/// occurrence counts as handled when the text after it, past optional
+/// spacing and one `=` or `:`, starts with a token. Anything else (a value
+/// left in place, a longer identifier such as `tokenizer`, a comment
+/// mentioning the word) counts as surviving, so the hint stays unresolved.
+fn keyword_survives_with_its_value(content: &str, keyword: &str) -> bool {
+    content.match_indices(keyword).any(|(i, _)| {
+        let rest = content[i + keyword.len()..].trim_start_matches([' ', '\t']);
+        let rest = rest
+            .strip_prefix(['=', ':'])
+            .unwrap_or(rest)
+            .trim_start_matches([' ', '\t']);
+        let value_end = rest
+            .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+            .unwrap_or(rest.len());
+        !is_redaction_token(&rest[..value_end])
+    })
 }
 
 /// Mask embedded credentials in a proxy URL line.
@@ -733,9 +699,8 @@ fn extract_hint_keyword(reason: &str) -> Option<String> {
 /// there are none.
 ///
 /// The older call sites above still inline this block; three of them
-/// use `registry.token_for` instead of `build_replacement`, which drops
-/// the URL structure a connection-string pattern's template preserves.
-/// This helper uses `build_replacement`, matching the `drop_ins` pass.
+/// call `registry.token_for` directly instead of `build_replacement`,
+/// which is equivalent now that a match's span is the secret alone.
 fn scan_and_redact_field(
     content: &mut String,
     source_path: &str,
@@ -755,7 +720,7 @@ fn scan_and_redact_field(
     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
     for (pat_idx, em) in all_matches {
         let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-        let replacement = build_replacement(&PATTERNS[pat_idx], &em, registry, &kind_label);
+        let replacement = build_replacement(&em, registry, &kind_label);
         content.replace_range(em.start..em.end, &replacement);
     }
     findings
@@ -915,8 +880,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement =
-                        build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 file.content = content;
@@ -941,8 +905,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement =
-                        build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 repo_file.content = content;
@@ -965,8 +928,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement =
-                        build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 gpg_key.content = content;
@@ -995,8 +957,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement =
-                        build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 drop_in.content = content;
@@ -1207,8 +1168,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement =
-                        build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 unit.command = content;
@@ -1273,8 +1233,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement =
-                        build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 at_job.command = content;
@@ -1302,8 +1261,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement =
-                        build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 timer.exec_start = content;
@@ -1349,8 +1307,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement =
-                        build_replacement(&PATTERNS[pat_idx], &em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 env_file.content = content;
@@ -1666,9 +1623,9 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 // If the keyword survives → hint unresolved.
                 let keyword = extract_hint_keyword(&hint.reason);
                 if let Some(ref kw) = keyword {
-                    // The hint's keyword is gone from post-redaction content
-                    // → the regex pass handled it.
-                    !content.contains(kw)
+                    // Every place the hint's keyword appears now carries a
+                    // token as its value → the regex pass handled it.
+                    !keyword_survives_with_its_value(content, kw)
                 } else {
                     // No extractable keyword — fall back to checking if
                     // ANY regex finding exists at this path.
@@ -1980,10 +1937,14 @@ baseurl = https://cdn.redhat.com
 ";
 
     /// Keys of every `key = value` line in INI text, in order. Panics on a
-    /// line Python's `configparser` would reject: anything that is not
-    /// blank, a `#`/`;` comment, a `[section]` header or a line with a
-    /// non-empty key before `=`.
-    fn ini_keys(text: &str) -> Vec<String> {
+    /// line that is not blank, a `#`/`;` comment, a `[section]` header or a
+    /// line with a non-empty key before `=`: the line a match that ran
+    /// across a newline left behind. It is not a model of `configparser`:
+    /// it does not check that assignments sit inside a section, reject
+    /// duplicate options, or accept `:` delimiters and continuation lines.
+    /// Pair it with a byte comparison of the lines redaction should not
+    /// touch.
+    fn assignment_keys(text: &str) -> Vec<String> {
         let mut keys = Vec::new();
         for (n, line) in text.lines().enumerate() {
             let t = line.trim();
@@ -2016,8 +1977,8 @@ baseurl = https://cdn.redhat.com
         redact(&mut snap, &RedactOptions::default());
         let out = &snap.config.as_ref().unwrap().files[0].content;
         assert_eq!(
-            ini_keys(out),
-            ini_keys(STOCK_RHSM_CONF),
+            assignment_keys(out),
+            assignment_keys(STOCK_RHSM_CONF),
             "redaction must keep every key line of rhsm.conf"
         );
         assert_eq!(
@@ -2036,6 +1997,159 @@ baseurl = https://cdn.redhat.com
         assert!(
             out.ends_with("\n\n# host/domain suffix blocklist\nno_proxy =\n"),
             "lines after the match must be untouched, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_key_value_redaction_keeps_key_delimiter_and_spacing() {
+        let wg_key = "A".repeat(43) + "=";
+        let cases: Vec<(String, String)> = vec![
+            (
+                "DB_PASSWORD=x".into(),
+                "DB_PASSWORD=REDACTED_PASSWORD_1".into(),
+            ),
+            (
+                "proxy_password = hunter2".into(),
+                "proxy_password = REDACTED_PASSWORD_1".into(),
+            ),
+            (
+                "API_TOKEN: abc".into(),
+                "API_TOKEN: REDACTED_PASSWORD_1".into(),
+            ),
+            (
+                "Environment=API_TOKEN=abc".into(),
+                "Environment=API_TOKEN=REDACTED_PASSWORD_1".into(),
+            ),
+            (
+                "      POSTGRES_PASSWORD: pg123".into(),
+                "      POSTGRES_PASSWORD: REDACTED_PASSWORD_1".into(),
+            ),
+            (
+                "secret\t=\tabc".into(),
+                "secret\t=\tREDACTED_PASSWORD_1".into(),
+            ),
+            ("psk=s3cretpsk".into(), "psk=REDACTED_WIFIPSK_1".into()),
+            (
+                "wpa-psk = s3cretpsk".into(),
+                "wpa-psk = REDACTED_WIFIPSK_1".into(),
+            ),
+            (
+                format!("PrivateKey = {wg_key}"),
+                "PrivateKey = REDACTED_WIREGUARDKEY_1".into(),
+            ),
+            (
+                "jdbc:mysql://db:3306/app?user=u&password=s3cret&ssl=1".into(),
+                "jdbc:mysql://db:3306/app?user=u&password=REDACTED_JDBCPASSWORD_1&ssl=1".into(),
+            ),
+            (
+                "aws_access_key_id = AKIAABCDEFGHIJKLMNOP\nregion = x".into(),
+                "aws_access_key_id = REDACTED_AWSKEY_1\nregion = x".into(),
+            ),
+        ];
+        for (input, want) in &cases {
+            assert_eq!(redact_string(input), want.as_str(), "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn test_redacted_rhsm_conf_keeps_proxy_password_key() {
+        let content = STOCK_RHSM_CONF.replace("proxy_password =\n", "proxy_password = hunter2\n");
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/rhsm/rhsm.conf".to_string(),
+                content: content.clone(),
+                ..Default::default()
+            }],
+        });
+        redact(&mut snap, &RedactOptions::default());
+        let out = &snap.config.as_ref().unwrap().files[0].content;
+        assert!(!out.contains("hunter2"), "the value must be redacted");
+        assert_eq!(
+            assignment_keys(out),
+            assignment_keys(&content),
+            "redaction must keep every key line of rhsm.conf"
+        );
+        for (got, want) in out.lines().zip(content.lines()) {
+            if want == "proxy_password = hunter2" {
+                assert_eq!(got, "proxy_password = REDACTED_PASSWORD_1");
+            } else {
+                assert_eq!(got, want, "only the proxy_password line changes");
+            }
+        }
+        assert_eq!(out.lines().count(), content.lines().count());
+    }
+
+    #[test]
+    fn test_hint_keyword_is_handled_only_where_its_value_is_a_token() {
+        let cases = [
+            ("proxy_password = REDACTED_PASSWORD_1", "password", false),
+            ("DB_PASSWORD=REDACTED_PASSWORD_2", "DB_PASSWORD", false),
+            ("access_key=REDACTED_PASSWORD_1", "key=", false),
+            ("password=REDACTED_JDBCPASSWORD_1&ssl=1", "password", false),
+            ("password: files", "password", true),
+            ("rd.luks.key=/path/to/key", "rd.luks.key", true),
+            ("tokenizer = REDACTED_PASSWORD_1", "token", true),
+            ("# password for basic http proxy auth", "password", true),
+            (
+                "a_password = REDACTED_PASSWORD_1\nb_password = left",
+                "password",
+                true,
+            ),
+        ];
+        for (content, kw, survives) in cases {
+            assert_eq!(
+                keyword_survives_with_its_value(content, kw),
+                survives,
+                "{kw:?} in {content:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_key_keeping_path_still_applies_false_positive_filters() {
+        for input in [
+            "password: files",
+            "passwd: files sss",
+            "password=files",
+            "password: sufficient",
+            "password=pam_unix.so",
+            "password: FILES",
+        ] {
+            assert_eq!(
+                redact_string(input),
+                input,
+                "a known NSS/PAM token is not a secret: {input:?}"
+            );
+            assert!(
+                scan_content(input, "/etc/nsswitch.conf").is_empty(),
+                "no finding for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_match_inside_another_patterns_claim_is_still_redacted() {
+        // A pattern's whole match can contain another pattern's secret
+        // outside its own secret: both secrets must be replaced.
+        let input = "postgres://app\npassword=leak\ncontact: ops@example.com";
+        let out = redact_string(input);
+        assert!(!out.contains("leak"), "{out:?}");
+    }
+
+    #[test]
+    fn test_second_pass_leaves_redacted_values_alone() {
+        let input =
+            "DB_PASSWORD=x\npsk=abc\npostgres://u:pw@db/app\naccess_key=AKIAABCDEFGHIJKLMNOP\n";
+        let once = redact_string(input).into_owned();
+        assert_eq!(
+            redact_string(&once),
+            once.as_str(),
+            "a token is not a secret"
+        );
+        assert!(
+            scan_content(&once, "/etc/app.conf").is_empty(),
+            "a second pass must not invent findings over tokens: {once:?}"
         );
     }
 

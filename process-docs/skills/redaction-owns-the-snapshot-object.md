@@ -181,29 +181,76 @@ directory. Getting it wrong in the narrow direction costs false findings;
 in the wide direction it leaks, so widen only with a table row in
 `test_non_hash_markers_exempt_only_where_they_are_comment_syntax`.
 
+## A pattern replaces the secret, not its key
+
+Every pattern in `redaction/patterns.rs` that matches anything besides
+the secret (a key and its delimiter, a URI's scheme and user, the
+boundary bytes either side of an AWS key id) names the secret with a
+`(?P<secret>...)` group (`SECRET_GROUP`). Only that group is replaced, so
+`proxy_password = hunter2` becomes `proxy_password = REDACTED_PASSWORD_1`
+with its key, delimiter and spacing as written. A pattern without the
+group is replaced whole, which is right only when the whole match is the
+secret: a PEM block, a password hash.
+`test_every_pattern_with_context_declares_its_secret_group` fails when a
+new pattern forgets the group.
+
+This is one rule in the engine, not a per-pattern template:
+`collect_eligible_matches` sets `start..end` and `text` of every
+`EligibleMatch` to the secret group, so every call site that replaces
+`em.start..em.end` keeps the key, including the ones that call
+`token_for` directly. A per-pattern `replacement_template` was the old
+mechanism, and three call sites never honoured it.
+
+Overlaps between patterns are decided on the **secret** spans, because
+those are what get replaced; the whole match (`claim`) only picks the
+winner, larger first, so a JDBC URL beats the generic `password=` inside
+it. Deciding overlaps on the whole match instead drops any second secret
+that sits inside one pattern's context but outside its secret, and that
+secret then ships: `postgres://app` on one line, `password=leak` on the
+next and an `@` later was exactly that until the URI classes stopped
+crossing lines (`test_a_match_inside_another_patterns_claim_is_still_redacted`).
+
+Every pattern goes through that one function, so every filter applies to
+every pattern, and the filters read the secret's text, never the key:
+comment lines, a value that is already a redaction token (a second pass
+over redacted text sees `password=REDACTED_PASSWORD_1` and must not
+report or renumber it), the NSS/PAM values (`password: files`), and
+password hashes in a shadow file. Do not add a second matching path.
+
+Two consumers depended on the key going with the value, and a third
+change of this kind must check them:
+
+- **Hint resolution** in `redact()` used to call a high-confidence hint
+  resolved when its keyword (`password`, `DB_PASSWORD`) was gone from
+  the redacted text. The key now stays, so it asks
+  `keyword_survives_with_its_value` instead: every occurrence must be
+  followed, past spacing and one `=` or `:`, by a token.
+- **Tokens are keyed by the secret's text**, so the same value under two
+  keys gets one token, as `CounterRegistry` intends.
+
 ## A `key = value` pattern stays on its line
 
-In `redaction/patterns.rs`, whitespace around a delimiter is `[ \t]*`,
-never `\s*`. `\s` matches a newline, so after an empty value the match
-runs on into the next line: the stock RHEL `rhsm.conf` has
-`proxy_password =` followed by a blank line and a comment, and the
-generic pattern took the key, the blank line and the comment's `#`,
-leaving a line with no `=` that `configparser` rejects. With `[ \t]*`
-the value class (`\S+`) must start on the key's own line, so an empty
-value does not match at all. A test that only checks the secret is gone
-passes over this; check that the redacted file still parses
-(`test_redact_leaves_stock_rhsm_conf_parseable`).
+Whitespace around a delimiter is `[ \t]*`, never `\s*`. `\s` matches a
+newline, so after an empty value the match runs on into the next line:
+the stock RHEL `rhsm.conf` has `proxy_password =` followed by a blank
+line and a comment, and the generic pattern took the key, the blank line
+and the comment's `#`, leaving a line with no `=` that `configparser`
+rejects. With `[ \t]*` the value class (`\S+`) must start on the key's
+own line, so an empty value does not match at all. A test that only
+checks the secret is gone passes over this. The byte comparison in
+`test_redact_leaves_stock_rhsm_conf_parseable` is what proves it; its
+`assignment_keys` helper only catches a line with no key before `=` and
+is not a `configparser` model.
 
 ## Content parsed after redaction is unknown when the pass changed it
 
 Some content is parsed *after* `redact()` has run: the sysctl
 explanation reads `kernel_boot.sysctl` files and runtime values to say
 what each key resolves to and whether it drifts. Parsing scrubbed text
-gives a confident wrong answer. A replacement token stands for a whole
-match, not for a value split off its key, so a match that spans a key,
-the `=` or several lines leaves text that parses as a different setting,
-or as none, and a token compared with a host value can read as equal or
-as drift.
+gives a confident wrong answer. A key kept beside a token parses as a
+setting whose value the host never had, a whole-match token (a PEM
+block) leaves text that parses as a different setting or as none, and a
+token compared with a host value can read as equal or as drift.
 
 The rule: **when the pass changed a piece of content, what it says is
 unknown, and nothing is parsed from the scrubbed text.** The pass records
