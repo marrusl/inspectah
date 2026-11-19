@@ -123,15 +123,19 @@ pub fn sanitize_stderr(s: &str) -> String {
     // Query strings: `https://host/blob?token=x` -> `https://host/blob?[REDACTED]`.
     // Go's HTTP errors keep a URL's query, which can carry a download
     // token or a signed URL's credentials, and there is no list of
-    // parameter names that covers them all, so the whole query goes. The
-    // URL ends at whitespace or at a quote, backslash or angle bracket that
-    // encloses it.
+    // parameter names that covers them all, so the whole query goes. After
+    // its userinfo, the URL ends at whitespace or at a quote, backslash or
+    // angle bracket that encloses it. The userinfo is the one the scrub
+    // above removes, so a quote or space inside a password does not end
+    // the URL before its query.
     spans.extend(value_spans(s, "://", |tail| {
-        let url_len = tail
+        let rest_start = userinfo_len(tail);
+        let rest = &tail[rest_start..];
+        let rest_len = rest
             .find(|c: char| c.is_whitespace() || URL_ENCLOSERS.contains(&c))
-            .unwrap_or(tail.len());
-        match tail[..url_len].find('?') {
-            Some(q) => (q + 1, url_len),
+            .unwrap_or(rest.len());
+        match rest[..rest_len].find('?') {
+            Some(q) => (rest_start + q + 1, rest_start + rest_len),
             None => (0, 0),
         }
     }));
@@ -1073,6 +1077,26 @@ pub(crate) mod tests {
             "Get https://u:tab\tzsecret@registry.example/x: denied",
             &["u:tab", "zsecret"],
         ),
+        (
+            "query after userinfo with a single quote",
+            "Get https://u:pa'ss@h/x?sig=query-secret-1",
+            &["pa'ss", "query-secret-1"],
+        ),
+        (
+            "query after userinfo with a double quote",
+            "Get https://u:pa\"ss@h/x?sig=query-secret-2",
+            &["pa\"ss", "query-secret-2"],
+        ),
+        (
+            "query after userinfo with backslashes",
+            r"Get https://u:pa\\ss@h/x?sig=query-secret-3",
+            &[r"pa\\ss", "query-secret-3"],
+        ),
+        (
+            "query after userinfo with a space",
+            "Get https://u:two zwords@h/x?sig=query-secret-4",
+            &["u:two", "zwords", "query-secret-4"],
+        ),
     ];
 
     #[test]
@@ -1131,6 +1155,20 @@ pub(crate) mod tests {
             sanitize_stderr("Get https://registry.example\nops@corp.example/x"),
             "Get https://registry.example\nops@corp.example/x"
         );
+        // A character the userinfo removes does not end the URL before
+        // its query.
+        for input in [
+            "https://u:pa'ss@h/x?sig=query-secret",
+            "https://u:pa\"ss@h/x?sig=query-secret",
+            r"https://u:pa\\ss@h/x?sig=query-secret",
+            "https://u:two words@h/x?sig=query-secret",
+        ] {
+            assert_eq!(
+                sanitize_stderr(input),
+                "https://[REDACTED]@h/x?[REDACTED]",
+                "{input:?}"
+            );
+        }
         // The word "token" in prose is not a JSON field.
         assert_eq!(
             sanitize_stderr("error decoding token response"),
