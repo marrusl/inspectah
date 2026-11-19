@@ -18,7 +18,7 @@ use inspectah_core::types::network::{
 };
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
 use inspectah_core::types::os::OsRelease;
-use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection, SystemdTimer};
 use inspectah_core::types::selinux::{
     FcontextFileType, FcontextRule, SelinuxContext, SelinuxSection,
@@ -341,6 +341,117 @@ async fn the_download_carries_the_operators_decision_not_just_the_leaf_set() {
          install it. Its absence means the route rendered without \
          `original_includes` and the leaf filter silently discarded the \
          decision.\nactive install list: {installed:?}\n{containerfile}"
+    );
+}
+
+const CONTAINER_GROUP: &str = "Container Management";
+
+/// A host with the group `Container Management` installed: two present
+/// non-leaf members and one declared member the baseline already
+/// carries. `vim` is a leaf non-member, so the individual install block
+/// is never empty.
+fn container_group_state() -> Arc<AppState> {
+    let pkg = |name: &str| PackageEntry {
+        name: name.into(),
+        arch: "x86_64".into(),
+        state: PackageState::Added,
+        source_repo: "appstream".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(inspectah_core::baseline::BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: "2026-05-17T00:00:00Z".into(),
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            pkg("buildah"),
+            pkg("containernetworking-plugins"),
+            pkg("vim"),
+        ],
+        leaf_packages: Some(vec!["vim.x86_64".into()]),
+        auto_packages: Some(vec![
+            "buildah.x86_64".into(),
+            "containernetworking-plugins.x86_64".into(),
+        ]),
+        baseline_suppressed: Some(vec!["podman.x86_64".into()]),
+        installed_groups: Some(vec![InstalledGroup {
+            name: CONTAINER_GROUP.into(),
+            members: vec![
+                "buildah".into(),
+                "containernetworking-plugins".into(),
+                "podman".into(),
+            ],
+            ..Default::default()
+        }]),
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// The Containerfile a user downloads is the one the preview showed
+/// them, byte for byte, with a `Renderable` group in the session.
+///
+/// The download used to render with no `RenderContext`, which is where a
+/// group's `Renderable` verdict lives, so it named no `dnf group install`
+/// and installed the members one by one while the preview showed the
+/// group install. Only a test that drives the route sees that: the
+/// route's own render call is the thing that diverged.
+#[tokio::test]
+async fn the_download_installs_a_renderable_group_as_the_preview_shows() {
+    let app = app(container_group_state());
+
+    let op = serde_json::to_value(inspectah_refine::types::TimelineEntry::Op(
+        inspectah_refine::types::RefinementOp::SetInclude {
+            item_id: inspectah_refine::types::ItemId::Group {
+                name: CONTAINER_GROUP.to_string(),
+            },
+            include: true,
+        },
+    ))
+    .unwrap();
+    let (status, body) = post_json(&app, "/api/op", op).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "including the group must succeed: {body}"
+    );
+
+    let view = view(&app).await;
+    let group = view["package_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["name"] == CONTAINER_GROUP)
+        .expect("the group is in the view");
+    assert_eq!(group["render_state"], "renderable");
+    let preview = view["containerfile_preview"].as_str().expect("a preview");
+
+    let (status, _headers, tarball) = post_tarball(&app).await;
+    assert_eq!(status, StatusCode::OK, "the download must succeed");
+    let containerfile =
+        String::from_utf8(tarball_member(&tarball, "Containerfile").expect("Containerfile"))
+            .unwrap();
+
+    let group_line = format!("    \"{CONTAINER_GROUP}\" \\");
+    let installs_group = containerfile
+        .lines()
+        .skip_while(|l| !l.starts_with("RUN dnf group install -y"))
+        .skip(1)
+        .take_while(|l| l.starts_with("    \""))
+        .any(|l| l == group_line);
+    assert!(
+        installs_group,
+        "the group is renderable, so the downloaded Containerfile must \
+         install it with `dnf group install`\n{containerfile}"
+    );
+    assert_eq!(
+        containerfile, preview,
+        "the downloaded Containerfile must be the one the preview showed"
     );
 }
 

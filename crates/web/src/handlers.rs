@@ -415,10 +415,7 @@ pub async fn export_tarball(
         // the two could drift without any test noticing. `export_plan`
         // also performs the stale-generation check this block used to
         // repeat inline.
-        let plan = session
-            .export_plan(req.generation)
-            .map_err(AppError)?
-            .without_render_context();
+        let plan = session.export_plan(req.generation).map_err(AppError)?;
         // Derive download filename from hostname in the snapshot.
         let hostname = session
             .snapshot()

@@ -13,7 +13,7 @@
 //! least one concrete value per state.
 //!
 //! Two gaps were found while writing this, both older than it and both
-//! in the export's file set rather than in any surface.
+//! in the export rather than in any surface. Both are fixed.
 //!
 //! 1. **Fixed.** The Containerfile's Storage block emitted
 //!    `COPY config/usr/lib/tmpfiles.d/inspectah-var.conf` and the refine
@@ -24,22 +24,16 @@
 //!    `export_contract_test::every_copy_source_is_in_the_archive` holds
 //!    the general property: every active `COPY` names something the
 //!    archive carries.
-//! 2. **Open**, backlogged as
-//!    `inspectah-downloaded-export-drops-every-dnf-group-install`. The
-//!    `POST /api/tarball` handler builds its `ExportPlan` and then calls
-//!    `ExportPlan::without_render_context()`, so it renders with `None`
-//!    for the `RenderContext`: the *downloaded* Containerfile carries no
-//!    `dnf group install` and installs a renderable group's members
-//!    individually. The preview renders with the context the session
-//!    cached, so it does show the group install. Every other caller of
-//!    `export_plan` keeps the context, which makes the download the one
-//!    path that disagrees with the preview — and it is the only one a
-//!    user reaches.
+//! 2. **Fixed.** The `POST /api/tarball` handler rendered with no
+//!    `RenderContext`, so the downloaded Containerfile carried no
+//!    `dnf group install` and installed a renderable group's members
+//!    individually while the preview showed the group install. The
+//!    handler now renders with the session's context, and the group
+//!    cases below compare `render_state` against the group install.
 //!
-//! The group cases below therefore compare `render_state` against which
-//! packages reach the install list, and say so at the probe. They are
-//! written against what the download does today; the `pin_after` of the
-//! include case marks what changes when gap 2 closes.
+//! The export is read from `POST /api/tarball` itself, not from a second
+//! copy of the handler's render call: gap 2 survived because the copy
+//! here and the handler disagreed in exactly that argument.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -57,7 +51,7 @@ use inspectah_core::types::rpm::{
 };
 use inspectah_core::types::storage::{StorageSection, VarDirBacking, VarDirectory};
 use inspectah_refine::autosave::{SessionState, compute_tarball_hash, save_session};
-use inspectah_refine::session::{RefineSession, render_refine_export};
+use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp, TimelineEntry};
 use inspectah_web::handlers::AppState;
 use serde_json::{Value, json};
@@ -215,55 +209,58 @@ impl Export {
     fn installs(&self, name: &str) -> bool {
         self.active_install_list().iter().any(|n| n == name)
     }
-}
 
-/// Render the session's current projection exactly as `GET /api/export`
-/// does, and read the archive back.
-fn export_of(state: &AppState) -> Export {
-    let (projected, original_includes) = {
-        let session = state.session.lock().unwrap();
-        let orig: std::collections::HashMap<String, bool> = session
-            .snapshot()
-            .rpm
-            .as_ref()
-            .map(|r| {
-                r.packages_added
-                    .iter()
-                    .map(|p| {
-                        (
-                            format!("{}.{}", p.name, p.arch),
-                            p.disposition.is_included(),
-                        )
-                    })
-                    .collect()
+    /// Group names from the `RUN dnf group install -y` block.
+    fn group_install_list(&self) -> Vec<String> {
+        self.containerfile()
+            .lines()
+            .skip_while(|l| !l.trim().starts_with("RUN dnf group install -y"))
+            .skip(1)
+            .take_while(|l| l.trim().starts_with('"'))
+            .map(|l| {
+                l.trim()
+                    .trim_end_matches('\\')
+                    .trim()
+                    .trim_matches('"')
+                    .to_string()
             })
-            .unwrap_or_default();
-        (session.snapshot_projected(), orig)
-    };
-
-    let dir = tempfile::tempdir().unwrap();
-    let tarball = dir.path().join("export.tar.gz");
-    render_refine_export(
-        &projected,
-        &tarball,
-        Some(&original_includes),
-        None,
-        None,
-        None,
-    )
-    .expect("the export renders");
-    read_export(&tarball)
+            .collect()
+    }
 }
 
-fn read_export(tarball: &std::path::Path) -> Export {
-    let file = std::fs::File::open(tarball).unwrap();
-    let gz = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(gz);
+/// Download the session's export through `POST /api/tarball` at the
+/// current generation, and read the archive back.
+async fn export_of(app: &axum::Router) -> Export {
+    let generation = get_json(app, "/api/view").await["generation"]
+        .as_u64()
+        .expect("the view carries a generation");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/tarball")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "generation": generation }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the download must succeed, got {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    read_export(&bytes)
+}
 
-    let stem = tarball.file_name().unwrap_or_default().to_string_lossy();
-    let prefix = stem.strip_suffix(".tar.gz").unwrap_or(&stem);
-    let prefix_slash = format!("{prefix}/");
-
+/// Every regular member of a gzipped export, keyed by its path below the
+/// archive's top-level directory.
+fn read_export(tarball: &[u8]) -> Export {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tarball));
     let mut files = BTreeMap::new();
     for entry in archive.entries().unwrap() {
         let mut entry = entry.unwrap();
@@ -271,7 +268,10 @@ fn read_export(tarball: &std::path::Path) -> Export {
             continue;
         }
         let raw = entry.path().unwrap().to_string_lossy().to_string();
-        let logical = raw.strip_prefix(&prefix_slash).unwrap_or(&raw).to_string();
+        let logical = raw
+            .split_once('/')
+            .map_or(raw.as_str(), |(_, rest)| rest)
+            .to_string();
         let mut buf = Vec::new();
         std::io::Read::read_to_end(&mut entry, &mut buf).unwrap();
         files.insert(logical, String::from_utf8_lossy(&buf).into_owned());
@@ -360,16 +360,13 @@ fn group_is_renderable(view: &Value, name: &str) -> bool {
     package_group(view, name)["render_state"] == "renderable"
 }
 
-/// What a group decision means for the image: both present members of
-/// `Container Management` reach the install list.
-///
-/// Not `dnf group install`. The `POST /api/tarball` handler renders with
-/// no `RenderContext`, and `render_containerfile` emits no group install
-/// without one, so the mechanism half of § 8.8 is not available from the
-/// download this file tests (see the module note, gap 2). Which packages
-/// reach the image is, and that is what the decision is about.
-fn group_members_installed(export: &Export) -> bool {
-    export.installs("buildah") && export.installs("containernetworking-plugins")
+/// What a group decision means for the image: `Container Management` is
+/// installed with `dnf group install`, and its members are not also
+/// installed one by one.
+fn group_installed(export: &Export) -> bool {
+    export.group_install_list() == [CONTAINER_GROUP]
+        && !export.installs("buildah")
+        && !export.installs("containernetworking-plugins")
 }
 
 // -- Fixtures --------------------------------------------------------------
@@ -797,7 +794,7 @@ fn cases() -> Vec<Case> {
                 )
             },
             surface: |v| group_is_renderable(v, CONTAINER_GROUP),
-            export: group_members_installed,
+            export: group_installed,
             before: false,
             pin_before: |v, e| {
                 let group = package_group(v, CONTAINER_GROUP);
@@ -823,23 +820,12 @@ fn cases() -> Vec<Case> {
                 let group = package_group(v, CONTAINER_GROUP);
                 assert_eq!(group["render_state"], json!("renderable"));
                 assert_eq!(group["effective_included"], json!(2));
-                // EXPECTED TO GO RED when the export handler is given a
-                // render context (backlog:
-                // inspectah-downloaded-export-drops-every-dnf-group-install).
-                // Today the download has none, so a renderable group's
-                // members are installed individually. Once it does, they
-                // move into a `dnf group install` and this list becomes
-                // `["vim"]`. That is the fix landing, not a regression:
-                // change the expected list and add the group install line.
+                assert_eq!(e.group_install_list(), vec![CONTAINER_GROUP.to_string()]);
                 assert_eq!(
                     e.active_install_list(),
-                    vec![
-                        "buildah".to_string(),
-                        "containernetworking-plugins".to_string(),
-                        "vim".to_string(),
-                    ],
-                    "the group's two present members join the install list, \
-                     and podman — declared but baseline-suppressed — does not"
+                    vec!["vim".to_string()],
+                    "the group install carries its members, so they leave \
+                     the individual install list"
                 );
             },
         },
@@ -865,27 +851,22 @@ fn cases() -> Vec<Case> {
                 )
             },
             surface: |v| group_is_renderable(v, CONTAINER_GROUP),
-            export: group_members_installed,
+            export: group_installed,
             before: true,
             pin_before: |v, e| {
                 assert_eq!(
                     package_group(v, CONTAINER_GROUP)["render_state"],
                     json!("renderable")
                 );
-                assert_eq!(
-                    e.active_install_list(),
-                    vec![
-                        "buildah".to_string(),
-                        "containernetworking-plugins".to_string(),
-                        "vim".to_string(),
-                    ]
-                );
+                assert_eq!(e.group_install_list(), vec![CONTAINER_GROUP.to_string()]);
+                assert_eq!(e.active_install_list(), vec!["vim".to_string()]);
             },
             pin_after: |v, e| {
                 assert_eq!(
                     package_group(v, CONTAINER_GROUP)["render_state"],
                     json!("excluded")
                 );
+                assert!(e.group_install_list().is_empty());
                 assert_eq!(
                     e.active_install_list(),
                     vec!["vim".to_string()],
@@ -924,7 +905,7 @@ async fn every_decision_surface_reflects_the_export() {
 
     for case in cases() {
         let state = state((case.snapshot)());
-        let app = app(state.clone());
+        let app = app(state);
 
         for op in (case.setup)() {
             post_ok(&app, "/api/op", op).await;
@@ -946,7 +927,7 @@ async fn every_decision_surface_reflects_the_export() {
             }
 
             let surface = get_json(&app, case.endpoint).await;
-            let export = export_of(&state);
+            let export = export_of(&app).await;
 
             let got = (case.surface)(&surface);
             if got != expected {
@@ -990,32 +971,29 @@ async fn every_decision_surface_reflects_the_export() {
 
 /// Everything a surface comparison needs: the sections document, the
 /// view's decision-bearing arrays, and the rendered export.
-async fn surfaces(
-    app: &axum::Router,
-    state: &AppState,
-) -> (Value, Value, BTreeMap<String, String>) {
+async fn surfaces(app: &axum::Router) -> (Value, Value, BTreeMap<String, String>) {
     let sections = get_json(app, "/api/snapshot/sections").await;
     let view = get_json(app, "/api/view").await;
-    (sections, view, export_of(state).files)
+    (sections, view, export_of(app).await.files)
 }
 
 #[tokio::test]
 async fn reset_returns_the_surfaces_of_a_fresh_session() {
     let live = state(kernel_and_storage_snapshot());
-    let live_app = app(live.clone());
+    let live_app = app(live);
 
     // The baseline is read from a second server on the same snapshot, so
     // "equal after reset" is not satisfied by a surface that never moved.
     let fresh = state(kernel_and_storage_snapshot());
-    let fresh_app = app(fresh.clone());
-    let (base_sections, base_view, base_files) = surfaces(&fresh_app, &fresh).await;
+    let fresh_app = app(fresh);
+    let (base_sections, base_view, base_files) = surfaces(&fresh_app).await;
 
     post_ok(&live_app, "/api/op", exclude_config(DRIFTIFY_CONF)).await;
     post_ok(&live_app, "/api/op", exclude_config(APPONE_CONF)).await;
 
     // Read the surfaces while the ops stand: this is what fills any
     // projection cache, and what reset has to displace.
-    let (dirty_sections, _, dirty_files) = surfaces(&live_app, &live).await;
+    let (dirty_sections, _, dirty_files) = surfaces(&live_app).await;
     assert_ne!(
         dirty_sections, base_sections,
         "the ops must move the sections, or the comparison after reset \
@@ -1025,7 +1003,7 @@ async fn reset_returns_the_surfaces_of_a_fresh_session() {
 
     post_ok(&live_app, "/api/reset", json!({})).await;
 
-    let (sections, view, files) = surfaces(&live_app, &live).await;
+    let (sections, view, files) = surfaces(&live_app).await;
     assert_eq!(
         sections, base_sections,
         "reset returns the sections of a fresh session"
@@ -1091,13 +1069,13 @@ async fn a_resumed_session_serves_the_surfaces_of_its_replayed_timeline() {
                 .expect("a session file exists"),
         )),
     });
-    let resumed_app = app(resumed.clone());
+    let resumed_app = app(resumed);
 
     // Read the resumed surfaces first, then move the session: the second
     // comparison is the one a stale projection fails.
-    let (resumed_sections, _, _) = surfaces(&resumed_app, &resumed).await;
+    let (resumed_sections, _, _) = surfaces(&resumed_app).await;
     post_ok(&resumed_app, "/api/op", exclude_config(DRIFTIFY_CONF)).await;
-    let (sections, view, files) = surfaces(&resumed_app, &resumed).await;
+    let (sections, view, files) = surfaces(&resumed_app).await;
     assert_ne!(
         sections, resumed_sections,
         "the second op must move the sections"
@@ -1105,10 +1083,10 @@ async fn a_resumed_session_serves_the_surfaces_of_its_replayed_timeline() {
 
     // A fresh session driven through the same two ops over the API.
     let fresh = state(snap);
-    let fresh_app = app(fresh.clone());
+    let fresh_app = app(fresh);
     post_ok(&fresh_app, "/api/op", exclude_config(APPONE_CONF)).await;
     post_ok(&fresh_app, "/api/op", exclude_config(DRIFTIFY_CONF)).await;
-    let (fresh_sections, fresh_view, fresh_files) = surfaces(&fresh_app, &fresh).await;
+    let (fresh_sections, fresh_view, fresh_files) = surfaces(&fresh_app).await;
 
     assert_eq!(
         sections, fresh_sections,

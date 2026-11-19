@@ -4402,12 +4402,9 @@ pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
 /// the Containerfile matches the preview byte for byte **only when the
 /// caller passes the `RenderContext` the preview was rendered with**.
 /// An `ExportPlan` from [`RefineSession::export_plan`] carries that
-/// context and does match. `POST /api/tarball` drops it by calling
-/// [`ExportPlan::without_render_context`], so the Containerfile in that
-/// download drops every `dnf group install` and installs the members
-/// individually instead — and it is the only path a user reaches.
-/// Backlog:
-/// `inspectah-downloaded-export-drops-every-dnf-group-install`.
+/// context and does match; `POST /api/tarball` renders through one.
+/// Without it, the Containerfile names no `dnf group install` and
+/// installs a renderable group's members individually.
 ///
 /// `upload_dir_canon` must be the *canonical* upload directory the session
 /// prepared, not a path that can still resolve somewhere else; `None`
@@ -4434,23 +4431,6 @@ pub struct ExportPlan {
 }
 
 impl ExportPlan {
-    /// Reproduces what the shipped download does today: render with no
-    /// `RenderContext`, so a renderable group installs its members
-    /// individually rather than through `dnf group install`, and the
-    /// download diverges from the preview.
-    ///
-    /// **This is a defect, not a design.** It is tracked at
-    /// `inspectah-downloaded-export-drops-every-dnf-group-install`. The
-    /// method exists so the divergence is named at the one call site that
-    /// has it, instead of being an unexplained `None` in an argument list
-    /// where nobody could see it. Closing that item means deleting this
-    /// method and the call to it.
-    #[must_use]
-    pub fn without_render_context(mut self) -> Self {
-        self.render_ctx = None;
-        self
-    }
-
     /// The projected snapshot this plan exports.
     pub fn projected(&self) -> &InspectionSnapshot {
         &self.projected
