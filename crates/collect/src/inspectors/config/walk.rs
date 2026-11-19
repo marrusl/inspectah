@@ -89,6 +89,16 @@ const UNOWNED_EXCLUDE_EXACT: &[&str] = &[
     "/etc/nvme/hostid",
     // Subscription manager / RHSM
     "/etc/rhsm/syspurpose/syspurpose.json",
+    // Registration identity: insights-client writes these at registration,
+    // not at install, so they are unowned. Copied into the image, every
+    // deployed machine would carry the source host's Insights machine-id
+    // and facts. The rest of each directory stays in the walk: it holds
+    // admin-written config (Insights tags and redaction rules, custom
+    // `*.facts`). The client's other generated files are the dotfiles
+    // excluded in UNOWNED_EXCLUDE_GLOBS. Files the packages own here still
+    // reach the rpm -Va branch, which never consults these lists.
+    "/etc/insights-client/machine-id",
+    "/etc/rhsm/facts/insights-client.facts",
     // OpenSSL configs (not RPM-owned on RHEL 10)
     "/etc/pki/tls/ct_log_list.cnf",
     "/etc/pki/tls/fips_local.cnf",
@@ -139,6 +149,14 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     "/etc/pki/tls/certs/ca-bundle.trust.crt",
     "/etc/pki/consumer/*",
     "/etc/pki/entitlement/*",
+    // insights-client's registration and upload state: `.registered`,
+    // `.unregistered`, `.lastupload`, `.last-upload.results`. Apart from
+    // `machine-id` (in UNOWNED_EXCLUDE_EXACT), the state files the client
+    // writes here start with a dot, and the documented admin files
+    // (`tags.yaml`, the redaction YAML) do not. Matching the dot also
+    // covers state files a later client adds, which a named list would
+    // miss; a dot-named admin file here would be dropped too.
+    "/etc/insights-client/.*",
     "/etc/depmod.d/*-dist.conf",
     // NOTE: `/etc/modprobe.d/*-blacklist.conf` was here, "for the distro
     // files". This list is consulted only in the unowned branch of the
@@ -185,16 +203,10 @@ const UNOWNED_EXCLUDE_PREFIX: &[&str] = &[
     // Desktop/interactive login session systemd units created by
     // systemd-rpm-macros running `systemctl --global enable`
     "/etc/xdg/systemd/",
-    // Registration identity: insights-client and subscription-manager
-    // write these at registration, not at install, so the files are
-    // unowned. Their content is the source host's Insights machine-id,
-    // `.registered` marker, upload ids, facts and product certificates;
-    // copied into the image, every deployed machine would claim that
-    // host's identity. Files the packages own here still reach the
-    // rpm -Va branch, which never consults this list. The trailing slash
-    // keeps the match on a path boundary.
-    "/etc/insights-client/",
-    "/etc/rhsm/facts/",
+    // Product certificates subscription-manager installs at registration:
+    // unowned, generated, and the source host's subscription identity,
+    // not configuration. The trailing slash keeps the match on a path
+    // boundary.
     "/etc/pki/product/",
 ];
 

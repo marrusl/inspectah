@@ -1008,39 +1008,82 @@ mod tests {
     /// reach the image: every machine deployed from it would carry the
     /// source host's Insights machine-id and `.registered` marker.
     ///
-    /// The registration paths are the unowned files a real RHEL 10.2 scan
-    /// staged. The sibling paths share a leading string with an excluded
+    /// The excluded paths are the unowned files a real RHEL 10.2 scan
+    /// staged, plus `.unregistered`, the client's other registration
+    /// marker. The same directories hold configuration the admin writes:
+    /// Insights tags and redaction rules, and custom facts. Those must be
+    /// carried, or the snapshot loses them with no record refine could
+    /// recover. The sibling paths share a leading string with an excluded
     /// directory but not the directory itself, so they pin that the
-    /// exclusion holds on a path boundary and do not leave the test passing
-    /// vacuously if the walk stopped yielding files.
+    /// exclusion holds on a path boundary.
+    ///
+    /// The owned, modified files pin that the exclusions stay out of the
+    /// rpm -Va branch: a package's own file, edited by the admin, is
+    /// collected even in a directory the exclusions reach. The owned
+    /// dotfile is one the dotfile rule matches, so the case fails if that
+    /// rule is ever applied to rpm -Va results.
     #[test]
     fn test_config_unowned_skips_registration_state() {
         // (path, carried as an unowned config file)
         let cases: &[(&str, bool)] = &[
             ("/etc/insights-client/machine-id", false),
             ("/etc/insights-client/.registered", false),
+            ("/etc/insights-client/.unregistered", false),
             ("/etc/insights-client/.lastupload", false),
             ("/etc/insights-client/.last-upload.results", false),
             ("/etc/rhsm/facts/insights-client.facts", false),
             ("/etc/pki/product/419.pem", false),
+            ("/etc/insights-client/tags.yaml", true),
+            ("/etc/insights-client/file-redaction.yaml", true),
+            ("/etc/insights-client/file-content-redaction.yaml", true),
+            ("/etc/rhsm/facts/site.facts", true),
             ("/etc/insights-client-local/machine-id", true),
             ("/etc/rhsm/facts-custom/site.facts", true),
             ("/etc/pki/product-default/README", true),
             ("/etc/pki/products/419.pem", true),
         ];
+        // (path, content) of package-owned files the admin modified
+        let owned_cases: &[(&str, &str)] = &[
+            (
+                "/etc/insights-client/insights-client.conf",
+                "[insights-client]\nhttp_timeout=120\n",
+            ),
+            ("/etc/insights-client/.exp.sed", "s/secret/REDACTED/\n"),
+        ];
+        const CONTENT_CHANGED: &str = "S.5....T.";
 
         let mut exec = base_mock_with_etc();
-        for (path, _) in cases {
+        let all_paths = cases
+            .iter()
+            .map(|(path, _)| (*path, "host state\n"))
+            .chain(owned_cases.iter().copied());
+        for (path, content) in all_paths {
             let mut parent = String::from("/etc");
             let rel = path.strip_prefix("/etc/").expect("case path is under /etc");
             for component in rel.split('/') {
                 exec = exec.with_dir_entry(&parent, component);
                 parent = format!("{parent}/{component}");
             }
-            exec = exec.with_file(path, "host state\n");
+            exec = exec.with_file(path, content);
         }
 
-        let rpm_state = empty_rpm_state();
+        let rpm_state = rpm_state_with_va_and_owned(
+            owned_cases
+                .iter()
+                .map(|(path, _)| RpmVaEntry {
+                    path: (*path).into(),
+                    flags: CONTENT_CHANGED.into(),
+                    package: Some("insights-client".into()),
+                })
+                .collect(),
+            owned_cases.iter().map(|(path, _)| *path).collect(),
+            vec![PackageEntry {
+                name: "insights-client".into(),
+                version: "3.2.8".into(),
+                state: PackageState::Added,
+                ..Default::default()
+            }],
+        );
         let source = test_source_system();
         let ctx = InspectionContext {
             source_system: &source,
@@ -1061,6 +1104,7 @@ mod tests {
             .filter(|f| f.kind == ConfigFileKind::Unowned)
             .map(|f| f.path.as_str())
             .collect();
+        let collected: HashSet<&str> = section.files.iter().map(|f| f.path.as_str()).collect();
 
         for (path, expected) in cases {
             assert_eq!(
@@ -1068,6 +1112,28 @@ mod tests {
                 *expected,
                 "{path}: expected carried={expected}, unowned files were {carried:?}"
             );
+            if !*expected {
+                assert!(
+                    !collected.contains(path),
+                    "{path}: excluded registration file reached the section, files were {collected:?}"
+                );
+            }
+        }
+
+        for (path, content) in owned_cases {
+            let owned = section
+                .files
+                .iter()
+                .find(|f| f.path == *path)
+                .unwrap_or_else(|| panic!("{path} not collected, files were {collected:?}"));
+            assert_eq!(owned.kind, ConfigFileKind::RpmOwnedModified, "{path}");
+            assert_eq!(
+                owned.rpm_va_flags.as_deref(),
+                Some(CONTENT_CHANGED),
+                "{path}"
+            );
+            assert_eq!(owned.package.as_deref(), Some("insights-client"), "{path}");
+            assert_eq!(owned.content, *content, "{path}");
         }
     }
 
