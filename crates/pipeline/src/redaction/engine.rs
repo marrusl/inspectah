@@ -5191,6 +5191,27 @@ baseurl = https://cdn.redhat.com
                 "# note\nREDACTED_AWSKEY_1",
                 &["ABCDEFGHIJKLMNOP"],
             ),
+            // A JSON string under a credential key, quotes and all.
+            (
+                r#"{"password": "zsecret"}"#,
+                r#"{"password": REDACTED_PASSWORD_1"#,
+                &["zsecret"],
+            ),
+            (
+                r#"{"token": "\/zsecret"}"#,
+                r#"{"token": REDACTED_PASSWORD_1"#,
+                &["zsecret"],
+            ),
+            (
+                r#"{"db_password": "a\"ztwo zwords", "pool": 4}"#,
+                r#"{"db_password": REDACTED_PASSWORD_1 "pool": 4}"#,
+                &["ztwo", "zwords"],
+            ),
+            (
+                r#"{"password": "files"}"#,
+                r#"{"password": REDACTED_PASSWORD_1"#,
+                &[r#""files""#],
+            ),
         ];
         for (input, want, secrets) in cases {
             let once = redact_string(input).into_owned();
@@ -5253,6 +5274,11 @@ baseurl = https://cdn.redhat.com
             (
                 "<url>jdbc:mysql://u:zsecret@db/app</url>",
                 "<url>jdbc:mysql://REDACTED_JDBCPASSWORD_1",
+            ),
+            // A JSON string under a credential key
+            (
+                r#"{"password": "zsecret", "pool": 4}"#,
+                r#"{"password": REDACTED_PASSWORD_1 "pool": 4}"#,
             ),
         ];
         for (input, want) in cases {

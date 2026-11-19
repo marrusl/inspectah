@@ -54,7 +54,9 @@ this failure.
 redaction replaced a secret. Tomcat's `<Resource password="p"/>` becomes
 `<Resource password=REDACTED_PASSWORD_1`, and
 `url="jdbc:mysql://u:pw@db/app" pool=4` becomes
-`url="jdbc:mysql://REDACTED_JDBCPASSWORD_1 pool=4`.
+`url="jdbc:mysql://REDACTED_JDBCPASSWORD_1 pool=4`. A JSON string under a
+credential key is replaced with its quotes, so `{"password": "p"}` becomes
+`{"password": REDACTED_PASSWORD_1`.
 
 **Cause.** Redaction does not yet read a file by its format. A value is
 replaced up to the next whitespace, and a JDBC URL that carries a
@@ -64,7 +66,7 @@ with it. Ending a value at a quote or tag instead left part of the secret
 in the export, because the same characters can be part of a password.
 
 **Who is affected.** Any export whose configuration files hold a secret in
-a quoted value or in an XML attribute or element.
+a quoted value, a JSON string, or an XML attribute or element.
 
 **Workaround.** Restore the closing quote or tag by hand in the exported
 file. The secret has to be supplied at deploy time in any case.

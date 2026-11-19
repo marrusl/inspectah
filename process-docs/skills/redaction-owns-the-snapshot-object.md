@@ -385,6 +385,18 @@ shipped the authority password. Every one of these inputs is a row in
 output and that no secret survives anywhere in the serialized snapshot.
 A new pattern adds a row there for each input it is meant to fix.
 
+A new pattern beside the others cannot shorten what they cover, because
+overlapping secrets absorb one another and none is dropped: a second
+pattern can only make a span longer. JSON's `"password": "x"` is such a
+pattern, last in `PATTERNS`, since the generic one needs its `=` or `:`
+right after the key. Its secret is the whole string, quotes included,
+through the next whitespace after the closing quote, so it never takes
+less than `\S+` would from the opening quote. A value that loses its
+quotes is not reread as `files` and exempted, and the JSON stops parsing,
+which costs syntax, not a secret. The cost to findings: a one-line PEM
+key in a JSON string now takes the longer match and a password token
+rather than a private-key one.
+
 `SecretPattern::accept` exists for a condition the regex cannot state
 because the `regex` crate has no lookahead: the AWS pattern's check that
 no key byte follows the key. Use it only for a fact about bytes that

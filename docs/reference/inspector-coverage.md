@@ -604,7 +604,7 @@ Compose files get two passes. The compose scrubber rewrites credentials by its o
 | PEM private key | Full private key blocks (`-----BEGIN...-----END`), including RSA, EC, DSA and OpenSSH | Private keys |
 | PEM certificate | Full certificate blocks | Certificates |
 | Password hash | Modular crypt hashes (`$1$`, `$2b$`, `$5$`, `$6$`, `$y$`, and others) anywhere in content | `$6$rounds=...` |
-| Credential assignment | `password`, `secret`, `token`, `api_key` and similar keys followed by `=` or `:` and a value | `db_password=...` |
+| Credential assignment | `password`, `secret`, `token`, `api_key` and similar keys followed by `=` or `:` and a value, or as a JSON key followed by a string | `db_password=...`, `"token": "..."` |
 | Connection string | PostgreSQL, MongoDB and Redis URIs and JDBC URLs with a password | `mongodb://user:pass@host/db` |
 | Cloud and network keys | AWS access key IDs, WireGuard keys, Wi-Fi PSKs | `AKIA...` |
 
@@ -622,8 +622,8 @@ Compose files get two passes. The compose scrubber rewrites credentials by its o
   keeps its scheme, user and host, and only the password is replaced. A
   JDBC URL that carries a credential keeps only its scheme:
   `jdbc:mysql://REDACTED_JDBCPASSWORD_1`. A credential value is replaced
-  up to the next whitespace, so a quoted or XML value can lose its
-  closing quote or tag. See [Known limitations](known-limitations.html).
+  up to the next whitespace, and a JSON string with its quotes, so a
+  quoted, JSON or XML value can lose its closing quote, brace or tag. See [Known limitations](known-limitations.html).
 - **Inspector hints**: inspectors emit `RedactionHint` values to flag
   content they know is sensitive (e.g., sudoers env vars matching secret
   patterns, SSH key material). The redaction engine uses these hints to

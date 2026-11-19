@@ -1378,11 +1378,13 @@ fn case_18_redaction_makes_the_explanation_unknown_snapshot() {
     );
     // The config walker reads the link through as well, so its entry
     // records the finding at the link's path, and the sysctl pass does
-    // not record it again.
-    assert!(
-        config_entry(&pem, pem_link)
-            .content
-            .contains("REDACTED_PRIVATEKEY_"),
+    // not record it again. The key is a quoted JSON value under a
+    // credential key, and that match is the longer one, so the value
+    // takes a password token. It takes the quotes and the closing brace
+    // too, which costs the JSON its syntax, not a key byte.
+    assert_eq!(
+        config_entry(&pem, pem_link).content,
+        "{\"private_key\":REDACTED_PASSWORD_1\n",
         "{:?}",
         config_entry(&pem, pem_link).content
     );

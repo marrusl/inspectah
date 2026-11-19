@@ -192,6 +192,31 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             accept: None,
             remediation: "Use 802.1X or externalize WiFi credentials",
         },
+        // A double-quoted value under a double-quoted credential key, as in
+        // JSON's `"password": "x"`, which the generic pattern above does
+        // not reach: a quote sits between its key and the `:`. The secret is
+        // the whole value, quotes included, through the next whitespace
+        // after its closing quote, so it never takes less than `\S+` would
+        // from the opening quote, and more when the quoted text holds a
+        // space. A backslash keeps the next character inside the quotes; an
+        // unterminated value runs to the end of the line. Taking the quotes
+        // breaks the JSON, which costs syntax, not a secret: where a value
+        // ends is not read off its punctuation until redaction parses the
+        // file's format. An empty `""` is left alone, as an empty value is
+        // above. This pattern is last, so it changes no other pattern's index
+        // or its tie order.
+        SecretPattern {
+            regex: Regex::new(
+                r#"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)"[ \t]*:[ \t]*(?P<secret>"(?:[^"\\\r\n]|\\[^\r\n]?)+"?\S*)"#,
+            )
+            .unwrap(),
+            finding_kind: FindingKind::Password,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Confidence::High,
+            accept: None,
+            remediation:
+                "Use environment variables or a secrets manager instead of inline passwords",
+        },
     ]
 });
 
@@ -417,6 +442,7 @@ mod tests {
     const REDIS: usize = 8;
     const WIREGUARD_KEY: usize = 9;
     const WIFI_PSK: usize = 10;
+    const JSON_PASSWORD: usize = 11;
 
     #[test]
     fn test_key_value_patterns_never_cross_a_newline() {
@@ -433,6 +459,8 @@ mod tests {
             (GENERIC_PASSWORD, "password\n= hunter2".into()),
             (WIFI_PSK, "psk=\n[ipv4]".into()),
             (WIFI_PSK, "psk\n=secret".into()),
+            (JSON_PASSWORD, "\"password\": \"\nnext\"".into()),
+            (JSON_PASSWORD, "\"password\":\n\"hunter2\"".into()),
             (WIREGUARD_KEY, format!("PrivateKey =\n{wg_key}")),
             (WIREGUARD_KEY, format!("PrivateKey\n= {wg_key}")),
         ];
@@ -447,6 +475,7 @@ mod tests {
             (GENERIC_PASSWORD, "proxy_password = hunter2".into()),
             (GENERIC_PASSWORD, "proxy_password =\thunter2".into()),
             (WIFI_PSK, "psk=secret".into()),
+            (JSON_PASSWORD, "\"password\": \"hunter2".into()),
             (WIREGUARD_KEY, format!("PrivateKey = {wg_key}")),
         ];
         for (idx, text) in &same_line {
@@ -537,6 +566,33 @@ mod tests {
                 .captures(text)
                 .unwrap_or_else(|| panic!("pattern {idx} must match {text:?}"));
             assert_eq!(&caps[SECRET_GROUP], secret, "pattern {idx} on {text:?}");
+        }
+    }
+
+    /// The JSON pattern's secret is the whole quoted value and on to the
+    /// next whitespace, so it never takes less than `\S+` from the opening
+    /// quote. An empty value and an unquoted one are not taken.
+    #[test]
+    fn test_a_json_credential_value_takes_its_quotes() {
+        let cases: &[(&str, Option<&str>)] = &[
+            (r#"{"password": "x"}"#, Some(r#""x"}"#)),
+            (r#""password": "two words", "#, Some(r#""two words","#)),
+            (r#""db_password":"a\"b c""#, Some(r#""a\"b c""#)),
+            (r#""token": "\/x"}"#, Some(r#""\/x"}"#)),
+            (r#""token": "ab"cd ef"#, Some(r#""ab"cd"#)),
+            // Unterminated: to the end of the line.
+            ("\"secret\": \"a b\nnext", Some("\"a b")),
+            (r#"{"password": ""}"#, None),
+            (r#""password": hunter2"#, None),
+            (r#""password": 4"#, None),
+            (r#""password_hint": "x""#, None),
+        ];
+        for (input, want) in cases {
+            let got = PATTERNS[JSON_PASSWORD]
+                .regex
+                .captures(input)
+                .map(|c| c.name(SECRET_GROUP).unwrap().as_str());
+            assert_eq!(got, *want, "{input:?}");
         }
     }
 
