@@ -22,7 +22,7 @@ Step-by-step lessons for learning inspectah. Start here if you're new.
 Task-oriented instructions for specific scenarios: aggregation, secrets handling, custom configurations.
 
 ### [Reference](reference/)
-Technical specifications and API documentation: CLI flags, output schemas, configuration options.
+Technical specifications and API documentation: CLI flags, output schemas, configuration options, known limitations.
 
 ### [Explanation](explanation/)
 Conceptual background on how inspectah works: architecture, design decisions, baseline subtraction.
