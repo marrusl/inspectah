@@ -187,10 +187,11 @@ the whole match starts on: the AWS pattern consumes the byte before the
 key as its boundary, and when that byte was the newline ending a
 `# note` line, the comment above exempted the key below it, which shipped
 with no finding. Context the match consumed on the secret's own line is
-not part of the prefix either, so `#AKIA...` and `#jdbc:...` stay
-redacted: the `#` there is the pattern's boundary, and both were redacted
-before keys kept their context
-(`test_aws_key_after_a_comment_line_is_redacted`). A finding's line is
+not part of the prefix either, so `#AKIA...` stays redacted: the `#`
+there is the pattern's boundary, and it was redacted before keys kept
+their context (`test_aws_key_after_a_comment_line_is_redacted`). The JDBC
+pattern consumes no boundary, so `#jdbc:...` is a comment line and exempt,
+as `#password=x` is. A finding's line is
 the secret's line too, counted as newlines before the secret plus one
 (`line_number`); `str::lines` on the text before a match counts the
 partial line and put every match not at column 0 one line low
@@ -257,40 +258,16 @@ Absorbing is the backstop, not the design. A pattern whose context can
 hold other credentials makes its secret cover them. The JDBC pattern
 fires on a URL that carries a credential anywhere, an `@` or a non-empty
 `password=` after `scheme://`, and its secret is everything after
-`scheme://`: authority, host, database and query string together. So a
+`scheme://` through the last such marker on the line and on to the next
+whitespace: authority, host, database and query string together. So a
 second `password=`, a `token=`, a nested URI and an authority password
-are all inside it.
-
-Where that secret ends is decided by the character before `jdbc:`, one
-pattern per case, and they exclude one another so only one claims a URL.
-After `"` or `'` it is the quoted scalar, to the closing quote (a
-backslash escape or YAML's `''` does not close it); after `>` it is XML
-element text, to the next `<`, unless that `>` sits inside a quoted
-attribute value, where it is attribute text and the URL ends at the
-attribute's quote (`gt_context` walks the line's tags and quotes up to
-the `>`;
-`test_a_jdbc_url_after_a_gt_inside_an_attribute_keeps_the_tag`); the
-marker must sit inside, and the
-closing quote or tag stays. Running on to the next whitespace took them
-with the URL, and the file no longer parsed
-(`test_a_jdbc_url_keeps_the_quotes_and_tags_around_it`). Find the end of
-the quoted value first and look for the marker inside it second, never
-both in one regex: escape handling that decides where a value ends must
-not decide whether a marker is there. The double-quoted pattern did both,
-read `\@` as one escaped unit, found no bare `@`, and in an XML attribute,
-where a backslash is no escape, shipped the whole credential. Its
-`accept` check (`SecretPattern::accept`) now sets backslashes aside
-before it looks
-(`test_an_escaped_marker_in_a_quoted_jdbc_url_is_still_a_credential`). After anything
-else the secret runs through the line's last marker and on to the next
-whitespace. That reach is what covers an authority password with a space
-in it, and its cost is that a later `password=` or `@` on the same line
-takes the assignments in between: stopping before ` key=` would ship the
-end of a password such as `p@ss w=x`, which reads the same as
-`p@db w=x@host`. The unquoted pattern recognises its case by consuming
-the character before `jdbc:`, so its match starts there, and a URL right
-after a comment marker (`#jdbc:`) is no longer exempt as a comment line. Splitting the URL into an authority pattern and a
-query pattern was tried and shipped what the split got wrong: a password
+are all inside it. That reach is what covers an authority password with
+a space in it, and its cost is that a later `password=` or `@` on the
+same line takes the assignments in between: stopping before ` key=`
+would ship the end of a password such as `p@ss w=x`, which reads the same
+as `p@db w=x@host`. It also takes a closing quote or tag that touches the
+URL; see "Redaction may take syntax, never leave a secret byte" below.
+Splitting the URL into an authority pattern and a query pattern was tried and shipped what the split got wrong: a password
 with no user before it (`jdbc:mysql://:pw@db`) and the part of one before
 a `?` (`jdbc:mysql://u:pa?ss@db`). The cost is the host and database
 name, which a recipient no longer sees
@@ -376,32 +353,43 @@ fix the second
 (`test_uri_password_with_a_slash_is_covered_at_the_cost_of_a_query_at`).
 Only the PEM patterns span lines, on purpose, with `(?s)`.
 
-## A credential value keeps the quotes and tags around it
+## Redaction may take syntax, never leave a secret byte
 
-The generic credential pattern is three patterns, one per way the value
-opens (`credential_pattern` in `redaction/patterns.rs`), because the
-`regex` crate has no backreference to match a closing quote to its
-opener and a named group may appear once. After `"` or `'` the secret is
-the text inside the quotes, which stay: `password="p"/>` keeps its `"/>`
-(`test_a_credential_value_keeps_the_quotes_and_tags_around_it`). A
-quoted value may follow a quoted key, so JSON's `"password": "x"` is
-covered; an unquoted value after a quoted key is not taken, because a
-JSON number or `null` replaced by a bare token stops parsing.
+Redaction may over-redact the syntax around a secret. It may never
+under-redact the secret. Until redaction parses each file by its format,
+no pattern decides where a value ends, or whether it holds a credential,
+by inferring the file's syntax from punctuation.
 
-An unquoted value used to be `\S+`, which ran past a closing quote or tag
-(`url="...?password=x" pool=4`, `password=pw</url>`), and when it sat
-inside a JDBC URL the merge widened the URL's span to match and took the
-quote or tag too. It now stops at a `"`, `'`, `<` or `>` run only when
-what follows cannot be more value: whitespace, the line's end, `/`, `,`,
-`;`, `)`, `]` or `}`. Stopping at every quote, as first proposed, would
-have shipped the rest of `password=p"ss`, which `\S+` covered. The two
-cases the rule cannot tell apart are pinned in that test: a value that
-really ends in a quote keeps the quote, and `password=ab",cd` keeps
-`",cd`. A quoted value goes on past its closing quote when more value
-follows (`"ab"cd` is one shell word). A backslash escapes inside double
-quotes, as JSON, YAML and TOML read it; in XML a value ending in a
-backslash then runs to the end of the line, which costs syntax, not a
-secret.
+So the generic credential value is `\S+`, and the JDBC secret runs to the
+next whitespace after the line's last marker. A quote, `<` or `>` that
+touches the value goes with it: Tomcat's `<Resource password="p"/>`
+becomes `<Resource password=REDACTED_PASSWORD_1`, and
+`url="jdbc:mysql://u:pw@db/app" pool=4` loses its closing quote. Those
+outputs are pinned in `test_a_quoted_or_xml_value_loses_its_closing_syntax`,
+so the cost is visible and deliberate, and fixing it means format-aware
+redaction, not a smarter regex.
+
+Inferring the end was tried, over four review rounds, and every version
+shipped bytes `\S+` covered. An unquoted value that stopped at a quote,
+`<` or `>` followed by `/`, `,`, `;`, `)`, `]` or `}` kept `/tail` of
+`password=ab"/tail`, since those characters are as good in a password as
+in markup. Quoted values read inside their quotes kept `hunter2` of
+`DB_PASSWORD=""hunter2`, and a value read without its quotes became
+`files`, which the NSS/PAM filter then exempted. JDBC patterns keyed on
+the character before `jdbc:` needed an escape rule (a backslash escapes
+in JSON and is a literal in XML), and setting backslashes aside read
+`password=\\` as empty and left `sig=signsecret` in the query. A tag
+walker that inferred an attribute's quote stopped inside `pa'ss` and
+shipped the authority password. Every one of these inputs is a row in
+`test_no_secret_byte_survives_a_reviewed_input`, which asserts the exact
+output and that no secret survives anywhere in the serialized snapshot.
+A new pattern adds a row there for each input it is meant to fix.
+
+`SecretPattern::accept` exists for a condition the regex cannot state
+because the `regex` crate has no lookahead: the AWS pattern's check that
+no key byte follows the key. Use it only for a fact about bytes that
+cannot be part of the secret. A check that rejects a match on inferred
+syntax drops the whole match, and nothing falls back to cover it.
 
 ## Content parsed after redaction is unknown when the pass changed it
 

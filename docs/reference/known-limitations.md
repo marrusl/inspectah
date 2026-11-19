@@ -47,3 +47,27 @@ this failure.
      `authorized_keys` at provisioning time.
 
 **Status.** Planned for a later release.
+
+## A redacted quoted or XML value loses its closing quote or tag
+
+**Symptom.** A configuration file in the export no longer parses where
+redaction replaced a secret. Tomcat's `<Resource password="p"/>` becomes
+`<Resource password=REDACTED_PASSWORD_1`, and
+`url="jdbc:mysql://u:pw@db/app" pool=4` becomes
+`url="jdbc:mysql://REDACTED_JDBCPASSWORD_1 pool=4`.
+
+**Cause.** Redaction does not yet read a file by its format. A value is
+replaced up to the next whitespace, and a JDBC URL that carries a
+credential is replaced after its scheme up to the next whitespace after
+its last credential, so a closing quote or tag touching the value goes
+with it. Ending a value at a quote or tag instead left part of the secret
+in the export, because the same characters can be part of a password.
+
+**Who is affected.** Any export whose configuration files hold a secret in
+a quoted value or in an XML attribute or element.
+
+**Workaround.** Restore the closing quote or tag by hand in the exported
+file. The secret has to be supplied at deploy time in any case.
+
+**Status.** Planned for a later release, which reads each file by its
+format.

@@ -28,134 +28,10 @@ pub(crate) struct SecretPattern {
 /// only when the whole match is the secret (a PEM block, a hash).
 pub(crate) const SECRET_GROUP: &str = "secret";
 
-/// One of the JDBC URL patterns in [`PATTERNS`]. They differ only in what
-/// opens the URL, which decides where it ends.
-fn jdbc_pattern(regex: &str, accept: Option<fn(&str, &Captures<'_>) -> bool>) -> SecretPattern {
-    SecretPattern {
-        regex: Regex::new(regex).unwrap(),
-        finding_kind: FindingKind::JdbcPassword,
-        detection_method: DetectionMethod::Pattern,
-        confidence: Confidence::High,
-        remediation: "Use connection pooling with externalized credentials",
-        accept,
-    }
-}
-
-/// Returns true if the double-quoted JDBC URL in `caps` carries a
-/// credential: an `@`, or a `password=` with a value, anywhere between
-/// its quotes once backslashes are set aside. The regex finds where the
-/// quoted value ends, honouring `\"`; this decides whether it holds a
-/// credential. A backslash is an escape in JSON and TOML but not in an XML
-/// attribute, so `\@` may be a backslash and an `@`, and either way the
-/// `@` is there.
-fn quoted_jdbc_url_carries_a_credential(_content: &str, caps: &Captures<'_>) -> bool {
-    let Some(url) = caps.name(SECRET_GROUP) else {
-        return false;
-    };
-    let plain: String = url.as_str().chars().filter(|&c| c != '\\').collect();
-    plain.contains('@')
-        || plain.match_indices(JDBC_PASSWORD_MARKER).any(|(i, m)| {
-            plain[i + m.len()..]
-                .chars()
-                .next()
-                .is_some_and(|c| c != '&' && !c.is_whitespace())
-        })
-}
-
-/// What a `>` right before `jdbc:` is, read from its line up to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GtContext {
-    /// It closes a tag, or no tag opens before it on the line: what
-    /// follows is element text, which ends at the next `<`.
-    ElementText,
-    /// It sits inside a `"`-quoted attribute value of an open tag.
-    DoubleQuotedAttribute,
-    /// It sits inside a `'`-quoted attribute value of an open tag.
-    SingleQuotedAttribute,
-}
-
-/// Classify the `>` that opens the match in `caps` by walking its line
-/// from the start: `<` opens a tag, a quote inside a tag opens or closes an
-/// attribute value, and `>` outside a value closes the tag. Quotes in
-/// element text are plain characters. Only the line is read, so in a tag
-/// that opened on an earlier line a `>` is taken as element text; that
-/// errs toward replacing more, never less.
-fn gt_context(content: &str, caps: &Captures<'_>) -> GtContext {
-    #[derive(Clone, Copy)]
-    enum State {
-        Text,
-        Tag,
-        Quoted(u8),
-    }
-    let pos = caps.get(0).map_or(0, |m| m.start());
-    let line_start = content[..pos].rfind('\n').map_or(0, |i| i + 1);
-    let mut state = State::Text;
-    for &b in &content.as_bytes()[line_start..pos] {
-        state = match (state, b) {
-            (State::Text, b'<') => State::Tag,
-            (State::Tag, b'>') => State::Text,
-            (State::Tag, b'"' | b'\'') => State::Quoted(b),
-            (State::Quoted(q), b) if b == q => State::Tag,
-            (state, _) => state,
-        };
-    }
-    match state {
-        State::Text | State::Tag => GtContext::ElementText,
-        State::Quoted(b'"') => GtContext::DoubleQuotedAttribute,
-        State::Quoted(_) => GtContext::SingleQuotedAttribute,
-    }
-}
-
 /// Returns true if `b` can be part of an AWS access key id, so a key id
 /// next to it is part of a longer run and not a key id.
 fn is_aws_key_byte(b: u8) -> bool {
     b.is_ascii_uppercase() || b.is_ascii_digit()
-}
-
-/// The query-string key that marks a JDBC URL as carrying a credential.
-const JDBC_PASSWORD_MARKER: &str = "password=";
-
-/// Keys whose value the generic credential patterns take as a secret.
-/// `(?:^|\b|_)` before them, not bare `\b`, catches compound forms such as
-/// `iscsi_password=` (an underscore is a word character, so `\b` alone
-/// misses the boundary inside the identifier).
-const CREDENTIAL_KEYS: &str = r"(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)";
-
-/// An unquoted credential value; see the generic patterns in [`PATTERNS`].
-/// A run of `"`, `'`, `<` and `>` is part of the value only with more value
-/// after it: not whitespace, the line's end, `/`, `,`, `;`, `)`, `]` or `}`,
-/// which follow a quote or tag that closes what holds the value
-/// (`"...password=x"/>`, `{"u": "...password=x", ...}`).
-const UNQUOTED_CREDENTIAL_VALUE: &str =
-    r#"(?P<secret>[<>]*[^\s"'<>](?:[^\s"'<>]|["'<>]+[^\s"'<>/,;)\]}])*)"#;
-/// A double-quoted credential value, the quotes outside the secret. A
-/// closing quote with more value right after it (`"ab"cd`, shell
-/// concatenation) does not end it: the rest is read as an unquoted value.
-const DOUBLE_QUOTED_CREDENTIAL_VALUE: &str = r#""(?P<secret>(?:[^"\\\r\n]|\\[^\r\n]?)+(?:"[^\s<>/,;)\]}](?:[^\s"'<>]|["'<>]+[^\s"'<>/,;)\]}])*)?)"#;
-/// A single-quoted credential value, the quotes outside the secret, read
-/// on past its closing quote as [`DOUBLE_QUOTED_CREDENTIAL_VALUE`] is.
-const SINGLE_QUOTED_CREDENTIAL_VALUE: &str =
-    r#"'(?P<secret>(?:[^'\r\n]|'')+(?:'[^\s<>/,;)\]}](?:[^\s"'<>]|["'<>]+[^\s"'<>/,;)\]}])*)?)"#;
-
-/// One of the generic credential patterns: a key from
-/// [`CREDENTIAL_KEYS`], then `key_close` (a quote that may end a quoted
-/// key), then `=` or `:` and `value`. Whitespace around the delimiter is
-/// `[ \t]*`, never `\s*`: `\s` matches a newline, so after an empty value
-/// (`proxy_password =` in the stock rhsm.conf) the match ran on into the
-/// next line and the token replaced it. Every value form needs at least
-/// one character on the key's own line.
-fn credential_pattern(key_close: &str, value: &str) -> SecretPattern {
-    SecretPattern {
-        regex: Regex::new(&format!(
-            r"(?i){CREDENTIAL_KEYS}{key_close}[ \t]*[=:][ \t]*{value}"
-        ))
-        .unwrap(),
-        finding_kind: FindingKind::Password,
-        detection_method: DetectionMethod::Pattern,
-        confidence: Confidence::High,
-        accept: None,
-        remediation: "Use environment variables or a secrets manager instead of inline passwords",
-    }
 }
 
 /// All compiled patterns. `LazyLock` ensures they compile exactly once.
@@ -200,42 +76,32 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             accept: None,
             remediation: "Remove password hash or use a secrets manager",
         },
-        // Generic password/credential in key=value config, one pattern per
-        // way the value opens (see `credential_pattern`). Covers password=,
-        // passwd=, db_password=, secret=, api_key=, token=, credential=,
-        // private_key=, access_key=, secret_key=, *_key= (compound forms
-        // only — bare "key=" is too broad for config files).
-        //
-        // Only the value is the secret: the key, delimiter, spacing and
-        // any quotes stay, so `proxy_password = x` still parses as INI,
-        // `Environment=API_TOKEN=x` is still a valid assignment, and
-        // `password="x"/>` keeps its `"/>`.
-        //
-        // - Unquoted, the value runs to whitespace. A run of `"`, `'`, `<`
-        //   or `>` ends it too when it closes what holds the value: when
-        //   whitespace, the line's end, `/`, `,`, `;`, `)`, `]` or `}`
-        //   follows it, as in `url="...?password=x" pool=4`,
-        //   `password=x"/>`, `password=pw</url>` and a JSON string ending
-        //   `password=x",`. With more value after it (`password=p"ss`) it
-        //   is part of the value. That keeps every byte the old `\S+` value
-        //   covered except such a run at the very end of a value
-        //   (`password=ab"`, which reads the same as `"password=ab"`) and a
-        //   value going on past one of those closers (`password=ab",cd`).
-        // - After `"`, the value runs to the closing `"` on its line, or to
-        //   the line's end. A backslash escapes the next character, as in
-        //   JSON, YAML and TOML, so `"a\"b"` is one value; in XML, where a
-        //   backslash is no escape, a value ending in one runs on to the
-        //   end of the line, which replaces more, never less. A closing
-        //   quote with more value after it (`"ab"cd`) does not end it.
-        // - After `'`, the same, and YAML's `''` does not close it.
-        //
-        // A quoted value may follow a quoted key (`"password": "x"`), so
-        // JSON and Python dicts are covered; an unquoted value after a
-        // quoted key is not taken, as a JSON number or `null` would lose
-        // its type. An empty value, quoted or not, is left alone.
-        credential_pattern("", UNQUOTED_CREDENTIAL_VALUE),
-        credential_pattern(r#"["']?"#, DOUBLE_QUOTED_CREDENTIAL_VALUE),
-        credential_pattern(r#"["']?"#, SINGLE_QUOTED_CREDENTIAL_VALUE),
+        // Generic password/credential in key=value config.
+        // Covers password=, passwd=, db_password=, secret=, api_key=, token=,
+        // credential=, private_key=, access_key=, secret_key=, *_key= (compound
+        // forms only — bare "key=" is too broad for config files).
+        // Uses (?:^|\b|_) instead of bare \b so compound forms like
+        // iscsi_password= or db_password= are caught (underscore is a word
+        // character, so \b alone misses mid-identifier boundaries).
+        // Whitespace around the delimiter is `[ \t]*`, never `\s*`: `\s`
+        // matches a newline, so after an empty value (`proxy_password =` in
+        // the stock rhsm.conf) the match ran on into the next line and the
+        // token replaced it. `\S+` then requires a value on the same line.
+        // Only the value is the secret: the key, delimiter and spacing stay,
+        // so `proxy_password = x` still parses as INI and
+        // `Environment=API_TOKEN=x` is still a valid assignment.
+        SecretPattern {
+            regex: Regex::new(
+                r"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)[ \t]*[=:][ \t]*(?P<secret>\S+)",
+            )
+            .unwrap(),
+            finding_kind: FindingKind::Password,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Confidence::High,
+            accept: None,
+            remediation:
+                "Use environment variables or a secrets manager instead of inline passwords",
+        },
         // AWS access key ID (AKIA...). The boundary character before the
         // key is context, not secret: replacing it ate the `=` before the
         // key. The boundary after it is checked by `accept`, not matched:
@@ -255,72 +121,23 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         },
         // JDBC URL carrying a credential: an `@` (a user and password in
         // the authority) or a non-empty `password=` anywhere after the
-        // scheme. Only the scheme stays: the secret is the rest of the URL,
-        // authority, host, database and query string together. Naming only
-        // part of it left the rest to parsing a URL whose password can hold
-        // `?`, `@` or nothing before the `:` (`jdbc:mysql://:pw@db`,
+        // scheme. The secret is everything after `scheme://` through the
+        // last such marker on the line and on to the next whitespace, so the
+        // authority, host, database and query string go together. Naming
+        // only part of it left the rest to parsing a URL whose password can
+        // hold `?`, `@` or nothing before the `:` (`jdbc:mysql://:pw@db`,
         // `jdbc:mysql://u:pa?ss@db`), and each part it got wrong shipped.
-        //
-        // Where the URL ends depends on what comes right before `jdbc:`, so
-        // there is one pattern per opener, and they exclude one another, so
-        // only one can claim a URL:
-        //
-        // - after `"` or `'`, the quoted scalar, up to its closing quote or
-        //   the end of the line; a backslash escape, or `''` inside single
-        //   quotes, does not close it. After `>`, XML element text, up to
-        //   the next `<`, unless the `>` sits inside a quoted attribute
-        //   (`gt_context`), where the URL ends at that attribute's quote.
-        //   The marker must sit inside, and the closing quote
-        //   or tag stays as written. Running on to the next whitespace
-        //   instead took `"` and `</url>` with the URL. In double quotes
-        //   the regex only finds where the value ends, and
-        //   `quoted_jdbc_url_carries_a_credential` looks for the marker
-        //   with backslashes set aside: in an XML attribute `\@` is a
-        //   backslash and an `@`, and reading it as one escape hid the `@`.
-        // - after anything else, the line's last marker and on to the next
-        //   whitespace. This reach crosses whitespace on purpose, for an
-        //   authority password holding a space (`jdbc:mysql://u:two
-        //   words@db`), so it also takes a later `password=` or `@` on the
-        //   line and what lies between: `url=jdbc:mysql://u:pw@db pool=4
-        //   password=x` loses `pool=4`. Stopping before ` key=` would keep
-        //   it and ship the end of a password such as `p@ss w=x`, and the
-        //   two cannot be told apart. This pattern recognises its case by
-        //   consuming the character before `jdbc:`, so its match starts
-        //   there: a URL right after a comment marker (`#jdbc:`) is
-        //   redacted rather than exempt.
-        //
-        // A quoted URL with no marker inside its quotes matches none of
-        // them, so a `password="..."` after it is the generic pattern's and
-        // does not pull the URL's closing quote into this one. No class
-        // here admits a line break, so a URL with no credential cannot pair
-        // with an `@` on a later line; spaces and tabs are allowed, as a
-        // host's malformed URL can hold them.
-        jdbc_pattern(
-            r#"(?:(?m:^)|[^"'>\r\n])jdbc:[a-z]+://(?P<secret>[^\r\n]*(?:@|password=[^&\s])\S*)"#,
-            None,
-        ),
-        jdbc_pattern(
-            r#""jdbc:[a-z]+://(?P<secret>(?:[^"\\\r\n]|\\[^\r\n]?)+)"#,
-            Some(quoted_jdbc_url_carries_a_credential),
-        ),
-        jdbc_pattern(
-            r#"'jdbc:[a-z]+://(?P<secret>(?:[^'\r\n]|'')*(?:@|password=[^&\s'])(?:[^'\r\n]|'')*)"#,
-            None,
-        ),
-        jdbc_pattern(
-            r#">jdbc:[a-z]+://(?P<secret>[^<\r\n]*(?:@|password=[^&\s<])[^<\r\n]*)"#,
-            Some(|content, caps| gt_context(content, caps) == GtContext::ElementText),
-        ),
-        // After a `>` inside a quoted attribute, `<db url=">jdbc:..."`: the
-        // `>` is attribute text, and the URL ends at the attribute's quote.
-        jdbc_pattern(
-            r#">jdbc:[a-z]+://(?P<secret>[^"\r\n]*(?:@|password=[^&\s"])[^"\r\n]*)"#,
-            Some(|content, caps| gt_context(content, caps) == GtContext::DoubleQuotedAttribute),
-        ),
-        jdbc_pattern(
-            r#">jdbc:[a-z]+://(?P<secret>[^'\r\n]*(?:@|password=[^&\s'])[^'\r\n]*)"#,
-            Some(|content, caps| gt_context(content, caps) == GtContext::SingleQuotedAttribute),
-        ),
+        // Only the scheme stays. No class here admits a line break, so a URL
+        // with no credential cannot pair with an `@` on a later line; spaces
+        // and tabs are allowed, as a host's malformed URL can hold them.
+        SecretPattern {
+            regex: Regex::new(r"jdbc:[a-z]+://(?P<secret>[^\r\n]*(?:@|password=[^&\s])\S*)").unwrap(),
+            finding_kind: FindingKind::JdbcPassword,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Confidence::High,
+            accept: None,
+            remediation: "Use connection pooling with externalized credentials",
+        },
         // PostgreSQL connection URI with password. Only the password is
         // replaced; the scheme, user and `@host` stay. The user and
         // password classes exclude CR and LF: with `[^:]+` / `[^@]+` a
@@ -594,19 +411,12 @@ mod tests {
 
     /// Index of each line-oriented `key = value` pattern in `PATTERNS`.
     const GENERIC_PASSWORD: usize = 3;
-    const GENERIC_PASSWORD_DOUBLE_QUOTED: usize = 4;
-    const GENERIC_PASSWORD_SINGLE_QUOTED: usize = 5;
-    const JDBC: usize = 7;
-    const JDBC_DOUBLE_QUOTED: usize = 8;
-    const JDBC_SINGLE_QUOTED: usize = 9;
-    const JDBC_XML_TEXT: usize = 10;
-    const JDBC_XML_DOUBLE_QUOTED_ATTRIBUTE: usize = 11;
-    const JDBC_XML_SINGLE_QUOTED_ATTRIBUTE: usize = 12;
-    const POSTGRES: usize = 13;
-    const MONGODB: usize = 14;
-    const REDIS: usize = 15;
-    const WIREGUARD_KEY: usize = 16;
-    const WIFI_PSK: usize = 17;
+    const JDBC: usize = 5;
+    const POSTGRES: usize = 6;
+    const MONGODB: usize = 7;
+    const REDIS: usize = 8;
+    const WIREGUARD_KEY: usize = 9;
+    const WIFI_PSK: usize = 10;
 
     #[test]
     fn test_key_value_patterns_never_cross_a_newline() {
@@ -621,16 +431,6 @@ mod tests {
             (GENERIC_PASSWORD, "token:\n  - item".into()),
             // Newline between key and delimiter.
             (GENERIC_PASSWORD, "password\n= hunter2".into()),
-            // A quote that opens a value does not close on a later line.
-            (
-                GENERIC_PASSWORD_DOUBLE_QUOTED,
-                "password = \"\nnext\"".into(),
-            ),
-            (
-                GENERIC_PASSWORD_DOUBLE_QUOTED,
-                "password =\n\"hunter2\"".into(),
-            ),
-            (GENERIC_PASSWORD_SINGLE_QUOTED, "password = '\nnext'".into()),
             (WIFI_PSK, "psk=\n[ipv4]".into()),
             (WIFI_PSK, "psk\n=secret".into()),
             (WIREGUARD_KEY, format!("PrivateKey =\n{wg_key}")),
@@ -646,11 +446,6 @@ mod tests {
         let same_line: Vec<(usize, String)> = vec![
             (GENERIC_PASSWORD, "proxy_password = hunter2".into()),
             (GENERIC_PASSWORD, "proxy_password =\thunter2".into()),
-            (
-                GENERIC_PASSWORD_DOUBLE_QUOTED,
-                "password = \"hunter2".into(),
-            ),
-            (GENERIC_PASSWORD_SINGLE_QUOTED, "password: 'hunter2'".into()),
             (WIFI_PSK, "psk=secret".into()),
             (WIREGUARD_KEY, format!("PrivateKey = {wg_key}")),
         ];
@@ -688,18 +483,6 @@ mod tests {
                     format!(
                         "primary=jdbc:mysql://db/one{nl}secondary=jdbc:mysql://db/two?password=hunter2"
                     ),
-                ),
-                (
-                    JDBC_DOUBLE_QUOTED,
-                    format!("url=\"jdbc:mysql://db/app{nl}contact: ops@example.com\""),
-                ),
-                (
-                    JDBC_SINGLE_QUOTED,
-                    format!("url='jdbc:mysql://db/app{nl}contact: ops@example.com'"),
-                ),
-                (
-                    JDBC_XML_TEXT,
-                    format!("<url>jdbc:mysql://db/app{nl}contact: ops@example.com</url>"),
                 ),
             ];
             for (idx, text) in &cases {
@@ -754,107 +537,6 @@ mod tests {
                 .captures(text)
                 .unwrap_or_else(|| panic!("pattern {idx} must match {text:?}"));
             assert_eq!(&caps[SECRET_GROUP], secret, "pattern {idx} on {text:?}");
-        }
-    }
-
-    /// What opens a JDBC URL decides where it ends, and exactly one of the
-    /// six JDBC patterns claims it, counting a pattern's `accept` check. A quoted URL or XML text leaves its
-    /// closing quote or tag outside the secret, and the unquoted pattern
-    /// never takes a URL that an opener's pattern declined.
-    #[test]
-    fn test_one_jdbc_pattern_claims_a_url_by_what_opens_it() {
-        let jdbc = [
-            JDBC,
-            JDBC_DOUBLE_QUOTED,
-            JDBC_SINGLE_QUOTED,
-            JDBC_XML_TEXT,
-            JDBC_XML_DOUBLE_QUOTED_ATTRIBUTE,
-            JDBC_XML_SINGLE_QUOTED_ATTRIBUTE,
-        ];
-        let cases: &[(&str, Option<(usize, &str)>)] = &[
-            (
-                "url=jdbc:mysql://u:pw@db/app pool=4",
-                Some((JDBC, "u:pw@db/app")),
-            ),
-            ("jdbc:mysql://u:pw@db/app", Some((JDBC, "u:pw@db/app"))),
-            ("a\njdbc:mysql://u:pw@db/app", Some((JDBC, "u:pw@db/app"))),
-            (
-                r#"url="jdbc:mysql://u:pw@db/app" pool=4"#,
-                Some((JDBC_DOUBLE_QUOTED, "u:pw@db/app")),
-            ),
-            (
-                r#"url="jdbc:mysql://app:two words@db" pool=4"#,
-                Some((JDBC_DOUBLE_QUOTED, "app:two words@db")),
-            ),
-            // A backslash escape does not close a double-quoted value.
-            (
-                r#"{"url": "jdbc:mysql://u:p\"w@db/app"}"#,
-                Some((JDBC_DOUBLE_QUOTED, r#"u:p\"w@db/app"#)),
-            ),
-            (
-                "url='jdbc:mysql://u:pw@db/app' pool=4",
-                Some((JDBC_SINGLE_QUOTED, "u:pw@db/app")),
-            ),
-            // Nor does YAML's doubled quote close a single-quoted one.
-            (
-                "url: 'jdbc:mysql://u:it''s@db/app'",
-                Some((JDBC_SINGLE_QUOTED, "u:it''s@db/app")),
-            ),
-            (
-                "<url>jdbc:mysql://u:pw@db/app</url>",
-                Some((JDBC_XML_TEXT, "u:pw@db/app")),
-            ),
-            (
-                "<url>jdbc:mysql://db/app?password=two words</url>",
-                Some((JDBC_XML_TEXT, "db/app?password=two words")),
-            ),
-            // A backslash before a marker does not hide it: in an XML
-            // attribute it is no escape at all.
-            (
-                r#"<db url="jdbc:mysql://u:pw\@db/app"/>"#,
-                Some((JDBC_DOUBLE_QUOTED, r"u:pw\@db/app")),
-            ),
-            // A `>` inside a quoted attribute is not element text.
-            (
-                r#"<db url=">jdbc:mysql://u:pw@db/app" pool="4"/>"#,
-                Some((JDBC_XML_DOUBLE_QUOTED_ATTRIBUTE, "u:pw@db/app")),
-            ),
-            (
-                "<db url='>jdbc:mysql://u:pw@db/app' pool='4'/>",
-                Some((JDBC_XML_SINGLE_QUOTED_ATTRIBUTE, "u:pw@db/app")),
-            ),
-            (
-                r#"<url kind="a>b">jdbc:mysql://u:pw@db/app</url>"#,
-                Some((JDBC_XML_TEXT, "u:pw@db/app")),
-            ),
-            // An unterminated quote runs to the end of the line.
-            (
-                r#"url="jdbc:mysql://u:pw@db/app pool=4"#,
-                Some((JDBC_DOUBLE_QUOTED, "u:pw@db/app pool=4")),
-            ),
-            // No marker inside the quotes or the element: no JDBC pattern
-            // matches, so none reaches the `@` after the closing quote.
-            (
-                r#"<db url="jdbc:mysql://db/app" owner="ops@example.com"/>"#,
-                None,
-            ),
-            (
-                "<url>jdbc:mysql://db/app</url><owner>ops@example.com</owner>",
-                None,
-            ),
-        ];
-        for (input, want) in cases {
-            let got: Vec<(usize, &str)> = jdbc
-                .iter()
-                .flat_map(|&idx| {
-                    let pat = &PATTERNS[idx];
-                    pat.regex
-                        .captures_iter(input)
-                        .filter(move |c| pat.accept.is_none_or(|accept| accept(input, c)))
-                        .map(move |c| (idx, c.name(SECRET_GROUP).unwrap().as_str()))
-                })
-                .collect();
-            assert_eq!(got, want.iter().copied().collect::<Vec<_>>(), "{input:?}");
         }
     }
 
