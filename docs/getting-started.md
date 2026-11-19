@@ -15,8 +15,10 @@ the refine UI to triage findings. Total time: about 10 minutes.
 - **Podman** installed (`dnf install podman`)
 - **Root access** on the target host (inspectah reads system configuration)
 
-**For RHEL users:** inspectah pulls the matching base image to classify
-findings. RHEL base images require registry authentication:
+**For RHEL users:** inspectah uses the matching base image to classify
+findings. It uses the copy already in local storage when there is one and
+pulls the image otherwise. RHEL base images require registry authentication
+for the pull:
 
 ```bash
 sudo podman login registry.redhat.io
@@ -132,14 +134,16 @@ sudo inspectah scan
 inspectah runs a four-stage pipeline:
 
 1. **Detect** the OS and resolve a matching base image
-2. **Pull** the base image (you will see download progress)
+2. **Prepare** the base image: use the copy in local storage, or pull it
+   and show download progress
 3. **Inspect** the system: RPMs, configs, services, users, repos,
    containers, storage, and more (11 inspectors by default)
 4. **Render** migration artifacts and package them into a tarball
 
 A typical scan takes 30--90 seconds depending on the number of installed
-packages and network speed for the base image pull. On subsequent runs,
-the base image is cached locally.
+packages and network speed when the base image has to be pulled. On subsequent runs,
+the stored image is used without a pull and the scan prints `Using local
+image`.
 
 When the scan finishes, you will see output like this, captured from a
 RHEL 9.8 test host:

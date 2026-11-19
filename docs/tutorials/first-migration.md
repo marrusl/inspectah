@@ -51,8 +51,9 @@ Before you start, make sure you have:
 - **Root access** on the host you want to scan
 - **Podman installed** (`dnf install podman`), needed for the build step
 
-**For RHEL users:** inspectah pulls a base image for baseline subtraction.
-RHEL base images require registry authentication:
+**For RHEL users:** inspectah uses a base image for baseline subtraction,
+from local storage when it is already there and from a pull otherwise. RHEL
+base images require registry authentication for the pull:
 
 ```bash
 sudo podman login registry.redhat.io
@@ -72,8 +73,9 @@ SSH into the host and run inspectah as root:
 sudo inspectah scan
 ```
 
-inspectah detects the source system, resolves and pulls the target base
-image, then runs its inspection pipeline:
+inspectah detects the source system, resolves the target base image and
+uses it from local storage or pulls it, then runs its inspection pipeline.
+This first run pulled the image:
 
 ```
 Detecting source system...
