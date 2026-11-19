@@ -205,9 +205,9 @@ Overlaps between patterns are decided on the **secret** spans, because
 those are what get replaced. Deciding them on the whole match instead
 drops any second secret that sits inside one pattern's context but
 outside its secret, and that secret then ships: in
-`jdbc:postgresql://u:inner@pg/app?password=outer` the JDBC query-string
-match runs from `jdbc:` to `outer`, and on whole matches it swallowed the
-authority password `inner`
+`postgres://AKIAABCDEFGHIJKLMNOP:pw@db` the PostgreSQL match runs from
+`postgres:` to the `@`, and on whole matches it swallows the AWS key id
+used as the user name
 (`test_a_match_inside_another_patterns_claim_is_still_redacted`).
 
 When two secrets do overlap, the whole match (`claim`) picks the winner,
@@ -232,10 +232,18 @@ broke that and panicked on every redaction path
 `prop_redaction_covers_every_captured_secret_without_panicking`).
 
 Absorbing is the backstop, not the design. A pattern whose context can
-hold other credentials makes its secret cover them: the JDBC pattern's
-secret is the whole query string after `?`, so a second `password=`, a
-`token=` or a nested URI there is inside it, and a JDBC URL with a
-password in its authority (`jdbc:mysql://u:pw@db`) has its own pattern.
+hold other credentials makes its secret cover them. The JDBC pattern
+fires on a URL that carries a credential anywhere, an `@` or a non-empty
+`password=` after `scheme://`, and its secret is everything after
+`scheme://` through the last such marker on the line and on to the next
+whitespace: authority, host, database and query string together. So a
+second `password=`, a `token=`, a nested URI and an authority password
+are all inside it. Splitting the URL into an authority pattern and a
+query pattern was tried and shipped what the split got wrong: a password
+with no user before it (`jdbc:mysql://:pw@db`) and the part of one before
+a `?` (`jdbc:mysql://u:pa?ss@db`). The cost is the host and database
+name, which a recipient no longer sees
+(`test_a_jdbc_url_with_a_credential_is_replaced_after_its_scheme`).
 `test_inputs_redacted_by_whole_match_replacement_stay_redacted` holds
 every input the old whole-match replacement covered to the same
 coverage.

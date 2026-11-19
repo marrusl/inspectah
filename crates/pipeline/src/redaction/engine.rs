@@ -2065,7 +2065,7 @@ baseurl = https://cdn.redhat.com
             ),
             (
                 "jdbc:mysql://db:3306/app?user=u&password=s3cret&ssl=1".into(),
-                "jdbc:mysql://db:3306/app?REDACTED_JDBCPASSWORD_1".into(),
+                "jdbc:mysql://REDACTED_JDBCPASSWORD_1".into(),
             ),
             (
                 "aws_access_key_id = AKIAABCDEFGHIJKLMNOP\nregion = x".into(),
@@ -2185,7 +2185,7 @@ baseurl = https://cdn.redhat.com
             let out = redact_string(&input).into_owned();
             assert_eq!(
                 out,
-                format!("{first}{nl}secondary=jdbc:mysql://db/two?REDACTED_JDBCPASSWORD_1{nl}"),
+                format!("{first}{nl}secondary=jdbc:mysql://REDACTED_JDBCPASSWORD_1{nl}"),
                 "{input:?}"
             );
             let kinds: Vec<Option<FindingKind>> = scan_content(&input, "/etc/app.conf")
@@ -2198,25 +2198,26 @@ baseurl = https://cdn.redhat.com
 
     #[test]
     fn test_a_match_inside_another_patterns_claim_is_still_redacted() {
-        // The JDBC query-string match runs from `jdbc:` to `outer`, so its
-        // whole match contains the password in the authority, which is
-        // outside its secret. Deciding overlaps on whole matches would let
-        // the JDBC match swallow the authority match and ship `inner`.
-        let input = "jdbc:postgresql://u:inner@pg/app?password=outer";
+        // The PostgreSQL match runs from `postgres:` to the `@`, so its
+        // whole match contains the AWS key id used as the user name, which
+        // is outside its secret. Deciding overlaps on whole matches would
+        // let the PostgreSQL match swallow the AWS match and ship the key.
+        let input = "postgres://AKIAABCDEFGHIJKLMNOP:pw@db";
         let out = redact_string(input);
         assert_eq!(
             out,
-            "jdbc:postgresql://u:REDACTED_JDBCPASSWORD_2@pg/app?REDACTED_JDBCPASSWORD_1"
+            "postgres://REDACTED_AWSKEY_1:REDACTED_POSTGRESPASSWORD_1@db"
         );
-        let kinds: Vec<Option<FindingKind>> = scan_content(input, "/etc/app.conf")
+        let mut kinds: Vec<Option<FindingKind>> = scan_content(input, "/etc/app.conf")
             .into_iter()
             .map(|f| f.finding_kind)
             .collect();
+        kinds.sort_by_key(|k| format!("{k:?}"));
         assert_eq!(
             kinds,
             vec![
-                Some(FindingKind::JdbcPassword),
-                Some(FindingKind::JdbcPassword)
+                Some(FindingKind::AwsKey),
+                Some(FindingKind::PostgresPassword)
             ],
             "one finding per secret"
         );
@@ -4554,31 +4555,75 @@ baseurl = https://cdn.redhat.com
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
-    /// A password in a JDBC URL's authority and one in its query string are
-    /// both redacted. A second pass is the one case here that does not
-    /// return the same text: the replaced query string has no `password=`
-    /// left to match, so the authority token is the first JDBC match the
-    /// second pass meets and is renumbered. No secret comes back.
+    /// A JDBC URL that carries a credential anywhere has everything after
+    /// `scheme://` replaced, up to the next whitespace: the authority, host,
+    /// database and query string go together. Parsing the URL into parts
+    /// shipped a password with no user before it, and the part of one
+    /// holding a `?`. A second pass changes nothing, as the replaced URL
+    /// has no `@` or `password=` left.
     #[test]
-    fn test_jdbc_authority_and_query_passwords_are_both_redacted() {
-        let input = "jdbc:mysql://u:authority-secret@db/app?password=query-secret";
-        let once = redact_string(input).into_owned();
-        assert_eq!(
-            once,
-            "jdbc:mysql://u:REDACTED_JDBCPASSWORD_2@db/app?REDACTED_JDBCPASSWORD_1"
-        );
-        assert_eq!(
-            redact_string(&once),
-            "jdbc:mysql://u:REDACTED_JDBCPASSWORD_1@db/app?REDACTED_JDBCPASSWORD_1"
-        );
-        let mut snap = config_snapshot("/etc/app/app.conf", input);
-        redact(&mut snap, &RedactOptions::default());
-        let content = &snap.config.as_ref().unwrap().files[0].content;
-        assert_eq!(content, &once);
-        assert!(matches!(
-            snap.redaction_state,
-            Some(RedactionState::FullyRedacted { .. })
-        ));
+    fn test_a_jdbc_url_with_a_credential_is_replaced_after_its_scheme() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            (
+                "jdbc:mysql://u:authority-secret@db/app?password=query-secret",
+                "jdbc:mysql://REDACTED_JDBCPASSWORD_1",
+                &["authority-secret", "query-secret"],
+            ),
+            (
+                "jdbc:mysql://:authority-secret@db/app?password=query-secret",
+                "jdbc:mysql://REDACTED_JDBCPASSWORD_1",
+                &["authority-secret", "query-secret"],
+            ),
+            (
+                "jdbc:mysql://u:pa?ss@db/app?password=outer",
+                "jdbc:mysql://REDACTED_JDBCPASSWORD_1",
+                &["pa?", "ss@", "outer"],
+            ),
+            (
+                "jdbc:mysql://:only-secret@db/app",
+                "jdbc:mysql://REDACTED_JDBCPASSWORD_1",
+                &["only-secret"],
+            ),
+            (
+                "jdbc:mysql://u:spaced secret@db/app",
+                "jdbc:mysql://REDACTED_JDBCPASSWORD_1",
+                &["spaced", "secret@"],
+            ),
+            (
+                "url=jdbc:postgresql://u:inner@pg/app?password=outer tail",
+                "url=jdbc:postgresql://REDACTED_JDBCPASSWORD_1 tail",
+                &["inner", "outer"],
+            ),
+            // No credential, no change.
+            (
+                "jdbc:mysql://db/app?ssl=1&password=",
+                "jdbc:mysql://db/app?ssl=1&password=",
+                &[],
+            ),
+        ];
+        for (input, want, secrets) in cases {
+            let once = redact_string(input).into_owned();
+            assert_eq!(&once, want, "{input:?}");
+            assert_eq!(
+                redact_string(&once),
+                once.as_str(),
+                "second pass of {input:?}"
+            );
+
+            let mut snap = config_snapshot("/etc/app/app.conf", input);
+            redact(&mut snap, &RedactOptions::default());
+            assert_eq!(&snap.config.as_ref().unwrap().files[0].content, want);
+            let written = serde_json::to_string(&snap).unwrap();
+            for secret in *secrets {
+                assert!(!written.contains(secret), "{secret:?} from {input:?}");
+            }
+            let findings = scan_content(input, "/etc/app.conf");
+            assert_eq!(
+                findings.len(),
+                usize::from(!secrets.is_empty()),
+                "{input:?}"
+            );
+        }
     }
 
     /// The generic match wins on `password=postgres://u:p w@db` (its whole

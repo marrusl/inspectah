@@ -98,17 +98,19 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             confidence: Confidence::High,
             remediation: "Rotate the AWS access key and use IAM roles",
         },
-        // JDBC connection string with password. The secret is the query
-        // string: from just after `?` through the last `password=` value on
-        // the line and on to the next whitespace. Any parameter there can
-        // carry a credential (`token=`, a second `password=`, a nested URI),
-        // and naming only the last password's value left the others to
-        // patterns it then overlapped. The scheme, host and database stay.
-        // No class here admits a line break, so a URL with no password
-        // cannot pair with a `?password=` on a later line; spaces and tabs
-        // are allowed, as a host's malformed URL can hold them.
+        // JDBC URL carrying a credential: an `@` (a user and password in
+        // the authority) or a non-empty `password=` anywhere after the
+        // scheme. The secret is everything after `scheme://` through the
+        // last such marker on the line and on to the next whitespace, so the
+        // authority, host, database and query string go together. Naming
+        // only part of it left the rest to parsing a URL whose password can
+        // hold `?`, `@` or nothing before the `:` (`jdbc:mysql://:pw@db`,
+        // `jdbc:mysql://u:pa?ss@db`), and each part it got wrong shipped.
+        // Only the scheme stays. No class here admits a line break, so a URL
+        // with no credential cannot pair with an `@` on a later line; spaces
+        // and tabs are allowed, as a host's malformed URL can hold them.
         SecretPattern {
-            regex: Regex::new(r"jdbc:[a-z]+://[^?\r\n]+\?(?P<secret>[^\r\n]*password=[^&\s]\S*)").unwrap(),
+            regex: Regex::new(r"jdbc:[a-z]+://(?P<secret>[^\r\n]*(?:@|password=[^&\s])\S*)").unwrap(),
             finding_kind: FindingKind::JdbcPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
@@ -158,18 +160,6 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             remediation: "Use 802.1X or externalize WiFi credentials",
-        },
-        // JDBC URL with a password in its authority
-        // (`jdbc:mysql://user:pw@host/db`), which MySQL Connector/J and
-        // MariaDB accept. The query-string pattern above starts its secret
-        // at `?`, so it cannot cover this one. Last in the list so the
-        // indices of the patterns above stay put.
-        SecretPattern {
-            regex: Regex::new(r"jdbc:[a-z]+://[^:/?@\r\n]+:(?P<secret>[^/?@\r\n]+)@").unwrap(),
-            finding_kind: FindingKind::JdbcPassword,
-            detection_method: DetectionMethod::Pattern,
-            confidence: Confidence::High,
-            remediation: "Use connection pooling with externalized credentials",
         },
     ]
 });
@@ -396,7 +386,6 @@ mod tests {
     const REDIS: usize = 8;
     const WIREGUARD_KEY: usize = 9;
     const WIFI_PSK: usize = 10;
-    const JDBC_AUTHORITY: usize = 11;
 
     #[test]
     fn test_key_value_patterns_never_cross_a_newline() {
@@ -453,7 +442,11 @@ mod tests {
                 ),
                 (MONGODB, format!("mongodb+srv://u:{nl}pw@h")),
                 (REDIS, format!("redis://:secretpw{nl}mail = a@b")),
-                (JDBC_AUTHORITY, format!("jdbc:mysql://app:{nl}pw@db")),
+                (JDBC, format!("jdbc:mysql://app:{nl}pw@db")),
+                (
+                    JDBC,
+                    format!("url=jdbc:mysql://db/app{nl}contact: ops@example.com"),
+                ),
                 (
                     JDBC,
                     format!(
@@ -481,14 +474,18 @@ mod tests {
             (
                 JDBC,
                 "jdbc:mysql://db:3306/app?user=u&password=pw",
-                "user=u&password=pw",
+                "db:3306/app?user=u&password=pw",
             ),
             (
                 JDBC,
                 "jdbc:postgresql://db/app?ssl=true&password=pw\r",
-                "ssl=true&password=pw",
+                "db/app?ssl=true&password=pw",
             ),
-            (JDBC_AUTHORITY, "jdbc:mysql://app:pw@db:3306/app", "pw"),
+            (
+                JDBC,
+                "jdbc:mysql://app:pw@db:3306/app",
+                "app:pw@db:3306/app",
+            ),
             // A space or tab is not a line break.
             (POSTGRES, "postgres://app:two words@db", "two words"),
             (POSTGRES, "postgresql://app:tab\tbed@db", "tab\tbed"),
@@ -496,8 +493,12 @@ mod tests {
             (MONGODB, "mongodb+srv://app:tab\tbed@db", "tab\tbed"),
             (REDIS, "redis://:two words@cache", "two words"),
             (REDIS, "redis://:tab\tbed@cache", "tab\tbed"),
-            (JDBC_AUTHORITY, "jdbc:mysql://app:two words@db", "two words"),
-            (JDBC, "jdbc:mysql://db/my app?password=pw", "password=pw"),
+            (JDBC, "jdbc:mysql://app:two words@db", "app:two words@db"),
+            (
+                JDBC,
+                "jdbc:mysql://db/my app?password=pw",
+                "db/my app?password=pw",
+            ),
         ];
         for (idx, text, secret) in same_line {
             let caps = PATTERNS[idx]
