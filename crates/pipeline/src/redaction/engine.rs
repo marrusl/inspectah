@@ -500,8 +500,10 @@ fn keyword_survives_with_its_value(content: &str, keyword: &str, issued: &HashSe
 ///
 /// Replaces only the password segment in `://user:password@` patterns,
 /// preserving the rest of the URL structure. This is a dedicated function
-/// because the generic `redact_string()` does whole-match replacement and
-/// would destroy the URL.
+/// because `PATTERNS` has no rule for a password in an arbitrary URL's
+/// authority, only for PostgreSQL, MongoDB, Redis and JDBC URLs, so
+/// `redact_string()`, which also replaces only the secret, would not find
+/// this one.
 ///
 /// Returns `(Cow<str>, Option<RedactionFinding>)` — borrowed if no match,
 /// owned with a finding if credentials were masked.

@@ -326,8 +326,8 @@ alternative is an explanation built from text the host never had.
 The pass is the config pass reused, not a new scrubber
 (`redact_sysctl_section` in `redaction/engine.rs`): the same patterns,
 eligibility and comment exemptions under the field's path (runtime
-values under `/proc/sys`), the same whole-match replacement, the
-snapshot's one counter registry, and findings into `all_findings` like
+values under `/proc/sys`), the same secret-span replacement and overlap
+arbitration, the snapshot's one counter registry, and findings into `all_findings` like
 any other, one per match per path. An `/etc` sysctl file that is also a
 config entry is scrubbed in both copies, but the config pass has already
 recorded its matches, so the sysctl pass drops a content finding equal
