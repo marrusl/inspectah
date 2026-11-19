@@ -202,13 +202,33 @@ This is one rule in the engine, not a per-pattern template:
 mechanism, and three call sites never honoured it.
 
 Overlaps between patterns are decided on the **secret** spans, because
-those are what get replaced; the whole match (`claim`) only picks the
-winner, larger first, so a JDBC URL beats the generic `password=` inside
-it. Deciding overlaps on the whole match instead drops any second secret
-that sits inside one pattern's context but outside its secret, and that
-secret then ships: `postgres://app` on one line, `password=leak` on the
-next and an `@` later was exactly that until the URI classes stopped
-crossing lines (`test_a_match_inside_another_patterns_claim_is_still_redacted`).
+those are what get replaced. Deciding them on the whole match instead
+drops any second secret that sits inside one pattern's context but
+outside its secret, and that secret then ships: in
+`jdbc:postgresql://u:inner@pg/app?password=outer` the JDBC query-string
+match runs from `jdbc:` to `outer`, and on whole matches it swallowed the
+authority password `inner`
+(`test_a_match_inside_another_patterns_claim_is_still_redacted`).
+
+When two secrets do overlap, the whole match (`claim`) picks the winner,
+larger first, and the winner **absorbs** the loser: its span grows to the
+union of both secrets and takes the winner's token. Never drop the loser.
+A conflict-free set of replaced spans does not mean every secret byte was
+replaced: with the winner's secret alone, `jdbc:...?token=a&password=b`
+shipped `a`, because the generic match `a&password=b` overlapped the JDBC
+secret `b` and was thrown away. The cost of absorbing is over-redaction
+where a pattern's value class overreaches (the generic `\S+` value can
+run past the end of a URI password into its `@host`); the cost of
+dropping is a credential in the export.
+
+Absorbing is the backstop, not the design. A pattern whose context can
+hold other credentials makes its secret cover them: the JDBC pattern's
+secret is the whole query string after `?`, so a second `password=`, a
+`token=` or a nested URI there is inside it, and a JDBC URL with a
+password in its authority (`jdbc:mysql://u:pw@db`) has its own pattern.
+`test_inputs_redacted_by_whole_match_replacement_stay_redacted` holds
+every input the old whole-match replacement covered to the same
+coverage.
 
 Every pattern goes through that one function, so every filter applies to
 every pattern, and the filters read the secret's text, never the key:

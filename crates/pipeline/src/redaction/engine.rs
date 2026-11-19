@@ -373,16 +373,20 @@ fn collect_eligible_matches(
 }
 
 /// Resolve overlapping matches from different patterns so no two replaced
-/// spans overlap. Input must be the combined matches from ALL patterns for a
-/// single content blob.
+/// spans overlap, without losing any secret byte. Input must be the combined
+/// matches from ALL patterns for a single content blob.
 ///
 /// Two matches conflict when their secret spans (what gets replaced; see
-/// [`EligibleMatch`]) overlap. A conflict goes to the larger whole match,
-/// then the longer secret, then the earlier pattern in `PATTERNS`: so a
-/// JDBC URL beats the generic `password=` inside it, whose `\S+` value runs
-/// on over `&ssl=1`. A match whose secret overlaps nothing is kept even when
-/// it sits inside another pattern's whole match, so a second secret there
-/// is still replaced. Output is ordered by secret start.
+/// [`EligibleMatch`]) overlap. The conflict goes to the larger whole match,
+/// then the longer secret, then the earlier pattern in `PATTERNS`: so a JDBC
+/// URL beats the generic `password=` inside it. The winner keeps its pattern
+/// (and so its token kind), but its span grows to the union of both secrets:
+/// a loser whose secret runs past the winner's still has those bytes
+/// replaced. Dropping the loser instead left them in place, so
+/// `jdbc:...?token=a&password=b` shipped `a` when only `b` was the JDBC
+/// secret. A match whose secret overlaps nothing is kept as it is, even when
+/// it sits inside another pattern's whole match. Output is ordered by secret
+/// start.
 fn dedup_overlapping_matches(matches: &mut Vec<(usize, EligibleMatch)>) {
     let mut by_priority: Vec<(usize, EligibleMatch)> = std::mem::take(matches);
     // Stable sort: equal keys keep input (pattern) order.
@@ -392,15 +396,43 @@ fn dedup_overlapping_matches(matches: &mut Vec<(usize, EligibleMatch)>) {
             .cmp(&a.1.claim.len())
             .then_with(|| (b.1.end - b.1.start).cmp(&(a.1.end - a.1.start)))
     });
-    for candidate in by_priority {
-        let overlaps = matches
+    for (pat_idx, candidate) in by_priority {
+        // Kept spans are pushed in priority order and only ever merged
+        // into, so the first one the candidate overlaps outranks the rest.
+        let overlapping: Vec<usize> = matches
             .iter()
-            .any(|(_, kept)| candidate.1.start < kept.end && kept.start < candidate.1.end);
-        if !overlaps {
-            matches.push(candidate);
+            .enumerate()
+            .filter(|(_, (_, kept))| candidate.start < kept.end && kept.start < candidate.end)
+            .map(|(i, _)| i)
+            .collect();
+        let Some((&winner, others)) = overlapping.split_first() else {
+            matches.push((pat_idx, candidate));
+            continue;
+        };
+        // Highest index first, so each removal leaves `winner` in place.
+        for &i in others.iter().rev() {
+            let (_, absorbed) = matches.remove(i);
+            absorb(&mut matches[winner].1, absorbed);
         }
+        absorb(&mut matches[winner].1, candidate);
     }
     matches.sort_by_key(|(_, em)| em.start);
+}
+
+/// Grow `into` to cover `other`'s secret too. The two secrets overlap, so
+/// the union is one span, and its text is `into`'s extended by whatever of
+/// `other` lies on either side. `into` keeps its line number and pattern.
+fn absorb(into: &mut EligibleMatch, other: EligibleMatch) {
+    if other.start < into.start {
+        into.text
+            .insert_str(0, &other.text[..into.start - other.start]);
+        into.start = other.start;
+    }
+    if other.end > into.end {
+        into.text.push_str(&other.text[into.end - other.start..]);
+        into.end = other.end;
+    }
+    into.claim = into.claim.start.min(other.claim.start)..into.claim.end.max(other.claim.end);
 }
 
 /// Build the replacement for a matched secret: the token for its text.
@@ -2039,7 +2071,7 @@ baseurl = https://cdn.redhat.com
             ),
             (
                 "jdbc:mysql://db:3306/app?user=u&password=s3cret&ssl=1".into(),
-                "jdbc:mysql://db:3306/app?user=u&password=REDACTED_JDBCPASSWORD_1&ssl=1".into(),
+                "jdbc:mysql://db:3306/app?REDACTED_JDBCPASSWORD_1".into(),
             ),
             (
                 "aws_access_key_id = AKIAABCDEFGHIJKLMNOP\nregion = x".into(),
@@ -2144,9 +2176,7 @@ baseurl = https://cdn.redhat.com
             let out = redact_string(&input).into_owned();
             assert_eq!(
                 out,
-                format!(
-                    "{first}{nl}secondary=jdbc:mysql://db/two?password=REDACTED_JDBCPASSWORD_1{nl}"
-                ),
+                format!("{first}{nl}secondary=jdbc:mysql://db/two?REDACTED_JDBCPASSWORD_1{nl}"),
                 "{input:?}"
             );
             let kinds: Vec<Option<FindingKind>> = scan_content(&input, "/etc/app.conf")
@@ -2159,11 +2189,55 @@ baseurl = https://cdn.redhat.com
 
     #[test]
     fn test_a_match_inside_another_patterns_claim_is_still_redacted() {
-        // A pattern's whole match can contain another pattern's secret
-        // outside its own secret: both secrets must be replaced.
-        let input = "postgres://app\npassword=leak\ncontact: ops@example.com";
+        // The JDBC query-string match runs from `jdbc:` to `outer`, so its
+        // whole match contains the password in the authority, which is
+        // outside its secret. Deciding overlaps on whole matches would let
+        // the JDBC match swallow the authority match and ship `inner`.
+        let input = "jdbc:postgresql://u:inner@pg/app?password=outer";
         let out = redact_string(input);
-        assert!(!out.contains("leak"), "{out:?}");
+        assert_eq!(
+            out,
+            "jdbc:postgresql://u:REDACTED_JDBCPASSWORD_2@pg/app?REDACTED_JDBCPASSWORD_1"
+        );
+        let kinds: Vec<Option<FindingKind>> = scan_content(input, "/etc/app.conf")
+            .into_iter()
+            .map(|f| f.finding_kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                Some(FindingKind::JdbcPassword),
+                Some(FindingKind::JdbcPassword)
+            ],
+            "one finding per secret"
+        );
+    }
+
+    #[test]
+    fn test_overlap_winner_absorbs_the_losers_secret() {
+        let content = "0123456789abcdefghij";
+        let em = |claim: Range<usize>, secret: Range<usize>| EligibleMatch {
+            claim,
+            start: secret.start,
+            end: secret.end,
+            text: content[secret].to_string(),
+            line_num: 1,
+        };
+        // The larger claim wins; the smaller one's secret runs past the
+        // winner's on the right, a third one's on the left, and a fourth
+        // overlaps nothing.
+        let mut matches = vec![
+            (1, em(8..14, 12..18)),
+            (0, em(0..20, 10..15)),
+            (2, em(6..12, 7..11)),
+            (3, em(18..20, 19..20)),
+        ];
+        dedup_overlapping_matches(&mut matches);
+        let got: Vec<(usize, Range<usize>, &str)> = matches
+            .iter()
+            .map(|(p, em)| (*p, em.start..em.end, em.text.as_str()))
+            .collect();
+        assert_eq!(got, vec![(0, 7..18, "789abcdefgh"), (3, 19..20, "j")]);
     }
 
     #[test]
@@ -4179,5 +4253,81 @@ baseurl = https://cdn.redhat.com
             .filter(|f| f.path == SYSCTL_APP_CONF)
             .count();
         assert_eq!(at_path, 1, "{:?}", snap.redactions);
+    }
+
+    /// One config file holding `content`, as a scan would collect it.
+    fn config_snapshot(path: &str, content: &str) -> InspectionSnapshot {
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: path.to_string(),
+                content: content.to_string(),
+                ..Default::default()
+            }],
+        });
+        snap
+    }
+
+    /// Every input here was fully redacted when the whole match was
+    /// replaced. Keeping the key must not cost any of that coverage: each
+    /// listed secret is gone after `redact_string()` and after snapshot
+    /// `redact()`, the snapshot is not labelled `FullyRedacted` over a
+    /// surviving one, and a second pass changes nothing.
+    #[test]
+    fn test_inputs_redacted_by_whole_match_replacement_stay_redacted() {
+        let cases: &[(&str, &[&str])] = &[
+            (
+                "jdbc:mysql://db/app?password=first&password=second",
+                &["first", "second"],
+            ),
+            (
+                "jdbc:mysql://db/app?password=first-secret&password=second-secret",
+                &["first-secret", "second-secret"],
+            ),
+            (
+                "jdbc:mysql://db/app?token=api-secret&password=db-secret",
+                &["api-secret", "db-secret"],
+            ),
+            (
+                "jdbc:mysql://db/app?next=postgres://u:inner@pg&password=outer",
+                &["inner", "outer"],
+            ),
+            (
+                "jdbc:mysql://u:authority-secret@db/app?password=query-secret",
+                &["authority-secret", "query-secret"],
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (input, secrets) in cases {
+            let once = redact_string(input).into_owned();
+            for secret in *secrets {
+                if once.contains(secret) {
+                    failures.push(format!("redact_string: {secret:?} survives in {once:?}"));
+                }
+            }
+            let twice = redact_string(&once);
+            if twice != once.as_str() {
+                failures.push(format!("second pass of {input:?}: {once:?} -> {twice:?}"));
+            }
+
+            let mut snap = config_snapshot("/etc/app/app.conf", input);
+            redact(&mut snap, &RedactOptions::default());
+            let content = &snap.config.as_ref().unwrap().files[0].content;
+            let written = serde_json::to_string(&snap).unwrap();
+            let survivors: Vec<&&str> = secrets
+                .iter()
+                .filter(|s| content.contains(**s) || written.contains(**s))
+                .collect();
+            if !survivors.is_empty() {
+                failures.push(format!(
+                    "redact(): {survivors:?} survive from {input:?} under {:?}",
+                    snap.redaction_state
+                ));
+            }
+            if snap.redactions.is_empty() {
+                failures.push(format!("redact(): no finding for {input:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
