@@ -232,10 +232,25 @@ coverage.
 
 Every pattern goes through that one function, so every filter applies to
 every pattern, and the filters read the secret's text, never the key:
-comment lines, a value that is already a redaction token (a second pass
-over redacted text sees `password=REDACTED_PASSWORD_1` and must not
-report or renumber it), the NSS/PAM values (`password: files`), and
-password hashes in a shadow file. Do not add a second matching path.
+comment lines, the NSS/PAM values (`password: files`), and password
+hashes in a shadow file. Do not add a second matching path.
+
+**No filter skips a value because it looks like a token.** Keeping the
+key means a second pass over redacted text sees
+`password=REDACTED_PASSWORD_1`, and skipping anything spelled
+`REDACTED_<KIND>_<N>` looked like the way to keep that pass quiet. The
+spelling is not provenance: `password=REDACTED_COMPANY_2026` is a
+password a host can have, and that filter shipped it with no finding
+under `FullyRedacted`. Nothing runs a second pass in production either:
+`redact()` runs once, in `scan` and in `run_pipeline`, and `refine` and
+`aggregate` load the redacted snapshot without calling it. So a second
+pass reports the tokens again and replaces each with a token. It meets
+the same matches in the same order and rewrites each token to itself,
+except where it matches fewer secrets of one kind: a replaced JDBC query
+string has no `password=` left, so a JDBC authority token after it is
+renumbered. To make a second pass quiet, carry provenance (the
+snapshot's redaction state, or the tokens a run issued) rather than
+reading it off the text.
 
 Two consumers depended on the key going with the value, and a third
 change of this kind must check them:

@@ -175,11 +175,9 @@ fn is_false_positive_value(value: &str) -> bool {
 /// Prefix of every token [`CounterRegistry::token_for`] produces.
 const TOKEN_PREFIX: &str = "REDACTED_";
 
-/// Returns true if `value` is a token this engine wrote
-/// (`REDACTED_<KIND>_<N>`). Since only the value is replaced, a second pass
-/// over redacted text sees `password=REDACTED_PASSWORD_1`, which the
-/// generic pattern matches; without this check it would report a finding
-/// and renumber the token.
+/// Returns true if `value` is spelled like a token this engine writes
+/// (`REDACTED_<KIND>_<N>`). The spelling is not proof the engine wrote it:
+/// a host can hold a raw password spelled that way.
 fn is_redaction_token(value: &str) -> bool {
     value
         .strip_prefix(TOKEN_PREFIX)
@@ -308,7 +306,6 @@ fn is_comment_line(content: &str, pos: usize, markers: &[&str]) -> bool {
 
 /// Collect regex matches from `content` for a single `pat`, filtering out:
 /// - Matches on comment lines (`#`, plus `;` / `//` where `path` uses them)
-/// - Matches whose secret is already a redaction token (a second pass)
 /// - Password-pattern matches whose value is a known NSS/PAM token
 /// - PasswordHash matches when `path` is a shadow file
 ///
@@ -339,18 +336,19 @@ fn collect_eligible_matches(
                 return None;
             }
 
-            // Filter 2: skip a value an earlier pass already replaced
-            if is_redaction_token(text) {
-                return None;
-            }
+            // No filter skips a value spelled like a redaction token. The
+            // spelling is not provenance: `password=REDACTED_COMPANY_2026`
+            // can be the host's real password. `redact()` runs once per
+            // snapshot; a second pass over its output reports the tokens
+            // again and replaces each with a token, usually itself.
 
-            // Filter 3: skip Password matches whose value is a known
+            // Filter 2: skip Password matches whose value is a known
             // NSS/PAM false-positive token
             if pat.finding_kind == FindingKind::Password && is_false_positive_value(text) {
                 return None;
             }
 
-            // Filter 4: skip PasswordHash matches when path is a shadow
+            // Filter 3: skip PasswordHash matches when path is a shadow
             // file — scan_shadow owns those with richer classification
             if pat.finding_kind == FindingKind::PasswordHash
                 && let Some(p) = path
@@ -2240,20 +2238,33 @@ baseurl = https://cdn.redhat.com
         assert_eq!(got, vec![(0, 7..18, "789abcdefgh"), (3, 19..20, "j")]);
     }
 
+    /// A value spelled like a token is redacted like any other: the
+    /// spelling does not show the engine wrote it. A second pass over
+    /// redacted output therefore reports the tokens again. When it meets
+    /// the same matches in the same order, as here, it rewrites each token
+    /// to itself and the text does not change.
     #[test]
-    fn test_second_pass_leaves_redacted_values_alone() {
-        let input =
-            "DB_PASSWORD=x\npsk=abc\npostgres://u:pw@db/app\naccess_key=AKIAABCDEFGHIJKLMNOP\n";
+    fn test_second_pass_rewrites_each_token_to_itself() {
+        let input = "DB_PASSWORD=x\npsk=abc\npostgres://u:pw@db/app\n\
+                     access_key=AKIAABCDEFGHIJKLMNOP\ntoken=y\nsecret=x\n";
         let once = redact_string(input).into_owned();
+        assert_eq!(redact_string(&once), once.as_str());
         assert_eq!(
-            redact_string(&once),
-            once.as_str(),
-            "a token is not a secret"
+            scan_content(&once, "/etc/app.conf").len(),
+            scan_content(input, "/etc/app.conf").len(),
+            "every token is found again: {once:?}"
         );
-        assert!(
-            scan_content(&once, "/etc/app.conf").is_empty(),
-            "a second pass must not invent findings over tokens: {once:?}"
-        );
+
+        let mut snap = config_snapshot("/etc/app/a.conf", input);
+        snap.config.as_mut().unwrap().files.push(ConfigFileEntry {
+            path: "/etc/app/b.conf".to_string(),
+            content: "password=y\npassword=z\n".to_string(),
+            ..Default::default()
+        });
+        redact(&mut snap, &RedactOptions::default());
+        let first = snap.config.clone();
+        redact(&mut snap, &RedactOptions::default());
+        assert_eq!(snap.config, first, "a second snapshot pass changes no text");
     }
 
     #[test]
@@ -4292,10 +4303,13 @@ baseurl = https://cdn.redhat.com
                 "jdbc:mysql://db/app?next=postgres://u:inner@pg&password=outer",
                 &["inner", "outer"],
             ),
+            ("password=REDACTED_COMPANY_2026", &["COMPANY_2026"]),
             (
-                "jdbc:mysql://u:authority-secret@db/app?password=query-secret",
-                &["authority-secret", "query-secret"],
+                "password=REDACTED_THIS_IS_THE_REAL_SECRET_123",
+                &["THIS_IS_THE_REAL_SECRET_123"],
             ),
+            ("token: REDACTED_PASSWORD_9", &["REDACTED_PASSWORD_9"]),
+            ("secret=REDACTED_NOSUCHKIND_4", &["NOSUCHKIND"]),
         ];
         let mut failures = Vec::new();
         for (input, secrets) in cases {
@@ -4329,5 +4343,32 @@ baseurl = https://cdn.redhat.com
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// A password in a JDBC URL's authority and one in its query string are
+    /// both redacted. A second pass is the one case here that does not
+    /// return the same text: the replaced query string has no `password=`
+    /// left to match, so the authority token is the first JDBC match the
+    /// second pass meets and is renumbered. No secret comes back.
+    #[test]
+    fn test_jdbc_authority_and_query_passwords_are_both_redacted() {
+        let input = "jdbc:mysql://u:authority-secret@db/app?password=query-secret";
+        let once = redact_string(input).into_owned();
+        assert_eq!(
+            once,
+            "jdbc:mysql://u:REDACTED_JDBCPASSWORD_2@db/app?REDACTED_JDBCPASSWORD_1"
+        );
+        assert_eq!(
+            redact_string(&once),
+            "jdbc:mysql://u:REDACTED_JDBCPASSWORD_1@db/app?REDACTED_JDBCPASSWORD_1"
+        );
+        let mut snap = config_snapshot("/etc/app/app.conf", input);
+        redact(&mut snap, &RedactOptions::default());
+        let content = &snap.config.as_ref().unwrap().files[0].content;
+        assert_eq!(content, &once);
+        assert!(matches!(
+            snap.redaction_state,
+            Some(RedactionState::FullyRedacted { .. })
+        ));
     }
 }
