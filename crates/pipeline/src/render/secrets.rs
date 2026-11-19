@@ -89,7 +89,10 @@ pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
         lines.push("## Inline Redactions".into());
         lines.push(String::new());
         lines.push(
-            "Secret values in these files/entries were replaced with `[REDACTED-*]` tokens.".into(),
+            "Secret values in these files and entries were replaced with tokens of the form \
+             `REDACTED_<KIND>_<N>`, such as `REDACTED_PASSWORD_1`. A credential in a URL's \
+             user information may read `[REDACTED]`, `REDACTED` or `<REDACTED>` instead."
+                .into(),
         );
         lines.push(String::new());
         lines.push("| Path | Line | Pattern | Detection |".into());
@@ -279,6 +282,29 @@ mod tests {
         let md = render_secrets_review(&snap);
         assert!(md.contains("| /etc/app/app.conf | 2 | password |"), "{md}");
         assert!(md.contains("| /etc/app/app.conf | 4 | awskey |"), "{md}");
+    }
+
+    /// The Inline Redactions note names the token form redaction writes,
+    /// `REDACTED_<KIND>_<N>`, so a reader can search the export for it.
+    #[test]
+    fn test_secrets_review_names_the_token_form() {
+        use crate::redaction::{RedactOptions, redact};
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/app/app.conf".to_string(),
+                content: "password = hunter2\n".to_string(),
+                ..Default::default()
+            }],
+        });
+        redact(&mut snap, &RedactOptions::default());
+        let content = &snap.config.as_ref().unwrap().files[0].content;
+        assert!(content.contains("REDACTED_PASSWORD_1"), "{content}");
+        let md = render_secrets_review(&snap);
+        assert!(!md.contains("[REDACTED-*]"), "{md}");
+        assert!(md.contains("`REDACTED_<KIND>_<N>`"), "{md}");
+        assert!(md.contains("`REDACTED_PASSWORD_1`"), "{md}");
     }
 
     #[test]
