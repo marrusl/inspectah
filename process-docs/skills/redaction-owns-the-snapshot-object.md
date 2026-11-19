@@ -243,7 +243,12 @@ Where that secret ends is decided by the character before `jdbc:`, one
 pattern per case, and they exclude one another so only one claims a URL.
 After `"` or `'` it is the quoted scalar, to the closing quote (a
 backslash escape or YAML's `''` does not close it); after `>` it is XML
-element text, to the next `<`; the marker must sit inside, and the
+element text, to the next `<`, unless that `>` sits inside a quoted
+attribute value, where it is attribute text and the URL ends at the
+attribute's quote (`gt_context` walks the line's tags and quotes up to
+the `>`;
+`test_a_jdbc_url_after_a_gt_inside_an_attribute_keeps_the_tag`); the
+marker must sit inside, and the
 closing quote or tag stays. Running on to the next whitespace took them
 with the URL, and the file no longer parsed
 (`test_a_jdbc_url_keeps_the_quotes_and_tags_around_it`). Find the end of

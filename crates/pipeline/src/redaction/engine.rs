@@ -4933,6 +4933,53 @@ baseurl = https://cdn.redhat.com
         }
     }
 
+    /// A `>` inside a quoted attribute does not open element text, so a
+    /// JDBC URL right after one ends at the attribute's closing quote, and
+    /// the attributes and markup after it stay. A `>` that closes a tag
+    /// still opens element text.
+    #[test]
+    fn test_a_jdbc_url_after_a_gt_inside_an_attribute_keeps_the_tag() {
+        let cases: &[(&str, &str)] = &[
+            (
+                r#"<db url=">jdbc:mysql://u:zsecret@db/app" pool="4"/>"#,
+                r#"<db url=">jdbc:mysql://REDACTED_JDBCPASSWORD_1" pool="4"/>"#,
+            ),
+            (
+                "<db url='>jdbc:mysql://u:zsecret@db/app' pool='4'/>",
+                "<db url='>jdbc:mysql://REDACTED_JDBCPASSWORD_1' pool='4'/>",
+            ),
+            (
+                r#"<db name="a>b" url=">jdbc:mysql://u:zsecret@db/app" pool="4"/>"#,
+                r#"<db name="a>b" url=">jdbc:mysql://REDACTED_JDBCPASSWORD_1" pool="4"/>"#,
+            ),
+            // A `>` that closes a tag, even after a quoted `>`, is text.
+            (
+                r#"<url kind="a>b">jdbc:mysql://u:zsecret@db/app</url>"#,
+                r#"<url kind="a>b">jdbc:mysql://REDACTED_JDBCPASSWORD_1</url>"#,
+            ),
+            (
+                "<url>jdbc:mysql://u:zsecret@db/app</url>",
+                "<url>jdbc:mysql://REDACTED_JDBCPASSWORD_1</url>",
+            ),
+        ];
+        for (input, want) in cases {
+            let once = redact_string(input).into_owned();
+            assert_eq!(&once, want, "{input:?}");
+
+            let mut snap = config_snapshot("/etc/app/context.xml", input);
+            redact(&mut snap, &RedactOptions::default());
+            assert_eq!(&snap.config.as_ref().unwrap().files[0].content, want);
+            let written = serde_json::to_string(&snap).unwrap();
+            assert!(!written.contains("zsecret"), "{input:?}");
+            let findings = scan_content(input, "/etc/app/context.xml");
+            assert_eq!(findings.len(), 1, "{input:?}: {findings:?}");
+            // Every quote that opened an attribute still closes it.
+            assert_eq!(once.matches('"').count() % 2, 0, "{once:?}");
+            assert_eq!(once.matches('\'').count() % 2, 0, "{once:?}");
+            assert!(once.ends_with("/>") || once.ends_with("</url>"), "{once:?}");
+        }
+    }
+
     /// The redacted text of a quoted JDBC URL still parses as the format
     /// it came in, with the token as the value and its neighbours intact.
     #[test]

@@ -62,6 +62,50 @@ fn quoted_jdbc_url_carries_a_credential(_content: &str, caps: &Captures<'_>) -> 
         })
 }
 
+/// What a `>` right before `jdbc:` is, read from its line up to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GtContext {
+    /// It closes a tag, or no tag opens before it on the line: what
+    /// follows is element text, which ends at the next `<`.
+    ElementText,
+    /// It sits inside a `"`-quoted attribute value of an open tag.
+    DoubleQuotedAttribute,
+    /// It sits inside a `'`-quoted attribute value of an open tag.
+    SingleQuotedAttribute,
+}
+
+/// Classify the `>` that opens the match in `caps` by walking its line
+/// from the start: `<` opens a tag, a quote inside a tag opens or closes an
+/// attribute value, and `>` outside a value closes the tag. Quotes in
+/// element text are plain characters. Only the line is read, so in a tag
+/// that opened on an earlier line a `>` is taken as element text; that
+/// errs toward replacing more, never less.
+fn gt_context(content: &str, caps: &Captures<'_>) -> GtContext {
+    #[derive(Clone, Copy)]
+    enum State {
+        Text,
+        Tag,
+        Quoted(u8),
+    }
+    let pos = caps.get(0).map_or(0, |m| m.start());
+    let line_start = content[..pos].rfind('\n').map_or(0, |i| i + 1);
+    let mut state = State::Text;
+    for &b in &content.as_bytes()[line_start..pos] {
+        state = match (state, b) {
+            (State::Text, b'<') => State::Tag,
+            (State::Tag, b'>') => State::Text,
+            (State::Tag, b'"' | b'\'') => State::Quoted(b),
+            (State::Quoted(q), b) if b == q => State::Tag,
+            (state, _) => state,
+        };
+    }
+    match state {
+        State::Text | State::Tag => GtContext::ElementText,
+        State::Quoted(b'"') => GtContext::DoubleQuotedAttribute,
+        State::Quoted(_) => GtContext::SingleQuotedAttribute,
+    }
+}
+
 /// The query-string key that marks a JDBC URL as carrying a credential.
 const JDBC_PASSWORD_MARKER: &str = "password=";
 
@@ -159,7 +203,9 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // - after `"` or `'`, the quoted scalar, up to its closing quote or
         //   the end of the line; a backslash escape, or `''` inside single
         //   quotes, does not close it. After `>`, XML element text, up to
-        //   the next `<`. The marker must sit inside, and the closing quote
+        //   the next `<`, unless the `>` sits inside a quoted attribute
+        //   (`gt_context`), where the URL ends at that attribute's quote.
+        //   The marker must sit inside, and the closing quote
         //   or tag stays as written. Running on to the next whitespace
         //   instead took `"` and `</url>` with the URL. In double quotes
         //   the regex only finds where the value ends, and
@@ -198,7 +244,17 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         ),
         jdbc_pattern(
             r#">jdbc:[a-z]+://(?P<secret>[^<\r\n]*(?:@|password=[^&\s<])[^<\r\n]*)"#,
-            None,
+            Some(|content, caps| gt_context(content, caps) == GtContext::ElementText),
+        ),
+        // After a `>` inside a quoted attribute, `<db url=">jdbc:..."`: the
+        // `>` is attribute text, and the URL ends at the attribute's quote.
+        jdbc_pattern(
+            r#">jdbc:[a-z]+://(?P<secret>[^"\r\n]*(?:@|password=[^&\s"])[^"\r\n]*)"#,
+            Some(|content, caps| gt_context(content, caps) == GtContext::DoubleQuotedAttribute),
+        ),
+        jdbc_pattern(
+            r#">jdbc:[a-z]+://(?P<secret>[^'\r\n]*(?:@|password=[^&\s'])[^'\r\n]*)"#,
+            Some(|content, caps| gt_context(content, caps) == GtContext::SingleQuotedAttribute),
         ),
         // PostgreSQL connection URI with password. Only the password is
         // replaced; the scheme, user and `@host` stay. The user and
@@ -473,11 +529,13 @@ mod tests {
     const JDBC_DOUBLE_QUOTED: usize = 6;
     const JDBC_SINGLE_QUOTED: usize = 7;
     const JDBC_XML_TEXT: usize = 8;
-    const POSTGRES: usize = 9;
-    const MONGODB: usize = 10;
-    const REDIS: usize = 11;
-    const WIREGUARD_KEY: usize = 12;
-    const WIFI_PSK: usize = 13;
+    const JDBC_XML_DOUBLE_QUOTED_ATTRIBUTE: usize = 9;
+    const JDBC_XML_SINGLE_QUOTED_ATTRIBUTE: usize = 10;
+    const POSTGRES: usize = 11;
+    const MONGODB: usize = 12;
+    const REDIS: usize = 13;
+    const WIREGUARD_KEY: usize = 14;
+    const WIFI_PSK: usize = 15;
 
     #[test]
     fn test_key_value_patterns_never_cross_a_newline() {
@@ -614,12 +672,19 @@ mod tests {
     }
 
     /// What opens a JDBC URL decides where it ends, and exactly one of the
-    /// four JDBC patterns claims it, counting a pattern's `accept` check. A quoted URL or XML text leaves its
+    /// six JDBC patterns claims it, counting a pattern's `accept` check. A quoted URL or XML text leaves its
     /// closing quote or tag outside the secret, and the unquoted pattern
     /// never takes a URL that an opener's pattern declined.
     #[test]
     fn test_one_jdbc_pattern_claims_a_url_by_what_opens_it() {
-        let jdbc = [JDBC, JDBC_DOUBLE_QUOTED, JDBC_SINGLE_QUOTED, JDBC_XML_TEXT];
+        let jdbc = [
+            JDBC,
+            JDBC_DOUBLE_QUOTED,
+            JDBC_SINGLE_QUOTED,
+            JDBC_XML_TEXT,
+            JDBC_XML_DOUBLE_QUOTED_ATTRIBUTE,
+            JDBC_XML_SINGLE_QUOTED_ATTRIBUTE,
+        ];
         let cases: &[(&str, Option<(usize, &str)>)] = &[
             (
                 "url=jdbc:mysql://u:pw@db/app pool=4",
@@ -662,6 +727,19 @@ mod tests {
             (
                 r#"<db url="jdbc:mysql://u:pw\@db/app"/>"#,
                 Some((JDBC_DOUBLE_QUOTED, r"u:pw\@db/app")),
+            ),
+            // A `>` inside a quoted attribute is not element text.
+            (
+                r#"<db url=">jdbc:mysql://u:pw@db/app" pool="4"/>"#,
+                Some((JDBC_XML_DOUBLE_QUOTED_ATTRIBUTE, "u:pw@db/app")),
+            ),
+            (
+                "<db url='>jdbc:mysql://u:pw@db/app' pool='4'/>",
+                Some((JDBC_XML_SINGLE_QUOTED_ATTRIBUTE, "u:pw@db/app")),
+            ),
+            (
+                r#"<url kind="a>b">jdbc:mysql://u:pw@db/app</url>"#,
+                Some((JDBC_XML_TEXT, "u:pw@db/app")),
             ),
             // An unterminated quote runs to the end of the line.
             (
