@@ -101,6 +101,10 @@ struct CounterRegistry {
     seen: HashMap<(String, String), u32>,
     /// Per-type counters
     type_counters: HashMap<String, u32>,
+    /// Every token this registry has handed out. A value equal to one of
+    /// these was put there by this run; a value merely spelled like one
+    /// may be the host's own.
+    issued: HashSet<String>,
 }
 
 impl CounterRegistry {
@@ -117,7 +121,9 @@ impl CounterRegistry {
             *counter += 1;
             let n = *counter;
             self.seen.insert(key, n);
-            format!("REDACTED_{}_{}", kind_label.to_uppercase(), n)
+            let token = format!("REDACTED_{}_{}", kind_label.to_uppercase(), n);
+            self.issued.insert(token.clone());
+            token
         }
     }
 }
@@ -170,26 +176,6 @@ static FALSE_POSITIVE_VALUES: LazyLock<HashSet<&'static str>> = LazyLock::new(||
 /// Returns true if `value` is a known NSS/PAM token, not a real secret.
 fn is_false_positive_value(value: &str) -> bool {
     FALSE_POSITIVE_VALUES.contains(value.trim().to_lowercase().as_str())
-}
-
-/// Prefix of every token [`CounterRegistry::token_for`] produces.
-const TOKEN_PREFIX: &str = "REDACTED_";
-
-/// Returns true if `value` is spelled like a token this engine writes
-/// (`REDACTED_<KIND>_<N>`). The spelling is not proof the engine wrote it:
-/// a host can hold a raw password spelled that way.
-fn is_redaction_token(value: &str) -> bool {
-    value
-        .strip_prefix(TOKEN_PREFIX)
-        .and_then(|rest| rest.rsplit_once('_'))
-        .is_some_and(|(kind, n)| {
-            !kind.is_empty()
-                && kind
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-                && !n.is_empty()
-                && n.chars().all(|c| c.is_ascii_digit())
-        })
 }
 
 /// Line-comment marker common to nearly every `/etc` file format.
@@ -487,25 +473,26 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
 }
 
 /// Returns true if `keyword` appears in `content` anywhere its value was
-/// not replaced by a redaction token.
+/// not replaced by this run.
 ///
 /// Redaction keeps the key and replaces only the value, so a hint's keyword
 /// (`password`, `DB_PASSWORD`, `key=`) survives a successful pass. An
-/// occurrence counts as handled when the text after it, past optional
-/// spacing and one `=` or `:`, starts with a token. Anything else (a value
-/// left in place, a longer identifier such as `tokenizer`, a comment
-/// mentioning the word) counts as surviving, so the hint stays unresolved.
-fn keyword_survives_with_its_value(content: &str, keyword: &str) -> bool {
+/// occurrence counts as handled only when its whole value, past optional
+/// spacing and one `=` or `:` and up to the next whitespace, is a token in
+/// `issued`: one this run's registry handed out. A value that only starts
+/// with a token (`REDACTED_PASSWORD_1/hunter2`) or is only spelled like one
+/// is the host's, and so is anything else (a value left in place, a longer
+/// identifier such as `tokenizer`, a comment mentioning the word); any of
+/// these leaves the hint unresolved.
+fn keyword_survives_with_its_value(content: &str, keyword: &str, issued: &HashSet<String>) -> bool {
     content.match_indices(keyword).any(|(i, _)| {
         let rest = content[i + keyword.len()..].trim_start_matches([' ', '\t']);
         let rest = rest
             .strip_prefix(['=', ':'])
             .unwrap_or(rest)
             .trim_start_matches([' ', '\t']);
-        let value_end = rest
-            .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
-            .unwrap_or(rest.len());
-        !is_redaction_token(&rest[..value_end])
+        let value_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        !issued.contains(&rest[..value_end])
     })
 }
 
@@ -1653,9 +1640,10 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 // If the keyword survives → hint unresolved.
                 let keyword = extract_hint_keyword(&hint.reason);
                 if let Some(ref kw) = keyword {
-                    // Every place the hint's keyword appears now carries a
-                    // token as its value → the regex pass handled it.
-                    !keyword_survives_with_its_value(content, kw)
+                    // Every place the hint's keyword appears now carries,
+                    // as its whole value, a token this run issued → the
+                    // regex pass handled it.
+                    !keyword_survives_with_its_value(content, kw, &registry.issued)
                 } else {
                     // No extractable keyword — fall back to checking if
                     // ANY regex finding exists at this path.
@@ -2112,11 +2100,19 @@ baseurl = https://cdn.redhat.com
 
     #[test]
     fn test_hint_keyword_is_handled_only_where_its_value_is_a_token() {
+        let mut registry = CounterRegistry::default();
+        registry.token_for("password", "a");
+        registry.token_for("password", "b");
         let cases = [
             ("proxy_password = REDACTED_PASSWORD_1", "password", false),
             ("DB_PASSWORD=REDACTED_PASSWORD_2", "DB_PASSWORD", false),
+            (
+                "DB_PASSWORD=REDACTED_PASSWORD_2 # rotated",
+                "DB_PASSWORD",
+                false,
+            ),
             ("access_key=REDACTED_PASSWORD_1", "key=", false),
-            ("password=REDACTED_JDBCPASSWORD_1&ssl=1", "password", false),
+            ("quiet password=REDACTED_PASSWORD_1 ro", "password", false),
             ("password: files", "password", true),
             ("rd.luks.key=/path/to/key", "rd.luks.key", true),
             ("tokenizer = REDACTED_PASSWORD_1", "token", true),
@@ -2126,10 +2122,17 @@ baseurl = https://cdn.redhat.com
                 "password",
                 true,
             ),
+            // A token followed by more of the value is not a replacement.
+            ("DB_KEY=REDACTED_PASSWORD_1/hunter2", "DB_KEY", true),
+            ("DB_KEY=REDACTED_PASSWORD_1:still-secret", "DB_KEY", true),
+            ("password=REDACTED_PASSWORD_1&ssl=1", "password", true),
+            // Spelled like a token, but this run never issued it.
+            ("DB_KEY=REDACTED_PASSWORD_3", "DB_KEY", true),
+            ("DB_KEY=REDACTED_COMPANY_2026", "DB_KEY", true),
         ];
         for (content, kw, survives) in cases {
             assert_eq!(
-                keyword_survives_with_its_value(content, kw),
+                keyword_survives_with_its_value(content, kw, &registry.issued),
                 survives,
                 "{kw:?} in {content:?}"
             );
@@ -4388,5 +4391,47 @@ baseurl = https://cdn.redhat.com
         assert_eq!(redact_string(input), "password=REDACTED_PASSWORD_1@db");
         let findings = scan_content(input, "/etc/app.conf");
         assert_eq!(findings.len(), 1, "{findings:?}");
+    }
+
+    /// A collected `.env` value that starts with a token and goes on is not
+    /// redacted: no pattern handles `DB_KEY`, so the high-confidence hint
+    /// the collector raises for it stays unresolved.
+    #[test]
+    fn test_hint_with_a_token_prefixed_value_stays_unresolved() {
+        use inspectah_core::types::nonrpm::NonRpmSoftwareSection;
+        for content in [
+            "DB_KEY=REDACTED_PASSWORD_1/hunter2\n",
+            "DB_KEY=REDACTED_PASSWORD_1:still-secret\n",
+        ] {
+            let mut snap = InspectionSnapshot::new();
+            snap.non_rpm_software = Some(NonRpmSoftwareSection {
+                env_files: vec![ConfigFileEntry {
+                    path: "opt/app/.env".to_string(),
+                    content: content.to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            snap.redaction_hints = vec![RedactionHint {
+                path: "opt/app/.env".into(),
+                reason: "environment variable 'DB_KEY' in .env file may contain a secret".into(),
+                confidence: Some(Confidence::High),
+            }];
+            redact(&mut snap, &RedactOptions::default());
+            assert_eq!(
+                snap.non_rpm_software.as_ref().unwrap().env_files[0].content,
+                content,
+                "nothing in {content:?} is a pattern match"
+            );
+            match &snap.redaction_state {
+                Some(RedactionState::PartiallyRedacted {
+                    unresolved_hints, ..
+                }) => assert!(
+                    unresolved_hints.iter().any(|h| h.path == "opt/app/.env"),
+                    "{unresolved_hints:?}"
+                ),
+                other => panic!("{content:?}: expected PartiallyRedacted, got {other:?}"),
+            }
+        }
     }
 }

@@ -258,8 +258,14 @@ change of this kind must check them:
 - **Hint resolution** in `redact()` used to call a high-confidence hint
   resolved when its keyword (`password`, `DB_PASSWORD`) was gone from
   the redacted text. The key now stays, so it asks
-  `keyword_survives_with_its_value` instead: every occurrence must be
-  followed, past spacing and one `=` or `:`, by a token.
+  `keyword_survives_with_its_value` instead: every occurrence's whole
+  value, past spacing and one `=` or `:` and up to the next whitespace,
+  must be a token this run's `CounterRegistry` issued. Both halves
+  matter. A token-spelled prefix is not enough:
+  `DB_KEY=REDACTED_PASSWORD_1/hunter2` in a collected `.env` matches no
+  pattern and was resolved over `hunter2`. Nor is the spelling: only the
+  registry knows what this run replaced
+  (`test_hint_with_a_token_prefixed_value_stays_unresolved`).
 - **Tokens are keyed by the secret's text**, so the same value under two
   keys gets one token, as `CounterRegistry` intends.
 
