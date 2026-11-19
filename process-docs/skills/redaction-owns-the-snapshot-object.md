@@ -278,10 +278,13 @@ checks the secret is gone passes over this. The byte comparison in
 is not a `configparser` model.
 
 The same holds for every negated class: `[^:]`, `[^@]` and `[^?]` all
-match a newline. The URI patterns use `[^:\s]`, `[^@\s]` and `[^?\s]`,
-or a password-less `postgres://db/app` pairs with a `contact: ops@host`
-line further down (`test_uri_patterns_never_cross_a_line_break`). Only
-the PEM patterns span lines, on purpose, with `(?s)`.
+match a newline. The URI patterns use `[^:\r\n]`, `[^@\r\n]` and
+`[^?\r\n]`, or a password-less `postgres://db/app` pairs with a
+`contact: ops@host` line further down
+(`test_uri_patterns_never_cross_a_line_break`). Exclude CR and LF, not
+`\s`: a URI password with a space or tab in it is malformed but is still
+a password, and `[^@\s]` stopped redacting `postgres://u:two words@db`.
+Only the PEM patterns span lines, on purpose, with `(?s)`.
 
 ## Content parsed after redaction is unknown when the pass changed it
 

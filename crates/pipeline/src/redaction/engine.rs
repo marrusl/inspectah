@@ -4310,6 +4310,11 @@ baseurl = https://cdn.redhat.com
             ),
             ("token: REDACTED_PASSWORD_9", &["REDACTED_PASSWORD_9"]),
             ("secret=REDACTED_NOSUCHKIND_4", &["NOSUCHKIND"]),
+            ("postgres://u:two words@db", &["two words"]),
+            ("mongodb://u:two words@db", &["two words"]),
+            ("redis://:two words@db", &["two words"]),
+            ("postgres://u:tab\tbed@db", &["tab\tbed"]),
+            ("mongodb+srv://u:tab\tbed@db", &["tab\tbed"]),
         ];
         let mut failures = Vec::new();
         for (input, secrets) in cases {
@@ -4370,5 +4375,18 @@ baseurl = https://cdn.redhat.com
             snap.redaction_state,
             Some(RedactionState::FullyRedacted { .. })
         ));
+    }
+
+    /// The generic match wins on `password=postgres://u:p w@db` (its whole
+    /// match is longer), and its `\S+` value stops at the space inside the
+    /// URI password. The URI match's secret runs on past it, so the winner
+    /// absorbs it: dropping the URI match, as the whole-match replacement
+    /// also did, shipped ` w`.
+    #[test]
+    fn test_overlap_absorbs_a_uri_password_the_generic_value_stops_inside() {
+        let input = "password=postgres://u:p w@db";
+        assert_eq!(redact_string(input), "password=REDACTED_PASSWORD_1@db");
+        let findings = scan_content(input, "/etc/app.conf");
+        assert_eq!(findings.len(), 1, "{findings:?}");
     }
 }

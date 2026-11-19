@@ -105,9 +105,10 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // and naming only the last password's value left the others to
         // patterns it then overlapped. The scheme, host and database stay.
         // No class here admits a line break, so a URL with no password
-        // cannot pair with a `?password=` on a later line.
+        // cannot pair with a `?password=` on a later line; spaces and tabs
+        // are allowed, as a host's malformed URL can hold them.
         SecretPattern {
-            regex: Regex::new(r"jdbc:[a-z]+://[^?\s]+\?(?P<secret>[^\r\n]*password=[^&\s]\S*)").unwrap(),
+            regex: Regex::new(r"jdbc:[a-z]+://[^?\r\n]+\?(?P<secret>[^\r\n]*password=[^&\s]\S*)").unwrap(),
             finding_kind: FindingKind::JdbcPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
@@ -115,10 +116,12 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         },
         // PostgreSQL connection URI with password. Only the password is
         // replaced; the scheme, user and `@host` stay. The user and
-        // password classes exclude whitespace: with `[^:]+` / `[^@]+` a
-        // password-less URI paired with a `contact: ops@host` line below it.
+        // password classes exclude CR and LF: with `[^:]+` / `[^@]+` a
+        // password-less URI paired with a `contact: ops@host` line below
+        // it. They exclude nothing else, so a password with a space or tab
+        // in it (`postgres://u:two words@db`) is still redacted.
         SecretPattern {
-            regex: Regex::new(r"postgres(?:ql)?://[^:\s]+:(?P<secret>[^@\s]+)@").unwrap(),
+            regex: Regex::new(r"postgres(?:ql)?://[^:\r\n]+:(?P<secret>[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::PostgresPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
@@ -126,7 +129,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         },
         // MongoDB connection URI with password; one line, as Postgres.
         SecretPattern {
-            regex: Regex::new(r"mongodb(?:\+srv)?://[^:\s]+:(?P<secret>[^@\s]+)@").unwrap(),
+            regex: Regex::new(r"mongodb(?:\+srv)?://[^:\r\n]+:(?P<secret>[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::MongodbPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
@@ -134,7 +137,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         },
         // Redis connection URI with password; one line, as Postgres.
         SecretPattern {
-            regex: Regex::new(r"redis://:(?P<secret>[^@\s]+)@").unwrap(),
+            regex: Regex::new(r"redis://:(?P<secret>[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::RedisPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
@@ -162,7 +165,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // at `?`, so it cannot cover this one. Last in the list so the
         // indices of the patterns above stay put.
         SecretPattern {
-            regex: Regex::new(r"jdbc:[a-z]+://[^:/?@\s]+:(?P<secret>[^/?@\s]+)@").unwrap(),
+            regex: Regex::new(r"jdbc:[a-z]+://[^:/?@\r\n]+:(?P<secret>[^/?@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::JdbcPassword,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
@@ -486,6 +489,15 @@ mod tests {
                 "ssl=true&password=pw",
             ),
             (JDBC_AUTHORITY, "jdbc:mysql://app:pw@db:3306/app", "pw"),
+            // A space or tab is not a line break.
+            (POSTGRES, "postgres://app:two words@db", "two words"),
+            (POSTGRES, "postgresql://app:tab\tbed@db", "tab\tbed"),
+            (MONGODB, "mongodb://app:two words@db", "two words"),
+            (MONGODB, "mongodb+srv://app:tab\tbed@db", "tab\tbed"),
+            (REDIS, "redis://:two words@cache", "two words"),
+            (REDIS, "redis://:tab\tbed@cache", "tab\tbed"),
+            (JDBC_AUTHORITY, "jdbc:mysql://app:two words@db", "two words"),
+            (JDBC, "jdbc:mysql://db/my app?password=pw", "password=pw"),
         ];
         for (idx, text, secret) in same_line {
             let caps = PATTERNS[idx]
