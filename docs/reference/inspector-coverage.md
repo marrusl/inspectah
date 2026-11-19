@@ -617,8 +617,8 @@ Compose files get two passes. The compose scrubber rewrites credentials by its o
   `required`, `pam_unix.so`) are filtered out before redaction. Files
   under `/etc/pam.d/` are exempt from inspector hints.
 - **Structure preservation**: a redacted secret becomes a token of the
-  form `REDACTED_<KIND>_<N>`, such as `REDACTED_PASSWORD_1`, and the key
-  and delimiter before it stay. A PostgreSQL, MongoDB or Redis URI
+  form `REDACTED_<KIND>_<N>`, such as `REDACTED_PASSWORD_1`, and the key,
+  the delimiter and any quotes or XML tag around the value stay. A PostgreSQL, MongoDB or Redis URI
   keeps its scheme, user and host, and only the password is replaced. A
   JDBC URL that carries a credential keeps only its scheme:
   `jdbc:mysql://REDACTED_JDBCPASSWORD_1`.

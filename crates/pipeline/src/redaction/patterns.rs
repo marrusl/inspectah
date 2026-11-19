@@ -115,6 +115,49 @@ fn is_aws_key_byte(b: u8) -> bool {
 /// The query-string key that marks a JDBC URL as carrying a credential.
 const JDBC_PASSWORD_MARKER: &str = "password=";
 
+/// Keys whose value the generic credential patterns take as a secret.
+/// `(?:^|\b|_)` before them, not bare `\b`, catches compound forms such as
+/// `iscsi_password=` (an underscore is a word character, so `\b` alone
+/// misses the boundary inside the identifier).
+const CREDENTIAL_KEYS: &str = r"(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)";
+
+/// An unquoted credential value; see the generic patterns in [`PATTERNS`].
+/// A run of `"`, `'`, `<` and `>` is part of the value only with more value
+/// after it: not whitespace, the line's end, `/`, `,`, `;`, `)`, `]` or `}`,
+/// which follow a quote or tag that closes what holds the value
+/// (`"...password=x"/>`, `{"u": "...password=x", ...}`).
+const UNQUOTED_CREDENTIAL_VALUE: &str =
+    r#"(?P<secret>[<>]*[^\s"'<>](?:[^\s"'<>]|["'<>]+[^\s"'<>/,;)\]}])*)"#;
+/// A double-quoted credential value, the quotes outside the secret. A
+/// closing quote with more value right after it (`"ab"cd`, shell
+/// concatenation) does not end it: the rest is read as an unquoted value.
+const DOUBLE_QUOTED_CREDENTIAL_VALUE: &str = r#""(?P<secret>(?:[^"\\\r\n]|\\[^\r\n]?)+(?:"[^\s<>/,;)\]}](?:[^\s"'<>]|["'<>]+[^\s"'<>/,;)\]}])*)?)"#;
+/// A single-quoted credential value, the quotes outside the secret, read
+/// on past its closing quote as [`DOUBLE_QUOTED_CREDENTIAL_VALUE`] is.
+const SINGLE_QUOTED_CREDENTIAL_VALUE: &str =
+    r#"'(?P<secret>(?:[^'\r\n]|'')+(?:'[^\s<>/,;)\]}](?:[^\s"'<>]|["'<>]+[^\s"'<>/,;)\]}])*)?)"#;
+
+/// One of the generic credential patterns: a key from
+/// [`CREDENTIAL_KEYS`], then `key_close` (a quote that may end a quoted
+/// key), then `=` or `:` and `value`. Whitespace around the delimiter is
+/// `[ \t]*`, never `\s*`: `\s` matches a newline, so after an empty value
+/// (`proxy_password =` in the stock rhsm.conf) the match ran on into the
+/// next line and the token replaced it. Every value form needs at least
+/// one character on the key's own line.
+fn credential_pattern(key_close: &str, value: &str) -> SecretPattern {
+    SecretPattern {
+        regex: Regex::new(&format!(
+            r"(?i){CREDENTIAL_KEYS}{key_close}[ \t]*[=:][ \t]*{value}"
+        ))
+        .unwrap(),
+        finding_kind: FindingKind::Password,
+        detection_method: DetectionMethod::Pattern,
+        confidence: Confidence::High,
+        accept: None,
+        remediation: "Use environment variables or a secrets manager instead of inline passwords",
+    }
+}
+
 /// All compiled patterns. `LazyLock` ensures they compile exactly once.
 pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
     vec![
@@ -157,32 +200,42 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             accept: None,
             remediation: "Remove password hash or use a secrets manager",
         },
-        // Generic password/credential in key=value config.
-        // Covers password=, passwd=, db_password=, secret=, api_key=, token=,
-        // credential=, private_key=, access_key=, secret_key=, *_key= (compound
-        // forms only — bare "key=" is too broad for config files).
-        // Uses (?:^|\b|_) instead of bare \b so compound forms like
-        // iscsi_password= or db_password= are caught (underscore is a word
-        // character, so \b alone misses mid-identifier boundaries).
-        // Whitespace around the delimiter is `[ \t]*`, never `\s*`: `\s`
-        // matches a newline, so after an empty value (`proxy_password =` in
-        // the stock rhsm.conf) the match ran on into the next line and the
-        // token replaced it. `\S+` then requires a value on the same line.
-        // Only the value is the secret: the key, delimiter and spacing stay,
-        // so `proxy_password = x` still parses as INI and
-        // `Environment=API_TOKEN=x` is still a valid assignment.
-        SecretPattern {
-            regex: Regex::new(
-                r"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)[ \t]*[=:][ \t]*(?P<secret>\S+)",
-            )
-            .unwrap(),
-            finding_kind: FindingKind::Password,
-            detection_method: DetectionMethod::Pattern,
-            confidence: Confidence::High,
-            accept: None,
-            remediation:
-                "Use environment variables or a secrets manager instead of inline passwords",
-        },
+        // Generic password/credential in key=value config, one pattern per
+        // way the value opens (see `credential_pattern`). Covers password=,
+        // passwd=, db_password=, secret=, api_key=, token=, credential=,
+        // private_key=, access_key=, secret_key=, *_key= (compound forms
+        // only — bare "key=" is too broad for config files).
+        //
+        // Only the value is the secret: the key, delimiter, spacing and
+        // any quotes stay, so `proxy_password = x` still parses as INI,
+        // `Environment=API_TOKEN=x` is still a valid assignment, and
+        // `password="x"/>` keeps its `"/>`.
+        //
+        // - Unquoted, the value runs to whitespace. A run of `"`, `'`, `<`
+        //   or `>` ends it too when it closes what holds the value: when
+        //   whitespace, the line's end, `/`, `,`, `;`, `)`, `]` or `}`
+        //   follows it, as in `url="...?password=x" pool=4`,
+        //   `password=x"/>`, `password=pw</url>` and a JSON string ending
+        //   `password=x",`. With more value after it (`password=p"ss`) it
+        //   is part of the value. That keeps every byte the old `\S+` value
+        //   covered except such a run at the very end of a value
+        //   (`password=ab"`, which reads the same as `"password=ab"`) and a
+        //   value going on past one of those closers (`password=ab",cd`).
+        // - After `"`, the value runs to the closing `"` on its line, or to
+        //   the line's end. A backslash escapes the next character, as in
+        //   JSON, YAML and TOML, so `"a\"b"` is one value; in XML, where a
+        //   backslash is no escape, a value ending in one runs on to the
+        //   end of the line, which replaces more, never less. A closing
+        //   quote with more value after it (`"ab"cd`) does not end it.
+        // - After `'`, the same, and YAML's `''` does not close it.
+        //
+        // A quoted value may follow a quoted key (`"password": "x"`), so
+        // JSON and Python dicts are covered; an unquoted value after a
+        // quoted key is not taken, as a JSON number or `null` would lose
+        // its type. An empty value, quoted or not, is left alone.
+        credential_pattern("", UNQUOTED_CREDENTIAL_VALUE),
+        credential_pattern(r#"["']?"#, DOUBLE_QUOTED_CREDENTIAL_VALUE),
+        credential_pattern(r#"["']?"#, SINGLE_QUOTED_CREDENTIAL_VALUE),
         // AWS access key ID (AKIA...). The boundary character before the
         // key is context, not secret: replacing it ate the `=` before the
         // key. The boundary after it is checked by `accept`, not matched:
@@ -537,17 +590,19 @@ mod tests {
 
     /// Index of each line-oriented `key = value` pattern in `PATTERNS`.
     const GENERIC_PASSWORD: usize = 3;
-    const JDBC: usize = 5;
-    const JDBC_DOUBLE_QUOTED: usize = 6;
-    const JDBC_SINGLE_QUOTED: usize = 7;
-    const JDBC_XML_TEXT: usize = 8;
-    const JDBC_XML_DOUBLE_QUOTED_ATTRIBUTE: usize = 9;
-    const JDBC_XML_SINGLE_QUOTED_ATTRIBUTE: usize = 10;
-    const POSTGRES: usize = 11;
-    const MONGODB: usize = 12;
-    const REDIS: usize = 13;
-    const WIREGUARD_KEY: usize = 14;
-    const WIFI_PSK: usize = 15;
+    const GENERIC_PASSWORD_DOUBLE_QUOTED: usize = 4;
+    const GENERIC_PASSWORD_SINGLE_QUOTED: usize = 5;
+    const JDBC: usize = 7;
+    const JDBC_DOUBLE_QUOTED: usize = 8;
+    const JDBC_SINGLE_QUOTED: usize = 9;
+    const JDBC_XML_TEXT: usize = 10;
+    const JDBC_XML_DOUBLE_QUOTED_ATTRIBUTE: usize = 11;
+    const JDBC_XML_SINGLE_QUOTED_ATTRIBUTE: usize = 12;
+    const POSTGRES: usize = 13;
+    const MONGODB: usize = 14;
+    const REDIS: usize = 15;
+    const WIREGUARD_KEY: usize = 16;
+    const WIFI_PSK: usize = 17;
 
     #[test]
     fn test_key_value_patterns_never_cross_a_newline() {
@@ -562,6 +617,16 @@ mod tests {
             (GENERIC_PASSWORD, "token:\n  - item".into()),
             // Newline between key and delimiter.
             (GENERIC_PASSWORD, "password\n= hunter2".into()),
+            // A quote that opens a value does not close on a later line.
+            (
+                GENERIC_PASSWORD_DOUBLE_QUOTED,
+                "password = \"\nnext\"".into(),
+            ),
+            (
+                GENERIC_PASSWORD_DOUBLE_QUOTED,
+                "password =\n\"hunter2\"".into(),
+            ),
+            (GENERIC_PASSWORD_SINGLE_QUOTED, "password = '\nnext'".into()),
             (WIFI_PSK, "psk=\n[ipv4]".into()),
             (WIFI_PSK, "psk\n=secret".into()),
             (WIREGUARD_KEY, format!("PrivateKey =\n{wg_key}")),
@@ -577,6 +642,11 @@ mod tests {
         let same_line: Vec<(usize, String)> = vec![
             (GENERIC_PASSWORD, "proxy_password = hunter2".into()),
             (GENERIC_PASSWORD, "proxy_password =\thunter2".into()),
+            (
+                GENERIC_PASSWORD_DOUBLE_QUOTED,
+                "password = \"hunter2".into(),
+            ),
+            (GENERIC_PASSWORD_SINGLE_QUOTED, "password: 'hunter2'".into()),
             (WIFI_PSK, "psk=secret".into()),
             (WIREGUARD_KEY, format!("PrivateKey = {wg_key}")),
         ];

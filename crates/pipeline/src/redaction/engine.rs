@@ -2516,6 +2516,9 @@ baseurl = https://cdn.redhat.com
         "jdbc:mysql://u:zqf@db/app?password=zqg",
         "AKIAABCDEFGHIJKLMNOP",
         "psk=zqh",
+        "password=\"zqj\"",
+        "secret='zqk'",
+        "\"token\": \"zql\"",
         "@h",
         "zqi",
     ];
@@ -5124,6 +5127,177 @@ baseurl = https://cdn.redhat.com
             assert_eq!(once.matches('\'').count() % 2, 0, "{once:?}");
             assert!(once.ends_with("/>") || once.ends_with("</url>"), "{once:?}");
         }
+    }
+
+    /// A credential value that opens with a quote is the text inside the
+    /// quotes, which stay; an unquoted value stops at whitespace and at a
+    /// quote, `<` or `>` that closes what holds it. Taking `"/>`, `"` or
+    /// `</url>` with the value left the file unparseable.
+    #[test]
+    fn test_a_credential_value_keeps_the_quotes_and_tags_around_it() {
+        let cases: &[(&str, &str, &[&str])] = &[
+            // Tomcat context.xml
+            (
+                r#"<Resource name="jdbc/app" username="app" password="zsecret" url="jdbc:mysql://db/app"/>"#,
+                r#"<Resource name="jdbc/app" username="app" password="REDACTED_PASSWORD_1" url="jdbc:mysql://db/app"/>"#,
+                &["zsecret"],
+            ),
+            (
+                r#"<Resource password="zsecret"/>"#,
+                r#"<Resource password="REDACTED_PASSWORD_1"/>"#,
+                &["zsecret"],
+            ),
+            // .properties
+            (
+                "db.password=zsecret\ndb.user=app",
+                "db.password=REDACTED_PASSWORD_1\ndb.user=app",
+                &["zsecret"],
+            ),
+            // YAML
+            (
+                r#"password: "ztwo zsecret""#,
+                r#"password: "REDACTED_PASSWORD_1""#,
+                &["ztwo", "zsecret"],
+            ),
+            (
+                "password: 'it''s zsecret'",
+                "password: 'REDACTED_PASSWORD_1'",
+                &["zsecret"],
+            ),
+            // JSON, with an escaped quote inside the value
+            (
+                r#"{"password": "zsecret", "pool": 4}"#,
+                r#"{"password": "REDACTED_PASSWORD_1", "pool": 4}"#,
+                &["zsecret"],
+            ),
+            (
+                r#"{"db_password": "a\"zsecret"}"#,
+                r#"{"db_password": "REDACTED_PASSWORD_1"}"#,
+                &["zsecret"],
+            ),
+            // An unquoted value followed by the quote or tag holding it.
+            (
+                r#"export OPTS="password=zsecret" next=1"#,
+                r#"export OPTS="password=REDACTED_PASSWORD_1" next=1"#,
+                &["zsecret"],
+            ),
+            (
+                r#"url="jdbc:mysql://db/app?password=zsecret" pool=4"#,
+                r#"url="jdbc:mysql://REDACTED_JDBCPASSWORD_1" pool=4"#,
+                &["zsecret"],
+            ),
+            (
+                "<url>jdbc:postgresql://db/app?user=u&amp;password=zsecret</url>",
+                "<url>jdbc:postgresql://REDACTED_JDBCPASSWORD_1</url>",
+                &["zsecret"],
+            ),
+            (
+                r#"<db url=">jdbc:mysql://db/app?password=zsecret" pool="4"/>"#,
+                r#"<db url=">jdbc:mysql://REDACTED_JDBCPASSWORD_1" pool="4"/>"#,
+                &["zsecret"],
+            ),
+            // A quote, `<` or `>` with more value after it is part of the
+            // value: every byte that was redacted before stays redacted.
+            (
+                r#"password=p"zsecret"#,
+                "password=REDACTED_PASSWORD_1",
+                &["zsecret"],
+            ),
+            (
+                "password=ab<zsecret>cd",
+                "password=REDACTED_PASSWORD_1",
+                &["zsecret"],
+            ),
+            (
+                "password=<zsecret>",
+                "password=REDACTED_PASSWORD_1>",
+                &["zsecret"],
+            ),
+            // A closing quote with more value after it does not end a
+            // quoted value: shell joins `"ab"cd` into one word.
+            (
+                r#"DB_PASSWORD="ab"zsecret"#,
+                "DB_PASSWORD=\"REDACTED_PASSWORD_1",
+                &["zsecret"],
+            ),
+            (
+                "DB_PASSWORD='ab'zsecret",
+                "DB_PASSWORD='REDACTED_PASSWORD_1",
+                &["zsecret"],
+            ),
+            // JSON: the value inside a JDBC string stops at the string's
+            // closing quote and comma, so the merge does not widen past it.
+            (
+                r#"{"url": "jdbc:mysql://db/app?password=zsecret", "pool": 4}"#,
+                r#"{"url": "jdbc:mysql://REDACTED_JDBCPASSWORD_1", "pool": 4}"#,
+                &["zsecret"],
+            ),
+            // The cost: a value that really ends in a quote before
+            // whitespace or the line's end keeps that quote, and one going
+            // on past a quote and a comma keeps the rest.
+            (
+                r#"password=zsecret" tail"#,
+                r#"password=REDACTED_PASSWORD_1" tail"#,
+                &["zsecret"],
+            ),
+            (
+                r#"password=zsecret",zrest"#,
+                r#"password=REDACTED_PASSWORD_1",zrest"#,
+                &["zsecret"],
+            ),
+            // And a double-quoted value reads a backslash as an escape, as
+            // JSON and YAML do, so in XML, where it is not, a value ending
+            // in a backslash runs on to the end of the line.
+            (
+                r#"<x password="zsecret\"/>"#,
+                r#"<x password="REDACTED_PASSWORD_1"#,
+                &["zsecret"],
+            ),
+            // An empty quoted value is left alone, as an empty one is.
+            (r#"password="""#, r#"password="""#, &[]),
+            ("password: ''", "password: ''", &[]),
+        ];
+        for (input, want, secrets) in cases {
+            let once = redact_string(input).into_owned();
+            assert_eq!(&once, want, "{input:?}");
+
+            let mut snap = config_snapshot("/etc/app/app.conf", input);
+            redact(&mut snap, &RedactOptions::default());
+            assert_eq!(&snap.config.as_ref().unwrap().files[0].content, want);
+            let written = serde_json::to_string(&snap).unwrap();
+            for secret in *secrets {
+                assert!(!written.contains(secret), "{secret:?} from {input:?}");
+            }
+            let findings = scan_content(input, "/etc/app.conf");
+            assert_eq!(
+                findings.len(),
+                usize::from(!secrets.is_empty()),
+                "{input:?}: {findings:?}"
+            );
+        }
+    }
+
+    /// A redacted quoted credential value still parses as the format it
+    /// came in, with the token as the value and its neighbours intact.
+    #[test]
+    fn test_a_redacted_quoted_credential_value_still_parses() {
+        const TOKEN: &str = "REDACTED_PASSWORD_1";
+
+        // One value under two keys gets one token.
+        let toml_in = "[db]\npassword = \"two words\"\nsecret = 'two words'\npool = 4\n";
+        let toml_out: toml::Value = toml::from_str(&redact_string(toml_in)).unwrap();
+        assert_eq!(toml_out["db"]["password"].as_str(), Some(TOKEN));
+        assert_eq!(toml_out["db"]["secret"].as_str(), Some(TOKEN));
+        assert_eq!(toml_out["db"]["pool"].as_integer(), Some(4));
+
+        let json_in = r#"{"password": "a\"b c", "token": "x", "pool": 4}"#;
+        let json_out: serde_json::Value = serde_json::from_str(&redact_string(json_in)).unwrap();
+        let password = json_out["password"].as_str().unwrap();
+        let token = json_out["token"].as_str().unwrap();
+        assert!(password.starts_with("REDACTED_PASSWORD_"), "{json_out}");
+        assert!(token.starts_with("REDACTED_PASSWORD_"), "{json_out}");
+        assert_ne!(password, token);
+        assert_eq!(json_out["pool"].as_i64(), Some(4));
     }
 
     /// The redacted text of a quoted JDBC URL still parses as the format

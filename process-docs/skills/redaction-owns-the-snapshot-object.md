@@ -372,6 +372,33 @@ match a newline. The URI patterns use `[^:\r\n]`, `[^@\r\n]` and
 a password, and `[^@\s]` stopped redacting `postgres://u:two words@db`.
 Only the PEM patterns span lines, on purpose, with `(?s)`.
 
+## A credential value keeps the quotes and tags around it
+
+The generic credential pattern is three patterns, one per way the value
+opens (`credential_pattern` in `redaction/patterns.rs`), because the
+`regex` crate has no backreference to match a closing quote to its
+opener and a named group may appear once. After `"` or `'` the secret is
+the text inside the quotes, which stay: `password="p"/>` keeps its `"/>`
+(`test_a_credential_value_keeps_the_quotes_and_tags_around_it`). A
+quoted value may follow a quoted key, so JSON's `"password": "x"` is
+covered; an unquoted value after a quoted key is not taken, because a
+JSON number or `null` replaced by a bare token stops parsing.
+
+An unquoted value used to be `\S+`, which ran past a closing quote or tag
+(`url="...?password=x" pool=4`, `password=pw</url>`), and when it sat
+inside a JDBC URL the merge widened the URL's span to match and took the
+quote or tag too. It now stops at a `"`, `'`, `<` or `>` run only when
+what follows cannot be more value: whitespace, the line's end, `/`, `,`,
+`;`, `)`, `]` or `}`. Stopping at every quote, as first proposed, would
+have shipped the rest of `password=p"ss`, which `\S+` covered. The two
+cases the rule cannot tell apart are pinned in that test: a value that
+really ends in a quote keeps the quote, and `password=ab",cd` keeps
+`",cd`. A quoted value goes on past its closing quote when more value
+follows (`"ab"cd` is one shell word). A backslash escapes inside double
+quotes, as JSON, YAML and TOML read it; in XML a value ending in a
+backslash then runs to the end of the line, which costs syntax, not a
+secret.
+
 ## Content parsed after redaction is unknown when the pass changed it
 
 Some content is parsed *after* `redact()` has run: the sysctl
