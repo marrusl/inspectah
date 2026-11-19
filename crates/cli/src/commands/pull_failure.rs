@@ -97,62 +97,70 @@ pub fn classify_pull_failure(stderr: &str) -> PullFailureKind {
 /// Sanitize stderr by redacting bearer tokens, basic auth, and authorization headers.
 ///
 /// This prevents credential leakage in error output shown to users or
-/// collected in diagnostic bundles.
+/// collected in diagnostic bundles. Every occurrence of each form is
+/// redacted, not only the first.
 pub fn sanitize_stderr(s: &str) -> String {
-    let mut result = s.to_string();
+    // Bearer tokens: `Bearer <token>`, token up to the next whitespace.
+    let result = redact_each(s, "bearer ", |tail| {
+        let start = horizontal_ws_len(tail);
+        let len = tail[start..]
+            .find(char::is_whitespace)
+            .unwrap_or(tail.len() - start);
+        (start, start + len)
+    });
 
-    // Bearer tokens: Bearer <token>
-    // Case-insensitive match for the keyword, greedy token capture.
-    // We handle the first occurrence — multiple bearer tokens in one
-    // stderr blob is not a realistic scenario.
-    if let Some(pos) = result.to_lowercase().find("bearer ") {
-        let token_start = pos + 7; // len("bearer ")
-        if token_start < result.len() {
-            let token_end = result[token_start..]
-                .find(|c: char| c.is_whitespace())
-                .map(|p| token_start + p)
-                .unwrap_or(result.len());
-            if token_end > token_start {
-                result.replace_range(token_start..token_end, "[REDACTED]");
-            }
+    // Userinfo in URLs: `https://user:pass@host` -> `https://[REDACTED]@host`.
+    // The authority runs to the first `/` or whitespace; everything before
+    // its last `@` is the userinfo.
+    let result = redact_each(&result, "://", |tail| {
+        let authority_len = tail
+            .find(|c: char| c == '/' || c.is_whitespace())
+            .unwrap_or(tail.len());
+        (0, tail[..authority_len].rfind('@').unwrap_or(0))
+    });
+
+    // Authorization headers: `Authorization: <value>`, value to end of line.
+    redact_each(&result, "authorization:", |tail| {
+        let start = horizontal_ws_len(tail);
+        let len = tail[start..]
+            .find(['\n', '\r'])
+            .unwrap_or(tail.len() - start);
+        (start, start + len)
+    })
+}
+
+/// Placeholder that replaces a redacted credential.
+const REDACTED: &str = "[REDACTED]";
+
+/// Redact the value after every case-insensitive match of the ASCII
+/// `keyword` in `s`.
+///
+/// `value` receives the text after the keyword and returns the value's
+/// `(start, end)` byte range within it; an empty range redacts nothing.
+/// Matching runs on an ASCII-lowercased copy, which keeps byte offsets
+/// identical to `s` (full Unicode lowercasing can change them).
+fn redact_each(s: &str, keyword: &str, value: impl Fn(&str) -> (usize, usize)) -> String {
+    let lower = s.to_ascii_lowercase();
+    let mut out = String::with_capacity(s.len());
+    let mut cursor = 0;
+    while let Some(found) = lower[cursor..].find(keyword) {
+        let after = cursor + found + keyword.len();
+        let (start, end) = value(&s[after..]);
+        if end > start {
+            out.push_str(&s[cursor..after + start]);
+            out.push_str(REDACTED);
+        } else {
+            out.push_str(&s[cursor..after + end]);
         }
+        cursor = after + end;
     }
+    out.push_str(&s[cursor..]);
+    out
+}
 
-    // Basic auth in URLs: https://user:pass@host -> https://[REDACTED]@host
-    if let Some(start) = result.find("://").map(|p| p + 3)
-        && start < result.len()
-        && let Some(at_pos) = result[start..].find('@')
-    {
-        let abs_at = start + at_pos;
-        // Only redact if there's no slash before the @
-        let before_at = &result[start..abs_at];
-        if !before_at.contains('/') && !before_at.is_empty() {
-            result.replace_range(start..abs_at, "[REDACTED]");
-        }
-    }
-
-    // Authorization headers: Authorization: <value>
-    let auth_lower = result.to_lowercase();
-    if let Some(pos) = auth_lower.find("authorization:") {
-        let value_start = pos + 14; // len("authorization:")
-        // Skip whitespace after colon
-        let trimmed_start = result[value_start..]
-            .find(|c: char| !c.is_whitespace())
-            .map(|p| value_start + p)
-            .unwrap_or(value_start);
-        if trimmed_start < result.len() {
-            // Value extends to end of line or end of string
-            let value_end = result[trimmed_start..]
-                .find('\n')
-                .map(|p| trimmed_start + p)
-                .unwrap_or(result.len());
-            if value_end > trimmed_start {
-                result.replace_range(trimmed_start..value_end, "[REDACTED]");
-            }
-        }
-    }
-
-    result
+/// Length of the leading run of spaces and tabs in `s`.
+fn horizontal_ws_len(s: &str) -> usize {
+    s.len() - s.trim_start_matches([' ', '\t']).len()
 }
 
 /// Extract the registry hostname (with optional port) from an image reference.
@@ -479,6 +487,17 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_after_text_whose_lowercase_is_longer() {
+        // 'İ' lowercases to three bytes from two; offsets must not shift.
+        let input = "İ Authorization: Basic c2VjcmV0\nİ Bearer tok-x done";
+        let result = sanitize_stderr(input);
+        assert_eq!(
+            result,
+            "İ Authorization: [REDACTED]\nİ Bearer [REDACTED] done"
+        );
+    }
+
+    #[test]
     fn sanitize_no_credentials() {
         let input = "Copying blob sha256:abc123 done\nWriting manifest";
         let result = sanitize_stderr(input);
@@ -786,6 +805,71 @@ mod tests {
         );
         assert!(
             msg.starts_with("Error: cannot pull baseline image\n"),
+            "{msg}"
+        );
+    }
+
+    /// Every credential form in a container step's stderr is scrubbed in the
+    /// excerpt, for each occurrence, whichever way the image arrived.
+    #[test]
+    fn step_failure_excerpt_scrubs_every_credential() {
+        let cases: [(&str, &str, &[&str]); 4] = [
+            (
+                "two authorization headers",
+                "Authorization: Basic Rmlyc3RTZWNyZXQ=\nAuthorization: Basic U2Vjb25kU2VjcmV0",
+                &["Rmlyc3RTZWNyZXQ=", "U2Vjb25kU2VjcmV0"],
+            ),
+            (
+                "two credentialed URLs",
+                "fetching https://alice:pw-one@reg1.example.com/v2/ and \
+                 https://bob:pw-two@reg2.example.com/v2/",
+                &["alice", "pw-one", "bob", "pw-two"],
+            ),
+            (
+                "credentialed URL after an ordinary URL",
+                "probe https://quay.io/v2/ then https://carol:pw-three@reg3.example.com/v2/",
+                &["carol", "pw-three"],
+            ),
+            (
+                "repeated bearer token",
+                "Bearer tok-first rejected\nretrying with Bearer tok-second",
+                &["tok-first", "tok-second"],
+            ),
+        ];
+        for image_source in [ImageSource::Local, ImageSource::Pulled] {
+            for (name, reason, secrets) in cases {
+                let err = ExtractionError::ContainerFailed {
+                    step: ContainerStep::Exec,
+                    image_ref: IMG.to_string(),
+                    image_source,
+                    reason: reason.to_string(),
+                };
+                let msg = format_baseline_error(&err, IMG, "");
+                assert!(msg.contains("podman reported:"), "{name}: {msg}");
+                assert!(msg.contains("[REDACTED]"), "{name}: {msg}");
+                for secret in secrets {
+                    assert!(
+                        !msg.contains(secret),
+                        "{image_source:?}, {name}: {secret:?} survived: {msg}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn step_failure_excerpt_keeps_the_hosts() {
+        let err = ExtractionError::ContainerFailed {
+            step: ContainerStep::Create,
+            image_ref: IMG.to_string(),
+            image_source: ImageSource::Local,
+            reason: "probe https://quay.io/v2/ then https://carol:pw@reg3.example.com/v2/"
+                .to_string(),
+        };
+        let msg = format_baseline_error(&err, IMG, "");
+        assert!(msg.contains("https://quay.io/v2/"), "{msg}");
+        assert!(
+            msg.contains("https://[REDACTED]@reg3.example.com/v2/"),
             "{msg}"
         );
     }
