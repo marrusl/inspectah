@@ -2018,27 +2018,85 @@ VARIANT_ID="workstation"
                 ..base_args()
             };
             let (roots, _, _) = build_scan_roots(&home_args, &exec).unwrap();
-            let added: Vec<&String> = roots
-                .iter()
-                .filter(|r| !default_scan_roots().contains(r))
-                .collect();
             assert_eq!(
-                added.first().map(|r| r.as_str()),
-                *as_home,
-                "--scan-home with home {spelling:?}: roots {roots:?}"
+                roots,
+                roots_with(*as_home),
+                "--scan-home with home {spelling:?}"
             );
 
             let path_args = ScanArgs {
                 scan_path: vec![spelling.to_string()],
                 ..base_args()
             };
-            let (_, _, extra_paths) = build_scan_roots(&path_args, &exec).unwrap();
+            let (roots, _, extra_paths) = build_scan_roots(&path_args, &exec).unwrap();
             assert_eq!(
-                extra_paths.first().map(|p| p.as_str()),
-                *as_path,
-                "--scan-path {spelling:?}: extra paths {extra_paths:?}"
+                roots,
+                roots_with(*as_path),
+                "--scan-path {spelling:?}: the roots the inspectors walk"
+            );
+            assert_eq!(
+                extra_paths,
+                as_path.iter().map(|p| p.to_string()).collect::<Vec<_>>(),
+                "--scan-path {spelling:?}: extra paths"
             );
         }
+    }
+
+    /// The default scan roots, plus `added` when there is one.
+    fn roots_with(added: Option<&str>) -> Vec<String> {
+        let mut roots = default_scan_roots();
+        roots.extend(added.map(str::to_string));
+        roots
+    }
+
+    /// A venv whose `pyvenv.cfg` sits directly in a `--scan-path` given with a
+    /// trailing slash: the scan root is the venv itself, so an untrimmed root
+    /// became the stored venv path.
+    #[test]
+    fn venv_at_a_trailing_slash_scan_path_is_stored_without_it() {
+        use inspectah_collect::executor::mock::MockExecutor;
+        use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
+        use inspectah_core::traits::inspector::{InspectionContext, Inspector, RpmState};
+        use inspectah_core::traits::progress::NullProgress;
+        use inspectah_core::types::completeness::SectionData;
+        use inspectah_core::types::system::SourceSystem;
+
+        let exec = MockExecutor::new()
+            .with_dir("/data/app", vec!["pyvenv.cfg"])
+            .with_file(
+                "/data/app/pyvenv.cfg",
+                "home = /usr/bin\ninclude-system-site-packages = false\n",
+            );
+        let args = ScanArgs {
+            scan_path: vec!["/data/app/".to_string()],
+            ..base_args()
+        };
+        let (roots, _, _) = build_scan_roots(&args, &exec).unwrap();
+        assert_eq!(roots, roots_with(Some("/data/app")));
+
+        let source = SourceSystem::PackageBased {
+            os_release: Default::default(),
+        };
+        let rpm_state = RpmState::default();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+        let output = NonRpmInspector::with_roots(roots)
+            .inspect(&ctx, &NullProgress)
+            .unwrap();
+        let SectionData::NonRpmSoftware(section) = &output.section else {
+            panic!("expected the non-RPM section, got {:?}", output.section);
+        };
+        let venvs: Vec<&str> = section
+            .items
+            .iter()
+            .filter(|item| item.method == "python venv")
+            .map(|item| item.path.as_str())
+            .collect();
+        assert_eq!(venvs, ["data/app"]);
     }
 
     // =========================================================================
