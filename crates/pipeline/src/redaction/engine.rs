@@ -5,7 +5,7 @@ use inspectah_core::types::redaction::{
     RedactionState,
 };
 use inspectah_core::types::sysctl::{SysctlFileBody, SysctlSection};
-use regex::Regex;
+use regex::{Captures, Regex};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -338,8 +338,7 @@ fn collect_eligible_matches(
     path: Option<&str>,
 ) -> Vec<EligibleMatch> {
     let markers = comment_markers(path);
-    pat.regex
-        .captures_iter(content)
+    captures_from_each_secret(&pat.regex, content)
         .filter_map(|caps| {
             let whole = caps.get(0)?;
             let secret = caps.name(SECRET_GROUP).unwrap_or(whole);
@@ -391,6 +390,48 @@ fn collect_eligible_matches(
             })
         })
         .collect()
+}
+
+/// Every match of `regex` in `content`, each one searched for from where
+/// the previous match's secret starts, not from where the whole match ends.
+///
+/// A secret can run on past its own value: the JSON pattern's `\S*` after
+/// a closing quote takes `"alpha","token":"beta` from
+/// `{"password":"alpha","token":"beta gamma"}`. `captures_iter` resumes
+/// after that, inside the next key's value, so `token` was never matched
+/// and `gamma` shipped. Resuming at the secret looks for every key from the
+/// end of the key before it. A match found inside an earlier secret
+/// overlaps it, and `dedup_overlapping_matches` absorbs it into one span,
+/// so this only adds coverage. A match whose secret is the whole match
+/// (no key before it) resumes after its end, as `captures_iter` does.
+fn captures_from_each_secret<'c>(
+    regex: &'c Regex,
+    content: &'c str,
+) -> impl Iterator<Item = Captures<'c>> + 'c {
+    let mut pos = 0;
+    std::iter::from_fn(move || {
+        if pos > content.len() {
+            return None;
+        }
+        let caps = regex.captures_at(content, pos)?;
+        let whole = caps.get(0)?;
+        let secret_start = caps
+            .name(SECRET_GROUP)
+            .map_or(whole.start(), |secret| secret.start());
+        pos = if secret_start > whole.start() {
+            secret_start
+        } else if whole.end() > whole.start() {
+            whole.end()
+        } else {
+            // An empty match: step past one character so the search moves.
+            whole.end()
+                + content[whole.end()..]
+                    .chars()
+                    .next()
+                    .map_or(1, char::len_utf8)
+        };
+        Some(caps)
+    })
 }
 
 /// Resolve overlapping matches from different patterns so no two replaced
@@ -5247,6 +5288,36 @@ baseurl = https://cdn.redhat.com
                 "password: \"a\tb c\"",
                 "password: REDACTED_PASSWORD_1",
                 &["a\tb", "b c"],
+            ),
+            // A value that runs on into the next key does not hide that
+            // key: each key is looked for from where the one before it
+            // ends, not from where its value ends.
+            (
+                r#"{"password":"alpha","token":"beta gamma"}"#,
+                r#"{"password":REDACTED_PASSWORD_1"#,
+                // Bare `beta` is in the snapshot's own version string.
+                &["alpha", "\"beta", "gamma"],
+            ),
+            (
+                r#"{"password":"alpha","token": "bravo"}"#,
+                r#"{"password":REDACTED_PASSWORD_2 REDACTED_PASSWORD_1"#,
+                &["alpha", "bravo"],
+            ),
+            (
+                r#"{"password":"za1","token":"zb2","secret":"zc3 zd4"}"#,
+                r#"{"password":REDACTED_PASSWORD_1"#,
+                &["za1", "zb2", "zc3", "zd4"],
+            ),
+            (
+                r#"{"password":"za1","token": "zb2","secret": "zc3"}"#,
+                r#"{"password":REDACTED_PASSWORD_3 REDACTED_PASSWORD_2 REDACTED_PASSWORD_1"#,
+                &["za1", "zb2", "zc3"],
+            ),
+            // Unquoted values still stop at whitespace: `c` is not a value.
+            (
+                "password=za token=zb c",
+                "password=REDACTED_PASSWORD_2 token=REDACTED_PASSWORD_1 c",
+                &["za", "zb"],
             ),
         ];
         for (input, want, secrets) in cases {

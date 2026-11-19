@@ -400,6 +400,21 @@ takes a quoted value under an unquoted key (`password: "two words"`)
 whole, where `\S+` stopped at the space. Like the JSON one, it can only
 lengthen a span that `\S+` starts at the same quote.
 
+A secret that runs past its own value can run into the next key, so the
+search for a pattern's next match resumes where the last match's
+**secret** starts, not where the whole match ends
+(`captures_from_each_secret`, used by `collect_eligible_matches` for
+every pattern). With `captures_iter`, the JSON secret
+`"alpha","token":"beta` in `{"password":"alpha","token":"beta gamma"}`
+moved the search past `token`, which was never matched, and `gamma`
+shipped. Resuming at the secret finds every key from the end of the key
+before it. A match found inside an earlier secret overlaps it and is
+absorbed, so this only lengthens spans; a pattern whose secret is the
+whole match has no key and resumes after the match as before. The
+property test cannot see this class: its oracle is the set of matches
+the engine discovers, so an undiscovered key is absent from both sides.
+Each case is a row in `test_no_secret_byte_survives_a_reviewed_input`.
+
 `SecretPattern::accept` exists for a condition the regex cannot state
 because the `regex` crate has no lookahead: the AWS pattern's check that
 no key byte follows the key. Use it only for a fact about bytes that
