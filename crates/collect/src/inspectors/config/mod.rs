@@ -1003,6 +1003,74 @@ mod tests {
         }
     }
 
+    /// Registration state that insights-client and subscription-manager
+    /// write under `/etc` is host identity, not configuration, and must not
+    /// reach the image: every machine deployed from it would carry the
+    /// source host's Insights machine-id and `.registered` marker.
+    ///
+    /// The registration paths are the unowned files a real RHEL 10.2 scan
+    /// staged. The sibling paths share a leading string with an excluded
+    /// directory but not the directory itself, so they pin that the
+    /// exclusion holds on a path boundary and do not leave the test passing
+    /// vacuously if the walk stopped yielding files.
+    #[test]
+    fn test_config_unowned_skips_registration_state() {
+        // (path, carried as an unowned config file)
+        let cases: &[(&str, bool)] = &[
+            ("/etc/insights-client/machine-id", false),
+            ("/etc/insights-client/.registered", false),
+            ("/etc/insights-client/.lastupload", false),
+            ("/etc/insights-client/.last-upload.results", false),
+            ("/etc/rhsm/facts/insights-client.facts", false),
+            ("/etc/pki/product/419.pem", false),
+            ("/etc/insights-client-local/machine-id", true),
+            ("/etc/rhsm/facts-custom/site.facts", true),
+            ("/etc/pki/product-default/README", true),
+            ("/etc/pki/products/419.pem", true),
+        ];
+
+        let mut exec = base_mock_with_etc();
+        for (path, _) in cases {
+            let mut parent = String::from("/etc");
+            let rel = path.strip_prefix("/etc/").expect("case path is under /etc");
+            for component in rel.split('/') {
+                exec = exec.with_dir_entry(&parent, component);
+                parent = format!("{parent}/{component}");
+            }
+            exec = exec.with_file(path, "host state\n");
+        }
+
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let output = ConfigInspector::new()
+            .inspect(&ctx, &NullProgress)
+            .expect("should succeed");
+        let SectionData::Config(ref section) = output.section else {
+            panic!("expected Config section");
+        };
+        let carried: HashSet<&str> = section
+            .files
+            .iter()
+            .filter(|f| f.kind == ConfigFileKind::Unowned)
+            .map(|f| f.path.as_str())
+            .collect();
+
+        for (path, expected) in cases {
+            assert_eq!(
+                carried.contains(path),
+                *expected,
+                "{path}: expected carried={expected}, unowned files were {carried:?}"
+            );
+        }
+    }
+
     // ---- Test 17: test_config_orphaned ----
 
     #[test]

@@ -185,6 +185,17 @@ const UNOWNED_EXCLUDE_PREFIX: &[&str] = &[
     // Desktop/interactive login session systemd units created by
     // systemd-rpm-macros running `systemctl --global enable`
     "/etc/xdg/systemd/",
+    // Registration identity: insights-client and subscription-manager
+    // write these at registration, not at install, so the files are
+    // unowned. Their content is the source host's Insights machine-id,
+    // `.registered` marker, upload ids, facts and product certificates;
+    // copied into the image, every deployed machine would claim that
+    // host's identity. Files the packages own here still reach the
+    // rpm -Va branch, which never consults this list. The trailing slash
+    // keeps the match on a path boundary.
+    "/etc/insights-client/",
+    "/etc/rhsm/facts/",
+    "/etc/pki/product/",
 ];
 
 /// Returns `true` if the path should be excluded from unowned file detection.
