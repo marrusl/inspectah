@@ -887,7 +887,9 @@ fn redact_sysctl_section(
                 }
                 let before = content.clone();
                 let content_findings = scan_and_redact_field(content, &path, registry);
-                *redacted = *content != before;
+                // Sticky: a later pass that changes nothing does not
+                // make the file as read again.
+                *redacted |= *content != before;
                 let same_text_as_config = config_originals
                     .get(&path)
                     .is_some_and(|originals| originals.contains(&before));
@@ -4738,6 +4740,23 @@ baseurl = https://cdn.redhat.com
             } => (content, *redacted),
             other => panic!("expected a read file, got {other:?}"),
         }
+    }
+
+    /// A sysctl file's `redacted` flag, once set, stays set. A second pass
+    /// over redacted text can replace each token with itself and change
+    /// nothing, and assigning the flag from that pass cleared it, which
+    /// made the report state values from a file redaction had changed.
+    #[test]
+    fn test_sysctl_redacted_flag_survives_a_second_pass() {
+        let mut snap = sysctl_and_config_snapshot("", "kernel.x = password=hunter2\n");
+        redact(&mut snap, &RedactOptions::default());
+        let (content, redacted) = sysctl_copy(&snap);
+        assert_eq!(content, "kernel.x = password=REDACTED_PASSWORD_1\n");
+        assert!(redacted);
+        redact(&mut snap, &RedactOptions::default());
+        let (content, redacted) = sysctl_copy(&snap);
+        assert_eq!(content, "kernel.x = password=REDACTED_PASSWORD_1\n");
+        assert!(redacted, "a second pass cleared the flag");
     }
 
     /// The config entry and the sysctl copy of one path read differently
