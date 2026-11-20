@@ -609,7 +609,7 @@ fn the_fixture_populates_the_optional_export_directories() {
         "openh264 installs from its disabled repo:\n{containerfile}"
     );
     assert!(
-        containerfile.contains(&format!("# RUN cd '{NPM_LOCK_ONLY_PROJECT}' && npm ci")),
+        containerfile.contains(&format!("# RUN cd {NPM_LOCK_ONLY_PROJECT} && npm ci")),
         "the lockfile-only project renders commented"
     );
     assert!(

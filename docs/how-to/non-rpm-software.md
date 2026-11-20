@@ -72,31 +72,32 @@ The Language Packages section of a scan of the sample host (two pip
 virtual environments, one npm project, and the npm global packages),
 captured below. The `venv` name in each temporary path is the final
 component of the environment path, and the numbered directory under
-`language-packages/` is a hash of the environment. Paths that come from
-the host are single-quoted.
+`language-packages/` is a hash of the environment. A path or package name
+from the host is single-quoted only when it holds a character the shell
+would interpret, such as a space or `$`.
 
 ```dockerfile
 # WARNING: This environment contains packages with C extensions that may need
 # native compilation toolchains (gcc, python3-devel).
 # pip packages: /opt/myapp/venv (from requirements.txt, RPM-filtered)
-COPY language-packages/pip/77fce1b75e7a/requirements.txt '/tmp/venv-requirements.txt'
-RUN python3 -m venv '/opt/myapp/venv' \
-    && '/opt/myapp/venv'/bin/pip install -r '/tmp/venv-requirements.txt' \
-    && rm '/tmp/venv-requirements.txt'
+COPY language-packages/pip/77fce1b75e7a/requirements.txt /tmp/venv-requirements.txt
+RUN python3 -m venv /opt/myapp/venv \
+    && /opt/myapp/venv/bin/pip install -r /tmp/venv-requirements.txt \
+    && rm /tmp/venv-requirements.txt
 
 # pip packages: /opt/legacy-app/venv (from requirements.txt, RPM-filtered)
-COPY language-packages/pip/3ee13faaf2c5/requirements.txt '/tmp/venv-requirements.txt'
-RUN python3 -m venv --system-site-packages '/opt/legacy-app/venv' \
-    && '/opt/legacy-app/venv'/bin/pip install -r '/tmp/venv-requirements.txt' \
-    && rm '/tmp/venv-requirements.txt'
+COPY language-packages/pip/3ee13faaf2c5/requirements.txt /tmp/venv-requirements.txt
+RUN python3 -m venv --system-site-packages /opt/legacy-app/venv \
+    && /opt/legacy-app/venv/bin/pip install -r /tmp/venv-requirements.txt \
+    && rm /tmp/venv-requirements.txt
 
 # npm packages: /opt/webapp (from package-lock.json)
-COPY language-packages/npm/23f9725da273/package.json '/opt/webapp'/package.json
-COPY language-packages/npm/23f9725da273/package-lock.json '/opt/webapp'/package-lock.json
-RUN cd '/opt/webapp' && npm ci --production
+COPY language-packages/npm/23f9725da273/package.json /opt/webapp/package.json
+COPY language-packages/npm/23f9725da273/package-lock.json /opt/webapp/package-lock.json
+RUN cd /opt/webapp && npm ci --production
 
 # npm global packages: /usr/local/lib/node_modules (detected via npm list -g)
-RUN npm install -g -- '@angular/cli' '@types/node' 'pm2' 'typescript'
+RUN npm install -g -- @angular/cli @types/node pm2 typescript
 ```
 
 *Sample output from a RHEL 9.8 test host. Command: `sudo inspectah scan`.
@@ -114,8 +115,8 @@ out:
 ```dockerfile
 # pip packages: /apps/reporting/venv (detected via dist-info — transitive deps may differ)
 # Uncomment after verifying package list is complete:
-# RUN python3 -m venv '/apps/reporting/venv' \
-#     && '/apps/reporting/venv'/bin/pip install humanize==4.13.0 pip==21.3.1 setuptools==53.0.0 tabulate==0.9.0
+# RUN python3 -m venv /apps/reporting/venv \
+#     && /apps/reporting/venv/bin/pip install humanize==4.13.0 pip==21.3.1 setuptools==53.0.0 tabulate==0.9.0
 ```
 
 *Sample output from a RHEL 9.8 test host. Command: `sudo inspectah scan

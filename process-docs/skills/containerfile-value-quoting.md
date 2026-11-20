@@ -14,14 +14,17 @@ has produced both over-rejection of legal paths and live command injection.
 
 | Context | Example site | Treatment | Predicate that matters |
 |---|---|---|---|
-| Inside single quotes in a command | `RUN python3 -m venv '{abs_path}'` | quote at the site | `'` and the line terminators only: everything else is inert inside the quotes |
+| Host path or token in a language-package command | `RUN python3 -m venv {venv}` | `shell_word()` at the site, as in the next row: bare when every byte is safe, single-quoted otherwise | `'` and the line terminators only: `shell_word` quotes every other byte that needs it |
 | Token in a command that may be bare | `RUN systemctl enable -- {unit}` | quote it when it needs it, by one function, never blacklist: `shell_word()` leaves a word bare only when it is non-empty and every byte is in `[A-Za-z0-9@%+=:,./_-]`, and single-quotes it otherwise (Mark Russell, 2026-11-18); put `--` before a token list that could hold a word starting with `-` | an allowlist of bytes the shell reads as themselves; a blacklist, or "quote if it holds a `\`", is structurally incomplete |
 | Comment text | `# npm global packages: {prefix}` | escaped for you by `comment::join_lines()`, the join every line-vector renderer goes through (the string-built files in `configtree.rs` escape at the site or carry fixed text); `sanitize_for_comment()` per value where the quotes should double | `\n` closes the comment; every other Unicode mandatory line break (`\r`, VT, FF, U+0085, U+2028, U+2029) is escaped too, since a viewer may break the line there whether or not the build parser does, and so is every other control but tab, since ESC starts a terminal escape sequence |
 
 `contains_unsafe_chars` refuses `'` and every character in
 `LINE_TERMINATORS`, one check serving every command site, which is
-correct only because every command site in `language_packages.rs` single-quotes. A new
-interpolation added bare inherits a predicate that admits `;`, `$` and `>`.
+correct only because every command site in `language_packages.rs` goes
+through `shell_word()`. Until 2026-11-19 they single-quoted every value
+unconditionally; they now quote only what needs it, for the reason the
+systemctl operands do. A new interpolation added raw inherits a predicate
+that admits `;`, `$` and `>`.
 The quotes make a carriage return or U+2028 inert to the shell but not to
 a terminal, which breaks the line there, so every terminator is refused,
 not just the newline (2026-11-10).
