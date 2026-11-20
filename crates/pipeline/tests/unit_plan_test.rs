@@ -12,6 +12,7 @@ use inspectah_pipeline::render::configtree::staged_writes;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
 use inspectah_pipeline::render::not_carried::not_carried_packages;
+use inspectah_pipeline::render::repoless::InstallRepos;
 use inspectah_pipeline::render::unit_plan::{
     AdvisoryReason, AlsoWhy, DeclinedMarker, OmissionReason, ServiceAdvisory, UnitPlan,
     declined_line, effective_target_packages, is_package_installable, mount_advisory_lines,
@@ -106,7 +107,7 @@ fn test_effective_target_packages_uses_plain_names_and_include_true() {
         ..Default::default()
     };
 
-    let names = effective_target_packages(&rpm);
+    let names = effective_target_packages(&rpm, &InstallRepos::default());
 
     assert!(names.contains("firewalld"));
     assert!(names.contains("systemd"));
@@ -1421,7 +1422,7 @@ fn only_a_leaf_the_export_installs_pulls_in_its_dependencies() {
             ..Default::default()
         };
         assert_eq!(
-            pulled_in_by_included(&rpm).contains("vendor-lib.x86_64"),
+            pulled_in_by_included(&rpm, &InstallRepos::default()).contains("vendor-lib.x86_64"),
             pulls_in,
             "{root_kind}"
         );

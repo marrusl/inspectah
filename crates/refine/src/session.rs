@@ -17,7 +17,7 @@ use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
 use inspectah_pipeline::render::not_carried::not_carried_notice;
-use inspectah_pipeline::render::repoless::{PackageRoute, route_for};
+use inspectah_pipeline::render::repoless::{InstallRepos, PackageRoute, route_for};
 
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
@@ -1073,8 +1073,9 @@ impl RefineSession {
         let projected = self.snapshot_projected();
         let rpm = projected.rpm.as_ref()?;
         let no_uploads = VerifiedUploads::new();
+        let repos = InstallRepos::of(&projected);
         let takes_upload =
-            |pkg: &PackageEntry| route_for(rpm, pkg, &no_uploads) != PackageRoute::ByName;
+            |pkg: &PackageEntry| route_for(rpm, &repos, pkg, &no_uploads) != PackageRoute::ByName;
 
         // Try exact NEVRA match first (backwards compat)
         for pkg in &rpm.packages_added {
@@ -3933,6 +3934,7 @@ fn extract_payload_dirs_with_budget(
     // Only the repo-less route copies a cached RPM. A package that installs
     // from its host-disabled repo has no `COPY` naming the file, so it is
     // not extracted, whatever the source tarball holds.
+    let repos = InstallRepos::of(snap);
     let included_repoless: HashSet<String> = snap
         .rpm
         .as_ref()
@@ -3940,7 +3942,7 @@ fn extract_payload_dirs_with_budget(
             r.packages_added
                 .iter()
                 .filter(|p| p.disposition.is_included() && p.repoless_cached && !p.uploaded)
-                .filter(|p| route_for(r, p, verified) == PackageRoute::Repoless)
+                .filter(|p| route_for(r, &repos, p, verified) == PackageRoute::Repoless)
                 .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
                 .filter(|n| inspectah_core::rpm_filename::validate_staged_name(n).is_ok())
                 .collect()

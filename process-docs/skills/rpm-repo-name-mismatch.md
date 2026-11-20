@@ -61,20 +61,43 @@ A third, render-side question sits on top of the first:
 **`render/repoless.rs::disabled_repo_install()`** asks whether a package
 the scan left repo-less can install from its own repo with
 `--enablerepo`. It matches `source_repo` against the section ids of the
-repo files the export carries, *included* and not `is_default_repo`
-(the Custom Repositories `COPY` leaves default files out), by
-case-insensitive equality (the `Exact` rule,
-which is what `normalize_source_repos` already rewrote `source_repo`
-to), and accepts only a section that is disabled, defines a source, and
-names no `gpgkey=file://` key the export leaves out (`keys_included`,
-shared with the repo-enabling proof).
+`.repo` files the build has when it installs (`InstallRepos`, built
+once per export from `staged_writes`), by case-insensitive equality (the
+`Exact` rule, which is what `normalize_source_repos` already rewrote
+`source_repo` to), and accepts only a section that is disabled, defines a
+source, and names no `gpgkey=file://` key the export leaves out
+(`keys_included`, shared with the repo-enabling proof).
+
+That set is what the package phase's early `COPY config/etc/yum.repos.d/`
+puts in the image, so it follows the `COPY`, not the repo inventory:
+
+- The `COPY` renders only when an included repo file that is not
+  `is_default_repo` is staged (`InstallRepos::custom_count`, which is
+  also the Custom Repositories count). With none, the set is empty: the
+  rest of `config/etc/` is copied after the packages install.
+- When it renders it copies the whole staged directory. **Default repo
+  files are not left out**: an included `redhat.repo` lands beside the
+  custom files and competes for an id like any other. The stager does not
+  exclude default files, and the route does not either; an excluded
+  default file is simply not staged.
+- A repo file the stager withholds (a conflict) or refuses (a path that
+  is not a `Destination`) is not in the set, however it is disposed.
+- The content is the staged content: where an included config entry at
+  the same path replaces a repo file's content, dnf reads the config
+  entry's. Checking that a path is staged is not enough.
+- Files the base image itself ships in `/etc/yum.repos.d` are unknown to
+  the export and not part of the set.
+
 When more than one file defines the id, the section it judges is the one
-dnf 4 uses (`carried_definition`): files sorted by path with `.repo` cut
-off, compared by component, first definition wins (dnf's `RepoDict.add`
-drops later ones with "listed more than once"). A header repeated inside
-one file is one section to dnf, later keys overriding earlier ones, and
-`parse_repo_sections` merges it the same way. Never decide by the order of
-`repo_files`: it is the host's `read_dir` order. A package the scan
+dnf 4 uses (`effective_definition` in `inspectah_core::types::repo`):
+files sorted by path with `.repo` cut off, compared by component, first
+definition wins (dnf's `RepoDict.add` drops later ones with "listed more
+than once"). A header repeated inside one file is one section to dnf, and
+`parse_repo_sections` merges it the same way: each option keeps the last
+value any block assigned it, `baseurl`, `metalink` and `mirrorlist` are
+separate options (clearing one keeps the others, an empty final value is
+no source), and the key list is the final `gpgkey=` alone. Never decide by
+the order of `repo_files`: it is the host's `read_dir` order. A package the scan
 attributed to a pseudo repo (`RepoAttribution::Pseudo`: `anaconda`,
 `@System`) never takes this route, whatever a `.repo` section is called;
 test the attribution, not the spelling of `source_repo`.

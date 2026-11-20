@@ -583,12 +583,8 @@ fn packages_section_lines(
     // withholds is not under `config/`, and the config section below names
     // it in a FIXME.
     let staged = staged_writes(snap);
-    let included_repos: usize = rpm
-        .repo_files
-        .iter()
-        .filter(|r| r.disposition.is_included() && !r.is_default_repo)
-        .filter(|r| is_staged(&staged, &r.path))
-        .count();
+    let install_repos = super::repoless::InstallRepos::from_staged(snap, &staged);
+    let included_repos = install_repos.custom_count();
     if included_repos > 0 {
         let body = vec!["COPY config/etc/yum.repos.d/ /etc/yum.repos.d/".into()];
         lines.extend(section(
@@ -898,7 +894,7 @@ fn packages_section_lines(
 
     let no_uploads = inspectah_core::types::verified_upload::VerifiedUploads::new();
     let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
-    let pulled_in = super::unit_plan::pulled_in_by_included(rpm);
+    let pulled_in = super::unit_plan::pulled_in_by_included(rpm, &install_repos);
 
     let installable_packages: Vec<&PackageEntry> = rpm
         .packages_added
@@ -917,7 +913,7 @@ fn packages_section_lines(
             // and an operator's exclusion both still read as excluded.
             if pulled_in.contains(&canonical_package_id(&pkg.name, &pkg.arch))
                 && matches!(
-                    super::repoless::route_for(rpm, pkg, verified),
+                    super::repoless::route_for(rpm, &install_repos, pkg, verified),
                     PackageRoute::DisabledRepo(_)
                 )
             {
@@ -975,7 +971,7 @@ fn packages_section_lines(
         std::collections::BTreeMap::new();
 
     for pkg in &installable_packages {
-        let route = super::repoless::route_for(rpm, pkg, verified);
+        let route = super::repoless::route_for(rpm, &install_repos, pkg, verified);
         // Suppress packages whose name is covered by a renderable group,
         // except one from a disabled repo: the group transaction does not
         // enable that repo, so it cannot install the member.

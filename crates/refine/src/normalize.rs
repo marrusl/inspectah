@@ -5,7 +5,7 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::units::UnitState;
 use inspectah_core::types::verified_upload::VerifiedUploads;
 use inspectah_pipeline::render::language_packages::is_language_env;
-use inspectah_pipeline::render::repoless::{PackageRoute, route_for};
+use inspectah_pipeline::render::repoless::{InstallRepos, PackageRoute, route_for};
 use serde_json::Value;
 
 fn is_anaconda_classified(reason: &TriageReason) -> bool {
@@ -118,6 +118,9 @@ fn collect_dep_tree_names(tree: &serde_json::Value) -> std::collections::HashSet
 /// leaf packages (or if leaf data is unavailable). Tier 3
 /// (NeedsReview/unknown provenance) packages are excluded.
 pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &[RefinedPackage]) {
+    // Built before the loop: it reads repo and config file dispositions,
+    // which this function does not change.
+    let repos = InstallRepos::of(snapshot);
     let rpm = match snapshot.rpm.as_mut() {
         Some(r) => r,
         None => return,
@@ -192,7 +195,7 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         // Normalization runs before any upload exists, so the route is
         // asked with none.
         if !matches!(
-            route_for(rpm, &rpm.packages_added[i], &VerifiedUploads::new()),
+            route_for(rpm, &repos, &rpm.packages_added[i], &VerifiedUploads::new()),
             PackageRoute::ByName | PackageRoute::DisabledRepo(_)
         ) {
             rpm.packages_added[i].disposition = FindingKind::excluded();

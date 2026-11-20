@@ -40,7 +40,7 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::units::UnitState;
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
-use super::repoless::{PackageRoute, route_for};
+use super::repoless::{InstallRepos, PackageRoute, route_for};
 use super::unit_plan::pulled_in_by_included;
 use crate::export_warning::{ExportWarning, sanitize_bounded};
 
@@ -102,7 +102,8 @@ pub fn classify_auto_carriage(snap: &InspectionSnapshot) -> Option<HashMap<Strin
         return None;
     }
 
-    let pulled_in = pulled_in_by_included(rpm);
+    let repos = InstallRepos::of(snap);
+    let pulled_in = pulled_in_by_included(rpm, &repos);
     let baseline: HashSet<&str> = rpm
         .baseline_package_names
         .iter()
@@ -124,7 +125,7 @@ pub fn classify_auto_carriage(snap: &InspectionSnapshot) -> Option<HashMap<Strin
                 || pkg.source_repo == ANACONDA_SOURCE_REPO
                 || baseline.contains(pkg.name.as_str())
                 || pkg.uploaded
-                || route_for(rpm, pkg, &no_uploads) == PackageRoute::Repoless
+                || route_for(rpm, &repos, pkg, &no_uploads) == PackageRoute::Repoless
             {
                 AutoCarriage::NotAuto
             } else {

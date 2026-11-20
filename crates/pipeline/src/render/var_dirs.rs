@@ -178,7 +178,8 @@ impl<'a> Evidence<'a> {
                         .or_insert(entry.package_name.as_str());
                 }
             }
-            let pulled_in = pulled_in_by_included(rpm);
+            let repos = super::repoless::InstallRepos::of(snap);
+            let pulled_in = pulled_in_by_included(rpm, &repos);
             install_set = rpm
                 .packages_added
                 .iter()
@@ -189,7 +190,7 @@ impl<'a> Evidence<'a> {
                     // installed leaf that needs it. A pulled-in
                     // repo-enabling package whose serving repo the export
                     // dropped is demoted to a FIXME and never installed.
-                    installs_on_its_own_route(rpm, pkg)
+                    installs_on_its_own_route(rpm, &repos, pkg)
                         || (pulled_in.contains(&format!("{}.{}", pkg.name, pkg.arch))
                             && !matches!(
                                 super::repo_enabling::repo_enabling_export(rpm, pkg),

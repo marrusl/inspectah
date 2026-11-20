@@ -340,6 +340,47 @@ pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
         .collect()
 }
 
+/// The key dnf 4 sorts `.repo` files by: the path without its `.repo`
+/// suffix, split into components (`dnf.util.split_path`). Without the cut,
+/// `x-y.repo` would sort before `x.repo`; dnf reads `x` first.
+pub fn dnf_read_order(path: &str) -> Vec<&str> {
+    path.strip_suffix(".repo")
+        .unwrap_or(path)
+        .split('/')
+        .collect()
+}
+
+/// The definition of `id` dnf uses, given every `.repo` file it reads as
+/// `(path, content)`.
+///
+/// dnf 4 merges the file lists of every `reposdir`, sorts them by
+/// [`dnf_read_order`] (`dnf/conf/read.py`, `RepoReader`), and the first
+/// file to define an id wins: `RepoDict.add` refuses a later one with
+/// "Repository ... is listed more than once in the configuration" and dnf
+/// goes on without it. Repeated headers inside one file are merged by
+/// [`parse_repo_sections`]. The order of `files` does not enter into it;
+/// two files with the same path, which a host cannot have, fall back to
+/// their content so the answer is still the same in any order.
+///
+/// Which files to pass is the caller's question, and the whole of it: the
+/// files the host's dnf reads, or the ones an image build will have. The
+/// answer is only as right as that set.
+pub fn effective_definition<'a>(
+    files: impl IntoIterator<Item = (&'a str, &'a str)>,
+    id: &RepoId,
+) -> Option<RepoSectionDef> {
+    files
+        .into_iter()
+        .filter_map(|(path, content)| {
+            let sec = parse_repo_sections(content)
+                .into_iter()
+                .find(|sec| sec.id == *id)?;
+            Some((dnf_read_order(path), content, sec))
+        })
+        .min_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)))
+        .map(|(_, _, sec)| sec)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

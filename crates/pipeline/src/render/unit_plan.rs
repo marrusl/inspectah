@@ -30,7 +30,7 @@ use super::configtree::{
 };
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
-use super::repoless::{PackageRoute, route_for};
+use super::repoless::{InstallRepos, PackageRoute, route_for};
 use super::safety::{operand_refusal, single_quote};
 use super::selinux::{
     BASE_IMAGE_DIRECTORIES, BASE_VAR_SYMLINKS, BOOTC_OWNED_MOUNT_POINTS, IMAGE_USR,
@@ -131,9 +131,13 @@ pub fn is_package_installable(pkg: &PackageEntry) -> bool {
 /// repo-less block, as it does any uploaded repo-less package. An
 /// included package that fails this renders as a manual step only: a
 /// `# TODO`, `# MANUAL` or `# FIXME` comment.
-pub(crate) fn installs_on_its_own_route(rpm: &RpmSection, pkg: &PackageEntry) -> bool {
+pub(crate) fn installs_on_its_own_route(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+    pkg: &PackageEntry,
+) -> bool {
     pkg.disposition.is_included()
-        && match route_for(rpm, pkg, &VerifiedUploads::new()) {
+        && match route_for(rpm, repos, pkg, &VerifiedUploads::new()) {
             PackageRoute::ByName => is_package_installable(pkg),
             PackageRoute::DisabledRepo(_) => true,
             PackageRoute::Upload(_) | PackageRoute::Repoless => pkg.uploaded || pkg.repoless_cached,
@@ -170,14 +174,17 @@ pub(crate) fn installs_on_its_own_route(rpm: &RpmSection, pkg: &PackageEntry) ->
 /// - The tree lists only auto dependencies of leaves. A leaf another leaf
 ///   depends on, or a dependency of an auto package an operator included
 ///   on its own, is not in it.
-pub fn pulled_in_by_included(rpm: &RpmSection) -> std::collections::HashSet<String> {
+pub fn pulled_in_by_included(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+) -> std::collections::HashSet<String> {
     let Some(tree) = rpm.leaf_dep_tree.as_object() else {
         return std::collections::HashSet::new();
     };
     let installed: std::collections::HashSet<String> = rpm
         .packages_added
         .iter()
-        .filter(|pkg| installs_on_its_own_route(rpm, pkg))
+        .filter(|pkg| installs_on_its_own_route(rpm, repos, pkg))
         .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
         .collect();
     tree.iter()
@@ -193,12 +200,15 @@ pub fn pulled_in_by_included(rpm: &RpmSection) -> std::collections::HashSet<Stri
 /// image is expected to contain. This merges baseline package names with
 /// user-included added packages and the added packages an included one
 /// pulls in ([`pulled_in_by_included`]).
-pub fn effective_target_packages(rpm: &RpmSection) -> std::collections::BTreeSet<String> {
+pub fn effective_target_packages(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+) -> std::collections::BTreeSet<String> {
     let mut names = std::collections::BTreeSet::new();
     if let Some(baseline) = &rpm.baseline_package_names {
         names.extend(baseline.iter().cloned());
     }
-    let pulled_in = pulled_in_by_included(rpm);
+    let pulled_in = pulled_in_by_included(rpm, repos);
     names.extend(
         rpm.packages_added
             .iter()
@@ -2733,7 +2743,7 @@ impl<'a> Presence<'a> {
     fn new(snap: &InspectionSnapshot, rpm: &'a RpmSection) -> Self {
         Self {
             rpm,
-            target_packages: effective_target_packages(rpm),
+            target_packages: effective_target_packages(rpm, &InstallRepos::of(snap)),
             baseline_unavailable: rpm.baseline_package_names.is_none(),
             // Empty for an aggregate, which `not_carried` never classifies.
             not_carried: not_carried_packages(snap)

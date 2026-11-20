@@ -360,8 +360,7 @@ fn scan_export(mut snapshot: InspectionSnapshot, out: &Path) -> InspectionSnapsh
     apply_scan_package_defaults(&mut snapshot);
     render::render_all(&snapshot, &RenderContext { target: None }, out).expect("render");
     let warnings =
-        render::repoless::write_cached_rpms(snapshot.rpm.as_ref().expect("rpm section"), out)
-            .expect("the cached RPMs are staged");
+        render::repoless::write_cached_rpms(&snapshot, out).expect("the cached RPMs are staged");
     // A refused NEVRA is dropped with a warning, which would leave this
     // test running on a different tree than the one it means to build.
     assert!(warnings.is_empty(), "cached RPMs not staged: {warnings:?}");

@@ -1,10 +1,11 @@
 use inspectah_core::rpm_filename::StagedName;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::group_render::RenderContext;
-use inspectah_core::types::repo::{RepoAttribution, RepoId, RepoSectionDef, parse_repo_sections};
+use inspectah_core::types::repo::{RepoAttribution, RepoId, RepoSectionDef, effective_definition};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 
+use super::configtree::{StagedWrites, is_staged, staged_writes};
 use super::language_packages::sanitize_for_comment;
 use super::repo_enabling::keys_included;
 use super::safety::sanitize_shell_value;
@@ -52,9 +53,11 @@ pub enum PackageRoute<'a> {
 /// [`PackageRoute::DisabledRepo`]; anything else is
 /// [`PackageRoute::Repoless`]. A cached RPM is not an operator decision, so
 /// it does not outrank the disabled repo. A path with no uploads, the scan
-/// tarball or refine before any upload, passes an empty map.
+/// tarball or refine before any upload, passes an empty map. `repos` is
+/// the export's [`InstallRepos`], built once from the same snapshot.
 pub fn route_for<'a>(
     rpm: &RpmSection,
+    repos: &InstallRepos,
     pkg: &PackageEntry,
     verified: &'a VerifiedUploads,
 ) -> PackageRoute<'a> {
@@ -64,7 +67,7 @@ pub fn route_for<'a>(
     if let Some(upload) = verified.get(&format!("{}.{}", pkg.name, pkg.arch)) {
         return PackageRoute::Upload(upload);
     }
-    match disabled_repo_install(rpm, pkg) {
+    match disabled_repo_install(rpm, repos, pkg) {
         Some(id) => PackageRoute::DisabledRepo(id),
         None => PackageRoute::Repoless,
     }
@@ -86,17 +89,21 @@ pub fn route_for<'a>(
 /// FIXME for it in place of a `COPY`; the caller prints the lines so the
 /// operator knows the cached RPM did not make it into the tarball.
 pub fn write_cached_rpms(
-    rpm: &RpmSection,
+    snap: &InspectionSnapshot,
     render_dir: &std::path::Path,
 ) -> std::io::Result<Vec<String>> {
     let mut refused = Vec::new();
+    let Some(rpm) = &snap.rpm else {
+        return Ok(refused);
+    };
+    let repos = InstallRepos::of(snap);
     let no_uploads = VerifiedUploads::new();
     let dest_dir = render_dir.join("repoless-packages");
     for pkg in &rpm.packages_added {
         let Some(cache_path) = &pkg.cache_path else {
             continue;
         };
-        if route_for(rpm, pkg, &no_uploads) != PackageRoute::Repoless {
+        if route_for(rpm, &repos, pkg, &no_uploads) != PackageRoute::Repoless {
             continue;
         }
         let nevra_filename = format!(
@@ -141,8 +148,8 @@ pub fn write_cached_rpms(
 /// its `source_repo` is a real repo id rather than `@commandline`), its
 /// the scan did not attribute it to a pseudo repo
 /// ([`RepoAttribution::Pseudo`]: `@System`, `anaconda`), the definition dnf
-/// would use among the repo files the export carries
-/// ([`carried_definition`]) is disabled and defines a source, every
+/// would use among the repo files the build has when it installs
+/// ([`InstallRepos::effective`]) is disabled and defines a source, every
 /// `gpgkey=file://` key that section names is an included key (dnf cannot
 /// verify the package without it), and the id and the package's name and arch pass `sanitize_shell_value`. The id
 /// is returned as the `.repo` file spells it, since `--enablerepo` takes
@@ -155,7 +162,11 @@ pub fn write_cached_rpms(
 /// the repo-less block either. That is what lets a scan tarball, where
 /// such a dependency is included, and a refine export, where its default
 /// is excluded, render it the same way.
-fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId> {
+fn disabled_repo_install(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+    pkg: &PackageEntry,
+) -> Option<RepoId> {
     if !is_package_installable(pkg)
         || pkg.repoless_annotation.is_empty()
         || pkg.source_repo.is_empty()
@@ -165,7 +176,8 @@ fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId>
     {
         return None;
     }
-    carried_definition(rpm, &RepoId::new(pkg.source_repo.as_str()))
+    repos
+        .effective(&RepoId::new(pkg.source_repo.as_str()))
         .filter(|sec| {
             !sec.enabled
                 && sec.has_source
@@ -175,44 +187,85 @@ fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId>
         .map(|sec| sec.id)
 }
 
-/// The definition of `id` dnf uses on the image, among the `.repo` files
-/// the export carries.
+/// Where the package phase's early `COPY` puts the export's repo files.
+const YUM_REPOS_DIR: &str = "/etc/yum.repos.d";
+
+/// The `.repo` files dnf reads when the Containerfile's package phase
+/// installs, with the content the export stages for each: the one set the
+/// disabled-repo route resolves a repo id against.
 ///
-/// Those are the included files that are not default repo files: the
-/// Custom Repositories `COPY` leaves a default file out, so its sections
-/// are not the image's, and do not compete for an id either.
+/// The package phase copies `config/etc/yum.repos.d/` into the image
+/// before it installs anything, and only when the Custom Repositories
+/// section renders, which it does when at least one included repo file
+/// that is not a default repo file is staged ([`Self::custom_count`]).
+/// That `COPY` carries the whole directory, so when it runs the image has
+/// every `.repo` file staged there: a default repo file the operator
+/// included too, and, where a config entry at the same path replaced a
+/// repo file's content, the config entry's content. A repo file the
+/// stager withholds or refuses is not there, and when the section does not
+/// render nothing is: the rest of `config/etc/` is copied after the
+/// packages are installed.
 ///
-/// dnf 4 reads `.repo` files sorted by their path with `.repo` cut off,
-/// compared component by component (`dnf/conf/read.py`, `RepoReader`), and
-/// the first file to define an id wins: `RepoDict.add` refuses a later one
-/// with "Repository ... is listed more than once in the configuration"
-/// and dnf goes on without it. Repeated headers inside one file are
-/// already merged by [`parse_repo_sections`]. The order of `repo_files`,
-/// which is the host's `read_dir` order, does not enter into it; files
-/// with the same path, which a host cannot have, fall back to their
-/// content so the answer is still the same in any order.
-fn carried_definition(rpm: &RpmSection, id: &RepoId) -> Option<RepoSectionDef> {
-    rpm.repo_files
-        .iter()
-        .filter(|f| f.disposition.is_included() && !f.is_default_repo)
-        .filter_map(|f| {
-            let sec = parse_repo_sections(&f.content)
-                .into_iter()
-                .find(|sec| sec.id == *id)?;
-            Some((dnf_read_order(&f.path), f.content.as_str(), sec))
-        })
-        .min_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)))
-        .map(|(_, _, sec)| sec)
+/// The files the base image itself ships in `/etc/yum.repos.d` are not
+/// known to the export and are not part of the set.
+#[derive(Debug, Clone, Default)]
+pub struct InstallRepos {
+    /// How many included, non-default repo files are staged.
+    custom: usize,
+    /// `(destination, staged content)` of each `.repo` file dnf reads
+    /// from the directory at install time.
+    files: Vec<(String, String)>,
 }
 
-/// The key dnf 4 sorts `.repo` files by: the path without its `.repo`
-/// suffix, split into components (`dnf.util.split_path`). Without the cut,
-/// `x-y.repo` would sort before `x.repo`; dnf reads `x` first.
-fn dnf_read_order(path: &str) -> Vec<&str> {
-    path.strip_suffix(".repo")
-        .unwrap_or(path)
-        .split('/')
-        .collect()
+impl InstallRepos {
+    /// The set for `snap`, from the stager's own decision.
+    pub fn of(snap: &InspectionSnapshot) -> Self {
+        Self::from_staged(snap, &staged_writes(snap))
+    }
+
+    /// The set for `snap`, given its [`staged_writes`].
+    pub fn from_staged(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> Self {
+        let custom = snap.rpm.as_ref().map_or(0, |rpm| {
+            rpm.repo_files
+                .iter()
+                .filter(|r| r.disposition.is_included() && !r.is_default_repo)
+                .filter(|r| is_staged(staged, &r.path))
+                .count()
+        });
+        if custom == 0 {
+            return Self::default();
+        }
+        // dnf reads `<reposdir>/*.repo`: directly in the directory, and a
+        // glob, so not a name starting with a dot.
+        let files = staged
+            .writes
+            .iter()
+            .filter_map(|(dest, write)| {
+                let (dir, name) = dest.as_str().rsplit_once('/')?;
+                (dir == YUM_REPOS_DIR && name.ends_with(".repo") && !name.starts_with('.'))
+                    .then(|| (dest.as_str().to_owned(), write.content.to_string()))
+            })
+            .collect();
+        Self { custom, files }
+    }
+
+    /// How many included repo files that are not default repo files the
+    /// export stages: the Custom Repositories count, and whether that
+    /// section's `COPY` renders at all.
+    pub fn custom_count(&self) -> usize {
+        self.custom
+    }
+
+    /// The definition of `id` dnf uses when the package phase installs
+    /// ([`effective_definition`] over this set).
+    pub fn effective(&self, id: &RepoId) -> Option<RepoSectionDef> {
+        effective_definition(
+            self.files
+                .iter()
+                .map(|(path, content)| (path.as_str(), content.as_str())),
+            id,
+        )
+    }
 }
 
 /// The commented `COPY`/`RUN` pair a pre-excluded cached RPM offers.
@@ -304,11 +357,12 @@ pub(crate) fn repoless_plan(
 
     let empty = VerifiedUploads::new();
     let verified = render_ctx.map_or(&empty, |c| &c.verified_uploads);
+    let repos = InstallRepos::of(snap);
 
     // A package that installs by name, or from its host-disabled repo,
     // renders in the packages section instead, so it is not offered here.
     for pkg in &rpm_section.packages_added {
-        match route_for(rpm_section, pkg, verified) {
+        match route_for(rpm_section, &repos, pkg, verified) {
             PackageRoute::Upload(upload) => plan.local.push(uploaded_rpm(pkg, upload)),
             PackageRoute::Repoless => plan_repoless(pkg, &mut plan),
             PackageRoute::ByName | PackageRoute::DisabledRepo(_) => {}
@@ -632,11 +686,8 @@ mod tests {
 
             let mut pkg = nevra_entry(name, version, release, arch);
             pkg.cache_path = Some(cache.to_string_lossy().into_owned());
-            let rpm = RpmSection {
-                packages_added: vec![pkg],
-                ..Default::default()
-            };
-            let warnings = write_cached_rpms(&rpm, &render_dir).expect("write_cached_rpms");
+            let snap = test_snapshot_with_repoless(vec![pkg]);
+            let warnings = write_cached_rpms(&snap, &render_dir).expect("write_cached_rpms");
 
             assert_eq!(
                 files_under(root.path()),
@@ -653,11 +704,8 @@ mod tests {
         std::fs::write(&cache, b"rpm").expect("write cached RPM");
         let mut pkg = nevra_entry("evil", "1", "1", "x86_64");
         pkg.cache_path = Some(cache.to_string_lossy().into_owned());
-        let rpm = RpmSection {
-            packages_added: vec![pkg],
-            ..Default::default()
-        };
-        let warnings = write_cached_rpms(&rpm, root.path()).expect("write_cached_rpms");
+        let snap = test_snapshot_with_repoless(vec![pkg]);
+        let warnings = write_cached_rpms(&snap, root.path()).expect("write_cached_rpms");
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(
             root.path()
@@ -724,17 +772,42 @@ mod tests {
         }
     }
 
+    /// A snapshot holding only `pkg` and `files`.
+    fn snapshot_with(pkg: &PackageEntry, files: Vec<RepoFile>) -> InspectionSnapshot {
+        InspectionSnapshot {
+            rpm: Some(RpmSection {
+                packages_added: vec![pkg.clone()],
+                repo_files: files,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Whether the snapshot's only package routes to its disabled repo, and
+    /// whether the rendered Containerfile installs it with
+    /// `--enablerepo=r`. The two are asked separately and must agree.
+    fn routes_and_renders_enablerepo(snap: &InspectionSnapshot) -> bool {
+        let rpm = snap.rpm.as_ref().expect("an rpm section");
+        let routed = matches!(
+            route_for(
+                rpm,
+                &InstallRepos::of(snap),
+                &rpm.packages_added[0],
+                &VerifiedUploads::new()
+            ),
+            PackageRoute::DisabledRepo(_)
+        );
+        let rendered = super::super::containerfile::render_containerfile(snap, None, None)
+            .lines()
+            .any(|l| l.starts_with("RUN dnf install") && l.contains("--enablerepo=r "));
+        assert_eq!(routed, rendered, "route and Containerfile disagree");
+        routed
+    }
+
     /// Whether `pkg` routes to its disabled repo, given `files`.
     fn installs_from_disabled_repo(pkg: &PackageEntry, files: Vec<RepoFile>) -> bool {
-        let rpm = RpmSection {
-            packages_added: vec![pkg.clone()],
-            repo_files: files,
-            ..Default::default()
-        };
-        matches!(
-            route_for(&rpm, pkg, &VerifiedUploads::new()),
-            PackageRoute::DisabledRepo(_)
-        )
+        routes_and_renders_enablerepo(&snapshot_with(pkg, files))
     }
 
     /// `(file name, content)` pairs under `/etc/yum.repos.d`.
@@ -817,10 +890,15 @@ mod tests {
 
     #[test]
     fn a_default_repo_file_or_a_pseudo_repo_never_routes_to_a_disabled_repo() {
-        // The Custom Repositories `COPY` leaves default repo files out, so a
-        // section only a default file defines is not one the image has. And
-        // a pseudo repo is not a repo, whatever a `.repo` file calls a
+        // The Custom Repositories `COPY` carries the whole staged directory
+        // before the install, default repo files included, and renders only
+        // when a custom file is staged; so an included default file is one
+        // dnf reads when a custom file brings the `COPY`, and none is read
+        // when no custom file does. An excluded default file is not staged.
+        // And a pseudo repo is not a repo, whatever a `.repo` file calls a
         // section: the scan's typed attribution says so, not a spelling.
+        let mut excluded_default = repo_file("/etc/yum.repos.d/a-default.repo", R_ENABLED, true);
+        excluded_default.disposition = FindingKind::excluded();
         let cases: &[(&str, PackageEntry, Vec<RepoFile>, bool)] = &[
             (
                 "control: a custom file",
@@ -829,19 +907,43 @@ mod tests {
                 true,
             ),
             (
-                "only a default file defines it",
+                // No custom file is staged, so the `COPY` that would put it
+                // in the image before the install does not render.
+                "only a default file is staged",
                 from_repo("r", exact("r")),
                 vec![repo_file("/etc/yum.repos.d/redhat.repo", R_DISABLED, true)],
                 false,
             ),
             (
-                // A default file that dnf on the host would read first does
-                // not compete: the image does not get this copy of it.
-                "a default file sorts first and enables it",
+                "a default file defines it, and a custom file brings the COPY",
                 from_repo("r", exact("r")),
                 vec![
-                    repo_file("/etc/yum.repos.d/a-default.repo", R_ENABLED, true),
-                    repo_file("/etc/yum.repos.d/custom.repo", R_DISABLED, false),
+                    repo_file("/etc/yum.repos.d/redhat.repo", R_DISABLED, true),
+                    repo_file(
+                        "/etc/yum.repos.d/z-custom.repo",
+                        "[other]\nbaseurl=https://example.invalid/o\n",
+                        false,
+                    ),
+                ],
+                true,
+            ),
+            (
+                // dnf reads redhat.repo first and keeps its definition: the
+                // image gets this copy of it too.
+                "an included default file sorts first and enables it",
+                from_repo("r", exact("r")),
+                vec![
+                    repo_file("/etc/yum.repos.d/redhat.repo", R_ENABLED, true),
+                    repo_file("/etc/yum.repos.d/z-custom.repo", R_DISABLED, false),
+                ],
+                false,
+            ),
+            (
+                "an excluded default file sorts first and enables it",
+                from_repo("r", exact("r")),
+                vec![
+                    excluded_default,
+                    repo_file("/etc/yum.repos.d/z-custom.repo", R_DISABLED, false),
                 ],
                 true,
             ),
@@ -868,6 +970,89 @@ mod tests {
                 *expected,
                 "{what}"
             );
+        }
+    }
+
+    /// An included config entry at `path`.
+    fn config_entry(path: &str, content: &str) -> inspectah_core::types::config::ConfigFileEntry {
+        inspectah_core::types::config::ConfigFileEntry {
+            path: path.into(),
+            content: content.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_route_reads_the_repo_files_the_export_stages() {
+        // The route judges the files the build has when it installs: what
+        // the stager writes under `/etc/yum.repos.d`, with the content it
+        // writes. An included repo file the stager withholds or refuses is
+        // not one of them, and where an included config entry at the same
+        // path replaces a repo file's content, dnf reads the config
+        // entry's.
+        const CUSTOM: &str = "/etc/yum.repos.d/custom.repo";
+        let other = || {
+            repo_file(
+                "/etc/yum.repos.d/other.repo",
+                "[other]\nbaseurl=https://example.invalid/o\n",
+                false,
+            )
+        };
+        // `(what, repo files, config entries as (path, content), routes)`.
+        type Case = (
+            &'static str,
+            Vec<RepoFile>,
+            Vec<(&'static str, &'static str)>,
+            bool,
+        );
+        let cases: Vec<Case> = vec![
+            (
+                "control: the repo file is staged",
+                vec![repo_file(CUSTOM, R_DISABLED, false), other()],
+                vec![],
+                true,
+            ),
+            (
+                // A config entry under `custom.repo/` needs it as a
+                // directory: the stager withholds both as a conflict.
+                "the repo file is withheld",
+                vec![repo_file(CUSTOM, R_DISABLED, false), other()],
+                vec![("/etc/yum.repos.d/custom.repo/stray", "x\n")],
+                false,
+            ),
+            (
+                "the repo file's path is refused",
+                vec![
+                    repo_file("/etc/yum.repos.d/cus\ttom.repo", R_DISABLED, false),
+                    other(),
+                ],
+                vec![],
+                false,
+            ),
+            (
+                "a config entry enables the repo the repo file disabled",
+                vec![repo_file(CUSTOM, R_DISABLED, false)],
+                vec![(CUSTOM, R_ENABLED)],
+                false,
+            ),
+            (
+                "a config entry disables the repo the repo file enabled",
+                vec![repo_file(CUSTOM, R_ENABLED, false)],
+                vec![(CUSTOM, R_DISABLED)],
+                true,
+            ),
+        ];
+        for (what, files, config, expected) in cases {
+            let pkg = from_repo("r", exact("r"));
+            let mut snap = snapshot_with(&pkg, files);
+            snap.config = Some(inspectah_core::types::config::ConfigSection {
+                files: config
+                    .into_iter()
+                    .map(|(path, content)| config_entry(path, content))
+                    .collect(),
+            });
+            assert_eq!(routes_and_renders_enablerepo(&snap), expected, "{what}");
         }
     }
 
@@ -918,8 +1103,12 @@ mod tests {
             !pkg.repoless_annotation.is_empty(),
             "the scan leaves the package repo-less"
         );
+        let snap = InspectionSnapshot {
+            rpm: Some(rpm.clone()),
+            ..Default::default()
+        };
         assert_eq!(
-            route_for(&rpm, pkg, &VerifiedUploads::new()),
+            route_for(&rpm, &InstallRepos::of(&snap), pkg, &VerifiedUploads::new()),
             PackageRoute::Repoless
         );
     }
