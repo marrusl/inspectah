@@ -276,4 +276,38 @@ describe("ContainerSection", () => {
     await userEvent.click(screen.getByText("myapp.container"));
     expect(screen.queryByTestId("quadlet-content")).not.toBeInTheDocument();
   });
+
+  it("j, k, G and g move between quadlet and flatpak rows", async () => {
+    const user = userEvent.setup();
+    render(
+      <ContainerSection
+        quadlets={[
+          makeQuadlet(),
+          makeQuadlet({
+            path: "/etc/containers/systemd/myapp.network",
+            name: "myapp.network",
+          }),
+        ]}
+        flatpaks={[makeFlatpak()]}
+        onViewUpdate={onViewUpdate}
+        onMutationError={onMutationError}
+      />,
+    );
+
+    const first = screen.getByRole("row", { name: "myapp.container" });
+    const second = screen.getByRole("row", { name: "myapp.network" });
+    const flatpak = screen.getByRole("row", { name: "org.mozilla.firefox" });
+
+    first.focus();
+    await user.keyboard("j");
+    expect(second).toHaveFocus();
+    await user.keyboard("j");
+    expect(flatpak).toHaveFocus();
+    await user.keyboard("k");
+    expect(second).toHaveFocus();
+    await user.keyboard("g");
+    expect(first).toHaveFocus();
+    await user.keyboard("G");
+    expect(flatpak).toHaveFocus();
+  });
 });

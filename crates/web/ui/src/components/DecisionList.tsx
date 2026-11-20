@@ -20,6 +20,7 @@ import { isIncluded } from "../api/disposition";
 import { ApiError } from "../api/types";
 import { useMutation } from "../hooks/useMutation";
 import { useViewed } from "../hooks/useViewed";
+import { rowNavigationTarget } from "../hooks/useRowNavigation";
 import { TriageBucketGroup } from "./TriageBucketGroup";
 import { RepoGroup } from "./RepoGroup";
 import { RoutineSummary } from "./RoutineSummary";
@@ -537,26 +538,14 @@ export function DecisionList({
 
   const handleRowKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      const total = flatItemIds.length;
-      if (total === 0) return;
-
-      let nextIndex: number | null = null;
-
-      if (e.key === "ArrowDown" || e.key === "j") {
-        e.preventDefault();
-        nextIndex = (focusedIndex + 1) % total;
-      } else if (e.key === "ArrowUp" || e.key === "k") {
-        e.preventDefault();
-        nextIndex = (focusedIndex - 1 + total) % total;
-      } else if (e.key === "g") {
-        e.preventDefault();
-        nextIndex = 0;
-      } else if (e.key === "G") {
-        e.preventDefault();
-        nextIndex = total - 1;
-      }
+      const nextIndex = rowNavigationTarget(
+        e.key,
+        focusedIndex,
+        flatItemIds.length,
+      );
 
       if (nextIndex !== null) {
+        e.preventDefault();
         setFocusedIndex(nextIndex);
         const targetId = flatItemIds[nextIndex];
         let el: HTMLElement | null;

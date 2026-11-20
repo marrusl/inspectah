@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { PackageList } from "../PackageList";
 import type { RepoGroupInfo, GroupInfo } from "../../api/types";
@@ -98,7 +98,9 @@ const excludedGroup: GroupInfo = {
 };
 
 describe("PackageList - Task 27c: Search focus and count behavior", () => {
-  it("search for group name focuses group row, not auto-expanded", async () => {
+  // Focus stays where the operator is typing: a search that moved it to
+  // the first match sent the rest of the word to that row.
+  it("search for group name shows the group row, not auto-expanded, and leaves focus alone", async () => {
     render(
       <PackageList
         mode="single"
@@ -114,16 +116,14 @@ describe("PackageList - Task 27c: Search focus and count behavior", () => {
       />,
     );
 
-    await waitFor(() => {
-      const groupRow = screen.getByTestId("group-row-core");
-      expect(document.activeElement).toBe(groupRow);
-    });
+    expect(screen.getByTestId("group-row-core")).toBeInTheDocument();
+    expect(document.activeElement).toBe(document.body);
 
     // Group should NOT be auto-expanded (only member matches trigger expansion)
     expect(screen.queryByTestId("group-member-bash")).not.toBeInTheDocument();
   });
 
-  it("search for member name focuses member row inside auto-expanded group", async () => {
+  it("search for member name auto-expands the group and leaves focus alone", async () => {
     render(
       <PackageList
         mode="single"
@@ -143,10 +143,7 @@ describe("PackageList - Task 27c: Search focus and count behavior", () => {
     const memberRow = await screen.findByTestId("group-member-nano");
     expect(memberRow).toBeInTheDocument();
 
-    // Member row should be focused
-    await waitFor(() => {
-      expect(document.activeElement).toBe(memberRow);
-    });
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("summary bar shows unique package count not visible rows", () => {

@@ -10,6 +10,7 @@ import type {
 } from "../api/types";
 import { applyOp } from "../api/client";
 import type { PendingGuard } from "../hooks/usePendingGuard";
+import { useRowNavigation } from "../hooks/useRowNavigation";
 import {
   attentionLabelColor,
   formatTriageReason,
@@ -33,6 +34,10 @@ export interface ContainerSectionProps {
    */
   pendingGuard: PendingGuard;
 }
+
+/** The rows j/k/g/G move between: quadlets, then flatpaks. */
+const CONTAINER_ROW_SELECTOR =
+  '[data-testid^="quadlet-item-"], [data-testid^="flatpak-item-"]';
 
 const LEVEL_BORDER: Record<string, string> = {
   investigate: "3px solid var(--pf-t--global--color--status--danger--default)",
@@ -130,6 +135,7 @@ export function ContainerSection({
   );
 
   const totalItems = quadlets.length + flatpaks.length;
+  const handleRowNavigation = useRowNavigation(CONTAINER_ROW_SELECTOR);
 
   if (totalItems === 0) {
     return (
@@ -152,6 +158,7 @@ export function ContainerSection({
       role="grid"
       aria-label="Containers"
       data-testid="container-section"
+      onKeyDown={handleRowNavigation}
     >
       {quadlets.map((q) => {
         const idx = rowIndex++;

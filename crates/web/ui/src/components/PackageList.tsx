@@ -6,6 +6,7 @@ import { ExcludedZone } from "./ExcludedZone";
 import { GroupRow } from "./GroupRow";
 import { RepoConflictPopover } from "./aggregate/RepoConflictPopover";
 import { PrevalenceBadge } from "./PrevalenceBadge";
+import { useRowNavigation } from "../hooks/useRowNavigation";
 import type {
   GroupInfo,
   PackageProvenance,
@@ -15,6 +16,13 @@ import type {
 } from "../api/types";
 
 // --- Types ---
+
+/**
+ * The rows j/k/g/G move between, in document order: group rows, the shown
+ * members of expanded groups, and individual package rows.
+ */
+export const PACKAGE_ROW_SELECTOR =
+  '[data-testid^="group-row-"], [data-testid^="group-member-"], [data-testid^="package-row-"]';
 
 export interface PackageListPackage {
   name: string;
@@ -406,57 +414,7 @@ export function PackageList({
     [onGroupUngroup],
   );
 
-  // Focus on first match when search changes
-  useEffect(() => {
-    if (!searchLower) return;
-
-    // Check if search matches a group name (focus group row, don't expand)
-    for (const group of displayGroups) {
-      if (group.name.toLowerCase().includes(searchLower)) {
-        const groupRow = document.querySelector(
-          `[data-testid="group-row-${CSS.escape(group.name)}"]`,
-        ) as HTMLElement;
-        if (groupRow) {
-          groupRow.focus();
-          groupRow.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
-          return;
-        }
-      }
-    }
-
-    // Check if search matches a member name (focus member row inside auto-expanded group)
-    for (const group of displayGroups) {
-      for (const member of group.members) {
-        if (member.name.toLowerCase().includes(searchLower)) {
-          const memberRow = document.querySelector(
-            `[data-testid="group-member-${CSS.escape(member.name)}"]`,
-          ) as HTMLElement;
-          if (memberRow) {
-            memberRow.focus();
-            memberRow.scrollIntoView?.({
-              block: "nearest",
-              behavior: "smooth",
-            });
-            return;
-          }
-        }
-      }
-    }
-
-    // If no group/member match, try individual packages
-    for (const pkg of displayPackages) {
-      if (pkg.name.toLowerCase().includes(searchLower)) {
-        const row = document.querySelector(
-          `[data-testid="package-row-${CSS.escape(pkg.name)}"]`,
-        ) as HTMLElement;
-        if (row) {
-          row.focus();
-          row.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
-          return;
-        }
-      }
-    }
-  }, [searchLower, displayGroups, displayPackages]);
+  const handleRowNavigation = useRowNavigation(PACKAGE_ROW_SELECTOR);
 
   // Labels by mode
   const rightLabel = mode === "single" ? "Repo" : "Prevalence";
@@ -465,7 +423,7 @@ export function PackageList({
   const showGroupsZone = hasGroups && displayGroups.length > 0;
 
   return (
-    <div data-testid="package-list">
+    <div data-testid="package-list" onKeyDown={handleRowNavigation}>
       <div
         data-testid="package-list-summary"
         className="inspectah-package-list__summary"
@@ -677,6 +635,13 @@ function PackageRow({
       tabIndex={-1}
       data-testid={`package-row-${pkg.name}`}
       className={rowClassName}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if ((e.key === " " || e.key === "x") && !isBlocked && !isPending) {
+          e.preventDefault();
+          onToggle(pkg.name);
+        }
+      }}
     >
       <div data-testid="left-column" className="inspectah-package-row__left">
         {isBlocked ? (

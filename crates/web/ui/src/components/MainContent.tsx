@@ -36,7 +36,7 @@ import { ServiceSection } from "./ServiceSection";
 import { ContainerSection } from "./ContainerSection";
 import { SectionSearch } from "./SectionSearch";
 import { RepoBar } from "./RepoBar";
-import { PackageList } from "./PackageList";
+import { PackageList, PACKAGE_ROW_SELECTOR } from "./PackageList";
 import type { PackageListPackage } from "./PackageList";
 import { LanguagePackageList } from "./LanguagePackageList";
 import { UnmanagedFileList } from "./UnmanagedFileList";
@@ -606,6 +606,15 @@ export function MainContent({
     firstFocusable?.focus();
   }, []);
 
+  // Packages: ArrowDown from the search box goes to the first shown row,
+  // since typing in the box leaves focus there.
+  const focusFirstPackageRow = useCallback(() => {
+    document
+      .querySelector<HTMLElement>('[data-testid="package-list"]')
+      ?.querySelector<HTMLElement>(PACKAGE_ROW_SELECTOR)
+      ?.focus();
+  }, []);
+
   if (loading) {
     return (
       <>
@@ -643,7 +652,7 @@ export function MainContent({
             value={filterText}
             onChange={setFilterText}
             onClose={handleSearchClose}
-            onArrowDown={handleArrowDown}
+            onArrowDown={focusFirstPackageRow}
             resultCount={0}
           />
         )}
