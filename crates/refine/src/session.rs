@@ -541,11 +541,19 @@ impl RefineSession {
 
         // Classify then normalize — materializes tier-aware defaults
         // into the snapshot BEFORE the op stack begins.
+        //
+        // Config and repo-file defaults settle first: the package trust
+        // gate asks which repo files and keys the export stages
+        // (`InstallRepos`), and staging reads config and repo-file
+        // dispositions. Normalized after it, a config default that
+        // removes a staging conflict would ship a repo file the gate had
+        // already judged missing, and the package would never be
+        // reconsidered.
         let pkgs = classify_packages(&snapshot);
         let configs = classify_configs(&snapshot);
-        normalize_package_defaults(&mut snapshot, &pkgs);
         normalize_config_defaults(&mut snapshot, &configs);
         normalize_inspectah_repo_files(&mut snapshot);
+        normalize_package_defaults(&mut snapshot, &pkgs);
         normalize_language_env_defaults(&mut snapshot);
 
         // Detect aggregate mode from snapshot metadata.

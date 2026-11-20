@@ -461,3 +461,53 @@ fn test_carried_unit(
     CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
         .expect("a test unit is carried")
 }
+
+/// The trust gate reads which repo files the export stages, and staging
+/// depends on config dispositions, so refine settles config and repo-file
+/// defaults before package defaults. Here an orphaned config entry under
+/// `<repo path>/` would make the stager withhold the repo file as a
+/// conflict, but its own default excludes it, so the repo file ships and
+/// the package keeps its default and installs from its repo. The control
+/// includes the entry, so the conflict stands and the gate excludes the
+/// package.
+#[test]
+fn the_trust_gate_reads_the_config_defaults_refine_settles() {
+    use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+
+    for (what, kind, installs) in [
+        (
+            "an orphaned entry, excluded by default",
+            ConfigFileKind::Orphaned,
+            true,
+        ),
+        (
+            "an unowned entry, included by default",
+            ConfigFileKind::Unowned,
+            false,
+        ),
+    ] {
+        let mut snap = snapshot(REPO_ID, Some((DISABLED_WITH_SOURCE, true)));
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: format!("{REPO_PATH}/stray"),
+                content: "x\n".into(),
+                kind,
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+        });
+        let session = RefineSession::new(snap);
+        assert_eq!(openh264_included(&session), installs, "{what}: disposition");
+        let containerfile = export_containerfile(&session);
+        assert_eq!(
+            containerfile.lines().any(|l| l.contains(ENABLEREPO)),
+            installs,
+            "{what}: --enablerepo\n{containerfile}"
+        );
+        assert_eq!(
+            containerfile.lines().any(|l| l == INSTALL_LINE),
+            installs,
+            "{what}: install line\n{containerfile}"
+        );
+    }
+}

@@ -119,7 +119,8 @@ fn collect_dep_tree_names(tree: &serde_json::Value) -> std::collections::HashSet
 /// (NeedsReview/unknown provenance) packages are excluded.
 pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &[RefinedPackage]) {
     // Built before the loop: it reads repo and config file dispositions,
-    // which this function does not change.
+    // which this function does not change. They must already be settled:
+    // `RefineSession::new` normalizes them first.
     let repos = InstallRepos::of(snapshot);
     let rpm = match snapshot.rpm.as_mut() {
         Some(r) => r,
