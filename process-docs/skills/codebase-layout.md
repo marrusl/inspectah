@@ -192,7 +192,7 @@ Playwright end-to-end tests live beside `src/`, in `crates/web/ui/e2e/`.
 
 | Location | Type |
 |----------|------|
-| `crates/*/tests/` | Per-crate integration tests, built as one binary per crate (refine so far; other crates one binary per file): `tests/main.rs` declares each file as a module (`autotests = false`); run one file with `cargo test -p <package> --test integration <file stem>::`. See [integration-test-layout](integration-test-layout.md) |
+| `crates/*/tests/` | Per-crate integration tests, built as one binary per crate (refine and pipeline so far; other crates one binary per file): `tests/main.rs` declares each file as a module (`autotests = false`); run one file with `cargo test -p <package> --test integration <file stem>::`. See [integration-test-layout](integration-test-layout.md) |
 | `crates/cli/tests/units_scan_test.rs` | The units section through the scan path on collector-built hosts, then render, refine and the fleet merge; hosts come from the `UnitHost` builder in `crates/cli/tests/support/unit_hosts.rs` |
 | `crates/cli/tests/staged_writes_parity_test.rs` | The scan and refine exports stage the same files from one snapshot |
 | `crates/collect/tests/units_test.rs` | The units inspector over `MockExecutor` |

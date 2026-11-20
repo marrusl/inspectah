@@ -41,11 +41,9 @@
 //! B1's run against the real base is. If B1 contradicts a rule here, the rule
 //! changes with the renderer.
 
-mod selinux_support;
-
+use crate::selinux_support as sel;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::selinux::FcontextFileType;
-use selinux_support as sel;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

@@ -528,10 +528,8 @@ fn credential_refs_in_secrets_review() {
 // (§ 8.9), never by substring.
 // ---------------------------------------------------------------------------
 
-mod selinux_support;
-
+use crate::selinux_support as sel;
 use inspectah_core::types::selinux::{FcontextFileType, FcontextSource};
-use selinux_support as sel;
 
 /// § 5.1's "After" text for the host's own rule, quoted whole. The fixture is
 /// the one the spec rendered it from: one `Label` on `/srv/www(/.*)?` and the
