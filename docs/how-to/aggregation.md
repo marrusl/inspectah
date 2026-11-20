@@ -53,10 +53,13 @@ hosts.
 - Every tarball from the same inspectah release. A tarball from a different
   release does not load: `aggregate` warns, skips it, and merges the rest if
   at least two valid inputs remain. Re-scan the host with the current release.
-- A static hostname on each host. A scan from a host with no static hostname
-  records none, and `aggregate` refuses two such scans with
-  `duplicate hostname: <unknown>`. Set one with `hostnamectl set-hostname`
-  before you scan.
+- A different hostname on each host. A host with an empty `/etc/hostname`,
+  such as a DHCP-named cloud instance, is recorded under its transient name,
+  the one `hostname` prints. `aggregate` refuses two scans that share a
+  hostname with `duplicate hostname: <name>`. A host with no name at all
+  (its transient name is `localhost`) still aggregates, listed as
+  `<unnamed, scanned <time>>`. To give it a readable name, run
+  `hostnamectl set-hostname` before you scan.
 - The same OS major version on every host. `aggregate` refuses a mix, for
   example RHEL 9 and RHEL 10, with `OS major version mismatch`.
 - All hosts should target the same base image for meaningful comparison

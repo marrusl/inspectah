@@ -456,18 +456,85 @@ fn test_is_ok_with_only_warnings() {
     assert!(!result.warnings.is_empty(), "should have warnings");
 }
 
+/// A snapshot that recorded no hostname is identified by its scan, not by
+/// a shared placeholder name: several unnamed hosts aggregate, while the
+/// same scan twice, or the same hostname twice, is still a duplicate.
 #[test]
-fn test_missing_hostname_defaults_to_unknown() {
-    let mut a = InspectionSnapshot::new();
-    let mut b = InspectionSnapshot::new();
-    // No hostname in meta, but give them rpm sections so they aren't empty
-    a.rpm = Some(inspectah_core::types::rpm::RpmSection::default());
-    b.rpm = Some(inspectah_core::types::rpm::RpmSection::default());
-    let result = validate_snapshots(&[a, b]);
-    // Both have "<unknown>" hostname, so duplicate should fire
-    assert!(result.errors.iter().any(|e| matches!(
-        e,
-        AggregateValidationError::DuplicateHostname { hostname }
-        if hostname == "<unknown>"
-    )));
+fn test_unnamed_snapshot_identity() {
+    /// An unnamed snapshot: no hostname, optionally a scan timestamp.
+    fn unnamed(scanned_at: Option<&str>) -> InspectionSnapshot {
+        let mut snap = make_snap("", "9.4");
+        snap.meta.remove("hostname");
+        if let Some(ts) = scanned_at {
+            snap.meta.insert(
+                "timestamp".to_string(),
+                serde_json::Value::String(ts.to_string()),
+            );
+        }
+        snap
+    }
+    fn named(hostname: &str, scanned_at: &str) -> InspectionSnapshot {
+        let mut snap = make_snap(hostname, "9.4");
+        snap.meta.insert(
+            "timestamp".to_string(),
+            serde_json::Value::String(scanned_at.to_string()),
+        );
+        snap
+    }
+    const T1: &str = "2026-11-19T10:00:00.000000001+00:00";
+    const T2: &str = "2026-11-19T10:00:00.000000002+00:00";
+    const T3: &str = "2026-11-19T10:05:00.000000000+00:00";
+
+    let cases: Vec<(&str, Vec<InspectionSnapshot>, Vec<AggregateValidationError>)> = vec![
+        (
+            "several unnamed hosts",
+            vec![unnamed(Some(T1)), unnamed(Some(T2)), unnamed(Some(T3))],
+            vec![],
+        ),
+        (
+            "named and unnamed mixed",
+            vec![named("web-01", T1), unnamed(Some(T2)), named("web-02", T3)],
+            vec![],
+        ),
+        (
+            "unnamed scan with the same timestamp as a named one",
+            vec![named("web-01", T1), unnamed(Some(T1))],
+            vec![],
+        ),
+        (
+            "the same unnamed scan twice",
+            vec![unnamed(Some(T1)), unnamed(Some(T1)), unnamed(Some(T2))],
+            vec![AggregateValidationError::DuplicateUnnamedScan {
+                scanned_at: Some(T1.to_string()),
+            }],
+        ),
+        (
+            "two unnamed snapshots with no timestamp",
+            vec![unnamed(None), unnamed(None)],
+            vec![AggregateValidationError::DuplicateUnnamedScan { scanned_at: None }],
+        ),
+        (
+            "the same named host twice, alongside unnamed ones",
+            vec![named("web-01", T1), named("web-01", T2), unnamed(Some(T3))],
+            vec![AggregateValidationError::DuplicateHostname {
+                hostname: "web-01".to_string(),
+            }],
+        ),
+    ];
+
+    for (case, snapshots, expected) in cases {
+        let result = validate_snapshots(&snapshots);
+        let duplicates: Vec<AggregateValidationError> = result
+            .errors
+            .into_iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    AggregateValidationError::DuplicateHostname { .. }
+                        | AggregateValidationError::DuplicateUnnamedScan { .. }
+                )
+            })
+            .collect();
+        assert_eq!(duplicates, expected, "case: {case}");
+    }
 }

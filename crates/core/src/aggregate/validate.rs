@@ -1,5 +1,5 @@
 use crate::snapshot::InspectionSnapshot;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Error and warning types
@@ -8,12 +8,30 @@ use std::collections::{HashMap, HashSet};
 /// Hard errors that prevent aggregate from proceeding.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AggregateValidationError {
-    TooFewSnapshots { count: usize },
-    SchemaVersionMismatch { versions: Vec<u32> },
-    DuplicateHostname { hostname: String },
-    ArchitectureMismatch { architectures: Vec<String> },
-    EmptySnapshot { hostname: String },
-    OsMajorVersionMismatch { versions: Vec<String> },
+    TooFewSnapshots {
+        count: usize,
+    },
+    SchemaVersionMismatch {
+        versions: Vec<u32>,
+    },
+    DuplicateHostname {
+        hostname: String,
+    },
+    /// Two snapshots with no hostname and the same scan timestamp: the same
+    /// scan given twice. `None` when neither recorded a timestamp, so
+    /// nothing tells them apart.
+    DuplicateUnnamedScan {
+        scanned_at: Option<String>,
+    },
+    ArchitectureMismatch {
+        architectures: Vec<String>,
+    },
+    EmptySnapshot {
+        hostname: String,
+    },
+    OsMajorVersionMismatch {
+        versions: Vec<String>,
+    },
 }
 
 /// Warnings that allow aggregation but signal potential issues.
@@ -83,20 +101,22 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
         }
     }
 
-    // --- Hard error: duplicate hostnames ---
+    // --- Hard error: duplicate hosts ---
     {
-        let mut seen: HashMap<String, usize> = HashMap::new();
+        let mut seen: BTreeMap<HostIdentity, usize> = BTreeMap::new();
         for snap in snapshots {
-            let hostname = extract_hostname(snap);
-            *seen.entry(hostname).or_insert(0) += 1;
+            *seen.entry(HostIdentity::of(snap)).or_insert(0) += 1;
         }
-        for (hostname, count) in &seen {
-            if *count > 1 {
-                result
-                    .errors
-                    .push(AggregateValidationError::DuplicateHostname {
-                        hostname: hostname.clone(),
-                    });
+        for (identity, count) in seen {
+            if count > 1 {
+                result.errors.push(match identity {
+                    HostIdentity::Named(hostname) => {
+                        AggregateValidationError::DuplicateHostname { hostname }
+                    }
+                    HostIdentity::Unnamed { scanned_at } => {
+                        AggregateValidationError::DuplicateUnnamedScan { scanned_at }
+                    }
+                });
             }
         }
     }
@@ -135,7 +155,7 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
     for snap in snapshots {
         if is_empty_snapshot(snap) {
             result.errors.push(AggregateValidationError::EmptySnapshot {
-                hostname: extract_hostname(snap),
+                hostname: HostIdentity::of(snap).label(),
             });
         }
     }
@@ -219,9 +239,48 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
 // Helper functions
 // ---------------------------------------------------------------------------
 
-/// Extract hostname from snapshot metadata. Falls back to "<unknown>".
-pub fn extract_hostname(snap: &InspectionSnapshot) -> String {
-    extract_meta_string(snap, "hostname").unwrap_or_else(|| "<unknown>".to_string())
+/// What identifies one host's snapshot in an aggregate.
+///
+/// A snapshot that recorded a hostname is that host; two snapshots with
+/// one hostname are the same host scanned twice, or two hosts that cannot
+/// be told apart, and either way a duplicate. A snapshot with no hostname
+/// carries no host identity at all (the scan never records the
+/// machine-id), so it is identified by its scan: its collection
+/// timestamp. Two unnamed snapshots are a duplicate only when they are
+/// the same scan. The variants never compare equal to each other, so an
+/// unnamed snapshot cannot collide with a named host, and the derived
+/// order puts named hosts first, by name, then unnamed ones by scan time.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HostIdentity {
+    /// The snapshot's `meta["hostname"]`.
+    Named(String),
+    /// No hostname; the snapshot's `meta["timestamp"]`, if it has one.
+    Unnamed { scanned_at: Option<String> },
+}
+
+impl HostIdentity {
+    /// The identity a snapshot's metadata gives it.
+    pub fn of(snap: &InspectionSnapshot) -> Self {
+        match extract_meta_string(snap, "hostname").filter(|h| !h.trim().is_empty()) {
+            Some(hostname) => Self::Named(hostname),
+            None => Self::Unnamed {
+                scanned_at: extract_meta_string(snap, "timestamp"),
+            },
+        }
+    }
+
+    /// The host's name in the aggregate's host list. An unnamed host's
+    /// label is in angle brackets with a space, which no hostname can
+    /// contain, so it never reads as, or collides with, a real name.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Named(hostname) => hostname.clone(),
+            Self::Unnamed {
+                scanned_at: Some(ts),
+            } => format!("<unnamed, scanned {ts}>"),
+            Self::Unnamed { scanned_at: None } => "<unnamed>".to_string(),
+        }
+    }
 }
 
 /// Extract a string value from the snapshot's meta HashMap.
@@ -287,19 +346,52 @@ mod tests {
     use crate::types::FindingKind;
 
     #[test]
-    fn test_extract_hostname_from_meta() {
-        let mut snap = InspectionSnapshot::new();
-        snap.meta.insert(
-            "hostname".to_string(),
-            serde_json::Value::String("web-01".to_string()),
+    fn test_host_identity_and_label() {
+        // (case, hostname, timestamp, expected identity, expected label)
+        type Case<'a> = (
+            &'a str,
+            Option<&'a str>,
+            Option<&'a str>,
+            HostIdentity,
+            &'a str,
         );
-        assert_eq!(extract_hostname(&snap), "web-01");
-    }
-
-    #[test]
-    fn test_extract_hostname_missing() {
-        let snap = InspectionSnapshot::new();
-        assert_eq!(extract_hostname(&snap), "<unknown>");
+        let cases: &[Case] = &[
+            (
+                "named",
+                Some("web-01"),
+                Some("2026-11-19T10:00:00+00:00"),
+                HostIdentity::Named("web-01".into()),
+                "web-01",
+            ),
+            (
+                "unnamed with a timestamp",
+                None,
+                Some("2026-11-19T10:00:00+00:00"),
+                HostIdentity::Unnamed {
+                    scanned_at: Some("2026-11-19T10:00:00+00:00".into()),
+                },
+                "<unnamed, scanned 2026-11-19T10:00:00+00:00>",
+            ),
+            (
+                "empty hostname is unnamed",
+                Some(" "),
+                None,
+                HostIdentity::Unnamed { scanned_at: None },
+                "<unnamed>",
+            ),
+        ];
+        for (case, hostname, timestamp, identity, label) in cases {
+            let mut snap = InspectionSnapshot::new();
+            if let Some(h) = hostname {
+                snap.meta.insert("hostname".into(), serde_json::json!(h));
+            }
+            if let Some(ts) = timestamp {
+                snap.meta.insert("timestamp".into(), serde_json::json!(ts));
+            }
+            let actual = HostIdentity::of(&snap);
+            assert_eq!(&actual, identity, "case: {case}");
+            assert_eq!(actual.label(), *label, "case: {case}");
+        }
     }
 
     #[test]

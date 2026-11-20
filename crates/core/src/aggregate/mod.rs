@@ -15,7 +15,7 @@ use self::merge::{
     merge_selinux_sections, merge_service_sections, merge_storage_sections,
     merge_unmanaged_file_sections, merge_usersgroups_sections,
 };
-use self::validate::{AggregateValidationError, AggregateWarning, extract_hostname};
+use self::validate::{AggregateValidationError, AggregateWarning, HostIdentity};
 
 /// Classify an aggregate prevalence into a zone based on its distribution across hosts.
 ///
@@ -51,16 +51,18 @@ pub fn merge_snapshots(
 
     let total = snapshots.len();
 
-    // CANONICAL HOST ORDERING: sort snapshots by hostname FIRST, then
+    // CANONICAL HOST ORDERING: sort snapshots by host identity FIRST
+    // (named hosts by hostname, then unnamed ones by scan time), then
     // derive the hostnames vec. All downstream code uses index into
     // this sorted vec as host_idx. This is the SINGLE source of truth
-    // for host ordering.
-    let mut indexed: Vec<(String, InspectionSnapshot)> = snapshots
+    // for host ordering. Validation has refused duplicate identities,
+    // so every label is distinct.
+    let mut indexed: Vec<(HostIdentity, InspectionSnapshot)> = snapshots
         .into_iter()
-        .map(|s| (extract_hostname(&s), s))
+        .map(|s| (HostIdentity::of(&s), s))
         .collect();
     indexed.sort_by(|(a, _), (b, _)| a.cmp(b));
-    let hostnames: Vec<String> = indexed.iter().map(|(h, _)| h.clone()).collect();
+    let hostnames: Vec<String> = indexed.iter().map(|(h, _)| h.label()).collect();
     let sorted_snapshots: Vec<InspectionSnapshot> = indexed.into_iter().map(|(_, s)| s).collect();
 
     let section_host_counts = compute_section_host_counts(&sorted_snapshots);
@@ -704,6 +706,38 @@ mod tests {
             ..Default::default()
         });
         s
+    }
+
+    /// Unnamed snapshots aggregate under distinct labels that no real
+    /// hostname can take, ordered after the named hosts by scan time, so
+    /// `host_idx` stays one index per input.
+    #[test]
+    fn test_merge_orders_unnamed_hosts_after_named() {
+        let unnamed = |ts: &str| {
+            let mut s = valid_snap("");
+            s.meta.remove("hostname");
+            s.meta.insert("timestamp".into(), serde_json::json!(ts));
+            s
+        };
+        let snapshots = vec![
+            unnamed("2026-11-19T10:05:00+00:00"),
+            valid_snap("web-02"),
+            unnamed("2026-11-19T10:00:00+00:00"),
+            valid_snap("web-01"),
+        ];
+
+        let (merged, _) = merge_snapshots(snapshots, None, None).expect("merge should succeed");
+        let meta = merged.aggregate_meta.expect("aggregate meta");
+        assert_eq!(
+            meta.hostnames,
+            vec![
+                "web-01",
+                "web-02",
+                "<unnamed, scanned 2026-11-19T10:00:00+00:00>",
+                "<unnamed, scanned 2026-11-19T10:05:00+00:00>",
+            ],
+        );
+        assert_eq!(meta.host_count, 4);
     }
 
     #[test]
