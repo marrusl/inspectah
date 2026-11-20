@@ -247,6 +247,37 @@ fn is_enabled_value(value: &str) -> bool {
     )
 }
 
+/// The last value each option a [`RepoSectionDef`] is derived from was
+/// assigned, across every block of one section.
+#[derive(Default)]
+struct SectionValues<'a> {
+    enabled: Option<&'a str>,
+    baseurl: Option<&'a str>,
+    metalink: Option<&'a str>,
+    mirrorlist: Option<&'a str>,
+    gpgkey: Option<&'a str>,
+}
+
+impl SectionValues<'_> {
+    /// Derive the section dnf ends up with from the final option values.
+    fn into_def(self, id: RepoId) -> RepoSectionDef {
+        let defined = |v: Option<&str>| v.is_some_and(|v| !v.is_empty());
+        RepoSectionDef {
+            id,
+            enabled: self.enabled.is_none_or(is_enabled_value),
+            has_source: defined(self.baseurl) || defined(self.metalink) || defined(self.mirrorlist),
+            gpg_key_paths: self
+                .gpgkey
+                .unwrap_or_default()
+                .split(|c: char| c == ',' || c.is_ascii_whitespace())
+                .filter_map(|part| part.strip_prefix("file://"))
+                .filter(|path| !path.is_empty())
+                .map(str::to_string)
+                .collect(),
+        }
+    }
+}
+
 /// Parse `.repo`-style INI content into one [`RepoSectionDef`] per
 /// `[section]` header.
 ///
@@ -255,15 +286,16 @@ fn is_enabled_value(value: &str) -> bool {
 /// not fail the scan.
 ///
 /// A header repeated in the same content reopens its section rather than
-/// starting another, as libdnf's `ConfigParser` does: keys from every
-/// block apply, a later `enabled=` overrides an earlier one, and the
-/// section keeps its first position. The match is on the exact spelling,
-/// since dnf keys repos case-sensitively; [`RepoId`]'s folded equality is
-/// not used here. `gpg_key_paths` collects every block's keys, a superset
-/// of the last `gpgkey=` dnf keeps, so a check that every key is present
-/// never passes on a key dnf would still ask for.
+/// starting another, as libdnf's `ConfigParser` does, and the section
+/// keeps its first position. Each option keeps the last value assigned to
+/// it in any block, and the section is derived from those final values:
+/// `baseurl`, `metalink` and `mirrorlist` are separate options, so
+/// clearing one leaves the others, and an empty final value is no source;
+/// `gpg_key_paths` comes from the final `gpgkey=` alone. The header match
+/// is on the exact spelling, since dnf keys repos case-sensitively;
+/// [`RepoId`]'s folded equality is not used here.
 pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
-    let mut sections: Vec<RepoSectionDef> = Vec::new();
+    let mut sections: Vec<(RepoId, SectionValues<'_>)> = Vec::new();
     let mut current: Option<usize> = None;
 
     for line in content.lines() {
@@ -272,15 +304,10 @@ pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             let header = &trimmed[1..trimmed.len() - 1];
             current = Some(
-                match sections.iter().position(|s| s.id.as_str() == header) {
+                match sections.iter().position(|(id, _)| id.as_str() == header) {
                     Some(idx) => idx,
                     None => {
-                        sections.push(RepoSectionDef {
-                            id: RepoId::new(header),
-                            enabled: true,
-                            has_source: false,
-                            gpg_key_paths: Vec::new(),
-                        });
+                        sections.push((RepoId::new(header), SectionValues::default()));
                         sections.len() - 1
                     }
                 },
@@ -288,32 +315,29 @@ pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
             continue;
         }
 
-        let Some(section) = current.map(|idx| &mut sections[idx]) else {
+        let Some(values) = current.map(|idx| &mut sections[idx].1) else {
             continue; // line outside any section
         };
         let Some((key, value)) = trimmed.split_once('=') else {
             continue; // malformed: no key=value
         };
-        let key = key.trim();
         let value = strip_trailing_comment(value).trim();
 
-        match key {
-            "enabled" => section.enabled = is_enabled_value(value),
-            "baseurl" | "metalink" | "mirrorlist" => section.has_source = true,
-            "gpgkey" => {
-                for part in value.split(|c: char| c == ',' || c.is_ascii_whitespace()) {
-                    if let Some(path) = part.strip_prefix("file://")
-                        && !path.is_empty()
-                    {
-                        section.gpg_key_paths.push(path.to_string());
-                    }
-                }
-            }
-            _ => {}
-        }
+        let slot = match key.trim() {
+            "enabled" => &mut values.enabled,
+            "baseurl" => &mut values.baseurl,
+            "metalink" => &mut values.metalink,
+            "mirrorlist" => &mut values.mirrorlist,
+            "gpgkey" => &mut values.gpgkey,
+            _ => continue,
+        };
+        *slot = Some(value);
     }
 
     sections
+        .into_iter()
+        .map(|(id, values)| values.into_def(id))
+        .collect()
 }
 
 #[cfg(test)]
@@ -451,7 +475,67 @@ enabled=1
         assert!(r.has_source, "the first block's baseurl still applies");
         assert_eq!(
             r.gpg_key_paths,
-            vec!["/etc/pki/rpm-gpg/KEY-1", "/etc/pki/rpm-gpg/KEY-2"]
+            vec!["/etc/pki/rpm-gpg/KEY-2"],
+            "the last gpgkey= replaces the first, as dnf keeps the last value"
         );
+    }
+
+    #[test]
+    fn parse_repo_sections_keeps_the_last_value_of_each_key() {
+        // libdnf's ConfigParser assigns each option once per key: a key
+        // repeated across reopened blocks keeps its last value, and the
+        // three source keys are separate options.
+        struct Case {
+            name: &'static str,
+            content: &'static str,
+            enabled: bool,
+            has_source: bool,
+            keys: &'static [&'static str],
+        }
+        let cases = [
+            Case {
+                name: "source cleared and repo disabled",
+                content: "[r]\nbaseurl=https://example.invalid/r\nenabled=1\n[r]\nbaseurl=\nenabled=0\n",
+                enabled: false,
+                has_source: false,
+                keys: &[],
+            },
+            Case {
+                name: "metalink survives a cleared baseurl",
+                content: "[r]\nbaseurl=https://example.invalid/r\nmetalink=https://example.invalid/m\n[r]\nbaseurl=\n",
+                enabled: true,
+                has_source: true,
+                keys: &[],
+            },
+            Case {
+                name: "a cleared mirrorlist leaves no source",
+                content: "[r]\nmirrorlist=https://example.invalid/m\nmirrorlist=   # gone\n",
+                enabled: true,
+                has_source: false,
+                keys: &[],
+            },
+            Case {
+                name: "an old key replaced by a new one",
+                content: "[r]\nbaseurl=https://example.invalid/r\ngpgkey=file:///etc/pki/rpm-gpg/OLD\n[r]\ngpgkey=file:///etc/pki/rpm-gpg/NEW\n",
+                enabled: true,
+                has_source: true,
+                keys: &["/etc/pki/rpm-gpg/NEW"],
+            },
+            Case {
+                name: "a cleared gpgkey names no key",
+                content: "[r]\nbaseurl=https://example.invalid/r\ngpgkey=file:///etc/pki/rpm-gpg/OLD\ngpgkey=\n",
+                enabled: true,
+                has_source: true,
+                keys: &[],
+            },
+        ];
+        for case in cases {
+            let got = parse_repo_sections(case.content);
+            assert_eq!(got.len(), 1, "{}", case.name);
+            let r = &got[0];
+            assert_eq!(r.enabled, case.enabled, "{}: enabled", case.name);
+            assert_eq!(r.has_source, case.has_source, "{}: has_source", case.name);
+            assert_eq!(r.gpg_key_paths, case.keys, "{}: gpg_key_paths", case.name);
+        }
     }
 }

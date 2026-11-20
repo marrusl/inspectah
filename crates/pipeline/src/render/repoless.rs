@@ -783,6 +783,16 @@ mod tests {
                 )],
                 false,
             ),
+            (
+                // The final baseurl= is empty: dnf has no source to
+                // install from, whatever the first block said.
+                "one file, a later block clears the source and disables it",
+                &[(
+                    "a.repo",
+                    "[r]\nbaseurl=https://example.invalid/r\nenabled=1\n[r]\nbaseurl=\nenabled=0\n",
+                )],
+                false,
+            ),
         ];
         for (what, files, expected) in cases {
             let pkg = from_repo("r", exact("r"));

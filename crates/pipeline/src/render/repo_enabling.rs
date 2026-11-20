@@ -248,4 +248,40 @@ mod tests {
             assert_eq!(keys_included(&rpm, &[KEY.to_string()]), present, "{name}");
         }
     }
+
+    /// dnf keeps the last `gpgkey=` of a reopened section, so a key an
+    /// earlier block named and a later one replaced does not cost the
+    /// package its proof.
+    #[test]
+    fn a_replaced_key_the_export_lacks_does_not_demote_the_package() {
+        const CARRIED: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9";
+        let rpm = RpmSection {
+            repo_files: vec![RepoFile {
+                path: "/etc/yum.repos.d/epel.repo".into(),
+                content: format!(
+                    "[epel]\nbaseurl=https://example.invalid/epel\n\
+                     gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-gone\n\
+                     [epel]\ngpgkey=file://{CARRIED}\n"
+                ),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            gpg_keys: vec![RepoFile {
+                path: CARRIED.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let pkg = PackageEntry {
+            name: "epel-release".into(),
+            repo_enabling_from: vec![RepoId::new("epel")],
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
+        assert!(matches!(
+            repo_enabling_export(&rpm, &pkg),
+            RepoEnablingExport::Served
+        ));
+    }
 }

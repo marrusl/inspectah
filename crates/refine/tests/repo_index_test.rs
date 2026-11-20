@@ -296,6 +296,20 @@ fn incomplete_when_declared_gpg_key_not_captured() {
 }
 
 #[test]
+fn a_replaced_uncaptured_key_does_not_make_a_repo_incomplete() {
+    // dnf keeps the last gpgkey= of a reopened section, so a key the
+    // first block named and a later block replaced is not one dnf asks for.
+    let mut snap = make_snap_with_repos();
+    let rpm = snap.rpm.as_mut().unwrap();
+    rpm.repo_files[1].content = "[epel]\nname=EPEL 9\nbaseurl=http://example.invalid/epel\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-gone\n[epel]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n".into();
+    let idx = RepoIndex::build(&snap);
+    assert_eq!(
+        idx.provenance(&RepoId::new("epel")),
+        RepoProvenance::Verified
+    );
+}
+
+#[test]
 fn validate_target_accepts_incomplete_and_refuses_the_rest() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
