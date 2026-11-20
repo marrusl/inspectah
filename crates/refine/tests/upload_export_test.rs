@@ -1796,6 +1796,104 @@ fn the_demotion_fixme_names_only_targets_the_session_accepts() {
     );
 }
 
+/// The FIXME a demoted `vendor-release` served by `repo` renders when no
+/// repo the refine toggle accepts would serve it again.
+fn upload_only_fixme(repo: &str) -> String {
+    format!(
+        "# FIXME: upload the RPM; vendor-release installs from repo {repo}, whose definition \
+         this export does not carry, and re-including no repo in refine restores it"
+    )
+}
+
+/// [`repo_enabling_snapshot`] with the serving section renamed to
+/// `extras`, a distro repo, and its file captured as `included`.
+fn distro_repo_enabling_snapshot(included: bool) -> InspectionSnapshot {
+    let mut snap = repo_enabling_snapshot();
+    let rpm = snap.rpm.as_mut().unwrap();
+    rpm.packages_added[0].repo_enabling_from =
+        vec![inspectah_core::types::repo::RepoId::new("extras")];
+    rpm.packages_added[1].source_repo = "extras".into();
+    let file = &mut rpm.repo_files[0];
+    file.path = "/etc/yum.repos.d/extras.repo".into();
+    file.content = "[extras]\nbaseurl=https://example.invalid/extras\nenabled=1\n".into();
+    file.disposition = FindingKind::from_bool(included);
+    snap
+}
+
+/// Refine refuses to toggle a distro repo, so the demotion FIXME never
+/// names one, even when re-including its file would serve the package.
+#[test]
+fn a_distro_repo_that_would_serve_is_not_named_in_the_demotion_fixme() {
+    // The control: with its file carried, `extras` serves the package, so
+    // a simulated toggle of `extras` restores it.
+    let mut served = Harness::with_snapshot(distro_repo_enabling_snapshot(true));
+    served.set_include("vendor-release", "noarch", true);
+    let (out, _) = served.export(None);
+    let file = containerfile(&out);
+    assert!(
+        active_lines(&file).contains(&"    vendor-release \\"),
+        "the control: extras serves the package:\n{file}"
+    );
+
+    let mut h = Harness::with_snapshot(distro_repo_enabling_snapshot(false));
+    h.set_include("vendor-release", "noarch", true);
+    let (demoted, _) = h.export(None);
+    let file = containerfile(&demoted);
+    assert!(file.contains(&upload_only_fixme("extras")), "{file}");
+    assert!(!file.contains("re-include repo"), "{file}");
+    assert!(
+        matches!(
+            h.session.apply(RefinementOp::SetInclude {
+                item_id: ItemId::Repo {
+                    path: "extras".into(),
+                },
+                include: true,
+            }),
+            Err(RefineError::BadRequest(_))
+        ),
+        "refine refuses the distro repo's toggle"
+    );
+}
+
+/// The repo toggle leaves a locked repo file excluded, so the demotion
+/// FIXME does not name the repo, even though including that file would
+/// serve the package. Following the toggle anyway changes nothing.
+#[test]
+fn a_locked_repo_file_the_toggle_leaves_out_is_not_named_in_the_demotion_fixme() {
+    let mut snap = repo_enabling_snapshot();
+    snap.rpm.as_mut().unwrap().repo_files[0].locked = true;
+    let mut h = Harness::with_snapshot(snap);
+    h.set_include("vendor-release", "noarch", true);
+    // A member to re-include, so the toggle is not refused as a no-op.
+    h.set_include("bootstrap-tool", "x86_64", false);
+
+    let (demoted, _) = h.export(None);
+    let file = containerfile(&demoted);
+    assert!(file.contains(&upload_only_fixme("bootstrap")), "{file}");
+    assert!(!file.contains("re-include repo"), "{file}");
+
+    // The toggle is accepted, and the projection keeps the locked file
+    // out, so the package stays demoted with the same advice.
+    set_include_bootstrap(&mut h, true);
+    let projected = h.session.snapshot_projected();
+    let rpm = projected.rpm.as_ref().unwrap();
+    assert!(
+        rpm.packages_added[1].disposition.is_included(),
+        "the toggle re-included bootstrap-tool"
+    );
+    assert!(
+        !rpm.repo_files[0].disposition.is_included(),
+        "the lock holds bootstrap.repo out"
+    );
+    let (followed, _) = h.export(None);
+    let file = containerfile(&followed);
+    assert!(file.contains(&upload_only_fixme("bootstrap")), "{file}");
+    assert!(
+        !active_lines(&file).contains(&"    vendor-release \\"),
+        "the toggle does not serve the package:\n{file}"
+    );
+}
+
 /// The uploaded package installs before anything that needs it: the
 /// `systemctl enable` of a unit it owns, and the plain install of an
 /// enabled-repo package that depends on it. Installing it in a late
