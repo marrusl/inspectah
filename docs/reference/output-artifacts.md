@@ -99,6 +99,62 @@ comments naming the creator on the source host and whether the export
 carries it, and a `FIXME` entry (commented out) where the export cannot
 tell whether the base image creates the directory.
 
+### Systemd unit state
+
+The Containerfile writes the state of every unit the scan collected under
+`# === Systemd Unit State ===`, after the configuration and drop-in `COPY`
+lines. Each verb (`enable`, `disable`, `mask`) is one `RUN systemctl <verb> --`
+with one unit per line, ordered by unit kind and then name. Every `systemctl`
+line in the Containerfile comes from this one plan. The rules below decide
+what a line says. Refine shows the same reason on the unit's row.
+
+**Commands left out.** An `# Omitted: <unit> (<reason>)` line replaces a
+command that would fail or do something the source host did not:
+
+- an `enable` or `disable` of a local or shadowed unit whose unit file is
+  excluded, or of a vendor unit with another unit file copied in at its name;
+- a `mask` where a unit file is copied in at the same name, since
+  `systemctl mask` fails on a regular file;
+- any command for a unit whose owning package is excluded or not carried.
+  A unit stays when the base image ships its package or a package you kept
+  depends on it.
+
+**Units the image needs.** A `disable` or `mask` of `bootc-*`, `ostree-*` or
+`systemd-remount-fs.service`, and a `mask` of `tmp.mount`, are never carried;
+a `# FIXME:` says the image needs the unit. An `enable` of any of them is
+carried.
+
+**Package updaters.** `dnf-automatic*.timer` and
+`packagekit-offline-update.service` are excluded by default, because an
+image-based host is updated by a new image. Include one in refine to carry it.
+
+**Local and shadowed units.** A service, socket, path, timer, target or slice
+whose file is in `/etc/systemd/system/` gets its `enable` when that file is
+copied, whatever the presets say, since the image loads the `/etc` file. A
+disabled local unit gets no `disable`. A mount, automount or swap unit you
+wrote gets advisory comments and never a command. A fleet aggregate leaves the
+command out when hosts hold different versions of the file.
+
+**How state is read.** The scan does not take `systemctl list-unit-files` at
+its word, because it reports `enabled` for any link to a unit. It reads the
+links the unit's effective `[Install]` section names, against the links under
+`/etc/systemd/system/` and the links packages ship. A unit is enabled when
+every named link is present and at least one is under `/etc`, and disabled
+when none is under `/etc`. A unit whose `[Install]` section holds an
+`UpheldBy=`, a specifier the scan does not expand or a name it does not admit
+gets no `enable`, and its links are reported with that reason. A unit with
+`Also=` members gets its command only when every member's links on the source
+host match what the command does. Otherwise the Containerfile names each member
+and the lines to add by hand.
+
+**Template instances.** An instance such as `getty@tty2.service` gets its
+`enable` only when every `/etc` file it reads is in the export as the host had
+it, including its template's drop-ins and any file named with `%i` or `%I`. If
+one is excluded, was not captured, had a secret redacted or is owned by a
+package and unchanged, an `# Omitted:` line names the file and reason: add the
+`enable` by hand. An instance that keeps data under `/var` also gets an
+`# Advisory:` line, since the image does not carry the data.
+
 ### `--inspect-only` mode
 
 When `--inspect-only` is passed, the scan writes only
