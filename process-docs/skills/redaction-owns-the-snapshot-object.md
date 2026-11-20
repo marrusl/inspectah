@@ -403,17 +403,42 @@ lengthen a span that `\S+` starts at the same quote.
 A secret that runs past its own value can run into the next key, so the
 search for a pattern's next match resumes where the last match's
 **secret** starts, not where the whole match ends
-(`captures_from_each_secret`, used by `collect_eligible_matches` for
-every pattern). With `captures_iter`, the JSON secret
-`"alpha","token":"beta` in `{"password":"alpha","token":"beta gamma"}`
-moved the search past `token`, which was never matched, and `gamma`
-shipped. Resuming at the secret finds every key from the end of the key
-before it. A match found inside an earlier secret overlaps it and is
-absorbed, so this only lengthens spans; a pattern whose secret is the
-whole match has no key and resumes after the match as before. The
-property test cannot see this class: its oracle is the set of matches
-the engine discovers, so an undiscovered key is absent from both sides.
-Each case is a row in `test_no_secret_byte_survives_a_reviewed_input`.
+(`collect_eligible_matches`, for every pattern). With `captures_iter`,
+the JSON secret `"alpha","token":"beta` in
+`{"password":"alpha","token":"beta gamma"}` moved the search past
+`token`, which was never matched, and `gamma` shipped. Resuming at the
+secret finds every key from the end of the key before it. A match found
+inside an earlier secret overlaps it and is absorbed, so this only
+lengthens spans; a pattern whose secret is the whole match has no key
+and resumes after the match as before. The property test cannot see
+this class: its oracle is the set of matches the engine discovers, so
+an undiscovered key is absent from both sides. Each case is a row in
+`test_no_secret_byte_survives_a_reviewed_input`.
+
+Resuming inside a secret re-reads it, and keys packed into one value
+make that quadratic: in `password=password=...x` every key's secret is
+the rest of the line, and the first version found 29,000 matches in a
+261 KB line and copied each one's text, about 3.5 GiB. Three rules keep
+the search linear without replacing less. **Offsets, not copies:** an
+`EligibleMatch` is ranges and a line number through collection,
+filtering and the merge, filters read borrowed slices, and a caller
+copies only a surviving span's text (`EligibleMatch::secret`).
+**Skip covered suffixes:** a secret inside the range the pattern's
+overlapping eligible secrets already cover is not kept, since it adds
+no byte and loses the merge to the secret it sits in, and once that
+range reaches the line break, the search moves to the break, since no
+keyed pattern's match crosses one. **Fail toward over-redaction:** a
+value that stops before its line does (`password=password=...x tail`)
+still has its inner keys each read to `x`, so after
+`MAX_REDUNDANT_RESCANS_PER_LINE` matches that start inside text already
+read and add nothing, the rest of the line becomes one unfiltered
+secret. Any bound added here must work that way: past it, replace more,
+never stop searching. `test_bounded_search_covers_what_an_unbounded_one_finds`
+and its property test check the bounded search against an unbounded
+one, and `test_dense_repeated_keys_redact_in_bounded_time` times the
+dense inputs. Line facts come from a forward `LineCursor` for the same
+reason: counting newlines from the start of the content for every match
+was quadratic too.
 
 `SecretPattern::accept` exists for a condition the regex cannot state
 because the `regex` crate has no lookahead: the AWS pattern's check that

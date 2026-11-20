@@ -130,20 +130,28 @@ impl CounterRegistry {
     }
 }
 
-/// A match that survived all eligibility filters.
+/// A match that survived all eligibility filters, as positions only.
 ///
-/// `start..end` and `text` are the secret only: the pattern's
-/// [`SECRET_GROUP`] when it has one, otherwise the whole match. Every caller
-/// replaces exactly that span, so a key, delimiter or URI around the secret
-/// stays as written. `claim` is the whole match; it decides which of two
-/// matches with overlapping secrets wins (see
-/// [`dedup_overlapping_matches`]).
+/// `start..end` is the secret only: the pattern's [`SECRET_GROUP`] when it
+/// has one, otherwise the whole match. Every caller replaces exactly that
+/// span, so a key, delimiter or URI around the secret stays as written.
+/// `claim` is the whole match; it decides which of two matches with
+/// overlapping secrets wins (see [`dedup_overlapping_matches`]). The
+/// secret's text is not copied: [`EligibleMatch::secret`] reads it from the
+/// content the match was found in, so only what a caller keeps is copied.
 struct EligibleMatch {
     claim: Range<usize>,
     start: usize,
     end: usize,
-    text: String,
     line_num: usize,
+}
+
+impl EligibleMatch {
+    /// The secret's text in `content`, which must be the content the match
+    /// was found in, or a copy edited only after `end`.
+    fn secret<'c>(&self, content: &'c str) -> &'c str {
+        &content[self.start..self.end]
+    }
 }
 
 /// Known non-secret values that appear after `password:` or `passwd:`
@@ -175,9 +183,24 @@ static FALSE_POSITIVE_VALUES: LazyLock<HashSet<&'static str>> = LazyLock::new(||
     .collect()
 });
 
+/// The most characters any of [`FALSE_POSITIVE_VALUES`] has.
+static LONGEST_FALSE_POSITIVE_VALUE: LazyLock<usize> = LazyLock::new(|| {
+    FALSE_POSITIVE_VALUES
+        .iter()
+        .map(|v| v.chars().count())
+        .max()
+        .unwrap_or(0)
+});
+
 /// Returns true if `value` is a known NSS/PAM token, not a real secret.
+///
+/// Lowercasing never maps one character to none, so a value with more
+/// characters than the longest token cannot be one, and is not copied to
+/// find out.
 fn is_false_positive_value(value: &str) -> bool {
-    FALSE_POSITIVE_VALUES.contains(value.trim().to_lowercase().as_str())
+    let value = value.trim();
+    value.chars().nth(*LONGEST_FALSE_POSITIVE_VALUE).is_none()
+        && FALSE_POSITIVE_VALUES.contains(value.to_lowercase().as_str())
 }
 
 /// Line-comment marker common to nearly every `/etc` file format.
@@ -283,40 +306,99 @@ fn comment_markers(path: Option<&str>) -> Vec<&'static str> {
     markers
 }
 
-/// Byte offset of the start of the line holding `pos`.
-fn line_start(content: &str, pos: usize) -> usize {
-    content[..pos].rfind('\n').map_or(0, |i| i + 1)
-}
-
-/// The 1-based number of the line holding byte `pos`: one more than the
-/// newlines before it. `str::lines` on the text before `pos` counts the
-/// partial line too, which put every match not at column 0 one line low.
-fn line_number(content: &str, pos: usize) -> usize {
-    content[..pos].matches('\n').count() + 1
-}
-
-/// Returns true if a match whose secret starts at `secret_start` and whose
-/// whole match starts at `claim_start` falls on a comment line: the text
-/// of the secret's line before the match, trimmed, starts with one of
-/// `markers` (see [`comment_markers`]).
+/// Line facts for byte positions visited in increasing order.
 ///
-/// The line is the secret's, never the line the match starts on. A
-/// pattern can consume a boundary byte before its secret, and when that
-/// byte is the newline ending a comment, reading the match's line took the
-/// comment above for the secret's own line and exempted it. Context the
-/// match consumed on the secret's own line is not part of the prefix, so a
-/// marker the pattern took as its boundary (`#AKIA...`) does not make
-/// the line a comment.
-fn is_comment_line(
-    content: &str,
-    claim_start: usize,
-    secret_start: usize,
-    markers: &[&str],
-) -> bool {
-    let start = line_start(content, secret_start);
-    let prefix = content[start..claim_start.max(start)].trim_start();
-    markers.iter().any(|m| prefix.starts_with(m))
+/// A scan can find thousands of matches on one long line. Reading back to
+/// the line start, or counting newlines from the start of the content, for
+/// each of them made the scan quadratic in the line's length; the cursor
+/// reads each byte once while positions only increase.
+struct LineCursor<'c> {
+    content: &'c str,
+    /// The position the fields below describe.
+    pos: usize,
+    /// Byte offset of the start of the line holding `pos`.
+    start: usize,
+    /// The 1-based number of that line: one more than the newlines before
+    /// `pos`.
+    number: usize,
+    /// Offset of the first non-whitespace character at or after `start`,
+    /// once something has asked for it.
+    first_text: Option<usize>,
 }
+
+impl<'c> LineCursor<'c> {
+    fn new(content: &'c str) -> Self {
+        Self {
+            content,
+            pos: 0,
+            start: 0,
+            number: 1,
+            first_text: None,
+        }
+    }
+
+    /// Move to `pos`. A position before the current one starts over from
+    /// the beginning of the content, so a caller that goes back gets a
+    /// slow answer, never a wrong one.
+    fn advance(&mut self, pos: usize) {
+        if pos < self.pos {
+            *self = Self::new(self.content);
+        }
+        let skipped = &self.content[self.pos..pos];
+        if let Some(last) = skipped.rfind('\n') {
+            self.number += skipped.matches('\n').count();
+            self.start = self.pos + last + 1;
+            self.first_text = None;
+        }
+        self.pos = pos;
+    }
+
+    /// Returns true if the match whose whole match starts at `claim_start`
+    /// falls on a comment line: the text of the current line before the
+    /// match, trimmed, starts with one of `markers` (see
+    /// [`comment_markers`]).
+    ///
+    /// Call it with the cursor on the secret's start. The line is the
+    /// secret's, never the line the match starts on. A pattern can consume
+    /// a boundary byte before its secret, and when that byte is the newline
+    /// ending a comment, reading the match's line took the comment above
+    /// for the secret's own line and exempted it. Context the match
+    /// consumed on the secret's own line is not part of the prefix, so a
+    /// marker the pattern took as its boundary (`#AKIA...`) does not make
+    /// the line a comment.
+    fn is_comment(&mut self, claim_start: usize, markers: &[&str]) -> bool {
+        let (content, start) = (self.content, self.start);
+        let first_text = *self.first_text.get_or_insert_with(|| {
+            let rest = &content[start..];
+            start + rest.len() - rest.trim_start().len()
+        });
+        // The prefix is `content[start..claim_start]` trimmed, which is
+        // empty when the match starts before the line's first text.
+        markers
+            .iter()
+            .any(|m| first_text + m.len() <= claim_start && content[first_text..].starts_with(m))
+    }
+}
+
+/// Offset of the first line break (`\r` or `\n`) at or after `pos`, or the
+/// end of `content`.
+fn line_break_at_or_after(content: &str, pos: usize) -> usize {
+    content[pos..]
+        .find(['\r', '\n'])
+        .map_or(content.len(), |i| pos + i)
+}
+
+/// How many matches on one line may be found inside text an earlier match
+/// on that line already read, without adding anything to what is replaced,
+/// before the rest of the line is replaced instead of searched.
+///
+/// Each such search can re-read the rest of the line, so this bounds the
+/// work on a line at a small multiple of its length. Reaching it takes
+/// more credential keys than this inside one value on one line, as in
+/// `password=password=...`, with the value ending before the line does.
+/// Past it the rest of the line is replaced, which can take text no
+/// pattern would have, but never leaves a byte one would have taken.
+const MAX_REDUNDANT_RESCANS_PER_LINE: usize = 4;
 
 /// Collect regex matches from `content` for a single `pat`, filtering out:
 /// - Matches on comment lines (`#`, plus `;` / `//` where `path` uses them)
@@ -332,94 +414,117 @@ fn is_comment_line(
 /// single `Vec<(usize, EligibleMatch)>` (tagged with the pattern index),
 /// then run `dedup_overlapping_matches` on the merged list before
 /// processing matches.
+///
+/// # Where each search starts
+///
+/// Each match is searched for from where the previous match's secret
+/// starts, not from where the whole match ends. A secret can run on past
+/// its own value: the JSON pattern's `\S*` after a closing quote takes
+/// `"alpha","token":"beta` from `{"password":"alpha","token":"beta gamma"}`.
+/// `captures_iter` resumes after that, inside the next key's value, so
+/// `token` was never matched and `gamma` shipped. Resuming at the secret
+/// looks for every key from the end of the key before it. A match whose
+/// secret is the whole match (no key before it) resumes after its end, as
+/// `captures_iter` does.
+///
+/// # Keeping that linear
+///
+/// Resuming inside a secret re-reads it, and with keys packed into one
+/// value (`password=password=...x`) every key's secret is the rest of the
+/// line: thousands of searches, each reading to the end of the line.
+/// Three rules bound that, and none of them replaces less than resuming at
+/// every secret does:
+///
+/// - **Only positions are kept.** A match is its ranges and line number;
+///   no secret text is copied here or in the merge (see
+///   [`EligibleMatch::secret`]).
+/// - **A secret inside what this pattern already covers is not kept.**
+///   Secret starts only increase, so the eligible secrets found so far
+///   that overlap form one range. A secret inside it adds no byte, and its
+///   whole match is shorter than that of the secret it sits in, so it
+///   would lose the merge and change neither the span nor the token.
+/// - **A covered line is not searched again.** No keyed pattern's match
+///   or secret crosses a line break, so once that range reaches the break
+///   ending the line, nothing found later on the line can add to it, and
+///   the search moves to the break.
+///
+/// Those leave a value that stops before the end of the line, as in
+/// `password=password=...x tail`, where the keys inside it still each read
+/// to `x`. After [`MAX_REDUNDANT_RESCANS_PER_LINE`] such matches the rest
+/// of the line, from where the next search would start, becomes one
+/// eligible secret of this pattern, without filters. Every match that
+/// search could still find on the line lies inside it, so this replaces
+/// more than an unbounded search would, never less.
 fn collect_eligible_matches(
     pat: &SecretPattern,
     content: &str,
     path: Option<&str>,
 ) -> Vec<EligibleMatch> {
     let markers = comment_markers(path);
-    captures_from_each_secret(&pat.regex, content)
-        .filter_map(|caps| {
-            let whole = caps.get(0)?;
-            let secret = caps.name(SECRET_GROUP).unwrap_or(whole);
-            let text = secret.as_str();
-
-            // Filter 0: the pattern's own condition on the match
-            if let Some(accept) = pat.accept
-                && !accept(content, &caps)
-            {
-                return None;
-            }
-
-            // Filter 1: skip matches on comment lines
-            if is_comment_line(content, whole.start(), secret.start(), &markers) {
-                return None;
-            }
-
-            // No filter skips a value spelled like a redaction token. The
-            // spelling is not provenance: `password=REDACTED_COMPANY_2026`
-            // can be the host's real password. `redact()` runs once per
-            // snapshot; a second pass over its output reports most tokens
-            // again and replaces each with a token, usually itself, and can
-            // change the text around one (see
-            // `test_a_second_pass_is_not_guaranteed_to_return_the_same_text`).
-
-            // Filter 2: skip Password matches whose value is a known
-            // NSS/PAM false-positive token
-            if pat.finding_kind == FindingKind::Password && is_false_positive_value(text) {
-                return None;
-            }
-
-            // Filter 3: skip PasswordHash matches when path is a shadow
-            // file — scan_shadow owns those with richer classification
-            if pat.finding_kind == FindingKind::PasswordHash
-                && let Some(p) = path
-                && (p.ends_with("/shadow") || p.ends_with("/shadow-"))
-            {
-                return None;
-            }
-
-            let line_num = line_number(content, secret.start());
-
-            Some(EligibleMatch {
-                claim: whole.range(),
-                start: secret.start(),
-                end: secret.end(),
-                text: text.to_string(),
-                line_num,
-            })
-        })
-        .collect()
-}
-
-/// Every match of `regex` in `content`, each one searched for from where
-/// the previous match's secret starts, not from where the whole match ends.
-///
-/// A secret can run on past its own value: the JSON pattern's `\S*` after
-/// a closing quote takes `"alpha","token":"beta` from
-/// `{"password":"alpha","token":"beta gamma"}`. `captures_iter` resumes
-/// after that, inside the next key's value, so `token` was never matched
-/// and `gamma` shipped. Resuming at the secret looks for every key from the
-/// end of the key before it. A match found inside an earlier secret
-/// overlaps it, and `dedup_overlapping_matches` absorbs it into one span,
-/// so this only adds coverage. A match whose secret is the whole match
-/// (no key before it) resumes after its end, as `captures_iter` does.
-fn captures_from_each_secret<'c>(
-    regex: &'c Regex,
-    content: &'c str,
-) -> impl Iterator<Item = Captures<'c>> + 'c {
+    let mut lines = LineCursor::new(content);
+    let mut found = Vec::new();
+    // The union of the eligible secrets kept last, which overlap one
+    // another; empty until one is kept.
+    let mut covered = 0..0;
+    // How far the whole matches found so far reach.
+    let mut read_to = 0;
+    let mut line_end = line_break_at_or_after(content, 0);
+    let mut redundant = 0;
     let mut pos = 0;
-    std::iter::from_fn(move || {
-        if pos > content.len() {
-            return None;
+    while pos <= content.len() {
+        if pos > line_end {
+            line_end = line_break_at_or_after(content, pos);
+            redundant = 0;
         }
-        let caps = regex.captures_at(content, pos)?;
-        let whole = caps.get(0)?;
-        let secret_start = caps
-            .name(SECRET_GROUP)
-            .map_or(whole.start(), |secret| secret.start());
-        pos = if secret_start > whole.start() {
-            secret_start
+        if pos < line_end && pos < covered.end && covered.end >= line_end {
+            pos = line_end;
+            continue;
+        }
+        if pos < line_end && redundant >= MAX_REDUNDANT_RESCANS_PER_LINE {
+            lines.advance(pos);
+            found.push(EligibleMatch {
+                claim: pos..line_end,
+                start: pos,
+                end: line_end,
+                line_num: lines.number,
+            });
+            covered = if pos < covered.end {
+                covered.start..line_end
+            } else {
+                pos..line_end
+            };
+            pos = line_end;
+            continue;
+        }
+        let Some(caps) = pat.regex.captures_at(content, pos) else {
+            break;
+        };
+        let Some(whole) = caps.get(0) else {
+            break;
+        };
+        let secret = caps.name(SECRET_GROUP).unwrap_or(whole);
+        let nested = whole.start() < read_to && whole.start() < line_end;
+        read_to = read_to.max(whole.end());
+
+        let added = match eligible_match(pat, content, &caps, path, &markers, &mut lines) {
+            Some(em) if em.start < covered.end && em.end <= covered.end => false,
+            Some(em) => {
+                covered = if em.start < covered.end {
+                    covered.start..em.end
+                } else {
+                    em.start..em.end
+                };
+                found.push(em);
+                true
+            }
+            None => false,
+        };
+        if nested && !added {
+            redundant += 1;
+        }
+
+        pos = if secret.start() > whole.start() {
+            secret.start()
         } else if whole.end() > whole.start() {
             whole.end()
         } else {
@@ -430,14 +535,73 @@ fn captures_from_each_secret<'c>(
                     .next()
                     .map_or(1, char::len_utf8)
         };
-        Some(caps)
+    }
+    found
+}
+
+/// The match `caps` as an [`EligibleMatch`], or `None` when a filter of
+/// [`collect_eligible_matches`] drops it. `lines` must not be past the
+/// secret's start.
+fn eligible_match(
+    pat: &SecretPattern,
+    content: &str,
+    caps: &Captures<'_>,
+    path: Option<&str>,
+    markers: &[&str],
+    lines: &mut LineCursor<'_>,
+) -> Option<EligibleMatch> {
+    let whole = caps.get(0)?;
+    let secret = caps.name(SECRET_GROUP).unwrap_or(whole);
+    let text = secret.as_str();
+
+    // Filter 0: the pattern's own condition on the match
+    if let Some(accept) = pat.accept
+        && !accept(content, caps)
+    {
+        return None;
+    }
+
+    // Filter 1: skip matches on comment lines
+    lines.advance(secret.start());
+    if lines.is_comment(whole.start(), markers) {
+        return None;
+    }
+
+    // No filter skips a value spelled like a redaction token. The
+    // spelling is not provenance: `password=REDACTED_COMPANY_2026`
+    // can be the host's real password. `redact()` runs once per
+    // snapshot; a second pass over its output reports most tokens
+    // again and replaces each with a token, usually itself, and can
+    // change the text around one (see
+    // `test_a_second_pass_is_not_guaranteed_to_return_the_same_text`).
+
+    // Filter 2: skip Password matches whose value is a known
+    // NSS/PAM false-positive token
+    if pat.finding_kind == FindingKind::Password && is_false_positive_value(text) {
+        return None;
+    }
+
+    // Filter 3: skip PasswordHash matches when path is a shadow
+    // file — scan_shadow owns those with richer classification
+    if pat.finding_kind == FindingKind::PasswordHash
+        && let Some(p) = path
+        && (p.ends_with("/shadow") || p.ends_with("/shadow-"))
+    {
+        return None;
+    }
+
+    Some(EligibleMatch {
+        claim: whole.range(),
+        start: secret.start(),
+        end: secret.end(),
+        line_num: lines.number,
     })
 }
 
 /// Resolve overlapping matches from different patterns so no two replaced
 /// spans overlap, without losing any secret byte. Input must be the combined
-/// matches from ALL patterns for a single content blob, and `content` must be
-/// that blob: a merged span's text is read from it.
+/// matches from ALL patterns for a single content blob. Only positions are
+/// merged; a caller reads a kept span's text with [`EligibleMatch::secret`].
 ///
 /// Two matches conflict when their secret spans (what gets replaced; see
 /// [`EligibleMatch`]) overlap. The conflict goes to the larger whole match,
@@ -453,10 +617,11 @@ fn captures_from_each_secret<'c>(
 ///
 /// A candidate can overlap several kept spans that do not overlap each
 /// other: it bridges them. All of them become one span, from the smallest
-/// start to the largest end, and its text is taken from `content` rather
-/// than stitched from the pieces. Stitching assumed each pair overlapped,
-/// and a bridge merged after the spans it joined broke that and panicked.
-fn dedup_overlapping_matches(content: &str, matches: &mut Vec<(usize, EligibleMatch)>) {
+/// start to the largest end. Its text, read from the content under that
+/// span, is never stitched from the pieces: stitching assumed each pair
+/// overlapped, and a bridge merged after the spans it joined broke that and
+/// panicked.
+fn dedup_overlapping_matches(matches: &mut Vec<(usize, EligibleMatch)>) {
     let mut by_priority: Vec<(usize, EligibleMatch)> = std::mem::take(matches);
     // Stable sort: equal keys keep input (pattern) order.
     by_priority.sort_by(|a, b| {
@@ -498,20 +663,20 @@ fn dedup_overlapping_matches(content: &str, matches: &mut Vec<(usize, EligibleMa
         kept.start = start;
         kept.end = end;
         kept.claim = claim;
-        kept.text = content[start..end].to_string();
     }
     matches.sort_by_key(|(_, em)| em.start);
 }
 
-/// Build the replacement for a matched secret: the token for its text.
-/// It replaces `em.start..em.end`, which is the secret alone (see
+/// Build the replacement for a matched secret: the token for its text in
+/// `content`. It replaces `em.start..em.end`, which is the secret alone (see
 /// [`EligibleMatch`]), so the key or URI around it stays as written.
 fn build_replacement(
     em: &EligibleMatch,
+    content: &str,
     registry: &mut CounterRegistry,
     kind_label: &str,
 ) -> String {
-    registry.token_for(kind_label, &em.text)
+    registry.token_for(kind_label, em.secret(content))
 }
 
 /// Apply pattern-based redaction to a string.
@@ -539,7 +704,7 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
             all_matches.push((idx, em));
         }
     }
-    dedup_overlapping_matches(&result, &mut all_matches);
+    dedup_overlapping_matches(&mut all_matches);
     if all_matches.is_empty() {
         // Regex matched but all hits were filtered (comment lines, false
         // positives, etc.) — no actual redaction needed.
@@ -549,7 +714,7 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
     for (pat_idx, em) in all_matches {
         let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-        let replacement = build_replacement(&em, &mut registry, &kind_label);
+        let replacement = build_replacement(&em, &result, &mut registry, &kind_label);
         result.replace_range(em.start..em.end, &replacement);
     }
 
@@ -736,7 +901,7 @@ pub fn scan_content(content: &str, path: &str) -> Vec<RedactionFinding> {
             all_matches.push((idx, em));
         }
     }
-    dedup_overlapping_matches(content, &mut all_matches);
+    dedup_overlapping_matches(&mut all_matches);
     for (pat_idx, em) in all_matches {
         let pat = &PATTERNS[pat_idx];
         findings.push(RedactionFinding {
@@ -866,11 +1031,11 @@ fn scan_and_redact_field(
             all_matches.push((idx, em));
         }
     }
-    dedup_overlapping_matches(content, &mut all_matches);
+    dedup_overlapping_matches(&mut all_matches);
     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
     for (pat_idx, em) in all_matches {
         let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-        let replacement = build_replacement(&em, registry, &kind_label);
+        let replacement = build_replacement(&em, content, registry, &kind_label);
         content.replace_range(em.start..em.end, &replacement);
     }
     findings
@@ -1028,11 +1193,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&content, &mut all_matches);
+                dedup_overlapping_matches(&mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 file.content = content;
@@ -1053,11 +1218,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&content, &mut all_matches);
+                dedup_overlapping_matches(&mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 repo_file.content = content;
@@ -1076,11 +1241,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&content, &mut all_matches);
+                dedup_overlapping_matches(&mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 gpg_key.content = content;
@@ -1105,11 +1270,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&content, &mut all_matches);
+                dedup_overlapping_matches(&mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 drop_in.content = content;
@@ -1175,11 +1340,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                     all_matches.push((idx, em));
                 }
             }
-            dedup_overlapping_matches(&content, &mut all_matches);
+            dedup_overlapping_matches(&mut all_matches);
             all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
             for (pat_idx, em) in all_matches {
                 let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                let token = registry.token_for(&kind_label, &em.text);
+                let token = registry.token_for(&kind_label, em.secret(&content));
                 content.replace_range(em.start..em.end, &token);
             }
             kernelboot.cmdline = content;
@@ -1316,11 +1481,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&content, &mut all_matches);
+                dedup_overlapping_matches(&mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 unit.command = content;
@@ -1340,12 +1505,12 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                             all_matches.push((idx, em));
                         }
                     }
-                    dedup_overlapping_matches(&content, &mut all_matches);
+                    dedup_overlapping_matches(&mut all_matches);
                     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                     for (pat_idx, em) in all_matches {
                         let kind_label =
                             format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                        let token = registry.token_for(&kind_label, &em.text);
+                        let token = registry.token_for(&kind_label, em.secret(&content));
                         content.replace_range(em.start..em.end, &token);
                     }
                     unit.service_content = content;
@@ -1381,11 +1546,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&content, &mut all_matches);
+                dedup_overlapping_matches(&mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 at_job.command = content;
@@ -1409,11 +1574,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&content, &mut all_matches);
+                dedup_overlapping_matches(&mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 timer.exec_start = content;
@@ -1455,11 +1620,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         all_matches.push((idx, em));
                     }
                 }
-                dedup_overlapping_matches(&content, &mut all_matches);
+                dedup_overlapping_matches(&mut all_matches);
                 all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                 for (pat_idx, em) in all_matches {
                     let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &mut registry, &kind_label);
+                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
                     content.replace_range(em.start..em.end, &replacement);
                 }
                 env_file.content = content;
@@ -1568,12 +1733,12 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                             all_matches.push((idx, em));
                         }
                     }
-                    dedup_overlapping_matches(&content, &mut all_matches);
+                    dedup_overlapping_matches(&mut all_matches);
                     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
                     for (pat_idx, em) in all_matches {
                         let kind_label =
                             format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                        let token = registry.token_for(&kind_label, &em.text);
+                        let token = registry.token_for(&kind_label, em.secret(&content));
                         content.replace_range(em.start..em.end, &token);
                     }
                     item.git_remote = content;
@@ -2418,7 +2583,6 @@ baseurl = https://cdn.redhat.com
             claim,
             start: secret.start,
             end: secret.end,
-            text: content[secret].to_string(),
             line_num: 1,
         };
         // The larger claim wins; the smaller one's secret runs past the
@@ -2430,26 +2594,23 @@ baseurl = https://cdn.redhat.com
             (2, em(6..12, 7..11)),
             (3, em(18..20, 19..20)),
         ];
-        dedup_overlapping_matches(content, &mut matches);
+        dedup_overlapping_matches(&mut matches);
         let got: Vec<(usize, Range<usize>, &str)> = matches
             .iter()
-            .map(|(p, em)| (*p, em.start..em.end, em.text.as_str()))
+            .map(|(p, em)| (*p, em.start..em.end, em.secret(content)))
             .collect();
         assert_eq!(got, vec![(0, 7..18, "789abcdefgh"), (3, 19..20, "j")]);
     }
 
     /// A candidate can overlap two kept secrets that do not overlap each
     /// other. All of them become one span, whichever side the winner is on
-    /// and however long the chain of bridges is, and the span's text is
-    /// the content under it.
+    /// and however long the chain of bridges is.
     #[test]
     fn test_a_bridge_between_kept_secrets_merges_all_of_them() {
-        let content = "0123456789abcdefghijklmnopqrstuvwxyz";
         let em = |claim: Range<usize>, secret: Range<usize>| EligibleMatch {
             claim,
             start: secret.start,
             end: secret.end,
-            text: content[secret].to_string(),
             line_num: 1,
         };
         type Case = (
@@ -2502,15 +2663,12 @@ baseurl = https://cdn.redhat.com
             ),
         ];
         for (name, mut matches, want) in cases {
-            dedup_overlapping_matches(content, &mut matches);
+            dedup_overlapping_matches(&mut matches);
             let got: Vec<(usize, Range<usize>)> = matches
                 .iter()
                 .map(|(p, em)| (*p, em.start..em.end))
                 .collect();
             assert_eq!(got, want, "{name}");
-            for (_, em) in &matches {
-                assert_eq!(em.text, &content[em.start..em.end], "{name}");
-            }
         }
     }
 
@@ -2604,12 +2762,9 @@ baseurl = https://cdn.redhat.com
             }
             let secrets: Vec<Range<usize>> =
                 matches.iter().map(|(_, em)| em.start..em.end).collect();
-            dedup_overlapping_matches(&input, &mut matches);
+            dedup_overlapping_matches(&mut matches);
             for pair in matches.windows(2) {
                 proptest::prop_assert!(pair[0].1.end <= pair[1].1.start, "{input:?}");
-            }
-            for (_, em) in &matches {
-                proptest::prop_assert_eq!(&em.text, &input[em.start..em.end]);
             }
             for s in &secrets {
                 proptest::prop_assert!(
@@ -2633,6 +2788,219 @@ baseurl = https://cdn.redhat.com
                 out
             );
             scan_content(&input, "/etc/app.conf");
+        }
+    }
+
+    /// Every eligible secret of `pat` in `content` as the unbounded search
+    /// finds them: each match searched for from the previous secret's
+    /// start, with no skipping and no cap. Slow on purpose; it is the
+    /// reference the bounded search in `collect_eligible_matches` must
+    /// cover.
+    fn unbounded_eligible_secrets(
+        pat: &SecretPattern,
+        content: &str,
+        path: Option<&str>,
+    ) -> Vec<Range<usize>> {
+        let markers = comment_markers(path);
+        let mut secrets = Vec::new();
+        let mut pos = 0;
+        while pos <= content.len() {
+            let Some(caps) = pat.regex.captures_at(content, pos) else {
+                break;
+            };
+            let whole = caps.get(0).unwrap();
+            let secret = caps.name(SECRET_GROUP).unwrap_or(whole);
+            let mut lines = LineCursor::new(content);
+            if let Some(em) = eligible_match(pat, content, &caps, path, &markers, &mut lines) {
+                secrets.push(em.start..em.end);
+            }
+            pos = if secret.start() > whole.start() {
+                secret.start()
+            } else if whole.end() > whole.start() {
+                whole.end()
+            } else {
+                whole.end()
+                    + content[whole.end()..]
+                        .chars()
+                        .next()
+                        .map_or(1, char::len_utf8)
+            };
+        }
+        secrets
+    }
+
+    /// Asserts that the bounded search replaces every byte the unbounded
+    /// one would, pattern by pattern. Returns true when it replaces exactly
+    /// those bytes.
+    fn assert_bounded_search_covers_unbounded(content: &str, path: Option<&str>) -> bool {
+        let mut exact = true;
+        for (idx, pat) in PATTERNS.iter().enumerate() {
+            let mut bounded = vec![false; content.len()];
+            for em in collect_eligible_matches(pat, content, path) {
+                bounded[em.start..em.end].fill(true);
+            }
+            let mut unbounded = vec![false; content.len()];
+            for s in unbounded_eligible_secrets(pat, content, path) {
+                unbounded[s].fill(true);
+            }
+            for (b, (&u, &k)) in unbounded.iter().zip(&bounded).enumerate() {
+                assert!(
+                    !u || k,
+                    "pattern {idx}: byte {b} of {content:?} is not covered"
+                );
+            }
+            exact &= bounded == unbounded;
+        }
+        exact
+    }
+
+    /// Keys packed into one value make every key's secret the rest of the
+    /// line, so resuming the search at each secret found thousands of
+    /// matches and copied each one's text: about 3.5 GiB for
+    /// `password=password=...x` under the collector's 256 KiB limit. Each
+    /// input here is under that limit and must come out fully redacted, by
+    /// `redact_string()` and by `redact()`, with a handful of matches kept
+    /// and within a time bound. Unbounded, the first input took minutes in
+    /// a release build. Bounded, each input takes about a second in a debug
+    /// build, nearly all of it the regex crate's capture search over the
+    /// one long match; the limit leaves room for a loaded machine running
+    /// the suite in parallel.
+    ///
+    /// The last two values stop before the end of the line, so the keys
+    /// inside them are each searched until the per-line bound replaces the
+    /// rest of the line: ` zqtail` is replaced too, which is accepted.
+    #[test]
+    fn test_dense_repeated_keys_redact_in_bounded_time() {
+        const COLLECTOR_LIMIT: usize = 256 * 1024;
+        const TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+        const MAX_KEPT: usize = 2;
+        let cases = [
+            (
+                "password=".repeat(29_000) + "x",
+                "password=REDACTED_PASSWORD_1",
+                "password=password=",
+            ),
+            (
+                "token=x&".repeat(32_768),
+                "token=REDACTED_PASSWORD_1",
+                "x&token=x",
+            ),
+            (
+                "{".to_string() + &"\"password\":\"zq\",".repeat(15_000) + "\"zqtail\":1}",
+                "{\"password\":REDACTED_PASSWORD_1",
+                "zq",
+            ),
+            (
+                "jdbc:mysql://".repeat(20_000) + "u:zq@db/zqtail",
+                "jdbc:mysql://REDACTED_JDBCPASSWORD_1",
+                "zq",
+            ),
+            (
+                "password=".repeat(29_000) + "zq zqtail",
+                "password=REDACTED_PASSWORD_1",
+                "zq",
+            ),
+            (
+                "jdbc:mysql://".repeat(20_000) + "u:zq@db zqtail",
+                "jdbc:mysql://REDACTED_JDBCPASSWORD_1",
+                "zq",
+            ),
+        ];
+        for (input, want, probe) in cases {
+            let name = format!("{}... ({} bytes)", &input[..20], input.len());
+            assert!(
+                input.len() <= COLLECTOR_LIMIT,
+                "{name}: {} bytes",
+                input.len()
+            );
+            let started = std::time::Instant::now();
+
+            let kept: usize = PATTERNS
+                .iter()
+                .map(|pat| collect_eligible_matches(pat, &input, None).len())
+                .sum();
+            assert!(kept <= MAX_KEPT, "{name}: kept {kept} matches");
+
+            assert_eq!(redact_string(&input), want, "{name}");
+
+            let mut snap = config_snapshot("/etc/app/app.conf", &input);
+            redact(&mut snap, &RedactOptions::default());
+            assert_eq!(
+                snap.config.as_ref().unwrap().files[0].content,
+                want,
+                "{name}"
+            );
+            let written = serde_json::to_string(&snap).unwrap();
+            assert!(!written.contains(probe), "{name}: {probe:?} survived");
+            assert!(matches!(
+                snap.redaction_state,
+                Some(RedactionState::FullyRedacted { .. })
+            ));
+
+            let elapsed = started.elapsed();
+            assert!(elapsed < TIME_LIMIT, "{name}: took {elapsed:?}");
+        }
+    }
+
+    /// The per-line bound and the skip over a covered line replace at
+    /// least what an unbounded search would, at every chain length on
+    /// either side of the bound, after a comment marker, and with the line
+    /// continuing past the value or on the next line. Below the bound they
+    /// replace exactly what it would.
+    #[test]
+    fn test_bounded_search_covers_what_an_unbounded_one_finds() {
+        let units = [
+            "password=",
+            "token=x&",
+            "\"password\":\"zq\",",
+            "jdbc:mysql://",
+            "postgres://u:",
+            "secret='zq'",
+            "password=\"zq ",
+        ];
+        let ends = [
+            "zq",
+            "u:zq@h",
+            "zq tail",
+            "zq\npassword=zq",
+            "zq \t",
+            "zq\r\nx",
+        ];
+        let path = Some("/etc/app/app.conf");
+        for unit in units {
+            for n in 1..=(MAX_REDUNDANT_RESCANS_PER_LINE * 2 + 3) {
+                for end in ends {
+                    for lead in ["", "# ", "a=1 "] {
+                        let input = format!("{lead}{}{end}", unit.repeat(n));
+                        let exact = assert_bounded_search_covers_unbounded(&input, path);
+                        assert!(
+                            exact || n > MAX_REDUNDANT_RESCANS_PER_LINE,
+                            "{input:?} replaced more than an unbounded search"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(PROP_CASES))]
+
+        /// Over long random joins of the pieces, long enough to pass the
+        /// per-line bound, the bounded search replaces every byte the
+        /// unbounded one would.
+        #[test]
+        fn prop_bounded_search_covers_what_an_unbounded_one_finds(
+            parts in proptest::collection::vec(
+                (0..PROP_PIECES.len(), 0..PROP_SEPARATORS.len()),
+                1..40,
+            )
+        ) {
+            let input: String = parts
+                .iter()
+                .map(|&(p, s)| format!("{}{}", PROP_PIECES[p], PROP_SEPARATORS[s]))
+                .collect();
+            assert_bounded_search_covers_unbounded(&input, None);
         }
     }
 
