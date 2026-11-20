@@ -1,5 +1,4 @@
 use inspectah_core::types::FindingKind;
-mod helpers;
 
 use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -13,7 +12,7 @@ use inspectah_refine::group_state;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
 
-use helpers::*;
+use crate::helpers::*;
 
 fn test_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();

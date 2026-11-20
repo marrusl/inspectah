@@ -3,6 +3,7 @@ name = "inspectah-refine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autotests = false
 
 [dependencies]
 inspectah-core = { path = "../core" }
@@ -25,3 +26,7 @@ tempfile = "3"
 tar = "0.4"
 flate2 = "1"
 walkdir = "2"
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
