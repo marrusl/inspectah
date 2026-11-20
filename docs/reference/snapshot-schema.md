@@ -41,7 +41,7 @@ see [Loading and schema version](#loading-and-schema-version).
 | Field | Type | Description |
 |:------|:-----|:------------|
 | `schema_version` | `u32` | Schema version number, currently **28**. Checked on load: any other value is rejected. |
-| `meta` | `Map<String, Value>` | Free-form metadata written by `scan`: `hostname` (omitted when `/etc/hostname` is empty), `timestamp` (RFC 3339), and `inspectah_version`. |
+| `meta` | `Map<String, Value>` | Free-form metadata written by `scan`: `hostname`, `hostname_source`, `timestamp` (RFC 3339), and `inspectah_version`. `hostname` is the static name from `/etc/hostname`, or when that is empty the transient name from `/proc/sys/kernel/hostname`, and is omitted when neither names the host. `hostname_source` is the file that supplied it, or `none` when no name was found. |
 | `os_release` | `OsRelease?` | Parsed `/etc/os-release` fields (name, version, version ID, ID, ID-like, pretty name, variant ID). |
 | `system_type` | `SystemType` | Detected system kind, serialized as `package-mode`, `rpm-ostree`, or `bootc`. Default: `unknown`. |
 

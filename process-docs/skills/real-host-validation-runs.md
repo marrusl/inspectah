@@ -312,8 +312,9 @@ A DHCP-named host has an empty `/etc/hostname` and only a transient
 hostname; `hostnamectl --static` is empty too. `collect.rs` reads
 `/etc/hostname` first and, when it is empty or whitespace, the kernel's
 transient name from `/proc/sys/kernel/hostname`. It records which file
-supplied the name in `meta["hostname_source"]`, written whenever
-`meta["hostname"]` is.
+supplied the name in `meta["hostname_source"]`, or `none` when nothing
+named the host, on every scan; a snapshot with no `hostname_source`
+predates the rule.
 
 A kernel name counts as no name only when it is the kernel's unset
 `(none)`, or when `hostnamectl --json=short` reports `HostnameSource`

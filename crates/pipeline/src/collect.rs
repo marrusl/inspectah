@@ -213,15 +213,19 @@ pub fn collect(
     snapshot.system_type = source_system_type(source);
 
     // Populate meta with provenance information
-    if let Some((hostname, source)) = resolve_hostname(executor) {
-        snapshot
-            .meta
-            .insert("hostname".into(), serde_json::Value::String(hostname));
-        snapshot.meta.insert(
-            "hostname_source".into(),
-            serde_json::Value::String(source.into()),
-        );
-    }
+    let hostname_source = match resolve_hostname(executor) {
+        Some((hostname, source)) => {
+            snapshot
+                .meta
+                .insert("hostname".into(), serde_json::Value::String(hostname));
+            source
+        }
+        None => NO_HOSTNAME_SOURCE,
+    };
+    snapshot.meta.insert(
+        "hostname_source".into(),
+        serde_json::Value::String(hostname_source.into()),
+    );
     snapshot.meta.insert(
         "timestamp".into(),
         serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
@@ -247,6 +251,11 @@ const STATIC_HOSTNAME_PATH: &str = "/etc/hostname";
 /// `/etc/hostname` is empty.
 const KERNEL_HOSTNAME_PATH: &str = "/proc/sys/kernel/hostname";
 
+/// `meta["hostname_source"]` when no source names the host, so a scan that
+/// found no name reads differently from a snapshot collected before the
+/// source was recorded, which has no `hostname_source` at all.
+const NO_HOSTNAME_SOURCE: &str = "none";
+
 /// The kernel's hostname before anything sets one. It is not a valid
 /// hostname, so no administrator can have chosen it.
 const KERNEL_UNSET_HOSTNAME: &str = "(none)";
@@ -271,9 +280,9 @@ const HOSTNAME_SOURCE_DEFAULT: &str = "default";
 /// systemd's default: whether a kernel name was set is a matter of how
 /// it got there, which its spelling cannot tell, so a `localhost` someone
 /// set stays the host's name. When hostnamed cannot answer, the kernel
-/// name is kept. `None` when neither file names the host. The source is
-/// written whenever the hostname is, so a snapshot with a hostname and no
-/// source predates this rule.
+/// name is kept. `None` when neither file names the host, recorded as
+/// [`NO_HOSTNAME_SOURCE`]. The source is written on every scan, so a
+/// snapshot with no source predates this rule.
 fn resolve_hostname(executor: &dyn Executor) -> Option<(String, &'static str)> {
     let read = |path: &str| {
         executor
@@ -849,10 +858,15 @@ mod tests {
             inspectah_core::types::os::SystemType::PackageMode
         );
 
-        // hostname absent when file doesn't exist
+        // hostname absent when no file names the host, and the source says
+        // so, which a snapshot from before the source was recorded cannot
         assert!(
             !snap.meta.contains_key("hostname"),
             "hostname should be absent when /etc/hostname is missing"
+        );
+        assert_eq!(
+            snap.meta.get("hostname_source"),
+            Some(&serde_json::json!("none")),
         );
         // version and timestamp still present
         assert!(snap.meta.contains_key("inspectah_version"));
@@ -1039,9 +1053,10 @@ mod tests {
             let expected = expected.map(|(h, s)| (h, Some(s)));
             assert_eq!(actual, expected, "case: {case}");
             if expected.is_none() {
-                assert!(
-                    !meta.contains_key("hostname_source"),
-                    "case: {case}: no source without a hostname"
+                assert_eq!(
+                    meta.get("hostname_source"),
+                    Some(&serde_json::json!("none")),
+                    "case: {case}: an unnamed host records that no source named it"
                 );
             }
         }
