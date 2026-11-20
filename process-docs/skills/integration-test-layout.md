@@ -5,7 +5,7 @@ Cargo builds every top-level `tests/*.rs` file as its own test binary, and
 each binary is linked separately. With about 86 such files across the
 workspace, a core edit relinks every binary that depends on core, and
 those links are a large part of the commit gate's test step. The crates are moving to one binary
-each: refine and pipeline so far, the other crates one binary per file until their
+each: refine, pipeline and core so far, the other crates one binary per file until their
 turn comes.
 
 ## Layout
@@ -40,7 +40,8 @@ Run one file's tests with
   `path = "tests/<stem>.rs"` entry in a `[[test]]` table of the manifest.
   It reads past comments, string literals and macro input, so a
   commented-out `mod` line does not count. It lives in a subdirectory of core's `tests/`, so
-  it is not a test target of its own.
+  it is not a test target of its own; core's `main.rs` includes it as
+  `#[path = "support/test_files_declared.rs"]`.
 - **Helper modules are declared once, in `main.rs`, and imported with
   `use crate::<mod>::...`.** A `mod helpers;` inside a test file no longer
   works: a module declared from a non-root file looks for

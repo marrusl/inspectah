@@ -3,6 +3,7 @@ name = "inspectah-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autotests = false
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
@@ -17,3 +18,7 @@ toml = "0.8"
 [dev-dependencies]
 proptest = "1"
 tempfile = "3.10"
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
