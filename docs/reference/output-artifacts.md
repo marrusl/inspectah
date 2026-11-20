@@ -101,12 +101,15 @@ tell whether the base image creates the directory.
 
 ### Systemd unit state
 
-The Containerfile writes the state of every unit the scan collected under
+The Containerfile writes the state changes the scan found under
 `# === Systemd Unit State ===`, after the configuration and drop-in `COPY`
-lines. Each verb (`enable`, `disable`, `mask`) is one `RUN systemctl <verb> --`
-with one unit per line, ordered by unit kind and then name. Every `systemctl`
-line in the Containerfile comes from this one plan. The rules below decide
-what a line says. Refine shows the same reason on the unit's row.
+lines: a mask, an enabled or disabled unit whose state differs from its preset,
+and an enabled local unit whatever its preset. A unit at its preset is recorded
+in the snapshot's inventory and gets no command. Each verb (`enable`,
+`disable`, `mask`) is one `RUN systemctl <verb> --` with one unit per line,
+ordered by unit kind and then name. Every `systemctl` line in the Containerfile
+comes from this one plan. The rules below decide what a line says. Refine shows
+the same reason on the unit's row.
 
 **Commands left out.** An `# Omitted: <unit> (<reason>)` line replaces a
 command that would fail or do something the source host did not:
@@ -115,9 +118,11 @@ command that would fail or do something the source host did not:
   excluded, or of a vendor unit with another unit file copied in at its name;
 - a `mask` where a unit file is copied in at the same name, since
   `systemctl mask` fails on a regular file;
-- any command for a unit whose owning package is excluded or not carried.
-  A unit stays when the base image ships its package or a package you kept
-  depends on it.
+- any command for a vendor unit, or a package-owned mount, automount or swap
+  unit, whose owning package is excluded or not carried. A unit stays when the
+  base image ships its package or a package you kept depends on it. A local
+  unit has no owning package, and a shadowed unit follows its staged file, as
+  below.
 
 **Units the image needs.** A `disable` or `mask` of `bootc-*`, `ostree-*` or
 `systemd-remount-fs.service`, and a `mask` of `tmp.mount`, are never carried;
@@ -128,12 +133,20 @@ carried.
 `packagekit-offline-update.service` are excluded by default, because an
 image-based host is updated by a new image. Include one in refine to carry it.
 
-**Local and shadowed units.** A service, socket, path, timer, target or slice
-whose file is in `/etc/systemd/system/` gets its `enable` when that file is
-copied, whatever the presets say, since the image loads the `/etc` file. A
-disabled local unit gets no `disable`. A mount, automount or swap unit you
-wrote gets advisory comments and never a command. A fleet aggregate leaves the
-command out when hosts hold different versions of the file.
+**Local units.** A service, socket, path, timer, target or slice whose file is
+only in `/etc/systemd/system/` is a state change when it is enabled, whatever
+the presets say, and gets its `enable` when that file is copied, since the
+image has the unit only if the export carries it. A disabled local unit gets
+no `disable`. A mount, automount or swap unit you wrote gets advisory comments
+and never a command. A fleet aggregate leaves the command out when hosts hold
+different versions of the file.
+
+**Shadowed units.** A unit whose vendor file you replaced in
+`/etc/systemd/system/` is a state change only when its state differs from its
+preset, as for any vendor unit. Its `enable` or `disable` is carried when the
+shadow file is copied, whether or not its package is in the image, since the
+image loads the `/etc` file. A shadow of a unit otherwise at its preset has no
+state row and shows on its drop-in row only.
 
 **How state is read.** The scan does not take `systemctl list-unit-files` at
 its word, because it reports `enabled` for any link to a unit. It reads the
@@ -148,12 +161,22 @@ host match what the command does. Otherwise the Containerfile names each member
 and the lines to add by hand.
 
 **Template instances.** An instance such as `getty@tty2.service` gets its
-`enable` only when every `/etc` file it reads is in the export as the host had
-it, including its template's drop-ins and any file named with `%i` or `%I`. If
-one is excluded, was not captured, had a secret redacted or is owned by a
-package and unchanged, an `# Omitted:` line names the file and reason: add the
-`enable` by hand. An instance that keeps data under `/var` also gets an
-`# Advisory:` line, since the image does not carry the data.
+`enable` only when the `/etc` configuration the scan identified for it is in
+the export as the host had it. The scan identifies the paths that the unit
+file and the drop-ins systemd applies to the instance (its own and its
+template's) name with `%i` or `%I`, and the file read by `wg-quick@`,
+`openvpn-client@` and `openvpn-server@` instances. It does not discover every
+file the application reads: an `EnvironmentFile=` or other path with no
+specifier, such as `/etc/sysconfig/x`, is not checked.
+
+When an identified file is excluded, was not captured or is not in the
+export, an `# Omitted:` line names the file and reason. Include an excluded
+file in refine to carry the `enable`; for the other two, put the file in the
+image yourself. A file a package owns and you did not change is not in the
+export, but the image's package supplies it: add the `enable` by hand. A file
+with a redacted secret is omitted too: provision the secret on the deployed
+host and enable the unit there. An instance that keeps data under `/var` also
+gets an `# Advisory:` line, since the image does not carry the data.
 
 ### `--inspect-only` mode
 
