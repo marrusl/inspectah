@@ -119,6 +119,32 @@ Re-measured 2026-11-08 on the same machine with the current
 `-D clippy::all --all-targets` gate: 43 s for the cold build, 96 s for
 the full suite, and 63 to 88 s for the hook on realistic changes.
 
+Measured 2026-11-20 after the gate rework (hook at `1372ebaa`), same
+machine, macOS 27.2, `rustc 1.100.0 (0ef1bc386 2026-11-09)`, in a fresh
+linked worktree with its own `target/`. Each sample appends a comment
+line to one file, stages it and runs `.githooks/pre-commit` directly;
+the probe is then restored and never committed. Load is the one-minute
+average before and after. The machine idles near 9 on its own, so these
+are not quiet-machine numbers.
+
+| edit | sample | fmt | clippy | test | hook wall | load before / after |
+|---|---|---|---|---|---|---|
+| `crates/cli/src/main.rs` (leaf) | 1 | 2s | 2s | 51s | 56s | 13.6 / 11.3 |
+| `crates/cli/src/main.rs` (leaf) | 2 | 1s | 2s | 32s | 36s | 10.8 / 10.4 |
+| `crates/cli/src/main.rs` (leaf) | 3 | 1s | 2s | 35s | 41s | 10.4 / 11.8 |
+| `crates/core/src/lib.rs` (core) | 1 | 2s | 11s | 104s | 119s | 11.4 / 9.0 |
+| `crates/core/src/lib.rs` (core) | 2 | 1s | 11s | 106s | 120s | 9.0 / 9.7 |
+| `crates/core/src/lib.rs` (core) | 3 | 2s | 11s | 111s | 126s | 9.7 / 9.9 |
+
+Medians: **41s for a leaf edit and 120s for a core edit**, against 70s
+and 135s before the rework. The worktree's warm-up build (clippy plus
+`cargo test --workspace --no-run` from an empty `target/`) took 161s
+from creation to finish (55s clippy, 104s test build) at a load of
+about 23. One `cargo test -p inspectah-cli --no-run` after it took 17s,
+so the first hook run in a fresh worktree pays a short extra compile.
+The first leaf sample's slower test gate is the first execution of
+freshly linked binaries.
+
 There is no per-binary idle. The row that matters is the third one: the
 very first execution of all **77** freshly linked test binaries, none of
 them ever run before, is 29 seconds for all 3010 tests together — well
