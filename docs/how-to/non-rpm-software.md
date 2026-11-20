@@ -277,8 +277,7 @@ comment block in place of the `COPY`, naming each path:
 
 *Sample output from a RHEL 9.8 test host. Command: `sudo inspectah -y scan
 --include-unmanaged`, with one file, `/srv/www/index.html`, added to the
-sample host. Lines 127 to 134 of the Containerfile. The text `symlink to
-var/srv` is printed without a leading slash.*
+sample host. Lines 127 to 134 of the Containerfile.*
 
 The audit report carries the same note under **Unmanaged Files under
 /srv**:
