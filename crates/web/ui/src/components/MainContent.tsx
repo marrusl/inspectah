@@ -246,6 +246,9 @@ export function MainContent({
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // Version Changes in the packages section, collapsed until opened.
+  const [versionChangesExpanded, setVersionChangesExpanded] = useState(false);
+
   // The units section's result count and its first-row focus (§ 6.12):
   // the section computes both, since only it knows its pins and groups.
   const [unitsResultCount, setUnitsResultCount] = useState(0);
@@ -677,7 +680,8 @@ export function MainContent({
         <div style={{ marginTop: "var(--pf-t--global--spacer--lg)" }}>
           <ExpandableSection
             toggleText="Version Changes"
-            isExpanded={false}
+            isExpanded={versionChangesExpanded}
+            onToggle={(_event, expanded) => setVersionChangesExpanded(expanded)}
             data-testid="version-changes-panel"
           >
             <VersionChangesTable

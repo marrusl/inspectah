@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MainContent } from "../MainContent";
 import { VersionChangesTable } from "../VersionChangesTable";
 import { emptyView } from "../../test-utils/emptyView";
@@ -85,6 +86,33 @@ describe("VersionChanges integration in MainContent", () => {
     // Version changes is now in an ExpandableSection panel within packages view
     expect(screen.getByTestId("version-changes-panel")).toBeInTheDocument();
     expect(screen.getByText("Version Changes")).toBeInTheDocument();
+  });
+
+  it("Version Changes opens and closes when its toggle is clicked", async () => {
+    const user = userEvent.setup();
+    render(
+      <MainContent
+        activeSection="packages"
+        loading={false}
+        viewData={makeViewData([downgrade, upgrade])}
+        sections={makeSections(2)}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+        sectionSearchOpen={false}
+        onSectionSearchClose={vi.fn()}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Version Changes" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByTestId("context-item-httpd.x86_64")).not.toBeVisible();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("context-item-httpd.x86_64")).toBeVisible();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
 
   it("plain section entry focuses first data row, not group header", () => {
