@@ -381,7 +381,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         lines.push(String::new());
         for w in &snap.warnings {
             if !w.message.is_empty() {
-                lines.push(format!("- {}", w.message));
+                lines.push(format!("- {}", md_code(&w.message)));
             }
         }
         lines.push(String::new());

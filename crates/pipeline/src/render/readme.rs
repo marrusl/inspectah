@@ -6,6 +6,7 @@ use inspectah_core::types::units::{OrdinaryKind, UnitKind, UnitState};
 
 use super::baseline_fmt;
 use super::containerfile::base_image_from_snapshot;
+use super::md_literal::md_code;
 use super::selinux;
 
 /// § 10.1 and § 10.2 "Never the machine-id": a carried unit state holds
@@ -388,7 +389,7 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
                 } else {
                     format!("**{}:** ", w.inspector)
                 };
-                lines.push(format!("- {prefix}{}", w.message));
+                lines.push(format!("- {prefix}{}", md_code(&w.message)));
             }
         }
         lines.push(String::new());

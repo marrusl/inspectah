@@ -35,7 +35,12 @@ string matching: `crates/cli/tests/sysctl_scan_test.rs`
 and asserts each cell's code-node literal equals the value and the section
 holds no HTML, link or image node.
 
-The audit's `#### Sysctl` block uses it for every interpolation. Most other
+The audit's `#### Sysctl` block uses it for every interpolation, and the
+Warnings list in `README.md` and `audit-report.md` prints each warning
+message as one `md_code` span: a message is prose with host values
+already interpolated by the collector (repo file names, key paths, unit
+names), so the renderer cannot escape only the host part.
+`crates/cli/tests/warning_markdown_test.rs` parses both reports. Most other
 audit sections still print paths raw inside hand-written backticks (the
 Unowned Config Files list prints a file name holding a newline across two
 lines); that is pre-existing, not covered by this helper yet.
