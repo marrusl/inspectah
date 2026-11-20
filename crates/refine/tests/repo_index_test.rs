@@ -508,3 +508,137 @@ fn only_host_enabled_sections_keep_a_file_or_key_carried() {
         assert_eq!([none, site, disabled], expected, "{what}");
     }
 }
+
+/// Provenance and the repo-toggle gate follow the definition dnf uses: the
+/// first file in dnf's read order to define an id, never the last one in
+/// `repo_files`, which is the host's `read_dir` order. Every case runs with
+/// the files in both orders, and the inventory of defining files keeps
+/// both whichever one wins.
+#[test]
+fn a_duplicate_repo_id_takes_dnfs_definition_in_either_file_order() {
+    const KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-r";
+    const ENABLED: &str = "[r]\nbaseurl=http://example.invalid/r\nenabled=1\n";
+    const DISABLED: &str = "[r]\nbaseurl=http://example.invalid/r\nenabled=0\n";
+    const KEYED: &str =
+        "[r]\nbaseurl=http://example.invalid/r\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-r\n";
+    const UNKEYED_MISSING: &str =
+        "[r]\nbaseurl=http://example.invalid/r\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-gone\n";
+    // `(what, a.repo, b.repo, provenance, toggle accepted)`.
+    let cases = [
+        (
+            "a enabled, b disabled",
+            ENABLED,
+            DISABLED,
+            RepoProvenance::Verified,
+            true,
+        ),
+        (
+            "a disabled, b enabled",
+            DISABLED,
+            ENABLED,
+            RepoProvenance::Disabled,
+            false,
+        ),
+        (
+            "a's key captured, b's missing",
+            KEYED,
+            UNKEYED_MISSING,
+            RepoProvenance::Verified,
+            true,
+        ),
+        (
+            "a's key missing, b's captured",
+            UNKEYED_MISSING,
+            KEYED,
+            RepoProvenance::Incomplete,
+            true,
+        ),
+    ];
+    for (what, a, b, provenance, toggles) in cases {
+        let file = |name: &str, content: &str| RepoFile {
+            path: format!("/etc/yum.repos.d/{name}"),
+            content: content.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
+        let forward = vec![file("a.repo", a), file("b.repo", b)];
+        let mut reverse = forward.clone();
+        reverse.reverse();
+        for (order, repo_files) in [("in order", forward), ("reversed", reverse)] {
+            let mut snap = InspectionSnapshot::new();
+            snap.rpm = Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "tool".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "r".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+                repo_files,
+                gpg_keys: vec![RepoFile {
+                    path: KEY.into(),
+                    content: "key-data".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            let index = RepoIndex::build(&snap);
+            assert_eq!(
+                index.provenance(&RepoId::new("r")),
+                provenance,
+                "{what}, {order}: provenance"
+            );
+            let mut defining = index.repo_file_by_section()[&RepoId::new("r")].clone();
+            defining.sort();
+            assert_eq!(
+                defining,
+                ["/etc/yum.repos.d/a.repo", "/etc/yum.repos.d/b.repo"],
+                "{what}, {order}: both files stay in the inventory"
+            );
+            // `include: true`: with no baseline the package starts
+            // excluded, so including the repo is a real change and reaches
+            // the provenance gate.
+            let mut session = RefineSession::new(snap);
+            let toggled = session.apply(RefinementOp::SetInclude {
+                item_id: ItemId::Repo { path: "r".into() },
+                include: true,
+            });
+            assert_eq!(
+                toggled.is_ok(),
+                toggles,
+                "{what}, {order}: toggle {toggled:?}"
+            );
+        }
+    }
+}
+
+/// `[ab]` and `[AB]` are two repos to dnf: each spelling has its own
+/// provenance, and a lone case variant answers for a package's spelling.
+#[test]
+fn case_variant_repo_ids_keep_their_own_provenance() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        repo_files: vec![RepoFile {
+            path: "/etc/yum.repos.d/a.repo".into(),
+            content: "[ab]\nbaseurl=http://example.invalid/l\nenabled=0\n\
+                      [AB]\nbaseurl=http://example.invalid/u\nenabled=1\n\
+                      [Solo]\nbaseurl=http://example.invalid/s\nenabled=0\n"
+                .into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let index = RepoIndex::build(&snap);
+    let cases = [
+        ("ab", RepoProvenance::Disabled),
+        ("AB", RepoProvenance::Verified),
+        ("Ab", RepoProvenance::Unknown),
+        ("solo", RepoProvenance::Disabled),
+    ];
+    for (id, provenance) in cases {
+        assert_eq!(index.provenance(&RepoId::new(id)), provenance, "{id}");
+    }
+}

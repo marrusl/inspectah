@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::repo::{self, RepoId, RepoSectionDef};
+use inspectah_core::types::repo::{self, RepoId};
 use inspectah_core::types::rpm::RepoFile;
 
 use crate::types::{RepoProvenance, RepoTier};
@@ -14,9 +14,11 @@ pub use repo::OFFICIAL_OPTIONAL_REPOS;
 /// Index mapping repo section IDs to packages, repo file paths, and GPG keys.
 /// Built once at session construction from snapshot data.
 ///
-/// Keyed by [`RepoId`] throughout: a package's recorded `source_repo` and a
-/// `.repo` file's `[section]` header fold ASCII case against each other, so
-/// a mixed-case spelling on either side still resolves to the same entry.
+/// The inventory maps are keyed by [`RepoId`]: a package's recorded
+/// `source_repo` and a `.repo` file's `[section]` header fold ASCII case
+/// against each other, so a mixed-case spelling on either side still
+/// resolves to the same entry. Provenance is judged on the one definition
+/// dnf uses, per exact spelling ([`Self::provenance`]).
 pub struct RepoIndex {
     /// Packages grouped by their `source_repo` section ID.
     packages_by_repo: BTreeMap<RepoId, Vec<String>>,
@@ -33,8 +35,10 @@ pub struct RepoIndex {
     /// sections that name it. Only these keep the key carried
     /// ([`Self::gpg_key_carried`]).
     enabled_sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>>,
-    /// Computed provenance per section ID.
-    provenance_map: BTreeMap<RepoId, RepoProvenance>,
+    /// Provenance per section id, keyed by the id's exact spelling: dnf
+    /// keys repos case-sensitively, so `[ab]` and `[AB]` each have their
+    /// own. Read through [`Self::provenance`], which picks the spelling.
+    provenance_map: BTreeMap<String, RepoProvenance>,
 }
 
 /// The paths of the captured keys a section's `gpgkey=` path names
@@ -74,14 +78,15 @@ impl RepoIndex {
 
         // 1. Parse repo files for sections and GPG key directives, using the
         // INI parser shared with collect (`inspectah_core::types::repo`).
+        // These are the inventory of every defining file and key, which
+        // exclusion needs whichever definition dnf uses; provenance is
+        // judged on that one definition alone, in step 3.
         let mut repo_file_by_section: BTreeMap<RepoId, Vec<String>> = BTreeMap::new();
         let mut gpg_keys_by_section: BTreeMap<RepoId, Vec<String>> = BTreeMap::new();
         let mut enabled_sections_by_file: BTreeMap<String, BTreeSet<RepoId>> = BTreeMap::new();
         let mut enabled_sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>> = BTreeMap::new();
-        // Last section wins when the same id (folding case) appears more
-        // than once; file/key associations above accumulate across all
-        // occurrences regardless.
-        let mut section_defs: BTreeMap<RepoId, RepoSectionDef> = BTreeMap::new();
+        // Every exact spelling any file defines.
+        let mut spellings: BTreeSet<String> = BTreeSet::new();
 
         for repo_file in &rpm.repo_files {
             for section in repo::parse_repo_sections(&repo_file.content) {
@@ -116,7 +121,7 @@ impl RepoIndex {
                     }
                 }
 
-                section_defs.insert(section.id.clone(), section);
+                spellings.insert(section.id.as_str().to_owned());
             }
         }
 
@@ -134,9 +139,20 @@ impl RepoIndex {
             }
         }
 
-        // 3. Compute provenance for every section ID we know about.
-        let mut provenance_map: BTreeMap<RepoId, RepoProvenance> = BTreeMap::new();
-        for (id, section) in &section_defs {
+        // 3. Compute provenance for every section id, from the definition
+        // dnf uses on the host (`effective_definition`: the first file in
+        // dnf's read order), never from the order of `repo_files`, which is
+        // the host's `read_dir` order. Each exact spelling is its own repo.
+        let mut provenance_map: BTreeMap<String, RepoProvenance> = BTreeMap::new();
+        for spelling in spellings {
+            let Some(section) = repo::effective_definition(
+                rpm.repo_files
+                    .iter()
+                    .map(|f| (f.path.as_str(), f.content.as_str())),
+                &RepoId::new(spelling.as_str()),
+            ) else {
+                continue;
+            };
             let prov = if !section.enabled {
                 RepoProvenance::Disabled
             } else if section.has_source
@@ -149,15 +165,7 @@ impl RepoIndex {
             } else {
                 RepoProvenance::Incomplete
             };
-            provenance_map.insert(id.clone(), prov);
-        }
-
-        // Section IDs referenced by packages but with no section on the
-        // host are Stale -- likely removed or renamed since install.
-        for id in packages_by_repo.keys() {
-            provenance_map
-                .entry(id.clone())
-                .or_insert(RepoProvenance::Stale);
+            provenance_map.insert(spelling, prov);
         }
 
         Self {
@@ -214,14 +222,29 @@ impl RepoIndex {
     }
 
     /// Look up the provenance of a repo section ID.
+    ///
+    /// The section is the one spelled as `id`, or the one case variant of
+    /// it ([`repo::section_spelling`]). Two or more case variants and no
+    /// exact spelling is `Unknown`: no one section answers. An id with no
+    /// section that a package references is `Stale`, likely removed or
+    /// renamed since install.
     pub fn provenance(&self, id: &RepoId) -> RepoProvenance {
         if id.as_str().is_empty() || id.as_str().eq_ignore_ascii_case("@commandline") {
             return RepoProvenance::Unknown;
         }
-        self.provenance_map
-            .get(id)
-            .copied()
-            .unwrap_or(RepoProvenance::Unknown)
+        let defined = self.provenance_map.keys().map(String::as_str);
+        if let Some(spelling) = repo::section_spelling(defined, id.as_str()) {
+            return self.provenance_map[spelling];
+        }
+        let any_variant = self
+            .provenance_map
+            .keys()
+            .any(|spelling| spelling.eq_ignore_ascii_case(id.as_str()));
+        if !any_variant && self.packages_by_repo.contains_key(id) {
+            RepoProvenance::Stale
+        } else {
+            RepoProvenance::Unknown
+        }
     }
 
     /// Check whether a section ID is a well-known distro repo.
