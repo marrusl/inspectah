@@ -60,8 +60,9 @@ names.
 **Who is affected.** Any export that carries a user (Containerfile strategy
 `useradd`) whose primary gid or supplementary group is not created by a
 `RUN groupadd` line above it and is not already in the base image. Typical
-cases are a group excluded in refine while a user still names it, and a group
-the scan did not record.
+cases are a group the scan did not record (the users inspector records only
+groups with gid 1000 to 59999), and a group present in the snapshot but marked
+not included.
 
 **Workarounds.** Pick one.
 
