@@ -194,7 +194,7 @@ impl<'a> Evidence<'a> {
                         || (pulled_in.contains(&format!("{}.{}", pkg.name, pkg.arch))
                             && !matches!(
                                 super::repo_enabling::repo_enabling_export(rpm, &repos, pkg),
-                                super::repo_enabling::RepoEnablingExport::Lost(_)
+                                super::repo_enabling::RepoEnablingExport::Lost
                             ))
                 })
                 .map(|pkg| pkg.name.as_str())

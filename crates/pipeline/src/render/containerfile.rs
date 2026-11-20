@@ -1013,8 +1013,11 @@ fn packages_section_lines(
             }
             // A demoted package the operator uploaded an RPM for installs
             // from it in the repo-less block, which settles the FIXME.
-            super::repo_enabling::RepoEnablingExport::Lost(loss) => {
+            super::repo_enabling::RepoEnablingExport::Lost => {
                 if !matches!(route, PackageRoute::Upload(_)) {
+                    let loss = super::repo_enabling::serving_loss(snap, pkg).expect(
+                        "a lost proof belongs to a repo-enabling package of this rpm section",
+                    );
                     demoted.push((pkg, loss));
                 }
             }
@@ -3016,6 +3019,105 @@ mod tests {
             });
             super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
             assert_eq!(epel_release_verdict(&snap).is_ok(), served, "{what}");
+        }
+    }
+
+    /// The file a demotion FIXME names is one whose inclusion, staged as
+    /// the export would stage it, serves the package again. An included
+    /// config entry at `a.repo/stray` makes the stager withhold both it and
+    /// an included `a.repo`, so naming `a.repo` would send the operator in
+    /// a circle: while that conflict remains the FIXME names another file
+    /// that does serve, or none. Each case follows the advice and checks
+    /// the projection, the Containerfile and the audit again.
+    #[test]
+    fn following_the_recovery_advice_serves_the_package_through_staging() {
+        const ON: &str = "[epel]\nbaseurl=https://example.invalid/epel\nenabled=1\n";
+        const OTHER: &str = "[other]\nbaseurl=https://example.invalid/other\n";
+        const STRAY: &str = "/etc/yum.repos.d/a.repo/stray";
+        const NO_FILE: &str = "# FIXME: re-include repo epel, or upload the RPM; epel-release \
+                               installs from that repo definition, which this export does not carry";
+        let names = |file: &str| {
+            format!(
+                "# FIXME: include /etc/yum.repos.d/{file} under Configuration Files, or \
+                 re-include repo epel, or upload the RPM; epel-release installs from that \
+                 repo definition, which this export does not carry"
+            )
+        };
+        let build = |files: &[(&str, &str, bool)], stray: bool| {
+            let mut snap = snapshot_with_packages(&["epel-release"]);
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            rpm.packages_added[0].source_repo = "@commandline".into();
+            rpm.packages_added[0].repo_enabling_from =
+                vec![inspectah_core::types::repo::RepoId::new("epel")];
+            rpm.repo_files = files
+                .iter()
+                .map(|(name, content, included)| {
+                    repo_file(&format!("/etc/yum.repos.d/{name}"), content, *included)
+                })
+                .collect();
+            if stray {
+                snap.config = Some(inspectah_core::types::config::ConfigSection {
+                    files: vec![inspectah_core::types::config::ConfigFileEntry {
+                        path: STRAY.into(),
+                        content: "x\n".into(),
+                        disposition: FindingKind::included(),
+                        ..Default::default()
+                    }],
+                });
+            }
+            snap
+        };
+        // `(what, files, stray config entry, what the FIXME says)`.
+        type Case<'a> = (&'a str, Vec<(&'a str, &'a str, bool)>, bool, String);
+        let cases: Vec<Case> = vec![
+            (
+                "no conflict: a.repo is named",
+                vec![("a.repo", ON, false), ("z.repo", OTHER, true)],
+                false,
+                names("a.repo"),
+            ),
+            (
+                "a.repo would be withheld: nothing is named",
+                vec![("a.repo", ON, false), ("z.repo", OTHER, true)],
+                true,
+                NO_FILE.to_string(),
+            ),
+            (
+                "a.repo would be withheld: the next file that serves is named",
+                vec![
+                    ("a.repo", ON, false),
+                    ("c.repo", ON, false),
+                    ("z.repo", OTHER, true),
+                ],
+                true,
+                names("c.repo"),
+            ),
+        ];
+        for (what, files, stray, fixme) in cases {
+            let mut snap = build(&files, stray);
+            super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+            assert_eq!(epel_release_verdict(&snap), Err(fixme.clone()), "{what}");
+
+            // Follow the advice: include the file it names, from the
+            // snapshot as it was before the projection demoted anything.
+            let Some(named) = files
+                .iter()
+                .map(|f| f.0)
+                .find(|name| fixme.contains(&format!("include /etc/yum.repos.d/{name} under")))
+            else {
+                continue;
+            };
+            let followed: Vec<(&str, &str, bool)> = files
+                .iter()
+                .map(|&(name, content, included)| (name, content, included || name == named))
+                .collect();
+            let mut snap = build(&followed, stray);
+            super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+            assert_eq!(
+                epel_release_verdict(&snap),
+                Ok(()),
+                "{what}: including {named} serves the package"
+            );
         }
     }
 

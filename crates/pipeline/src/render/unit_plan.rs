@@ -145,7 +145,7 @@ pub(crate) fn installs_on_its_own_route(
         && (pkg.uploaded
             || !matches!(
                 repo_enabling_export(rpm, repos, pkg),
-                RepoEnablingExport::Lost(_)
+                RepoEnablingExport::Lost
             ))
 }
 

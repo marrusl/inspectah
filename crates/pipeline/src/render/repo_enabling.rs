@@ -39,15 +39,15 @@ const REPO_CONFIG_DIRS: [&str; 2] = [YUM_REPOS_DIR, "/etc/pki/rpm-gpg/"];
 const REPO_FILE_SUFFIX: &str = ".repo";
 
 /// What the Containerfile and the projection name when a repo-enabling
-/// package loses its proof.
+/// package loses its proof ([`serving_loss`]).
 pub(crate) struct ServingLoss {
     /// The serving section the export no longer provides.
     pub id: RepoId,
     /// The `.repo` file that would restore it: a captured file the export
-    /// leaves out whose re-inclusion makes dnf's definition of `id` serve
-    /// the package again, or the package's own dropped file. `None` when
-    /// no single file would: the advice that names a file is dropped
-    /// rather than invented.
+    /// leaves out whose inclusion, staged as the export would stage it,
+    /// makes dnf's definition of `id` serve the package again, or the
+    /// package's own dropped file. `None` when no single file would: the
+    /// advice that names a file is dropped rather than invented.
     pub file: Option<String>,
 }
 
@@ -59,8 +59,8 @@ pub(crate) enum RepoEnablingExport {
     /// the package itself provides is still included.
     Served,
     /// No proof survives. The package installs from a repo definition this
-    /// export does not carry.
-    Lost(ServingLoss),
+    /// export does not carry; [`serving_loss`] says what would restore it.
+    Lost,
 }
 
 /// Decide whether `pkg`'s repo-enabling proof survives this export.
@@ -80,27 +80,12 @@ pub(crate) fn repo_enabling_export(
     repos: &InstallRepos,
     pkg: &PackageEntry,
 ) -> RepoEnablingExport {
-    let Some(first_id) = pkg.repo_enabling_from.first() else {
+    if pkg.repo_enabling_from.is_empty() {
         return RepoEnablingExport::NotEnabling;
-    };
-
-    // The advice names a serving id and, when one exists, a file whose
-    // re-inclusion would serve the package again; the first id otherwise.
-    let recovery = pkg
-        .repo_enabling_from
-        .iter()
-        .find_map(|id| restoring_file(rpm, repos, id).map(|f| (id.clone(), f)));
-    let named_id = recovery
-        .as_ref()
-        .map_or_else(|| first_id.clone(), |(id, _)| id.clone());
-
-    if let Some(dropped) = dropped_owned_path(rpm, pkg) {
-        return RepoEnablingExport::Lost(ServingLoss {
-            id: named_id,
-            file: Some(dropped.to_string()),
-        });
     }
-
+    if dropped_owned_path(rpm, pkg).is_some() {
+        return RepoEnablingExport::Lost;
+    }
     if pkg.repo_enabling_from.iter().any(|id| {
         repos
             .effective(id)
@@ -108,11 +93,43 @@ pub(crate) fn repo_enabling_export(
     }) {
         RepoEnablingExport::Served
     } else {
-        RepoEnablingExport::Lost(ServingLoss {
-            id: named_id,
-            file: recovery.map(|(_, f)| f.to_string()),
-        })
+        RepoEnablingExport::Lost
     }
+}
+
+/// What to name for `pkg`, a package whose proof this export lost
+/// ([`RepoEnablingExport::Lost`]): the package's own dropped repo file or
+/// key when it has one, else the first captured file whose inclusion
+/// would serve it again ([`restoring_file`]), with the serving id that
+/// file restores; the first serving id and no file otherwise. `None` only
+/// for a package that is not repo-enabling or a snapshot with no RPM
+/// section, neither of which can lose a proof.
+///
+/// Separate from the verdict because answering it re-stages the export
+/// once per candidate file, which only the advice needs.
+pub(crate) fn serving_loss(snap: &InspectionSnapshot, pkg: &PackageEntry) -> Option<ServingLoss> {
+    let rpm = snap.rpm.as_ref()?;
+    let first_id = pkg.repo_enabling_from.first()?;
+    if let Some(dropped) = dropped_owned_path(rpm, pkg) {
+        return Some(ServingLoss {
+            id: first_id.clone(),
+            file: Some(dropped.to_string()),
+        });
+    }
+    Some(
+        pkg.repo_enabling_from
+            .iter()
+            .find_map(|id| {
+                restoring_file(snap, rpm, id).map(|f| ServingLoss {
+                    id: id.clone(),
+                    file: Some(f.to_string()),
+                })
+            })
+            .unwrap_or_else(|| ServingLoss {
+                id: first_id.clone(),
+                file: None,
+            }),
+    )
 }
 
 /// Whether dnf can install a repo-enabling package from `sec`, the
@@ -125,14 +142,21 @@ fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDef) -> bool 
 }
 
 /// The first captured `.repo` file, in dnf's read order, that the export
-/// leaves out and whose re-inclusion alone would make dnf's definition of
-/// `id` serve the package ([`InstallRepos::effective_with`]).
+/// leaves out and whose inclusion alone would make dnf's definition of
+/// `id` serve the package, judged on the export re-staged with that file
+/// included ([`InstallRepos::with_included`]).
 ///
 /// Neither the order of `repo_files` nor the first file that merely
-/// defines `id` decides it: re-including a file whose definition is
-/// disabled, or one an earlier file still shadows, would not recover the
-/// proof, and advice naming it would send the operator in a circle.
-fn restoring_file<'a>(rpm: &'a RpmSection, repos: &InstallRepos, id: &RepoId) -> Option<&'a str> {
+/// defines `id` decides it: including a file whose definition is
+/// disabled, one an earlier file still shadows, or one the stager would
+/// withhold (a config entry at `a.repo/stray` withholds both it and
+/// `a.repo`) would not recover the proof, and advice naming it would send
+/// the operator in a circle.
+fn restoring_file<'a>(
+    snap: &InspectionSnapshot,
+    rpm: &'a RpmSection,
+    id: &RepoId,
+) -> Option<&'a str> {
     let mut left_out: Vec<&RepoFile> = rpm
         .repo_files
         .iter()
@@ -145,9 +169,10 @@ fn restoring_file<'a>(rpm: &'a RpmSection, repos: &InstallRepos, id: &RepoId) ->
     left_out
         .into_iter()
         .find(|f| {
-            repos
-                .effective_with(f, id)
-                .is_some_and(|sec| serves(rpm, repos, &sec))
+            let restored = InstallRepos::with_included(snap, f);
+            restored
+                .effective(id)
+                .is_some_and(|sec| serves(rpm, &restored, &sec))
         })
         .map(|f| f.path.as_str())
 }
@@ -220,26 +245,36 @@ pub(crate) fn owned_repo_file_name<'a>(rpm: &'a RpmSection, pkg: &PackageEntry) 
 /// export is not installing has no proof to lose.
 pub fn demote_unserved_repo_enabling(snap: &mut InspectionSnapshot) {
     let repos = InstallRepos::of(snap);
-    let Some(rpm) = snap.rpm.as_mut() else {
-        return;
-    };
     let demoted: Vec<(usize, String)> = {
-        let read = &*rpm;
-        read.packages_added
+        let read: &InspectionSnapshot = snap;
+        let Some(rpm) = read.rpm.as_ref() else {
+            return;
+        };
+        rpm.packages_added
             .iter()
             .enumerate()
             .filter(|(_, pkg)| pkg.disposition.is_included())
-            .filter_map(|(i, pkg)| match repo_enabling_export(read, &repos, pkg) {
-                RepoEnablingExport::Lost(loss) => Some((
-                    i,
-                    format!(
-                        "No repo source: the repo that served {} ({}) is not carried by this export",
-                        pkg.name, loss.id
-                    ),
-                )),
-                RepoEnablingExport::Served | RepoEnablingExport::NotEnabling => None,
+            .filter(|(_, pkg)| {
+                matches!(
+                    repo_enabling_export(rpm, &repos, pkg),
+                    RepoEnablingExport::Lost
+                )
+            })
+            .filter_map(|(i, pkg)| {
+                serving_loss(read, pkg).map(|loss| {
+                    (
+                        i,
+                        format!(
+                            "No repo source: the repo that served {} ({}) is not carried by this export",
+                            pkg.name, loss.id
+                        ),
+                    )
+                })
             })
             .collect()
+    };
+    let Some(rpm) = snap.rpm.as_mut() else {
+        return;
     };
     for (i, annotation) in demoted {
         rpm.packages_added[i].repoless_annotation = annotation;

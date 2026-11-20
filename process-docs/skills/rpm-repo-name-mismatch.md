@@ -188,11 +188,15 @@ of the two questions that ask it. Never resolve an id by walking
   accepts that definition only when it is enabled, keyed and has a
   source (`has_source`): an enabled copy with no `baseurl`, `metalink`
   or `mirrorlist`, or one whose source a later assignment cleared,
-  cannot supply the package. Recovery advice asks
-  `InstallRepos::effective_with`: it names a left-out file only when
-  re-including that file alone would make dnf's definition serve the
-  package, so the FIXME never points at a file that is already included
-  or one an earlier file would still shadow.
+  cannot supply the package. Recovery advice (`serving_loss`, asked
+  only once the verdict is `Lost`) asks `InstallRepos::with_included`,
+  which re-stages the whole export with the candidate file included: it
+  names a left-out file only when including that file alone would make
+  dnf's definition serve the package, so the FIXME never points at a
+  file that is already included, one an earlier file would still shadow,
+  or one the stager would withhold. Adding the candidate to the staged
+  set by hand is not enough: a config entry at `a.repo/stray` makes the
+  stager withhold both it and an included `a.repo`.
 
 Both are exact-first and case-aware. dnf keys repos by exact spelling,
 so `[ab]` and `[AB]` are two repos, in one file or in two;

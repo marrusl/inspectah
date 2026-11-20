@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use inspectah_core::rpm_filename::StagedName;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::repo::{RepoAttribution, RepoId, RepoSectionDef, effective_definition};
 use inspectah_core::types::rpm::{PackageEntry, RepoFile, RpmSection};
@@ -297,25 +298,26 @@ impl InstallRepos {
         )
     }
 
-    /// The definition of `id` dnf would use if the export also staged
-    /// `file`, as re-including it would: the question recovery advice
-    /// asks before it names a file. A file already staged at that path
-    /// changes nothing (dnf reads what is staged there), and a default
-    /// repo file does not bring the `COPY` on its own.
-    pub(crate) fn effective_with(&self, file: &RepoFile, id: &RepoId) -> Option<RepoSectionDef> {
-        if self.files.iter().any(|(path, _)| *path == file.path) {
-            return self.effective(id);
+    /// The set the export would have if it also included the repo file
+    /// `file`: the snapshot re-staged with every entry at that path and
+    /// content included, the question recovery advice asks before it names
+    /// a file. Re-staging, rather than adding the file to this set, is
+    /// what keeps the advice honest: the stager can withhold the file (a
+    /// config entry under its path makes it a file-and-directory
+    /// conflict), a config entry at the same path replaces its content,
+    /// and a default repo file does not bring the `COPY` on its own.
+    pub(crate) fn with_included(snap: &InspectionSnapshot, file: &RepoFile) -> Self {
+        let mut proposed = snap.clone();
+        if let Some(rpm) = proposed.rpm.as_mut() {
+            for entry in rpm
+                .repo_files
+                .iter_mut()
+                .filter(|r| r.path == file.path && r.content == file.content)
+            {
+                entry.disposition = FindingKind::included();
+            }
         }
-        if self.custom == 0 && file.is_default_repo {
-            return None;
-        }
-        effective_definition(
-            self.files
-                .iter()
-                .map(|(path, content)| (path.as_str(), content.as_str()))
-                .chain(std::iter::once((file.path.as_str(), file.content.as_str()))),
-            id,
-        )
+        Self::of(&proposed)
     }
 }
 
