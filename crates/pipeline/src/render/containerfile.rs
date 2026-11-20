@@ -387,7 +387,7 @@ impl CrbFlags {
     /// transaction that also needs repos the source host kept disabled.
     /// The banner stays with `self`. Every id must already have passed
     /// `sanitize_shell_value`.
-    fn with_repos<'a>(&self, ids: impl IntoIterator<Item = &'a RepoId>) -> CrbFlags {
+    fn with_repos<'a>(&self, ids: impl IntoIterator<Item = &'a str>) -> CrbFlags {
         CrbFlags {
             flags: ids.into_iter().fold(self.flags.clone(), |flags, id| {
                 format!("{flags} --enablerepo={id}")
@@ -966,8 +966,11 @@ fn packages_section_lines(
     // Packages installed from a repo the source host has disabled, by repo.
     // They come from the same selection as the plain list, so a non-leaf
     // dependency is left to dnf here as it is there, and naming and
-    // multiarch handling match.
-    let mut disabled_repo_installs: std::collections::BTreeMap<RepoId, Vec<String>> =
+    // multiarch handling match. Keyed by the id exactly as the route
+    // spells it, not by `RepoId`, whose equality folds case: `[ab]` and
+    // `[AB]` are two repos to dnf, and folding them into one key left the
+    // transaction enabling only one of them.
+    let mut disabled_repo_installs: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
 
     for pkg in &installable_packages {
@@ -996,7 +999,7 @@ fn packages_section_lines(
             super::repo_enabling::RepoEnablingExport::NotEnabling => match route {
                 PackageRoute::ByName => install_names.push(install_name),
                 PackageRoute::DisabledRepo(id) => disabled_repo_installs
-                    .entry(id)
+                    .entry(id.as_str().to_owned())
                     .or_default()
                     .push(install_name),
                 // No enabled repo on the source host serves a repo-less
@@ -1086,7 +1089,7 @@ fn packages_section_lines(
         body.extend(dnf_install_with_local_lines(
             &names,
             &local,
-            &crb.with_repos(disabled_repo_installs.keys()),
+            &crb.with_repos(disabled_repo_installs.keys().map(String::as_str)),
         ));
         let header = match (names.len(), local.len()) {
             (n, 0) => format!("Packages from repos disabled on the source host ({n})"),

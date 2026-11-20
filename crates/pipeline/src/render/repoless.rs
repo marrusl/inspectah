@@ -1001,6 +1001,79 @@ mod tests {
     }
 
     #[test]
+    fn packages_from_case_variant_repos_install_together_with_both_flags() {
+        // Routing gives each package its own spelling; the combined
+        // install must keep them apart too. Grouped by a folded id, a
+        // package from `ab` and one from `AB` shared one bucket and the
+        // transaction enabled only one of the two repos, so whichever
+        // package lives only in the other one could not be found. Each
+        // case runs in both package orders and both file orders.
+        const LOWER: &str = "[ab]\nbaseurl=https://example.invalid/lower\nenabled=0\n";
+        const UPPER: &str = "[AB]\nbaseurl=https://example.invalid/upper\nenabled=0\n";
+        let d = "/etc/yum.repos.d";
+        let same_file = format!("{LOWER}{UPPER}");
+        let layouts: [(&str, Vec<(String, &str)>); 2] = [
+            (
+                "same file",
+                vec![(format!("{d}/a.repo"), same_file.as_str())],
+            ),
+            (
+                "cross file",
+                vec![
+                    (format!("{d}/A.repo"), UPPER),
+                    (format!("{d}/b.repo"), LOWER),
+                ],
+            ),
+        ];
+        let package = |name: &str, repo: &str| PackageEntry {
+            name: name.into(),
+            ..from_repo(repo, exact(repo))
+        };
+        let packages = vec![package("tool-lower", "ab"), package("tool-upper", "AB")];
+        for (layout, files) in &layouts {
+            let files: Vec<RepoFile> = files
+                .iter()
+                .map(|(path, content)| repo_file(path, content, false))
+                .collect();
+            for reverse_packages in [false, true] {
+                for reverse_files in [false, true] {
+                    let mut snap = snapshot_with(&packages[0], files.clone());
+                    let rpm = snap.rpm.as_mut().expect("an rpm section");
+                    rpm.packages_added = packages.clone();
+                    if reverse_packages {
+                        rpm.packages_added.reverse();
+                    }
+                    if reverse_files {
+                        rpm.repo_files.reverse();
+                    }
+                    let what = format!(
+                        "{layout}, packages reversed {reverse_packages}, \
+                         files reversed {reverse_files}"
+                    );
+                    let output =
+                        super::super::containerfile::render_containerfile(&snap, None, None);
+                    let mut flags: Vec<&str> = output
+                        .split_whitespace()
+                        .filter(|w| w.starts_with("--enablerepo="))
+                        .collect();
+                    flags.sort();
+                    assert_eq!(
+                        flags,
+                        ["--enablerepo=AB", "--enablerepo=ab"],
+                        "{what}:\n{output}"
+                    );
+                    let operands: Vec<&str> = output
+                        .lines()
+                        .map(|l| l.trim_end_matches(" \\").trim())
+                        .filter(|l| l.starts_with("tool-"))
+                        .collect();
+                    assert_eq!(operands, ["tool-lower", "tool-upper"], "{what}:\n{output}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_default_repo_file_or_a_pseudo_repo_never_routes_to_a_disabled_repo() {
         // The Custom Repositories `COPY` carries the whole staged directory
         // before the install, default repo files included, and renders only

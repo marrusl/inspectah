@@ -159,7 +159,11 @@ and needs a merge for cycles, so it was not taken. The isolation that
 matters still holds: no group or plain-list transaction carries the
 flags. What one transaction gives up is isolation between the disabled
 repos themselves, so a package in one can resolve a dependency from
-another.
+another. The transaction groups its packages by the id exactly as the
+route spells it, never by `RepoId`: `[ab]` and `[AB]` are two repos and
+each gets its own `--enablerepo`. A folded key once put both packages
+under one flag, and the package only the other repo held could not be
+found.
 
 If you touch repo-name matching, decide which of these questions you
 are answering (repo-less yes/no, full attribution, or install from a
