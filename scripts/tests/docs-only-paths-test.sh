@@ -10,13 +10,14 @@
 #     (), [] or {} delimiters, resolves from the source file's directory to
 #     a path outside the list; an argument that is not a single string
 #     literal fails as unresolved;
-#   - no string literal, normalized lexically by stripping everything up to
-#     its last ../ segment and then any leading ./ or /, matches the list or
-#     names a docs-only directory on its own (docs, process-docs, .github,
-#     packaging, .copr, completions, with or without a trailing /), unless
-#     its file and literal pair is on the allowlist below. So
-#     "../../README.md", "/../../docs/x.md" after CARGO_MANIFEST_DIR, and
-#     "{}/../../README.md" in a format! string are all caught.
+#   - no string literal, normalized lexically (each ../ removes the segment
+#     before it, empty and ./ segments are dropped, and any ../ left at the
+#     start is stripped), matches the list or names a docs-only directory on
+#     its own (docs, process-docs, .github, packaging, .copr, completions,
+#     with or without a trailing /), unless its file and literal pair is on
+#     the allowlist below. So "../../README.md", "/../../docs/x.md" after
+#     CARGO_MANIFEST_DIR, "{}/../../README.md" in a format! string, and
+#     "docs/sub/../input.json" are all caught.
 #
 # Plain literals are decoded first: \x and \u{} escapes, the one-character
 # escapes, and a backslash-newline continuation. The scan fails, rather
@@ -208,8 +209,9 @@ for my $file (split /\n/, $ENV{FILES}) {
             $src =~ m{\G.}gcs;
         }
         if (defined $lit) {
-            (my $norm = $lit) =~ s{^.*(?:^|/)\.\./}{}s;
-            $norm =~ s{^(?:\./|/)+}{};
+            # normalize drops empty and . segments, so a leading / or ./
+            # goes with them; what is left above the root is stripped.
+            (my $norm = normalize($lit)) =~ s{^(?:\.\.(?:/|$))+}{};
             if (docs_only($norm)) {
                 if (exists $allow{"$file\0$lit"}) {
                     $allow{"$file\0$lit"}++;
@@ -380,6 +382,19 @@ planted "a manifest-dir concat through ../ into docs/ fails" \
 planted "a format! path through ../ to README.md fails" \
     'pub fn f() -> String { format!("{}/../../README.md", env!("CARGO_MANIFEST_DIR")) }' \
     "" fail "$LIB:1:" '"{}/../../README.md" -> README.md'
+
+# A ../ segment inside a docs-only directory resolves within it: the prefix
+# before it is kept, not stripped along with it.
+for dir in docs process-docs .github packaging .copr completions; do
+    planted "an internal parent segment stays under $dir/" \
+        "pub fn f() { let _ = repo_root().join(\"$dir/sub/../input.json\"); }" \
+        "" fail "$LIB:1:" "-> $dir/input.json"
+done
+
+# A leading / with no ../ after it is stripped too.
+planted "a manifest-dir concat of /docs/ fails" \
+    'pub fn f() { let _ = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/x.md")); }' \
+    "" fail "$LIB:1:" '"/docs/x.md" -> docs/x.md'
 
 # The scan fails, rather than passing, when it cannot look.
 new_tree 'pub fn f() {}'

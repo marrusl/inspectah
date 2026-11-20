@@ -540,6 +540,17 @@ case_ignored_other() {
 }
 check "an ignored file outside the refused set does not block" case_ignored_other
 
+# The second pass lists ignored inputs too: one written while the gates ran
+# was compiled by them but is not in the commit.
+case_late_ignored() {
+    new_repo; printf 'build/\n' > "$R/.gitignore"; stage .gitignore
+    edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    commit_env STUB_DURING_TEST=untracked:crates/a/src/build/late.rs
+    want_refused && has "after the gates ran" && has crates/a/src/build/late.rs \
+        && stub_has test
+}
+check "an ignored Rust source created during the test gate is refused after it" case_late_ignored
+
 # --- path names git quotes ---
 
 # git quotes a non-ASCII name unless core.quotePath is off, and a quoted
@@ -574,6 +585,22 @@ case_quoted_docs() {
     want_gated
 }
 check "a docs path git must still quote is gated" case_quoted_docs
+
+case_head_unicode_docs() {
+    new_repo; edit "docs/café.md"; stage "docs/café.md"; commit_no_verify "test: docs"
+    run .githooks/pre-commit --head
+    want_accepted && has "$DOCS_ONLY_LINE" && stub_empty
+}
+check "head mode skips a commit of a non-ASCII docs path" case_head_unicode_docs
+
+case_head_staged_unicode_docs() {
+    new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    commit_no_verify "test: code"
+    edit "docs/café.md"; stage "docs/café.md"
+    run .githooks/pre-commit --head
+    want_gated
+}
+check "head mode is not refused for a staged non-ASCII docs path" case_head_staged_unicode_docs
 
 echo
 echo "$passes passed, $failures failed"
