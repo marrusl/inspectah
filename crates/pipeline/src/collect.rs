@@ -247,18 +247,31 @@ const STATIC_HOSTNAME_PATH: &str = "/etc/hostname";
 /// `/etc/hostname` is empty.
 const KERNEL_HOSTNAME_PATH: &str = "/proc/sys/kernel/hostname";
 
-/// Kernel names that mean nothing set one: the kernel's own default and
-/// systemd's fallback when there is no static or transient name. Taking
-/// them as hostnames would give every unnamed host in a fleet the same
-/// name.
-const PLACEHOLDER_KERNEL_HOSTNAMES: &[&str] = &["(none)", "localhost", "localhost.localdomain"];
+/// The kernel's hostname before anything sets one. It is not a valid
+/// hostname, so no administrator can have chosen it.
+const KERNEL_UNSET_HOSTNAME: &str = "(none)";
+
+/// hostnamed's description of the host's names, as JSON: the `Describe()`
+/// reply of `org.freedesktop.hostname1`, which `hostnamectl` relays.
+const HOSTNAMECTL: &str = "hostnamectl";
+const HOSTNAMECTL_ARGS: &[&str] = &["--json=short"];
+
+/// hostnamed's `HostnameSource` for a kernel name that is systemd's
+/// fallback (os-release's `DEFAULT_HOSTNAME` or the compiled-in default,
+/// usually `localhost`) rather than a name anything set. The other
+/// values are `static` and `transient`.
+const HOSTNAME_SOURCE_DEFAULT: &str = "default";
 
 /// The host's name and the file it was read from, recorded in the
 /// snapshot as `meta["hostname"]` and `meta["hostname_source"]`.
 ///
 /// The static name wins; an empty or whitespace-only `/etc/hostname`
-/// falls back to the kernel's transient name, unless that is a
-/// placeholder. `None` when neither file names the host. The source is
+/// falls back to the kernel's transient name. That name is dropped only
+/// when it is the kernel's unset value, or when hostnamed reports it as
+/// systemd's default: whether a kernel name was set is a matter of how
+/// it got there, which its spelling cannot tell, so a `localhost` someone
+/// set stays the host's name. When hostnamed cannot answer, the kernel
+/// name is kept. `None` when neither file names the host. The source is
 /// written whenever the hostname is, so a snapshot with a hostname and no
 /// source predates this rule.
 fn resolve_hostname(executor: &dyn Executor) -> Option<(String, &'static str)> {
@@ -273,8 +286,29 @@ fn resolve_hostname(executor: &dyn Executor) -> Option<(String, &'static str)> {
         return Some((name, STATIC_HOSTNAME_PATH));
     }
     read(KERNEL_HOSTNAME_PATH)
-        .filter(|name| !PLACEHOLDER_KERNEL_HOSTNAMES.contains(&name.as_str()))
+        .filter(|name| name != KERNEL_UNSET_HOSTNAME)
+        .filter(|name| !is_systemd_default_hostname(executor, name))
         .map(|name| (name, KERNEL_HOSTNAME_PATH))
+}
+
+/// Whether hostnamed reports `kernel_name` as systemd's default hostname.
+///
+/// hostnamed (systemd 252 on RHEL 9, 257 on RHEL 10) calls the current
+/// name `default` when it equals `/run/systemd/default-hostname`, which
+/// PID 1 writes only when it fell back to the default at boot and which
+/// hostnamed removes when a transient name is set. False when
+/// `hostnamectl` is missing, fails, predates `--json`, prints something
+/// unparseable, or describes a different name than the one read.
+fn is_systemd_default_hostname(executor: &dyn Executor, kernel_name: &str) -> bool {
+    let result = executor.run(HOSTNAMECTL, HOSTNAMECTL_ARGS);
+    if !result.success() {
+        return false;
+    }
+    let Ok(described) = serde_json::from_str::<serde_json::Value>(&result.stdout) else {
+        return false;
+    };
+    described.get("Hostname").and_then(|v| v.as_str()) == Some(kernel_name)
+        && described.get("HostnameSource").and_then(|v| v.as_str()) == Some(HOSTNAME_SOURCE_DEFAULT)
 }
 
 /// Reconcile facts that span two inspectors, once, after every inspector
@@ -828,78 +862,163 @@ mod tests {
     /// The hostname falls back from the static name to the kernel's
     /// (transient) name, and `meta["hostname_source"]` names the file that
     /// supplied it. A host whose `/etc/hostname` is empty and whose name
-    /// comes from DHCP is the measured real-host case (`rhel9`).
+    /// comes from DHCP is the measured real-host case (`rhel9`). A kernel
+    /// name is dropped only when hostnamed says it is systemd's default,
+    /// never for its spelling: a `localhost` someone set is a name.
     #[test]
     fn test_collect_hostname_source_order() {
         const STATIC: &str = "/etc/hostname";
         const KERNEL: &str = "/proc/sys/kernel/hostname";
-        /// (case, /etc/hostname, /proc/sys/kernel/hostname, expected (hostname, source))
+        /// hostnamed's answer for a kernel name and a source.
+        fn describe(hostname: &str, source: &str) -> Option<(i32, String)> {
+            Some((
+                0,
+                serde_json::json!({"Hostname": hostname, "StaticHostname": null, "HostnameSource": source})
+                    .to_string(),
+            ))
+        }
+        /// (case, /etc/hostname, /proc/sys/kernel/hostname,
+        ///  `hostnamectl --json=short` exit code and stdout, expected (hostname, source))
         type Case<'a> = (
             &'a str,
             Option<&'a str>,
             Option<&'a str>,
+            Option<(i32, String)>,
             Option<(&'a str, &'a str)>,
         );
-        let cases: &[Case] = &[
+        let cases: Vec<Case> = vec![
             (
                 "static present wins over kernel",
                 Some("web-01\n"),
                 Some("dhcp-10-0-0-5\n"),
+                describe("web-01", "static"),
                 Some(("web-01", STATIC)),
             ),
             (
                 "static present, no kernel file",
                 Some("web-01\n"),
                 None,
+                None,
                 Some(("web-01", STATIC)),
+            ),
+            (
+                "static localhost is a name",
+                Some("localhost\n"),
+                Some("localhost\n"),
+                describe("localhost", "default"),
+                Some(("localhost", STATIC)),
             ),
             (
                 "empty static falls back to kernel",
                 Some(""),
                 Some("rhel9\n"),
+                describe("rhel9", "transient"),
                 Some(("rhel9", KERNEL)),
             ),
             (
                 "whitespace-only static falls back to kernel",
                 Some("  \n\t\n"),
                 Some("rhel9\n"),
+                describe("rhel9", "transient"),
                 Some(("rhel9", KERNEL)),
             ),
             (
                 "missing static falls back to kernel",
                 None,
                 Some("ip-10-0-0-5.ec2.internal\n"),
+                describe("ip-10-0-0-5.ec2.internal", "transient"),
                 Some(("ip-10-0-0-5.ec2.internal", KERNEL)),
             ),
-            ("both absent", None, None, None),
-            ("empty static, empty kernel", Some(""), Some("\n"), None),
+            ("both absent", None, None, None, None),
+            (
+                "empty static, empty kernel",
+                Some(""),
+                Some("\n"),
+                None,
+                None,
+            ),
             (
                 "kernel default name is not a hostname",
                 Some(""),
                 Some("(none)\n"),
                 None,
+                None,
             ),
             (
-                "systemd fallback name is not a hostname",
+                "systemd default name is not a hostname",
+                Some(""),
+                Some("localhost\n"),
+                describe("localhost", "default"),
+                None,
+            ),
+            (
+                "a distribution default name is not a hostname",
+                None,
+                Some("fedora\n"),
+                describe("fedora", "default"),
+                None,
+            ),
+            (
+                "a transient localhost someone set is a name",
+                Some(""),
+                Some("localhost\n"),
+                describe("localhost", "transient"),
+                Some(("localhost", KERNEL)),
+            ),
+            (
+                "a transient localhost.localdomain someone set is a name",
+                None,
+                Some("localhost.localdomain\n"),
+                describe("localhost.localdomain", "transient"),
+                Some(("localhost.localdomain", KERNEL)),
+            ),
+            (
+                "hostnamectl missing keeps the kernel name",
                 Some(""),
                 Some("localhost\n"),
                 None,
+                Some(("localhost", KERNEL)),
             ),
             (
-                "systemd fallback FQDN is not a hostname",
-                None,
-                Some("localhost.localdomain\n"),
-                None,
+                "hostnamectl without --json keeps the kernel name",
+                Some(""),
+                Some("localhost\n"),
+                Some((1, String::new())),
+                Some(("localhost", KERNEL)),
+            ),
+            (
+                "unparseable hostnamectl output keeps the kernel name",
+                Some(""),
+                Some("localhost\n"),
+                Some((0, "not json".into())),
+                Some(("localhost", KERNEL)),
+            ),
+            (
+                "a default verdict about another name keeps the kernel name",
+                Some(""),
+                Some("rhel9\n"),
+                describe("localhost", "default"),
+                Some(("rhel9", KERNEL)),
             ),
         ];
 
-        for (case, static_name, kernel_name, expected) in cases {
+        for (case, static_name, kernel_name, hostnamectl, expected) in cases {
             let mut exec = MockExecutor::new();
             if let Some(content) = static_name {
                 exec = exec.with_file(STATIC, content);
             }
             if let Some(content) = kernel_name {
                 exec = exec.with_file(KERNEL, content);
+            }
+            if let Some((exit_code, stdout)) = hostnamectl {
+                exec = exec.with_command(
+                    "hostnamectl --json=short",
+                    ExecResult {
+                        stdout,
+                        stderr: String::new(),
+                        exit_code,
+                    },
+                );
             }
             let source = SourceSystem::PackageBased {
                 os_release: test_os_release(),

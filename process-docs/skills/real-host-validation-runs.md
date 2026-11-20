@@ -313,14 +313,22 @@ hostname; `hostnamectl --static` is empty too. `collect.rs` reads
 `/etc/hostname` first and, when it is empty or whitespace, the kernel's
 transient name from `/proc/sys/kernel/hostname`. It records which file
 supplied the name in `meta["hostname_source"]`, written whenever
-`meta["hostname"]` is. A kernel name of `(none)`, `localhost` or
-`localhost.localdomain` counts as no name, so a host that nothing named
-still carries no hostname. `aggregate` identifies such a snapshot by a
-SHA-256 digest of its content (`HostIdentity::Unnamed` in
-`aggregate/validate.rs`), never by its timestamp, which independent hosts
-can share. It lists unnamed hosts after the named ones, ordered by scan
-time and then digest, numbered as `<unnamed N, scanned <time>>`, and
-refuses two only when their content is identical.
+`meta["hostname"]` is.
+
+A kernel name counts as no name only when it is the kernel's unset
+`(none)`, or when `hostnamectl --json=short` reports `HostnameSource`
+`default` for it: hostnamed's verdict that the name is systemd's
+fallback, not one anything set. Spelling decides nothing, so a
+`localhost` someone set stays the host's name. If `hostnamectl` is
+missing or fails, the kernel name is kept, and two such `localhost` hosts
+are refused as a duplicate hostname.
+
+`aggregate` identifies a snapshot with no hostname by a SHA-256 digest of
+its content (`HostIdentity::Unnamed` in `aggregate/validate.rs`), never
+by its timestamp, which independent hosts can share. It lists unnamed
+hosts after the named ones, ordered by scan time and then digest,
+numbered as `<unnamed N, scanned <time>>`, and refuses two only when
+their content is identical.
 
 Fixtures all set a static hostname, so the fallback only appears on real
 hardware. On a real-host run, check `hostname_source` in the snapshot
