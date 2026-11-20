@@ -817,6 +817,58 @@ mod tests {
         );
     }
 
+    /// A recorded hostname that spells an unnamed host's label would merge
+    /// as the same host: the merge counts hosts by label, so a package on
+    /// both would read 1/2. Validation refuses the reserved name instead,
+    /// before any merging.
+    #[test]
+    fn test_merge_refuses_a_hostname_in_the_unnamed_label_namespace() {
+        const T: &str = "2026-11-19T10:00:00+00:00";
+        let named_as = |hostname: &str| {
+            let mut s = unnamed_with_packages(T, &["bash"]);
+            s.meta
+                .insert("hostname".into(), serde_json::json!(hostname));
+            s
+        };
+        let untimed_unnamed = || {
+            let mut s = unnamed_with_packages(T, &["bash", "httpd"]);
+            s.meta.remove("timestamp");
+            s
+        };
+        let cases = [
+            (
+                "a label with a timestamp",
+                named_as(&format!("<unnamed 1, scanned {T}>")),
+                unnamed_with_packages(T, &["bash", "httpd"]),
+            ),
+            (
+                "a label with no timestamp",
+                named_as("<unnamed 1>"),
+                untimed_unnamed(),
+            ),
+            (
+                "the bare placeholder",
+                named_as("<unnamed>"),
+                untimed_unnamed(),
+            ),
+        ];
+        for (case, named, unnamed) in cases {
+            let hostname = named.meta["hostname"].as_str().unwrap().to_string();
+            for inputs in [vec![named.clone(), unnamed.clone()], vec![unnamed, named]] {
+                let errors = merge_snapshots(inputs, None, None)
+                    .err()
+                    .unwrap_or_else(|| panic!("case: {case}: the merge is refused"));
+                assert_eq!(
+                    errors,
+                    vec![AggregateValidationError::ReservedHostname {
+                        hostname: hostname.clone()
+                    }],
+                    "case: {case}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_merge_stamps_aggregate_source_in_meta() {
         let s1 = valid_snap("host-a");

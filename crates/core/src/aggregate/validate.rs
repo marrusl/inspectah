@@ -17,6 +17,11 @@ pub enum AggregateValidationError {
     DuplicateHostname {
         hostname: String,
     },
+    /// A recorded hostname begins with [`UNNAMED_LABEL_PREFIX`], which the
+    /// aggregate reserves for the labels of hosts with no hostname.
+    ReservedHostname {
+        hostname: String,
+    },
     /// Two snapshots with no hostname and identical content: the same
     /// snapshot given twice. `scanned_at` is their scan timestamp, `None`
     /// when they recorded none.
@@ -118,6 +123,21 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
                     }
                 });
             }
+        }
+    }
+
+    // --- Hard error: a hostname in the unnamed-label namespace ---
+    // Merging counts hosts by label, so a recorded hostname that spells an
+    // unnamed host's label would merge with it as one host. Snapshot
+    // loading does not check hostname syntax, so this is the boundary
+    // that keeps the two namespaces apart.
+    for snap in snapshots {
+        if let HostIdentity::Named(hostname) = HostIdentity::of(snap)
+            && hostname.starts_with(UNNAMED_LABEL_PREFIX)
+        {
+            result
+                .errors
+                .push(AggregateValidationError::ReservedHostname { hostname });
         }
     }
 
@@ -299,6 +319,13 @@ impl std::fmt::Display for HostIdentity {
     }
 }
 
+/// The first character of every label [`host_labels`] gives an unnamed
+/// host, and of every [`HostIdentity`] display of one. No valid hostname
+/// contains it (RFC 1123 allows letters, digits, hyphens and dots), and
+/// validation refuses a recorded hostname that begins with it, so a named
+/// host's label never equals an unnamed host's.
+pub const UNNAMED_LABEL_PREFIX: char = '<';
+
 /// The aggregate's host labels, one per identity, for identities already
 /// in canonical order.
 ///
@@ -448,6 +475,40 @@ mod tests {
                 _ => panic!("case: {case}: unexpected identity {actual:?}"),
             }
             assert_eq!(actual.to_string(), *display, "case: {case}");
+        }
+    }
+
+    /// Unnamed hosts' labels are distinct, timestamps tied or not, and all
+    /// begin with the reserved prefix that validation keeps out of
+    /// hostnames.
+    #[test]
+    fn test_host_labels_are_distinct_and_reserved() {
+        let unnamed = |ts: Option<&str>, digest: &str| HostIdentity::Unnamed {
+            scanned_at: ts.map(String::from),
+            content_digest: digest.into(),
+        };
+        const T: &str = "2026-11-19T10:00:00+00:00";
+        let identities = [
+            HostIdentity::Named("web-01".into()),
+            unnamed(None, "a"),
+            unnamed(None, "b"),
+            unnamed(Some(T), "a"),
+            unnamed(Some(T), "b"),
+        ];
+        let labels = host_labels(&identities);
+        assert_eq!(
+            labels,
+            [
+                "web-01".to_string(),
+                "<unnamed 1>".into(),
+                "<unnamed 2>".into(),
+                format!("<unnamed 3, scanned {T}>"),
+                format!("<unnamed 4, scanned {T}>"),
+            ]
+        );
+        for (identity, label) in identities.iter().zip(&labels).skip(1) {
+            assert!(label.starts_with(UNNAMED_LABEL_PREFIX), "{label}");
+            assert!(identity.to_string().starts_with(UNNAMED_LABEL_PREFIX));
         }
     }
 

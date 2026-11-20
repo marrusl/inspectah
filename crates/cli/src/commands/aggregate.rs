@@ -463,6 +463,11 @@ fn format_validation_errors(errors: &[AggregateValidationError]) -> anyhow::Erro
             AggregateValidationError::DuplicateHostname { hostname } => {
                 format!("duplicate hostname: {hostname}")
             }
+            AggregateValidationError::ReservedHostname { hostname } => {
+                format!(
+                    "hostname {hostname:?} begins with `<`, which aggregate reserves for hosts with no hostname; correct meta.hostname in that snapshot or re-scan the host"
+                )
+            }
             AggregateValidationError::DuplicateUnnamedScan {
                 scanned_at: Some(ts),
             } => {
