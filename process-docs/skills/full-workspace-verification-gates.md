@@ -150,6 +150,35 @@ so the first hook run in a fresh worktree pays a short extra compile.
 The first leaf sample's slower test gate is the first execution of
 freshly linked binaries.
 
+Measured 2026-11-20 again after integration tests moved to one binary
+per crate (`575c159c`; cli keeps `units_scan_test` as a second binary,
+see [integration-test-layout](integration-test-layout.md)). Same
+machine, macOS 27.2, `rustc 1.100.0 (0ef1bc386 2026-11-09)`. A is the
+same tip with the six layout commits reverted (86 integration test
+binaries), B the tip (7). Same probe method as above, samples
+interleaved A B B A A B A B B A, every one with all three gates ok.
+Each leaf sample follows an untimed build of the gate's commands, so it
+does not pay for the previous core probe. Load is the one-minute
+average before and after; every sample started between 8.2 and 9.9.
+
+| edit | side | hook wall, 5 samples | median | test gate | load after |
+|---|---|---|---|---|---|
+| `crates/cli/src/main.rs` (leaf) | A, per-file | 58.71, 34.15, 33.11, 36.05, 36.79 s | **36.05s** | 29-54s | 8.5-11.8 |
+| `crates/cli/src/main.rs` (leaf) | B, per-crate | 30.93, 31.38, 29.83, 30.51, 30.15 s | **30.51s** | 25-27s | 10.2-19.0 |
+| `crates/core/src/lib.rs` (core) | A, per-file | 113.18, 111.35, 111.62, 116.13, 114.51 s | **113.18s** | 98-102s | 8.1-19.1 |
+| `crates/core/src/lib.rs` (core) | B, per-crate | 63.40, 57.34, 58.82, 61.10, 59.14 s | **59.14s** | 47-51s | 9.1-14.0 |
+
+A warm `cargo test --workspace` with nothing to rebuild took 26.73 and
+27.16 s on A (97 test result lines) and 22.62 and 22.98 s on B (18).
+Both run the same 1,629 integration tests; B adds the 3 guard tests in
+each of its six `integration` binaries (3,940 tests passed on A, 3,958
+on B).
+
+The core-edit saving is 54.04 s (113.18 to 59.14), more than the
+2026-11-19 estimate of "most of the ~62 s test build" (at least 31 s):
+the test gate itself fell from about 100 s to about 49 s. The leaf-edit
+gate saved 5.54 s.
+
 There is no per-binary idle. The row that matters is the third one: the
 very first execution of all **77** freshly linked test binaries, none of
 them ever run before, is 29 seconds for all 3010 tests together — well
