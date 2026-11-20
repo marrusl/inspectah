@@ -196,21 +196,56 @@ test.describe("Refine controls", () => {
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
 
-  test("a stale export keeps the dialog open with the stale alert", async ({
+  test("a stale export says so, and the next export posts the current generation", async ({
     page,
   }) => {
-    await page.route("**/api/tarball", (route) =>
+    const view = viewFixture();
+    const current = view.generation + 1;
+    let changedElsewhere = false;
+    const posted: number[] = [];
+    // Registered after beforeEach's /api/view route, so this one wins.
+    await page.route("**/api/view", (route) =>
       route.fulfill({
-        status: 409,
+        status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ error: "stale generation" }),
+        body: JSON.stringify({
+          ...view,
+          generation: changedElsewhere ? current : view.generation,
+        }),
       }),
     );
+    await page.route("**/api/tarball", (route) => {
+      // Another tab changes the session before the first export lands.
+      changedElsewhere = true;
+      const generation = route.request().postDataJSON().generation;
+      posted.push(generation);
+      if (generation !== current) {
+        return route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "stale generation" }),
+        });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/gzip",
+        headers: { "x-export-warnings": "[]" },
+        body: "tarball",
+      });
+    });
     await page.getByRole("button", { name: /export/i }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
-    await dialog.getByRole("button", { name: /^export$/i }).click();
+    const exportButton = dialog.getByRole("button", { name: /^export$/i });
+    await exportButton.click();
     await expect(dialog.getByText("Stale state")).toBeVisible();
-    await expect(dialog.getByRole("button", { name: /^export$/i })).toBeEnabled();
+    await expect(dialog.getByText(/export again/)).toBeVisible();
+    await expect(dialog).toContainText(`Generation: ${current}`);
+
+    const download = page.waitForEvent("download");
+    await exportButton.click();
+    await download;
+    expect(posted).toEqual([view.generation, current]);
+    await expect(dialog).toBeHidden();
   });
 });

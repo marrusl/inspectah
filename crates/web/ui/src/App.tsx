@@ -652,11 +652,15 @@ function SingleHostApp({
     setRevealNotCarried(false);
   }, []);
 
+  // The Export dialog fetched this view after a stale export. Show it in the
+  // same render the dialog re-enables Export in, so the dialog's generation
+  // is the one on screen; a refetch here would leave Export live at the old
+  // generation until it landed.
   const handleExportViewUpdate = useCallback(
-    (_updatedView: ViewResponse) => {
-      view.invalidate();
+    (updatedView: ViewResponse) => {
+      view.publish(updatedView);
     },
-    [view.invalidate],
+    [view.publish],
   );
 
   const viewLoading = view.loading && view.data === null;

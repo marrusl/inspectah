@@ -102,4 +102,31 @@ describe("useView", () => {
 
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
   });
+
+  it("publish shows a view at once, and a fetch already out cannot replace it", async () => {
+    let answer: (view: ViewResponse) => void = () => {};
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = (view) =>
+            resolve({
+              ok: true,
+              json: () => Promise.resolve(view),
+            } as Response);
+        }),
+    );
+
+    const { result } = renderHook(() => useView());
+    const published = { ...MOCK_VIEW, generation: 5 };
+    act(() => {
+      result.current.publish(published);
+    });
+    expect(result.current.data).toEqual(published);
+    expect(result.current.loading).toBe(false);
+
+    await act(async () => answer({ ...MOCK_VIEW, generation: 4 }));
+    expect(result.current.data).toEqual(published);
+    expect(result.current.loading).toBe(false);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
 });

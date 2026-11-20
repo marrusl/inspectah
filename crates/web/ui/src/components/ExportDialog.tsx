@@ -52,7 +52,10 @@ export function ExportDialog({
 }: ExportDialogProps) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [stale, setStale] = useState(false);
+  // Set by a 409, then by how loading the current view after it went.
+  const [stale, setStale] = useState<
+    "refreshing" | "refreshed" | "refresh-failed" | null
+  >(null);
   const [sensitiveAck, setSensitiveAck] = useState(false);
   const [unmatchedAck, setUnmatchedAck] = useState(false);
   // Non-null once a download finished with warnings: the dialog then stays
@@ -77,7 +80,7 @@ export function ExportDialog({
   const handleExport = useCallback(async () => {
     setExporting(true);
     setError(null);
-    setStale(false);
+    setStale(null);
 
     try {
       const { blob, warnings } = await exportTarball(generation, sensitiveAck);
@@ -96,15 +99,16 @@ export function ExportDialog({
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        // Stay open: the stale alert explains the failed export, and the
-        // re-fetched view brings the current generation in, so Export
-        // downloads that state when clicked again.
-        setStale(true);
+        // Stay open: the stale alert explains the failed export. The owner
+        // shows the re-fetched view before `exporting` clears (both land in
+        // one render), so Export comes back at the current generation.
+        setStale("refreshing");
         try {
           const view = await fetchView();
           onViewUpdate(view);
+          setStale("refreshed");
         } catch {
-          // If re-fetch also fails, stale alert is still visible
+          setStale("refresh-failed");
         }
       } else if (err instanceof ApiError && err.status === 428) {
         // Server requires sensitive acknowledgment
@@ -122,7 +126,7 @@ export function ExportDialog({
 
   const handleClose = useCallback(() => {
     setError(null);
-    setStale(false);
+    setStale(null);
     setSensitiveAck(false);
     setUnmatchedAck(false);
     setDownloadWarnings(null);
@@ -324,10 +328,16 @@ export function ExportDialog({
           </Alert>
         )}
 
-        {stale && (
+        {stale !== null && (
           <Alert variant="warning" isInline title="Stale state">
-            The view has changed since it was last loaded. Re-fetching current
-            state.
+            The session changed since this view loaded.{" "}
+            {stale === "refreshing"
+              ? "Loading the current state."
+              : stale === "refreshed"
+                ? "The view now shows the current state; review it, then " +
+                  "export again."
+                : "The current state could not be loaded. Reload the page, " +
+                  "then export again."}
           </Alert>
         )}
       </ModalBody>

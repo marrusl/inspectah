@@ -9,6 +9,12 @@ export interface UseViewResult {
   refetch: () => void;
   /** Bump to trigger a refetch from mutation hooks. */
   invalidate: () => void;
+  /**
+   * Show a view the caller already fetched, in the same render, without
+   * another request. A fetch still in flight is dropped so it cannot
+   * replace this view with one it read earlier.
+   */
+  publish: (view: ViewResponse) => void;
 }
 
 export function useView(): UseViewResult {
@@ -16,6 +22,9 @@ export function useView(): UseViewResult {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const generationRef = useRef(0);
+  // Bumped by each fetch and each publish; a fetch applies its result only
+  // while it is still the latest of either.
+  const latestRef = useRef(0);
   const [tick, setTick] = useState(0);
 
   const refetch = useCallback(() => {
@@ -26,23 +35,33 @@ export function useView(): UseViewResult {
     setTick((t) => t + 1);
   }, []);
 
+  const publish = useCallback((view: ViewResponse) => {
+    latestRef.current += 1;
+    generationRef.current = view.generation;
+    setData(view);
+    setError(null);
+    setLoading(false);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
+    const request = ++latestRef.current;
+    const superseded = () => cancelled || request !== latestRef.current;
     setLoading(true);
 
     fetchView()
       .then((view) => {
-        if (cancelled) return;
+        if (superseded()) return;
         generationRef.current = view.generation;
         setData(view);
         setError(null);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (superseded()) return;
         setError(err instanceof Error ? err : new Error(String(err)));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!superseded()) setLoading(false);
       });
 
     return () => {
@@ -50,5 +69,5 @@ export function useView(): UseViewResult {
     };
   }, [tick]);
 
-  return { data, loading, error, refetch, invalidate };
+  return { data, loading, error, refetch, invalidate, publish };
 }
