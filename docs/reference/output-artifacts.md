@@ -105,11 +105,12 @@ The Containerfile writes the state changes the scan found under
 `# === Systemd Unit State ===`, after the configuration and drop-in `COPY`
 lines: a mask, an enabled or disabled unit whose state differs from its preset,
 and an enabled local unit whatever its preset. A unit at its preset is recorded
-in the snapshot's inventory and gets no command. Each verb (`enable`,
-`disable`, `mask`) is one `RUN systemctl <verb> --` with one unit per line,
-ordered by unit kind and then name. Every `systemctl` line in the Containerfile
-comes from this one plan. The rules below decide what a line says. Refine shows
-the same reason on the unit's row.
+in the snapshot's inventory and gets no command, with the two exceptions named
+under Shadowed units below. Each verb (`enable`, `disable`, `mask`) is one
+`RUN systemctl <verb> --` with one unit per line, ordered by unit kind and then
+name. Every `systemctl` line in the Containerfile comes from this one plan. The
+rules below decide what a line says. Refine shows the same reason on the unit's
+row.
 
 **Commands left out.** An `# Omitted: <unit> (<reason>)` line replaces a
 command that would fail or do something the source host did not:
@@ -142,11 +143,14 @@ and never a command. A fleet aggregate leaves the command out when hosts hold
 different versions of the file.
 
 **Shadowed units.** A unit whose vendor file you replaced in
-`/etc/systemd/system/` is a state change only when its state differs from its
-preset, as for any vendor unit. Its `enable` or `disable` is carried when the
-shadow file is copied, whether or not its package is in the image, since the
-image loads the `/etc` file. A shadow of a unit otherwise at its preset has no
-state row and shows on its drop-in row only.
+`/etc/systemd/system/` is compared with its preset like any vendor unit: it is
+a state change when its state differs from its preset. Its `enable` or
+`disable` is carried when the shadow file is copied, whether or not its
+package is in the image, since the image loads the `/etc` file. A shadow of a unit otherwise at its preset has no
+state row and shows on its drop-in row only, with two exceptions. A
+preset-enabled shadow that adds `[Install]` links the package's unit does not
+make gets an `enable` after its `COPY`, and an `Also=` difference can produce a
+state row at the preset.
 
 **How state is read.** The scan does not take `systemctl list-unit-files` at
 its word, because it reports `enabled` for any link to a unit. It reads the
@@ -174,8 +178,9 @@ export, an `# Omitted:` line names the file and reason. Include an excluded
 file in refine to carry the `enable`; for the other two, put the file in the
 image yourself. A file a package owns and you did not change is not in the
 export, but the image's package supplies it: add the `enable` by hand. A file
-with a redacted secret is omitted too: provision the secret on the deployed
-host and enable the unit there. An instance that keeps data under `/var` also
+with a redacted secret stays in the export with the secret removed, and
+redaction withholds the `enable`: provision the secret on the deployed host and
+enable the unit there. An instance that keeps data under `/var` also
 gets an `# Advisory:` line, since the image does not carry the data.
 
 ### `--inspect-only` mode
