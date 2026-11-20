@@ -6,11 +6,9 @@
 //! HTML when written bare, so the audit must render every host label as
 //! literal text.
 
-#[path = "support/sysctl_hosts.rs"]
-mod sysctl_hosts;
-
 use std::collections::BTreeMap;
 
+use crate::sysctl_hosts::{SysctlHost, reload, scan};
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{Arena, Options, parse_document};
 use inspectah_core::aggregate::merge_snapshots;
@@ -18,7 +16,6 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::aggregate::AggregateSnapshotMeta;
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_pipeline::render::audit::render_audit;
-use sysctl_hosts::{SysctlHost, reload, scan};
 
 /// A node's text, with its markup dropped.
 fn text_of<'a>(node: &'a AstNode<'a>) -> String {

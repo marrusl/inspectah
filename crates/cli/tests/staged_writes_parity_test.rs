@@ -7,19 +7,17 @@
 //! zero-length unit file offered as a config entry, come from imported or
 //! hand-edited snapshots, not from the collector.
 
-#[path = "support/unit_hosts.rs"]
-mod unit_hosts;
-
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::unit_hosts;
+use crate::unit_hosts::{export_session, render_export, session};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
 use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection};
 use inspectah_core::types::units::{SystemdDropIn, UnitSection};
-use unit_hosts::{export_session, render_export, session};
 
 const WORKER_UNIT: &str = "/etc/systemd/system/worker.service";
 const WORKER_CHILD: &str = "/etc/systemd/system/worker.service/extra.conf";

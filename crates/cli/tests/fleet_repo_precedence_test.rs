@@ -10,14 +10,11 @@
 //! inspectors over a mock host), merged with `merge_snapshots`, opened in
 //! a refine session and exported.
 
-#[path = "support/unit_hosts.rs"]
-mod unit_hosts;
-
+use crate::unit_hosts::{UnitHost, export_session, reload, scan, session};
 use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp};
-use unit_hosts::{UnitHost, export_session, reload, scan, session};
 
 const REPO: &str = "/etc/yum.repos.d/custom.repo";
 const REPO_COPY: &str = "COPY config/etc/yum.repos.d/ /etc/yum.repos.d/";

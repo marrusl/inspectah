@@ -4,9 +4,9 @@
 Cargo builds every top-level `tests/*.rs` file as its own test binary, and
 each binary is linked separately. With about 86 such files across the
 workspace, a core edit relinks every binary that depends on core, and
-those links are a large part of the commit gate's test step. The crates are moving to one binary
-each: every crate except cli so far, cli one binary per file until its
-turn comes.
+those links are a large part of the commit gate's test step. Every crate now builds
+its integration tests as one binary, except that cli keeps
+`units_scan_test` as a second binary (see the last rule below).
 
 ## Layout
 A converted crate's manifest turns off auto-discovery and names one target:
@@ -57,7 +57,12 @@ Run one file's tests with
   `cargo test -p <package> --test <target>`. That target is its own crate
   root: it declares its own helper modules, does not include the guard, and
   is listed in the manifest with its `path`, which is how the guard counts
-  it as declared. Its tests list without a stem prefix.
+  it as declared. Its tests list without a stem prefix. The one such
+  target today is cli's `units_scan_test`, its heaviest file, kept apart
+  because the split measured faster on the leaf-edit gate: run it with
+  `cargo test -p inspectah-cli --test units_scan_test`. It declares
+  `#[path = "support/unit_hosts.rs"] mod unit_hosts;` itself, since as
+  its own crate root it does not see `integration`'s copy.
 
 ## Why `autotests = false` and not `tests/<name>/main.rs`
 Cargo auto-discovers a directory target with no manifest change, but that

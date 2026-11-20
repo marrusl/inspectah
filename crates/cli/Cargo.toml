@@ -3,6 +3,7 @@ name = "inspectah-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autotests = false
 
 [dependencies]
 inspectah-core = { path = "../core" }
@@ -44,3 +45,11 @@ comrak = { version = "0.59", default-features = false }
 [[bin]]
 name = "inspectah"
 path = "src/main.rs"
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
+
+[[test]]
+name = "units_scan_test"
+path = "tests/units_scan_test.rs"

@@ -6,12 +6,13 @@
 //! `case_NN_<layout>` for the snapshot and export, then `_audit`, `_html`,
 //! `_view` and `_groups` for the surfaces.
 
-#[path = "support/sysctl_hosts.rs"]
-mod sysctl_hosts;
-
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use crate::sysctl_hosts::{
+    KERNEL_BOOT_FAILURE, SysctlHost, export_session, reload, render_export, scan,
+    scan_with_failed_kernel_boot, scan_without_config, scan_without_kernel_boot, session,
+};
 use axum::response::IntoResponse;
 use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -35,10 +36,6 @@ use inspectah_refine::types::{ItemId, RefinementOp};
 use inspectah_web::adapter::build_web_view;
 use inspectah_web::aggregate_handlers::aggregate_view;
 use inspectah_web::handlers::{AppState, get_groups};
-use sysctl_hosts::{
-    KERNEL_BOOT_FAILURE, SysctlHost, export_session, reload, render_export, scan,
-    scan_with_failed_kernel_boot, scan_without_config, scan_without_kernel_boot, session,
-};
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
