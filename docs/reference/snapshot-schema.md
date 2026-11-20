@@ -136,3 +136,23 @@ In practice:
 
 - `aggregate` prints a warning for each tarball it cannot load and skips it, then refuses to merge fewer than two snapshots.
 - The file is parsed before its version is compared. A snapshot from an older schema whose fields no longer parse reports a `json error` describing what failed to parse, in place of the version message. It does not load either way.
+
+## Migrating from schema 27
+
+Re-scanning a host produces a schema 28 snapshot, but it does not update a script or saved file that reads the old names. These are the changes that affect one.
+
+**Snapshot fields** (`inspection-snapshot.json`):
+
+- The `services` section is `units`. Its `enabled_units`, `disabled_units` and `preset_matched_units` name lists are replaced by `inventory`, which records each unit once with its state and preset, masked units included. Filter `inventory` by state for the old lists.
+- A scheduled timer no longer records `timer_content`, `service_content`, `disposition` or `locked`. It records the unit it starts (`trigger`) and the drop-ins that set it (`trigger_drop_ins`). A timer's unit file is now a Configuration Files entry, or a Service Drop-ins entry for a copy of a vendor timer.
+
+**Refine API and saved sessions:**
+
+- Unit operations name the item kind `Unit`. The kind `Service` is retired. `/api/view` returns `unit_states` and `unit_dropins` in place of `service_states` and `service_dropins`, and the section id is `units`.
+- The item kind `SystemdTimer` is retired. A request naming it is refused with a bad request, and a saved refine session holding one does not load: `refine` names the kind, keeps the file, and `--fresh` discards it. The same applies to a saved session holding `Service`.
+- In `/api/snapshot/sections`, a scheduled row's id is `<kind>:<source>`. It used to be the timer's name, the cron job's path or the `at` job's file. The forms are `cron:<path>`, `timer:<path>`, `at:<file>` and `generated:<index>:<name>`. A timer whose snapshot records no path is `timer:<name>`. An instance timer, described from its template's file, is `timer-instance:` followed by the JSON array `[path, name]`, for example `timer-instance:["etc/systemd/system/worker@.timer","worker@a"]`. Join a generated row to `declined_generated` and `generated_timers` through its `generated_timer` field, not by reading the id.
+- The `x-export-warnings` header of `POST /api/tarball` is a JSON array of `{"kind": ..., "text": ...}` objects, where `kind` is `failure` or `notice`, in place of an array of strings.
+
+**Export contents:**
+
+- The scan tarball and the refine export no longer contain `sysctl/99-inspectah-migrated.conf` or a `COPY sysctl/` line. The host's own files are copied under `config/etc/sysctl.d/` and read from the Configuration Files section.
