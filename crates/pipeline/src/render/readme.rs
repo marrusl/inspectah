@@ -387,7 +387,9 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
                 let prefix = if w.inspector.is_empty() {
                     String::new()
                 } else {
-                    format!("**{}:** ", w.inspector)
+                    // Set by code during a scan, but arbitrary text in an
+                    // imported snapshot: literal, like the message.
+                    format!("**{}:** ", md_code(&w.inspector))
                 };
                 lines.push(format!("- {prefix}{}", md_code(&w.message)));
             }

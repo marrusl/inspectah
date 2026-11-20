@@ -602,7 +602,7 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
                     .unwrap_or_default()
                     .trim_matches('"')
                     .to_string();
-                lines.push(format!("- `{}` ({})", f.path, category));
+                lines.push(format!("- {} ({})", md_code(&f.path), category));
             }
             lines.push(String::new());
         }

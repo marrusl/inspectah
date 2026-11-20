@@ -39,11 +39,22 @@ The audit's `#### Sysctl` block uses it for every interpolation, and the
 Warnings list in `README.md` and `audit-report.md` prints each warning
 message as one `md_code` span: a message is prose with host values
 already interpolated by the collector (repo file names, key paths, unit
-names), so the renderer cannot escape only the host part.
-`crates/cli/tests/warning_markdown_test.rs` parses both reports. Most other
-audit sections still print paths raw inside hand-written backticks (the
-Unowned Config Files list prints a file name holding a newline across two
-lines); that is pre-existing, not covered by this helper yet.
+names), so the renderer cannot escape only the host part. The inspector
+name `README.md` prints in bold before each message is an `md_code` span
+too: the scan sets it from code, but an imported snapshot can hold any
+text there. The audit's Unowned Config Files list prints each path with
+`md_code`. `crates/cli/tests/warning_markdown_test.rs` parses the reports;
+`audit_host_paths_render_literally` is a table with one row per audit
+list, so a site moved to `md_code` gets a row there.
+
+These audit sites in `crates/pipeline/src/render/audit.rs` still print
+host text raw inside hand-written backticks (pre-existing, not yet moved
+to the helper): Modified RPM-Owned Files (each file's bold path), the kernel
+command line, the duplicate-group note's package name, the SELinux summary
+label, firewall direct rules (`args`), static routes, `/etc/hosts`
+additions, proxy entries (source and line), storage credential references
+(mount point and path), the unit-file outcome table's path, and the
+`/var`/`/srv` path list.
 
 ## The HTML report is not Markdown
 
