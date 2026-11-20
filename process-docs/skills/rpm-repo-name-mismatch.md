@@ -68,9 +68,15 @@ the scan left repo-less can install from its own repo with
 `.repo` files the build has when it installs (`InstallRepos`, built
 once per export from `staged_writes`), by the same exact-first spelling
 rule (`section_spelling`, which is what `normalize_source_repos` already
-rewrote `source_repo` by), returns the id as that section spells it, and accepts only a section that is disabled, defines a
-source, and names no `gpgkey=file://` key the export leaves out
-(`keys_included`, shared with the repo-enabling proof).
+rewrote `source_repo` by), returns the id as that section spells it,
+and accepts only a section that is disabled, defines a source, and names
+only `gpgkey=file://` keys the image has when it installs
+(`keys_included`, shared with the repo-enabling proof): a key the base
+image ships, or one the GPG Keys section copies, which is an included
+key the stager actually writes (`InstallRepos::copies_key`). An included
+key the stager withholds or refuses is not copied, and dnf cannot verify
+the package without it; checking the key's disposition is not enough,
+for the same reason checking a repo file's is not.
 
 That set is what the package phase's early `COPY config/etc/yum.repos.d/`
 puts in the image, so it follows the `COPY`, not the repo inventory:

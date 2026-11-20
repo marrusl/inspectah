@@ -100,11 +100,11 @@ pub(crate) fn repo_enabling_export(
         });
     }
 
-    if pkg
-        .repo_enabling_from
-        .iter()
-        .any(|id| repos.effective(id).is_some_and(|sec| serves(rpm, &sec)))
-    {
+    if pkg.repo_enabling_from.iter().any(|id| {
+        repos
+            .effective(id)
+            .is_some_and(|sec| serves(rpm, repos, &sec))
+    }) {
         RepoEnablingExport::Served
     } else {
         RepoEnablingExport::Lost(ServingLoss {
@@ -117,8 +117,8 @@ pub(crate) fn repo_enabling_export(
 /// Whether dnf can install a repo-enabling package from `sec`, the
 /// definition it uses for a serving id: enabled, and every key it names
 /// in the image.
-fn serves(rpm: &RpmSection, sec: &RepoSectionDef) -> bool {
-    sec.enabled && keys_included(rpm, &sec.gpg_key_paths)
+fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDef) -> bool {
+    sec.enabled && keys_included(rpm, repos, &sec.gpg_key_paths)
 }
 
 /// The first captured `.repo` file, in dnf's read order, that the export
@@ -144,27 +144,30 @@ fn restoring_file<'a>(rpm: &'a RpmSection, repos: &InstallRepos, id: &RepoId) ->
         .find(|f| {
             repos
                 .effective_with(f, id)
-                .is_some_and(|sec| serves(rpm, &sec))
+                .is_some_and(|sec| serves(rpm, repos, &sec))
         })
         .map(|f| f.path.as_str())
 }
 
 /// Whether every `gpgkey=file://` path a section names is a key the image
-/// will have: an included `gpg_keys` entry, or one the base image ships
-/// ([`RepoFile::is_in_image`]). A path written with dnf variables names the
-/// key the scan recorded at the expanded path ([`RepoFile::is_key_named_by`]).
+/// has when the package phase installs: one the GPG Keys section copies
+/// ([`InstallRepos::copies_key`]: included, and actually staged, so a key
+/// the stager withholds or refuses does not count), or one the base image
+/// ships ([`RepoFile::shipped_by_base`]). A path written with dnf variables
+/// names the key the scan recorded at the expanded path
+/// ([`RepoFile::is_key_named_by`]).
 ///
 /// Shared with `repoless::disabled_repo_install`: a section dnf cannot
 /// verify packages from is no more installable from a disabled repo than
 /// from a repo-enabling one.
 ///
 /// [`RepoFile::is_key_named_by`]: inspectah_core::types::rpm::RepoFile::is_key_named_by
-/// [`RepoFile::is_in_image`]: inspectah_core::types::rpm::RepoFile::is_in_image
-pub(crate) fn keys_included(rpm: &RpmSection, paths: &[String]) -> bool {
+/// [`RepoFile::shipped_by_base`]: inspectah_core::types::rpm::RepoFile::shipped_by_base
+pub(crate) fn keys_included(rpm: &RpmSection, repos: &InstallRepos, paths: &[String]) -> bool {
     paths.iter().all(|path| {
-        rpm.gpg_keys
-            .iter()
-            .any(|k| k.is_in_image() && k.is_key_named_by(path))
+        rpm.gpg_keys.iter().any(|k| {
+            k.is_key_named_by(path) && (k.shipped_by_base.is_some() || repos.copies_key(&k.path))
+        })
     })
 }
 
@@ -262,16 +265,24 @@ mod tests {
             ("excluded", FindingKind::excluded(), None, false),
         ];
         for (name, disposition, shipped_by_base, present) in cases {
-            let rpm = RpmSection {
-                gpg_keys: vec![RepoFile {
-                    path: KEY.into(),
-                    disposition,
-                    shipped_by_base: shipped_by_base.map(String::from),
+            let snap = InspectionSnapshot {
+                rpm: Some(RpmSection {
+                    gpg_keys: vec![RepoFile {
+                        path: KEY.into(),
+                        disposition,
+                        shipped_by_base: shipped_by_base.map(String::from),
+                        ..Default::default()
+                    }],
                     ..Default::default()
-                }],
+                }),
                 ..Default::default()
             };
-            assert_eq!(keys_included(&rpm, &[KEY.to_string()]), present, "{name}");
+            let rpm = snap.rpm.as_ref().expect("an rpm section");
+            assert_eq!(
+                keys_included(rpm, &InstallRepos::of(&snap), &[KEY.to_string()]),
+                present,
+                "{name}"
+            );
         }
     }
 

@@ -2888,6 +2888,44 @@ mod tests {
         }
     }
 
+    /// A repo-enabling package whose serving section names a key the
+    /// export includes but the stager withholds is demoted: the GPG Keys
+    /// section copies only what is staged, so dnf cannot verify it. The
+    /// base image shipping the key keeps it served.
+    #[test]
+    fn a_withheld_serving_key_demotes_the_repo_enabling_package() {
+        const KEYED: &str = "[epel]\nbaseurl=https://example.invalid/epel\nenabled=1\n\
+                             gpgkey=file:///etc/pki/rpm-gpg/KEY-epel\n";
+        for (what, shipped_by_base, served) in [
+            ("withheld", None, false),
+            (
+                "withheld, shipped by the base image",
+                Some("vendor-keys"),
+                true,
+            ),
+        ] {
+            let mut snap = snapshot_with_packages(&["epel-release"]);
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            rpm.packages_added[0].source_repo = "@commandline".into();
+            rpm.packages_added[0].repo_enabling_from =
+                vec![inspectah_core::types::repo::RepoId::new("epel")];
+            rpm.repo_files = vec![repo_file("/etc/yum.repos.d/epel.repo", KEYED, true)];
+            let mut key = repo_file("/etc/pki/rpm-gpg/KEY-epel", "key-data", true);
+            key.shipped_by_base = shipped_by_base.map(String::from);
+            rpm.gpg_keys = vec![key];
+            snap.config = Some(inspectah_core::types::config::ConfigSection {
+                files: vec![inspectah_core::types::config::ConfigFileEntry {
+                    path: "/etc/pki/rpm-gpg/KEY-epel/stray".into(),
+                    content: "x\n".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+            });
+            super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+            assert_eq!(epel_release_verdict(&snap).is_ok(), served, "{what}");
+        }
+    }
+
     /// A demoted repo-enabling leaf the operator uploaded installs from the
     /// upload, so dnf resolves its dependencies: an excluded dependency
     /// from a host-disabled repo is still named in that repo's

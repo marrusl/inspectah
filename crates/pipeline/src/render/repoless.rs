@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use inspectah_core::rpm_filename::StagedName;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::group_render::RenderContext;
@@ -181,7 +183,7 @@ fn disabled_repo_install(
         .filter(|sec| {
             !sec.enabled
                 && sec.has_source
-                && keys_included(rpm, &sec.gpg_key_paths)
+                && keys_included(rpm, repos, &sec.gpg_key_paths)
                 && sanitize_shell_value(sec.id.as_str()).is_some()
         })
         .map(|sec| sec.id)
@@ -208,6 +210,11 @@ const YUM_REPOS_DIR: &str = "/etc/yum.repos.d";
 ///
 /// The files the base image itself ships in `/etc/yum.repos.d` are not
 /// known to the export and are not part of the set.
+///
+/// It also holds the GPG keys the GPG Keys section copies, which it does
+/// right after that `COPY` and before anything installs: an included key
+/// the stager writes at an absolute, shell-safe path. A key the stager
+/// withholds or refuses is not copied, however it is disposed.
 #[derive(Debug, Clone, Default)]
 pub struct InstallRepos {
     /// How many included, non-default repo files are staged.
@@ -216,6 +223,8 @@ pub struct InstallRepos {
     /// directory: what dnf reads at install time when the `COPY` renders
     /// (`custom > 0`), and nothing otherwise.
     files: Vec<(String, String)>,
+    /// The paths of the `gpg_keys` entries the GPG Keys section copies.
+    keys: BTreeSet<String>,
 }
 
 impl InstallRepos {
@@ -244,7 +253,27 @@ impl InstallRepos {
                     .then(|| (dest.as_str().to_owned(), write.content.to_string()))
             })
             .collect();
-        Self { custom, files }
+        // The same conditions the GPG Keys section applies before it names
+        // a key in a `COPY`: included, staged, absolute and shell-safe.
+        let keys = snap.rpm.as_ref().map_or_else(BTreeSet::new, |rpm| {
+            rpm.gpg_keys
+                .iter()
+                .filter(|k| k.disposition.is_included() && is_staged(staged, &k.path))
+                .filter(|k| k.path.starts_with('/') && sanitize_shell_value(&k.path).is_some())
+                .map(|k| k.path.clone())
+                .collect()
+        });
+        Self {
+            custom,
+            files,
+            keys,
+        }
+    }
+
+    /// Whether the GPG Keys section copies the captured key at `path`
+    /// before the package phase installs.
+    pub(crate) fn copies_key(&self, path: &str) -> bool {
+        self.keys.contains(path)
     }
 
     /// How many included repo files that are not default repo files the
@@ -1136,6 +1165,76 @@ mod tests {
                     .collect(),
             });
             assert_eq!(routes_and_renders_enablerepo(&snap), expected, "{what}");
+        }
+    }
+
+    #[test]
+    fn a_key_the_export_does_not_copy_keeps_the_package_repo_less() {
+        // dnf verifies a package against the keys its section names, so the
+        // route needs each one in the image when the package phase
+        // installs: copied by the GPG Keys section, which copies only what
+        // the stager writes, or shipped by the base image. An included key
+        // the stager withholds (a config entry under `KEY-r/` needs that
+        // path as a directory) is not copied, and dnf fails on it.
+        const KEY: &str = "/etc/pki/rpm-gpg/KEY-r";
+        const KEYED: &str = "[r]\nbaseurl=https://example.invalid/r\nenabled=0\n\
+                             gpgkey=file:///etc/pki/rpm-gpg/KEY-r\n";
+        let key = |shipped_by_base: Option<&str>| RepoFile {
+            path: KEY.into(),
+            content: "key-data".into(),
+            disposition: FindingKind::included(),
+            shipped_by_base: shipped_by_base.map(String::from),
+            ..Default::default()
+        };
+        // `(what, key, config entries as (path, content), routes)`.
+        type Case = (
+            &'static str,
+            RepoFile,
+            Vec<(&'static str, &'static str)>,
+            bool,
+        );
+        let cases: Vec<Case> = vec![
+            ("control: the key is copied", key(None), vec![], true),
+            (
+                "the key is withheld",
+                key(None),
+                vec![("/etc/pki/rpm-gpg/KEY-r/stray", "x\n")],
+                false,
+            ),
+            (
+                "the key is withheld, but the base image ships it",
+                key(Some("vendor-keys")),
+                vec![("/etc/pki/rpm-gpg/KEY-r/stray", "x\n")],
+                true,
+            ),
+        ];
+        for (what, key, config, expected) in cases {
+            let pkg = from_repo("r", exact("r"));
+            let mut snap = snapshot_with(
+                &pkg,
+                vec![repo_file("/etc/yum.repos.d/custom.repo", KEYED, false)],
+            );
+            snap.rpm.as_mut().expect("an rpm section").gpg_keys = vec![key];
+            snap.config = Some(inspectah_core::types::config::ConfigSection {
+                files: config
+                    .into_iter()
+                    .map(|(path, content)| config_entry(path, content))
+                    .collect(),
+            });
+            assert_eq!(routes_and_renders_enablerepo(&snap), expected, "{what}");
+            let rpm = snap.rpm.as_ref().expect("an rpm section");
+            let uploads = VerifiedUploads::new();
+            let route = route_for(
+                rpm,
+                &InstallRepos::of(&snap),
+                &rpm.packages_added[0],
+                &uploads,
+            );
+            assert_eq!(
+                matches!(route, PackageRoute::Repoless),
+                !expected,
+                "{what}: {route:?}"
+            );
         }
     }
 
