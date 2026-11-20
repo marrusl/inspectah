@@ -172,6 +172,25 @@ stub_has() {
 stub_lacks() {
     if grep -qE -- "^$1( |\$)" "$STUB_LOG"; then report "stub log has a '$1' line"; fi
 }
+# want_gated: accepted, and the stub log is exactly the three gates, run
+# once each in order. A hook that stops after fmt, or refuses after the
+# gates, fails it.
+want_gated() {
+    want_accepted || return 1
+    local lines
+    lines=$(wc -l < "$STUB_LOG" | tr -d ' ')
+    [ "$lines" -eq 3 ] || { report "stub log is $lines lines, want 3"; return 1; }
+    case "$(sed -n 1p "$STUB_LOG")" in "fmt --check "*) ;; *) report "line 1 is not fmt --check"; return 1 ;; esac
+    case "$(sed -n 2p "$STUB_LOG")" in "clippy --workspace --all-targets -- -D clippy::all "*) ;; *) report "line 2 is not the clippy gate"; return 1 ;; esac
+    case "$(sed -n 3p "$STUB_LOG")" in "test --workspace "*) ;; *) report "line 3 is not test --workspace"; return 1 ;; esac
+}
+# want_exit <n>: the hook exited with status n.
+want_exit() { [ "$RC" -eq "$1" ] || report "exit $RC, want $1"; }
+
+# commit_no_verify <message>: commit in $R without running the hook.
+commit_no_verify() {
+    git -C "$R" commit -q --no-verify -m "$1"
+}
 
 # check <name> <function>: run one case; ok if the function returns 0.
 check() {
@@ -203,11 +222,7 @@ check "an empty commit is docs-only" case_empty
 
 case_order() {
     new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs; commit
-    want_accepted || return 1
-    [ "$(wc -l < "$STUB_LOG" | tr -d ' ')" -eq 3 ] || { report "stub log is not three lines"; return 1; }
-    case "$(sed -n 1p "$STUB_LOG")" in "fmt --check "*) ;; *) report "line 1 is not fmt --check"; return 1 ;; esac
-    case "$(sed -n 2p "$STUB_LOG")" in "clippy --workspace --all-targets -- -D clippy::all "*) ;; *) report "line 2 is not the clippy gate"; return 1 ;; esac
-    case "$(sed -n 3p "$STUB_LOG")" in "test --workspace "*) ;; *) report "line 3 is not test --workspace"; return 1 ;; esac
+    want_gated
 }
 check "a code commit runs fmt, clippy and test in order" case_order
 
@@ -226,7 +241,8 @@ case_gate_fails() {
     new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
     commit_env STUB_FAIL=clippy
     [ "$RC" -eq 1 ] || { report "exit $RC, want 1"; return 1; }
-    has "pre-commit: clippy FAILED (" && has "stub clippy failed" && stub_lacks test
+    has "pre-commit: clippy FAILED (" && has "stub clippy failed" \
+        && has "clippy warnings found" && stub_lacks test
 }
 check "a failing gate prints its output" case_gate_fails
 
@@ -243,23 +259,23 @@ check "the hook unsets INSPECTAH_SKIP_UI" case_skip_ui
 
 case_snapshot() {
     new_repo; edit crates/a/tests/snapshots/x.snap; stage crates/a/tests/snapshots/x.snap
-    commit; stub_has fmt
+    commit; want_gated
 }
 check "a snapshot-only commit is gated" case_snapshot
 
 case_ui() {
     new_repo; edit crates/web/ui/src/App.tsx; stage crates/web/ui/src/App.tsx
-    commit; stub_has fmt
+    commit; want_gated
 }
 check "a UI-only commit is gated" case_ui
 
 case_deletion() {
-    new_repo; run git rm -q crates/a/tests/t.rs; commit; stub_has fmt
+    new_repo; run git rm -q crates/a/tests/t.rs; commit; want_gated
 }
 check "a deletion-only code commit is gated" case_deletion
 
 case_rename() {
-    new_repo; run git mv crates/a/src/lib.rs docs/lib.rs; commit; stub_has fmt
+    new_repo; run git mv crates/a/src/lib.rs docs/lib.rs; commit; want_gated
 }
 check "a rename out of a code path is gated" case_rename
 
@@ -367,10 +383,9 @@ check "an unreadable staged tarball refuses with exit 1" case_bad_tarball
 
 case_head_code() {
     new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
-    run git commit -q --no-verify -m "test: code"
+    commit_no_verify "test: code"
     run .githooks/pre-commit --head
-    [ "$RC" -eq 0 ] || { report "exit $RC, want 0"; return 1; }
-    stub_has fmt
+    want_gated
 }
 check "head mode gates a code commit" case_head_code
 
@@ -382,6 +397,183 @@ case_head_docs() {
     has "$DOCS_ONLY_LINE" && stub_empty
 }
 check "head mode skips a docs commit" case_head_docs
+
+# head mode tests HEAD, so the index must not differ from it outside the
+# docs-only list: a staged repair would be tested in HEAD's place.
+case_head_staged() {
+    new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    commit_no_verify "test: code"
+    edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    run .githooks/pre-commit --head
+    want_refused && has "the index differs from HEAD" && has crates/a/src/lib.rs && stub_empty
+}
+check "head mode refuses a staged code change on top of HEAD before fmt" case_head_staged
+
+case_head_staged_docs() {
+    new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    commit_no_verify "test: code"
+    edit docs/guide.md; stage docs/guide.md
+    run .githooks/pre-commit --head
+    want_gated
+}
+check "head mode is not refused for a staged docs change" case_head_staged_docs
+
+case_head_untracked() {
+    new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    commit_no_verify "test: code"
+    edit crates/a/tests/new.rs
+    run .githooks/pre-commit --head
+    want_refused && has crates/a/tests/new.rs && stub_empty
+}
+check "head mode refuses an untracked code path before fmt" case_head_untracked
+
+# merge_with <path on side> <path on main> <hand-resolved path or empty>:
+# a merge commit in $R, made without the hook, whose two parents changed
+# the first two paths and whose resolution also edits the third.
+merge_with() {
+    git -C "$R" checkout -q -b side
+    edit "$1"; stage "$1"; commit_no_verify "test: side"
+    git -C "$R" checkout -q -
+    edit "$2"; stage "$2"; commit_no_verify "test: main"
+    git -C "$R" merge -q --no-ff --no-commit side >/dev/null
+    if [ -n "$3" ]; then edit "$3"; stage "$3"; fi
+    commit_no_verify "test: merge"
+}
+
+case_head_merge() {
+    new_repo; merge_with docs/side.md docs/guide.md crates/a/src/lib.rs
+    run .githooks/pre-commit --head
+    want_gated
+}
+check "head mode gates a merge whose resolution changes code" case_head_merge
+
+case_head_merge_docs() {
+    new_repo; merge_with docs/side.md docs/guide.md ""
+    run .githooks/pre-commit --head
+    want_accepted && has "$DOCS_ONLY_LINE" && stub_empty
+}
+check "head mode skips a docs-only merge" case_head_merge_docs
+
+# Gate 0 runs as --tracked in head mode. Under --staged the index equals
+# HEAD, so nothing would be checked and this tarball would pass.
+case_head_tarball() {
+    new_repo; mkdir -p "$R/testdata"
+    echo "this is not an archive" > "$R/testdata/bad.tar.gz"
+    run git add -f testdata/bad.tar.gz
+    commit_no_verify "test: tarball"
+    run .githooks/pre-commit --head
+    want_exit 1 && has "commit refused: sensitive-tarball check failed (exit 2)" && stub_empty
+}
+check "head mode checks every tracked tarball" case_head_tarball
+
+case_usage() {
+    new_repo
+    run .githooks/pre-commit --bogus
+    want_exit 1 && has "pre-commit: usage: pre-commit [--head]" && stub_empty
+}
+check "an unknown argument is a usage error" case_usage
+
+# A helper status other than 2 is still mapped to 1 and reported as is.
+# A PATH holding only bash and git hides jq, so the helper exits 64.
+case_gate0_usage() {
+    new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    local bin="$WORK/no-jq-$case_no"
+    mkdir -p "$bin"
+    ln -s "$(command -v bash)" "$bin/bash"
+    ln -s "$(command -v git)" "$bin/git"
+    run env PATH="$bin" .githooks/pre-commit
+    want_exit 1 && has "requires jq" \
+        && has "commit refused: sensitive-tarball check failed (exit 64)" && stub_empty
+}
+check "gate 0 exiting 64 refuses with exit 1" case_gate0_usage
+
+# A git failure that set -e turns into an exit still exits 1: an unmerged
+# docs path passes the refuse check, then git write-tree exits 128.
+case_set_e_exit() {
+    new_repo; merge_conflict_on docs/guide.md
+    edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    run .githooks/pre-commit
+    want_exit 1 && has "unmerged" && stub_empty
+}
+# merge_conflict_on <path>: leave $R mid-merge with <path> unmerged.
+merge_conflict_on() {
+    git -C "$R" checkout -q -b side
+    echo "side" > "$R/$1"; stage "$1"; commit_no_verify "test: side"
+    git -C "$R" checkout -q -
+    echo "main" > "$R/$1"; stage "$1"; commit_no_verify "test: main"
+    if git -C "$R" merge -q side >/dev/null 2>&1; then
+        echo "merge_conflict_on: the merge did not conflict" >&2
+        return 1
+    fi
+}
+check "a status set -e raises is mapped to exit 1" case_set_e_exit
+
+# --- ignored build inputs ---
+
+# An ignored Rust source under crates/ is compiled by the gates but never
+# committed. The repository's unanchored build/ rule makes this real.
+case_ignored_source() {
+    new_repo; printf 'build/\n' > "$R/.gitignore"; stage .gitignore
+    echo "mod build;" >> "$R/crates/a/src/lib.rs"; stage crates/a/src/lib.rs
+    mkdir -p "$R/crates/a/src/build"; echo "pub fn b() {}" > "$R/crates/a/src/build/mod.rs"
+    commit
+    want_refused && has crates/a/src/build/mod.rs && stub_empty
+}
+check "an ignored Rust source under crates/ is refused before fmt" case_ignored_source
+
+case_ignored_manifest() {
+    new_repo; printf 'build/\n' > "$R/.gitignore"; stage .gitignore
+    edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    mkdir -p "$R/crates/build/b"; echo "[package]" > "$R/crates/build/b/Cargo.toml"
+    commit
+    want_refused && has crates/build/b/Cargo.toml && stub_empty
+}
+check "an ignored Cargo.toml under crates/ is refused before fmt" case_ignored_manifest
+
+case_ignored_other() {
+    new_repo; printf 'build/\n*.log\n' > "$R/.gitignore"; stage .gitignore
+    edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    mkdir -p "$R/crates/a/build"; echo "out" > "$R/crates/a/build/out.txt"
+    echo "log" > "$R/crates/a/run.log"
+    commit
+    want_gated
+}
+check "an ignored file outside the refused set does not block" case_ignored_other
+
+# --- path names git quotes ---
+
+# git quotes a non-ASCII name unless core.quotePath is off, and a quoted
+# docs path would fail the list.
+case_unicode_docs_only() {
+    new_repo; edit "docs/café.md"; stage "docs/café.md"; commit
+    want_accepted && has "$DOCS_ONLY_LINE" && stub_empty
+}
+check "a docs-only commit of a non-ASCII docs path skips the cargo gates" case_unicode_docs_only
+
+case_unicode_docs_dirt() {
+    new_repo; edit "docs/naïve.md"; stage "docs/naïve.md"; commit_no_verify "test: seed"
+    edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    edit "docs/naïve.md"; edit "docs/café.md"
+    commit
+    want_gated
+}
+check "an unstaged and an untracked non-ASCII docs path do not block" case_unicode_docs_dirt
+
+case_unicode_code() {
+    new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    edit "crates/a/src/café.rs"
+    commit
+    want_refused && has "crates/a/src/café.rs" && stub_empty
+}
+check "an untracked non-ASCII code path is refused, named as is" case_unicode_code
+
+# A name git must still quote (here a double quote) keeps its quotes and
+# fails the list: gated, never exempt.
+case_quoted_docs() {
+    new_repo; edit 'docs/a"b.md'; stage 'docs/a"b.md'; commit
+    want_gated
+}
+check "a docs path git must still quote is gated" case_quoted_docs
 
 echo
 echo "$passes passed, $failures failed"

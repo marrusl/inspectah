@@ -228,9 +228,11 @@ passes. Every other commit is gated, including one that only deletes a
 file, renames one, or changes a `.snap` file, a fixture under
 `testdata/`, or the web UI. For a gated commit the hook:
 
-1. Refuses while any path outside the list is edited and not staged, or
-   untracked and not ignored. It names every such path: commit it,
-   delete it, or ignore it.
+1. Refuses while any path outside the list is edited and not staged,
+   untracked and not ignored, or an ignored `.rs` or `Cargo.toml` file
+   under `crates/`, which the gates would compile but the commit would
+   leave out. It names every such path: commit it, delete it, or ignore
+   it (an ignored Rust source can only be committed or deleted).
 2. Runs three gates, in order: `cargo fmt --check`,
    `cargo clippy --workspace --all-targets -- -D clippy::all`, and
    `cargo test --workspace`. Each prints one line, such as
@@ -241,11 +243,15 @@ file, renames one, or changes a `.snap` file, a fixture under
 
 Four things follow.
 
-- **The gates test your commit.** They run on the files on disk, and
-  steps 1 and 3 refuse whenever those could differ from what you are
-  committing. That holds for `git commit -a` and
+- **The gates test your commit, except for ignored files outside
+  `crates/**/*.rs` and `crates/**/Cargo.toml`.** They run on the files
+  on disk, and steps 1 and 3 refuse whenever those could differ from
+  what you are committing. That holds for `git commit -a` and
   `git commit --only <paths>` too: git gives the hook the index it
-  builds for that commit, and the hook compares against it.
+  builds for that commit, and the hook compares against it. The hook
+  does not look for other ignored files, so an ignored build input of
+  another kind, such as a template or a UI asset, can still be tested
+  without being committed.
 - **A docs-only commit is never refused for other files.** Unstaged or
   untracked code beside it does not block it, so a docs fix can land
   while a code change is in progress in the same clone.
@@ -260,7 +266,9 @@ Four things follow.
 
 To gate every commit of a rebase, run
 `git rebase --exec '.githooks/pre-commit --head'`: in that mode the hook
-checks the paths `HEAD` changed. The hook's own tests are
+checks the paths `HEAD` changed (for a merge, its changes against every
+parent), and refuses while the index differs from `HEAD` outside the
+docs-only list, so the tree it tests is `HEAD`. The hook's own tests are
 `scripts/tests/pre-commit-hook-test.sh`, and
 `scripts/tests/docs-only-paths-test.sh` checks that no Rust source under
 `crates/` reads a docs-only path.

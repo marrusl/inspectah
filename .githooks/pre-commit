@@ -6,7 +6,9 @@
 # USAGE:
 #   pre-commit            git calls it with no argument before each commit
 #   pre-commit --head     gate the paths HEAD changed instead of the staged
-#                         ones, for `git rebase --exec '.githooks/pre-commit --head'`
+#                         ones, for `git rebase --exec '.githooks/pre-commit --head'`.
+#                         For a merge that is every path it changed against
+#                         any parent.
 #
 # ORDER:
 #   1. Unset INSPECTAH_SKIP_UI, so rust-embed never embeds a stale
@@ -24,8 +26,11 @@
 #      commit is docs-only. A docs-only commit is never refused for other
 #      files, so docs writers are not blocked by a code writer's work.
 #   5. Refuse while any path that fails the list differs from the index
-#      being committed: an unstaged edit or an untracked file. Then record
-#      the index's tree.
+#      being committed: an unstaged edit, an untracked file, or an ignored
+#      Rust source or Cargo.toml under crates/, which the gates would
+#      compile but the commit would leave out. With --head, also refuse
+#      while the index differs from HEAD, since the gates must test HEAD.
+#      Then record the index's tree.
 #   6. fmt, clippy and test, each with its output in a file and one line
 #      printed per gate; a failed gate prints its file.
 #   7. The same refuse check again, and refuse if the index's tree changed
@@ -35,7 +40,13 @@
 # of the commit: the hook refuses whenever the tested tree could differ from
 # the index being committed. git sets GIT_INDEX_FILE for `commit --only` and
 # `commit -a`, and every git command here reads it, so the comparison is
-# against the index that becomes the commit, not the real one.
+# against the index that becomes the commit, not the real one. An ignored
+# file outside crates/**/*.rs and crates/**/Cargo.toml is not checked.
+#
+# Paths are listed with core.quotePath off, so a non-ASCII name such as
+# docs/café.md is matched as written. A name git must still quote (one
+# holding a double quote, a backslash or a control character) keeps its
+# quotes, fails the list, and so is gated or refused, never exempt.
 #
 # EXIT: 0 passed or skipped; 1 for everything else: a refusal, a failed
 # gate, a usage error, and any non-zero status from gate 0's helper (which
@@ -52,6 +63,8 @@
 set -euo pipefail
 
 DOCS_ONLY_FILE=.githooks/docs-only-paths
+# Ignored files that are still build inputs. A *.rs pattern covers build.rs.
+IGNORED_INPUTS=(':(glob)crates/**/*.rs' ':(glob)crates/**/Cargo.toml')
 CLIPPY_GATE=(cargo clippy --workspace --all-targets -- -D clippy::all)
 
 GATE_DIR=
@@ -70,6 +83,12 @@ trap cleanup EXIT
 refuse() {
     echo "pre-commit: commit refused: $1" >&2
     exit 1
+}
+
+# git_paths <git arguments...>: git with core.quotePath off, for every
+# command whose path list is matched against the docs-only list.
+git_paths() {
+    git -c core.quotePath=false "$@"
 }
 
 mode=staged
@@ -146,9 +165,11 @@ non_docs_paths() {
 # --- fast path: a docs-only commit skips everything below ---
 
 if [ "$mode" = head ]; then
-    changed=$(git diff-tree -r --no-commit-id --name-only --no-renames --root HEAD)
+    # -m: without it diff-tree prints nothing for a merge, which would read
+    # as docs-only. With it a merge lists its changes against every parent.
+    changed=$(git_paths diff-tree -m -r --no-commit-id --name-only --no-renames --root HEAD)
 else
-    changed=$(git diff --cached --name-only --no-renames)
+    changed=$(git_paths diff --cached --name-only --no-renames)
 fi
 gated=$(non_docs_paths "$changed")
 if [ -z "$gated" ]; then
@@ -159,25 +180,41 @@ fi
 # --- refuse check ---
 
 # refuse_if_dirty <first|second>: refuse while a path that fails the list is
-# edited and unstaged, or untracked and not ignored. Both git commands read
-# GIT_INDEX_FILE, so they compare against the index being committed.
+# edited and unstaged, untracked and not ignored, or ignored and one of
+# IGNORED_INPUTS. Every git command reads GIT_INDEX_FILE, so they compare
+# against the index being committed.
 refuse_if_dirty() {
-    local when unstaged untracked dirty
+    local when unstaged untracked ignored dirty
     if [ "$1" = first ]; then
         when="before the gates ran"
     else
         when="after the gates ran"
     fi
-    unstaged=$(git diff --name-only --no-renames)
-    untracked=$(git ls-files --others --exclude-standard)
+    unstaged=$(git_paths diff --name-only --no-renames)
+    untracked=$(git_paths ls-files --others --exclude-standard)
+    ignored=$(git_paths ls-files --others --ignored --exclude-standard -- "${IGNORED_INPUTS[@]}")
     dirty=$(non_docs_paths "$unstaged
-$untracked")
+$untracked
+$ignored")
     if [ -n "$dirty" ]; then
         refuse "these paths differ from the commit $when, so the gates would not test it:
 $(sed 's/^/    /' <<<"$dirty")
-commit it, delete it, or ignore it; docs-only paths are exempt"
+commit it, delete it, or ignore it (an ignored Rust source or Cargo.toml under
+crates/ is still compiled: commit it or delete it); docs-only paths are exempt"
     fi
 }
+
+# In head mode the commit under test is HEAD, so a staged change outside the
+# list would be tested in its place.
+if [ "$mode" = head ]; then
+    staged=$(git_paths diff --cached --name-only --no-renames HEAD)
+    staged=$(non_docs_paths "$staged")
+    if [ -n "$staged" ]; then
+        refuse "the index differs from HEAD in these paths, so the gates would not test HEAD:
+$(sed 's/^/    /' <<<"$staged")
+unstage them or commit them first; docs-only paths are exempt"
+    fi
+fi
 
 refuse_if_dirty first
 tree_before=$(git write-tree)

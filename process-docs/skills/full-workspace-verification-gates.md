@@ -51,11 +51,18 @@ says nothing about either.
 
 **The hook tests the commit, not just the working tree.** Before fmt and
 again after test it refuses while any path outside the docs-only list is
-edited and unstaged or untracked, and after the gates it refuses if the
-index's tree changed. Every check reads the index git hands the hook
-(`GIT_INDEX_FILE`), which under `git commit --only` and `git commit -a`
-is a temporary index, not `.git/index`. A docs-only commit skips all of
-this and is never refused for other files.
+edited and unstaged or untracked, or is an ignored `crates/**/*.rs` or
+`crates/**/Cargo.toml` (the unanchored `build/` rule in `.gitignore`
+matches `crates/*/src/build/`, so an ignored module is a real case), and
+after the gates it refuses if the index's tree changed. Every check reads
+the index git hands the hook (`GIT_INDEX_FILE`), which under
+`git commit --only` and `git commit -a` is a temporary index, not
+`.git/index`. Other ignored files are not checked, so an ignored build
+input of another kind can still be tested without being committed. With
+`--head` the hook also refuses while the index differs from `HEAD`, and
+classifies a merge by its changes against every parent. A docs-only
+commit skips all of this and is never refused for other files. The git
+and shell traps behind these checks are in `git-hook-shell-pitfalls.md`.
 
 **Never run cargo and vitest at the same time.** `crates/web/build.rs`
 runs `npm ci` in `crates/web/ui` whenever the build script reruns, and `npm ci`

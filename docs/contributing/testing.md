@@ -52,8 +52,9 @@ outside the docs-only list in `.githooks/docs-only-paths`: `docs/`,
 top-level `*.md` files and `LICENSE`. A commit whose every path is on
 that list skips the gates and is never refused for other files. For any
 other commit the hook refuses, before fmt and again after test, while a
-path outside the list is edited and unstaged or untracked, so the gates
-test exactly the content being committed. It prints one line per gate
+path outside the list is edited and unstaged or untracked, or is an
+ignored `.rs` or `Cargo.toml` file under `crates/`, so the gates test
+the content being committed. Other ignored files are not checked. It prints one line per gate
 and unsets `INSPECTAH_SKIP_UI`. Before any of this it always checks
 staged tarballs for preserved sensitive content; see the developer
 guide, § Fixture tarballs are local-only.
