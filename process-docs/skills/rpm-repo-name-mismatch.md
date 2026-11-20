@@ -184,7 +184,11 @@ of the two questions that ask it. Never resolve an id by walking
   disabled-repo route, the repo-enabling proof, its demotion FIXME and the
   audit's "Carried by Export") ask `InstallRepos::effective`, which is
   `effective_definition` over the staged files and nothing when the
-  Custom Repositories `COPY` does not render. Recovery advice asks
+  Custom Repositories `COPY` does not render. The repo-enabling proof
+  accepts that definition only when it is enabled, keyed and has a
+  source (`has_source`): an enabled copy with no `baseurl`, `metalink`
+  or `mirrorlist`, or one whose source a later assignment cleared,
+  cannot supply the package. Recovery advice asks
   `InstallRepos::effective_with`: it names a left-out file only when
   re-including that file alone would make dnf's definition serve the
   package, so the FIXME never points at a file that is already included

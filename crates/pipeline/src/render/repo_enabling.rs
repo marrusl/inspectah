@@ -68,8 +68,9 @@ pub(crate) enum RepoEnablingExport {
 /// A serving id survives when the definition dnf uses for it among the
 /// repo files the build has when it installs ([`InstallRepos::effective`]:
 /// the first file in dnf's read order, with the content the export
-/// stages) is *enabled* and *keyed* (every `gpgkey=file://` path it names
-/// is a key the image has, [`keys_included`]). Another file defining the
+/// stages) is *enabled*, has a *source*, and is *keyed* (every
+/// `gpgkey=file://` path it names is a key the image has,
+/// [`keys_included`]). Another file defining the
 /// same id does not count: dnf drops it as "listed more than once". The
 /// files and keys the package itself owns are checked too: a dropped
 /// `epel.repo` leaves nothing to install from even when another file
@@ -115,10 +116,12 @@ pub(crate) fn repo_enabling_export(
 }
 
 /// Whether dnf can install a repo-enabling package from `sec`, the
-/// definition it uses for a serving id: enabled, and every key it names
-/// in the image.
+/// definition it uses for a serving id: enabled, with a source to fetch
+/// from (`baseurl`, `metalink` or `mirrorlist` left defined), and every
+/// key it names in the image. An enabled copy of the section with no
+/// source cannot supply the package, whichever file it sits in.
 fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDef) -> bool {
-    sec.enabled && keys_included(rpm, repos, &sec.gpg_key_paths)
+    sec.enabled && sec.has_source && keys_included(rpm, repos, &sec.gpg_key_paths)
 }
 
 /// The first captured `.repo` file, in dnf's read order, that the export

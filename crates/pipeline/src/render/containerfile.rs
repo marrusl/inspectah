@@ -2921,6 +2921,66 @@ mod tests {
         }
     }
 
+    /// dnf cannot install from a definition with no `baseurl`, `metalink`
+    /// or `mirrorlist`, however enabled and keyed it is. When the export
+    /// leaves the working file out and a source-less copy of the section
+    /// becomes dnf's definition, the package is demoted and the FIXME
+    /// names the file that would serve it again. A source cleared by a
+    /// later assignment is no source. Every case runs with the files in
+    /// both orders, and the verdict is checked on the projection, the
+    /// Containerfile and the audit.
+    #[test]
+    fn a_source_less_definition_does_not_keep_a_repo_enabling_package_served() {
+        const ON: &str = "[epel]\nbaseurl=https://example.invalid/epel\nenabled=1\n";
+        const NO_SOURCE: &str = "[epel]\nenabled=1\n";
+        const CLEARED: &str = "[epel]\nbaseurl=https://example.invalid/epel\nenabled=1\nbaseurl=\n";
+        const CLEARED_IN_A_LATER_BLOCK: &str = "[epel]\nmetalink=https://example.invalid/epel\n\
+                                                enabled=1\n[epel]\nmetalink=\n";
+        const NO_FILE: &str = "# FIXME: re-include repo epel, or upload the RPM; epel-release \
+                               installs from that repo definition, which this export does not carry";
+        let names = |file: &str| {
+            format!(
+                "# FIXME: include /etc/yum.repos.d/{file} under Configuration Files, or \
+                 re-include repo epel, or upload the RPM; epel-release installs from that \
+                 repo definition, which this export does not carry"
+            )
+        };
+        type Case<'a> = (String, Vec<(&'a str, &'a str, bool)>, Result<(), String>);
+        let mut cases: Vec<Case> = Vec::new();
+        for (how, source_less) in [
+            ("no source", NO_SOURCE),
+            ("a source cleared later", CLEARED),
+            (
+                "a source cleared in a later block",
+                CLEARED_IN_A_LATER_BLOCK,
+            ),
+        ] {
+            cases.push((
+                format!("{how}, the working file sorts first and is excluded"),
+                vec![("a.repo", ON, false), ("b.repo", source_less, true)],
+                Err(names("a.repo")),
+            ));
+            // The source-less copy sorts first, so re-including the working
+            // file would leave it shadowed: no file is named.
+            cases.push((
+                format!("{how}, the source-less copy sorts first"),
+                vec![("a.repo", source_less, true), ("b.repo", ON, false)],
+                Err(NO_FILE.to_string()),
+            ));
+        }
+        for (what, files, expected) in cases {
+            let mut reversed = files.clone();
+            reversed.reverse();
+            for (order, set) in [("in order", files.clone()), ("reversed", reversed)] {
+                assert_eq!(
+                    epel_release_verdict(&epel_served_by(&set)),
+                    expected,
+                    "{what}, {order}"
+                );
+            }
+        }
+    }
+
     /// A repo-enabling package whose serving section names a key the
     /// export includes but the stager withholds is demoted: the GPG Keys
     /// section copies only what is staged, so dnf cannot verify it. The
