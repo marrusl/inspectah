@@ -26,15 +26,21 @@ function fixture(name: string): Record<string, unknown> {
 
 const TARBALL_URL = "/api/tarball";
 const VIEW_URL = "/api/view";
+const UNDO_URL = "/api/undo";
 /** Enough rounds for a refresh chain to show itself; the fix needs one. */
 const MAX_RELEASE_ROUNDS = 5;
 
 let generation = 0;
 let exportsPosted: { generation: number; status: number }[] = [];
 let heldViews: (() => void)[] = [];
+let heldUndos: (() => void)[] = [];
 
-function serve() {
-  const recorded = fixture("view");
+/** `canUndo` offers Undo, whose request waits for the test to let it go. */
+function serve({ canUndo = false } = {}) {
+  const fixed = fixture("view");
+  const recorded = canUndo
+    ? { ...fixed, stats: { ...(fixed.stats as object), can_undo: true } }
+    : fixed;
   generation = recorded.generation as number;
   const routes: Record<string, unknown> = {
     "/api/health": fixture("health"),
@@ -70,6 +76,15 @@ function serve() {
           blob: async () => new Blob(["tarball"]),
         };
       }
+      if (url === UNDO_URL) {
+        await new Promise<void>((resolve) => heldUndos.push(resolve));
+        generation += 1;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ...recorded, generation }),
+        };
+      }
       if (url === VIEW_URL) {
         const view = { ...recorded, generation };
         if (changedElsewhere) {
@@ -88,9 +103,9 @@ function serve() {
 beforeEach(() => {
   exportsPosted = [];
   heldViews = [];
+  heldUndos = [];
   URL.createObjectURL = vi.fn(() => "blob:http://localhost/fake-url");
   URL.revokeObjectURL = vi.fn();
-  serve();
 });
 
 afterEach(() => {
@@ -100,6 +115,7 @@ afterEach(() => {
 
 describe("stale export through App", () => {
   it("keeps Export off until App shows the new generation, then exports it", async () => {
+    serve();
     render(<App />);
     const stale = generation;
     fireEvent.click(await screen.findByRole("button", { name: "Export" }));
@@ -139,5 +155,45 @@ describe("stale export through App", () => {
     ]);
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps the newer view when the dialog's refresh lands after a mutation's", async () => {
+    serve({ canUndo: true });
+    render(<App />);
+    const stale = generation;
+    // An undo is still out when the Export dialog opens.
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    await act(async () => {});
+    expect(heldUndos).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Export tarball",
+    });
+    const exportButton = () =>
+      within(dialog).getByRole("button", { name: /Export$/ });
+
+    // The export is stale; the dialog's refresh reads stale + 1 and waits.
+    await act(async () => fireEvent.click(exportButton()));
+    expect(exportsPosted).toEqual([{ generation: stale, status: 409 }]);
+    expect(heldViews).toHaveLength(1);
+    const dialogRefresh = heldViews.shift()!;
+
+    // The undo lands at stale + 2, and App shows the view it fetches next.
+    await act(async () => heldUndos.shift()!());
+    expect(heldViews).toHaveLength(1);
+    await act(async () => heldViews.shift()!());
+    expect(dialog).toHaveTextContent(`Generation: ${stale + 2}`);
+
+    // The dialog's older refresh arrives last and must not replace it.
+    await act(async () => dialogRefresh());
+    expect(dialog).toHaveTextContent(`Generation: ${stale + 2}`);
+    expect(within(dialog).getByText(/export again/i)).toBeVisible();
+
+    await act(async () => fireEvent.click(exportButton()));
+    expect(exportsPosted).toEqual([
+      { generation: stale, status: 409 },
+      { generation: stale + 2, status: 200 },
+    ]);
   });
 });

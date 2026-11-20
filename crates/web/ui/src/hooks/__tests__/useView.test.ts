@@ -129,4 +129,81 @@ describe("useView", () => {
     expect(result.current.loading).toBe(false);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("an older publish arriving after a newer fetch leaves the newer view shown", async () => {
+    const answers = holdFetches();
+    const { result } = renderHook(() => useView());
+    await act(async () => answers[0]({ ...MOCK_VIEW, generation: 42 }));
+
+    act(() => result.current.invalidate());
+    await waitFor(() => expect(answers).toHaveLength(2));
+    const newer = { ...MOCK_VIEW, generation: 43, containerfile_preview: "43" };
+    await act(async () => answers[1](newer));
+    expect(result.current.data).toEqual(newer);
+
+    act(() => {
+      result.current.publish({ ...MOCK_VIEW, generation: 42 });
+    });
+    expect(result.current.data).toEqual(newer);
+  });
+
+  it("a newer fetch answering after a publish replaces the published view", async () => {
+    const answers = holdFetches();
+    const { result } = renderHook(() => useView());
+    await act(async () => answers[0]({ ...MOCK_VIEW, generation: 41 }));
+
+    act(() => result.current.invalidate());
+    await waitFor(() => expect(answers).toHaveLength(2));
+    act(() => {
+      result.current.publish({ ...MOCK_VIEW, generation: 42 });
+    });
+
+    const newer = { ...MOCK_VIEW, generation: 43, containerfile_preview: "43" };
+    await act(async () => answers[1](newer));
+    expect(result.current.data).toEqual(newer);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("at an equal generation, a fetch started before the last fetch or publish does not replace it", async () => {
+    const answers = holdFetches();
+    const { result } = renderHook(() => useView());
+    await act(async () => answers[0]({ ...MOCK_VIEW, generation: 7 }));
+
+    act(() => result.current.invalidate());
+    await waitFor(() => expect(answers).toHaveLength(2));
+    const published = {
+      ...MOCK_VIEW,
+      generation: 7,
+      containerfile_preview: "published",
+    };
+    act(() => {
+      result.current.publish(published);
+    });
+
+    await act(async () =>
+      answers[1]({
+        ...MOCK_VIEW,
+        generation: 7,
+        containerfile_preview: "fetched",
+      }),
+    );
+    expect(result.current.data).toEqual(published);
+  });
 });
+
+/** Hold every view request; `answers[i]` answers the i-th one. */
+function holdFetches(): ((view: ViewResponse) => void)[] {
+  const answers: ((view: ViewResponse) => void)[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        answers.push((view) =>
+          resolve({
+            ok: true,
+            json: () => Promise.resolve(view),
+          } as Response),
+        );
+      }),
+  );
+  return answers;
+}

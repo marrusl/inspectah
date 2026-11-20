@@ -11,8 +11,9 @@ export interface UseViewResult {
   invalidate: () => void;
   /**
    * Show a view the caller already fetched, in the same render, without
-   * another request. A fetch still in flight is dropped so it cannot
-   * replace this view with one it read earlier.
+   * another request, unless the view on screen has a newer generation.
+   * Fetches still in flight are judged by generation when they answer, so
+   * one carrying a newer generation still replaces this view.
    */
   publish: (view: ViewResponse) => void;
 }
@@ -21,11 +22,32 @@ export function useView(): UseViewResult {
   const [data, setData] = useState<ViewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
-  const generationRef = useRef(0);
-  // Bumped by each fetch and each publish; a fetch applies its result only
-  // while it is still the latest of either.
+  // Server generation of the view on screen; null until one is shown.
+  const shownGenerationRef = useRef<number | null>(null);
+  // Bumped by each fetch and each publish. A fetch sets `loading` and
+  // `error` only while it is still the latest of either, and at an equal
+  // generation a view replaces the one on screen only from the latest.
   const latestRef = useRef(0);
+  const mountedRef = useRef(true);
   const [tick, setTick] = useState(0);
+
+  // Generations order views, whichever way they arrive: an older one never
+  // replaces a newer one. Equal generations can still differ, since some
+  // changes (an RPM upload) do not move the generation, so a tie goes to
+  // the latest fetch or publish.
+  const show = useCallback((view: ViewResponse, isLatest: boolean) => {
+    const shown = shownGenerationRef.current;
+    if (
+      shown !== null &&
+      (view.generation < shown || (view.generation === shown && !isLatest))
+    ) {
+      return false;
+    }
+    shownGenerationRef.current = view.generation;
+    setData(view);
+    setError(null);
+    return true;
+  }, []);
 
   const refetch = useCallback(() => {
     setTick((t) => t + 1);
@@ -35,39 +57,39 @@ export function useView(): UseViewResult {
     setTick((t) => t + 1);
   }, []);
 
-  const publish = useCallback((view: ViewResponse) => {
-    latestRef.current += 1;
-    generationRef.current = view.generation;
-    setData(view);
-    setError(null);
-    setLoading(false);
+  const publish = useCallback(
+    (view: ViewResponse) => {
+      if (!show(view, true)) return;
+      latestRef.current += 1;
+      setLoading(false);
+    },
+    [show],
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
     const request = ++latestRef.current;
-    const superseded = () => cancelled || request !== latestRef.current;
+    const superseded = () => request !== latestRef.current;
     setLoading(true);
 
     fetchView()
       .then((view) => {
-        if (superseded()) return;
-        generationRef.current = view.generation;
-        setData(view);
-        setError(null);
+        if (mountedRef.current) show(view, !superseded());
       })
       .catch((err: unknown) => {
-        if (superseded()) return;
+        if (!mountedRef.current || superseded()) return;
         setError(err instanceof Error ? err : new Error(String(err)));
       })
       .finally(() => {
-        if (!superseded()) setLoading(false);
+        if (mountedRef.current && !superseded()) setLoading(false);
       });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [tick]);
+  }, [tick, show]);
 
   return { data, loading, error, refetch, invalidate, publish };
 }
