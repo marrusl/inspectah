@@ -1,0 +1,23 @@
+# Paths whose changes cannot affect a build, test or lint result.
+#
+# One anchored extended regular expression (grep -E) per line. Blank lines
+# and lines starting with # are ignored; the rest are joined with |.
+#
+# Consumers, all of which load this file the same way:
+#   .githooks/pre-commit             a commit that changes only these paths
+#                                    skips the cargo gates and the refuse check
+#   scripts/tests/docs-only-paths-test.sh
+#                                    no Rust source under crates/ reads a path
+#                                    on this list
+#   the worktree setup script, which reads it from main
+#
+# Everything not matched here is gated: a deletion, a rename, a snapshot, a
+# fixture or a UI file runs fmt, clippy and test like any Rust change.
+^docs/
+^process-docs/
+^\.github/
+^packaging/
+^\.copr/
+^completions/
+^[A-Za-z_]+\.md$
+^LICENSE$

@@ -1,50 +1,195 @@
 #!/usr/bin/env bash
 #
-# inspectah pre-commit hook — green-suite + clippy + fmt gate
+# inspectah pre-commit hook: sensitive-tarball check, then fmt, clippy and
+# the workspace tests on the content being committed.
 #
-# Blocks commits unless cargo fmt, cargo clippy, and cargo test all pass.
-# Skips the cargo gates when no Rust/Cargo files are in the changeset.
-# Always checks staged tarballs for preserved sensitive content first.
+# USAGE:
+#   pre-commit            git calls it with no argument before each commit
+#   pre-commit --head     gate the paths HEAD changed instead of the staged
+#                         ones, for `git rebase --exec '.githooks/pre-commit --head'`
+#
+# ORDER:
+#   1. Unset INSPECTAH_SKIP_UI, so rust-embed never embeds a stale
+#      crates/web/ui/dist/. Setting it has no effect on this hook.
+#   2. Gate 0: scripts/check-sensitive-tarballs.sh --staged (--tracked with
+#      --head). It runs before the fast path, so a fixture-only commit is
+#      always checked.
+#   3. Load .githooks/docs-only-paths from the index being committed
+#      (from HEAD with --head), so the list being committed is the list
+#      applied. One anchored ERE per line; blank lines and lines starting
+#      with # are ignored; the rest are joined with |. A missing or
+#      unreadable list refuses the commit.
+#   4. Fast path: if every changed path matches the list (deletions and both
+#      sides of a rename count), print the docs-only line and pass. An empty
+#      commit is docs-only. A docs-only commit is never refused for other
+#      files, so docs writers are not blocked by a code writer's work.
+#   5. Refuse while any path that fails the list differs from the index
+#      being committed: an unstaged edit or an untracked file. Then record
+#      the index's tree.
+#   6. fmt, clippy and test, each with its output in a file and one line
+#      printed per gate; a failed gate prints its file.
+#   7. The same refuse check again, and refuse if the index's tree changed
+#      while the gates ran.
+#
+# The gates run on the working tree. Steps 5 and 7 are what make that a test
+# of the commit: the hook refuses whenever the tested tree could differ from
+# the index being committed. git sets GIT_INDEX_FILE for `commit --only` and
+# `commit -a`, and every git command here reads it, so the comparison is
+# against the index that becomes the commit, not the real one.
+#
+# EXIT: 0 passed or skipped; 1 for everything else: a refusal, a failed
+# gate, a usage error, and any non-zero status from gate 0's helper (which
+# exits 1, 2 for unreadable input, or 64 for usage or a missing jq).
 #
 # INSTALL (once per clone):
 #   git config core.hooksPath .githooks
 #
 # BYPASS (last resort):
 #   git commit --no-verify
+#
+# Written for bash 3.2 (macOS /bin/bash): no mapfile, no associative arrays.
 
 set -euo pipefail
 
-# --- gate 0: no preserve-mode inspectah output in staged tarballs ---
-#
-# Runs before the fast-path on purpose: a fixture-only commit stages no Rust
-# file, and the fast-path below would let it through unchecked. Reads the
-# staged blobs, so a clean working-tree copy cannot mask a staged one.
+DOCS_ONLY_FILE=.githooks/docs-only-paths
+CLIPPY_GATE=(cargo clippy --workspace --all-targets -- -D clippy::all)
 
-"$(git rev-parse --show-toplevel)/scripts/check-sensitive-tarballs.sh" --staged
+GATE_DIR=
+cleanup() {
+    local rc=$?
+    if [ -n "$GATE_DIR" ]; then
+        rm -rf "$GATE_DIR"
+    fi
+    # Every failure exits 1, including one set -e raised.
+    if [ "$rc" -ne 0 ]; then
+        exit 1
+    fi
+}
+trap cleanup EXIT
 
-# --- fast-path: skip when no Rust-relevant files changed ---
-
-rust_relevant() {
-    # Staged files that could affect compilation or test outcomes.
-    # .rs sources, Cargo manifests, build scripts, lockfile, and the pinned
-    # toolchain, so a version bump runs the new clippy before it lands.
-    # A here-string, not a pipe: under pipefail, git dies on SIGPIPE when
-    # grep -q exits on an early match in a long list, and the pipeline's
-    # failure would read as "no Rust change" and skip every gate below.
-    local staged
-    staged=$(git diff --cached --name-only --diff-filter=ACMR)
-    grep -qE '\.(rs)$|Cargo\.(toml|lock)$|build\.rs$|^rust-toolchain\.toml$' <<<"$staged"
+refuse() {
+    echo "pre-commit: commit refused: $1" >&2
+    exit 1
 }
 
-if ! rust_relevant; then
+mode=staged
+case $# in
+    0) ;;
+    1)
+        case "$1" in
+            --head) mode=head ;;
+            *)
+                echo "pre-commit: usage: pre-commit [--head]" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    *)
+        echo "pre-commit: usage: pre-commit [--head]" >&2
+        exit 1
+        ;;
+esac
+
+unset INSPECTAH_SKIP_UI
+cd "$(git rev-parse --show-toplevel)"
+
+# --- gate 0: no preserve-mode inspectah output in tarballs ---
+
+if [ "$mode" = head ]; then
+    tarball_mode=--tracked
+else
+    tarball_mode=--staged
+fi
+if scripts/check-sensitive-tarballs.sh "$tarball_mode"; then
+    :
+else
+    rc=$?
+    refuse "sensitive-tarball check failed (exit $rc)"
+fi
+
+# --- the docs-only list, as committed ---
+
+# load_docs_only: set DOCS_ONLY_RE from the list in the index (HEAD with
+# --head). Fails if the list is missing or holds no pattern.
+load_docs_only() {
+    local raw line re=
+    if [ "$mode" = head ]; then
+        raw=$(git show "HEAD:$DOCS_ONLY_FILE" 2>/dev/null) || return 1
+    else
+        raw=$(git show ":$DOCS_ONLY_FILE" 2>/dev/null) || return 1
+    fi
+    while IFS= read -r line; do
+        case "$line" in '' | '#'*) continue ;; esac
+        re="${re:+$re|}$line"
+    done <<<"$raw"
+    [ -n "$re" ] || return 1
+    DOCS_ONLY_RE=$re
+}
+
+if ! load_docs_only; then
+    if [ "$mode" = head ]; then
+        refuse "cannot read $DOCS_ONLY_FILE from HEAD"
+    fi
+    refuse "cannot read $DOCS_ONLY_FILE from the index"
+fi
+
+# non_docs_paths <newline-separated list>: print the paths that fail the
+# list. A here-string, not a pipe: under pipefail a producer killed by
+# SIGPIPE would read as a match. grep exits 1 when it prints nothing, which
+# here means every path is docs-only.
+non_docs_paths() {
+    local rc=0
+    grep -vE -e "$DOCS_ONLY_RE" -e '^$' <<<"$1" || rc=$?
+    [ "$rc" -le 1 ]
+}
+
+# --- fast path: a docs-only commit skips everything below ---
+
+if [ "$mode" = head ]; then
+    changed=$(git diff-tree -r --no-commit-id --name-only --no-renames --root HEAD)
+else
+    changed=$(git diff --cached --name-only --no-renames)
+fi
+gated=$(non_docs_paths "$changed")
+if [ -z "$gated" ]; then
+    echo "pre-commit: docs-only, cargo gates skipped"
     exit 0
 fi
 
-# --- gate 1: cargo fmt (fast, catches formatting drift) ---
+# --- refuse check ---
 
-echo "pre-commit: running cargo fmt --check..."
-if ! cargo fmt --check 2>&1; then
-    cat <<'EOF'
+# refuse_if_dirty <first|second>: refuse while a path that fails the list is
+# edited and unstaged, or untracked and not ignored. Both git commands read
+# GIT_INDEX_FILE, so they compare against the index being committed.
+refuse_if_dirty() {
+    local when unstaged untracked dirty
+    if [ "$1" = first ]; then
+        when="before the gates ran"
+    else
+        when="after the gates ran"
+    fi
+    unstaged=$(git diff --name-only --no-renames)
+    untracked=$(git ls-files --others --exclude-standard)
+    dirty=$(non_docs_paths "$unstaged
+$untracked")
+    if [ -n "$dirty" ]; then
+        refuse "these paths differ from the commit $when, so the gates would not test it:
+$(sed 's/^/    /' <<<"$dirty")
+commit it, delete it, or ignore it; docs-only paths are exempt"
+    fi
+}
+
+refuse_if_dirty first
+tree_before=$(git write-tree)
+
+# --- gates: fmt, clippy, test ---
+
+GATE_DIR=$(mktemp -d)
+
+banner() {
+    case "$1" in
+        fmt)
+            cat <<'EOF'
 
     !! COMMIT BLOCKED — formatting issues found !!
 
@@ -53,19 +198,9 @@ if ! cargo fmt --check 2>&1; then
     Bypass (last resort): git commit --no-verify
 
 EOF
-    exit 1
-fi
-
-# --- gate 2: clippy (warnings are errors) ---
-#
-# -D, not -W: -W exits 0 however many warnings it prints, so this gate
-# tested an exit code that could not be non-zero and never blocked a commit.
-# --all-targets is equally load-bearing: without it clippy checks lib and bin
-# only, and every warning this tree has ever carried lived in a test target.
-
-echo "pre-commit: running cargo clippy..."
-if ! cargo clippy --workspace --all-targets -- -D clippy::all 2>&1; then
-    cat <<'EOF'
+            ;;
+        clippy)
+            cat <<'EOF'
 
     !! COMMIT BLOCKED — clippy warnings found !!
 
@@ -75,14 +210,9 @@ if ! cargo clippy --workspace --all-targets -- -D clippy::all 2>&1; then
     Bypass (last resort): git commit --no-verify
 
 EOF
-    exit 1
-fi
-
-# --- gate 3: cargo test (full workspace) ---
-
-echo "pre-commit: running cargo test..."
-if ! cargo test --workspace 2>&1; then
-    cat <<'EOF'
+            ;;
+        test)
+            cat <<'EOF'
 
     !! COMMIT BLOCKED — test suite failed !!
 
@@ -95,7 +225,41 @@ if ! cargo test --workspace 2>&1; then
     Bypass (last resort): git commit --no-verify
 
 EOF
+            ;;
+    esac
+}
+
+# run_gate <name> <command...>: run the command with its output in a file,
+# print one line with the elapsed time, and on failure print the file and
+# the gate's banner and exit 1.
+run_gate() {
+    local name=$1 log start rc=0
+    shift
+    log="$GATE_DIR/$name.log"
+    start=$SECONDS
+    "$@" >"$log" 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "pre-commit: $name ok ($((SECONDS - start)) s)"
+        return 0
+    fi
+    echo "pre-commit: $name FAILED ($((SECONDS - start)) s)"
+    cat "$log"
+    banner "$name"
     exit 1
+}
+
+run_gate fmt cargo fmt --check
+# -D, not -W: -W exits 0 however many warnings it prints. --all-targets is
+# equally load-bearing: without it clippy checks lib and bin only, and every
+# warning this tree has ever carried lived in a test target.
+run_gate clippy "${CLIPPY_GATE[@]}"
+run_gate test cargo test --workspace
+
+# --- refuse check, second pass ---
+
+refuse_if_dirty second
+if [ "$(git write-tree)" != "$tree_before" ]; then
+    refuse "the index changed while the gate ran"
 fi
 
 echo "pre-commit: all checks passed."

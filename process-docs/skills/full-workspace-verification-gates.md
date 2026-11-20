@@ -1,6 +1,6 @@
 ---
 name: full-workspace-verification-gates
-description: Running the full clippy/test/frontend gate suite correctly: the single clippy command the pre-commit hook and CI both run, the pinned toolchain in `rust-toolchain.toml` and how to bump it, what that hook does and does not gate (nothing for a frontend-only commit, `tsc && vite build` but never vitest or Playwright for a mixed commit), measured gate timings (2026-10-31 table, superseded figures noted) and why a slower run means something is wrong, why an agent cannot time its own run, and why periodic `cargo clean` is maintenance rather than risk.
+description: Running the full clippy/test/frontend gate suite correctly: the single clippy command the pre-commit hook and CI both run, the pinned toolchain in `rust-toolchain.toml` and how to bump it, what that hook does and does not gate (`tsc && vite build` for any commit that changes the UI, never vitest or Playwright), measured gate timings (2026-10-31 table, superseded figures noted) and why a slower run means something is wrong, why an agent cannot time its own run, and why periodic `cargo clean` is maintenance rather than risk.
 ---
 
 # Running the Full Verification Gate Suite
@@ -10,8 +10,8 @@ repo's review history.
 
 ## 1. The pre-commit hook and CI run the same clippy command
 
-`.githooks/pre-commit` (line 53) and `.github/workflows/rust-ci.yml`
-(line 77) both run:
+`.githooks/pre-commit` (line 55) and `.github/workflows/rust-ci.yml`
+(line 108) both run:
 
 ```bash
 cargo clippy --workspace --all-targets -- -D clippy::all
@@ -39,14 +39,23 @@ flag. Never bump the file alone and fix the lints later. Targets are
 per toolchain, so a release build after a bump needs `rustup target add`
 run again inside the clone (see `release-process.md`).
 
-**The hook does not gate TypeScript.** A frontend-only commit gets
-nothing from it: the fast path at `.githooks/pre-commit:18-27` exits
-before any gate when no `.rs`, `Cargo.*` or `build.rs` file is staged.
-A mixed Rust-plus-UI commit does get `tsc && vite build`, because
-`crates/web/build.rs:30-35` runs `npm run build` inside the clippy gate,
-but it never runs vitest (`npm test`) or Playwright (`npm run
-test:e2e`). A passing hook on a frontend change says nothing about
-either.
+**The hook type-checks TypeScript but runs no web test.** It gates
+every commit that changes a path outside `.githooks/docs-only-paths`, a
+frontend-only commit included, and runs only the three cargo gates, one
+output line each. `crates/web/build.rs:30-35` runs `npm run build`
+(`tsc && vite build`) inside the clippy gate whenever the UI source or
+build files changed, and the hook unsets `INSPECTAH_SKIP_UI`, so setting
+it does not skip that step. It never runs vitest (`npm test`) or
+Playwright (`npm run test:e2e`). A passing hook on a frontend change
+says nothing about either.
+
+**The hook tests the commit, not just the working tree.** Before fmt and
+again after test it refuses while any path outside the docs-only list is
+edited and unstaged or untracked, and after the gates it refuses if the
+index's tree changed. Every check reads the index git hands the hook
+(`GIT_INDEX_FILE`), which under `git commit --only` and `git commit -a`
+is a temporary index, not `.git/index`. A docs-only commit skips all of
+this and is never refused for other files.
 
 **Never run cargo and vitest at the same time.** `crates/web/build.rs`
 runs `npm ci` in `crates/web/ui` whenever the build script reruns, and `npm ci`

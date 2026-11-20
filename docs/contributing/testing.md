@@ -26,7 +26,7 @@ whatever row it matches.
 
 | Your PR changes | Local gates | Real-host run | Browser pass |
 |---|---|---|---|
-| Test code only: every changed line is in a `tests/` directory, a `#[cfg(test)]` module, `crates/web/ui/e2e/`, a `*.test.ts` or `*.test.tsx` file, a fixture under `testdata/` or `crates/web/ui/e2e/fixtures/`, or a `.snap` file | The gate set for the files' area: Rust gates for `.rs`, `.snap` and `testdata/` files, web gates for files under `crates/web/ui/`. The hook fires only on staged added, copied, modified, or renamed `.rs`, `Cargo.toml`, `Cargo.lock` and `build.rs` paths, so run the rest by hand | No | No |
+| Test code only: every changed line is in a `tests/` directory, a `#[cfg(test)]` module, `crates/web/ui/e2e/`, a `*.test.ts` or `*.test.tsx` file, a fixture under `testdata/` or `crates/web/ui/e2e/fixtures/`, or a `.snap` file | The gate set for the files' area: Rust gates for `.rs`, `.snap` and `testdata/` files, web gates for files under `crates/web/ui/`. The hook runs the Rust gates for every one of these, since none is on its docs-only list; run the web gates by hand | No | No |
 | `Cargo.toml` or `Cargo.lock` only | Rust gates | Only when it changes a dependency of `crates/collect/`, of the Containerfile renderer in `crates/pipeline/`, or of redaction | No |
 | Non-test code in a required area: `crates/collect/`, the Containerfile renderer, either export path, redaction, `/var` backing, or SELinux replay (§ Real-host runs lists the files) | Rust gates | Yes | No, unless a web row also matches |
 | A web DTO or handler under `crates/web/src/` | Rust gates and web gates | Yes when it touches the refine export download (`crates/web/src/handlers.rs`, the tarball export); otherwise no | Yes, when the UI consumes what changed |
@@ -42,17 +42,21 @@ whatever row it matches.
 | Clippy | `cargo clippy --workspace --all-targets -- -D clippy::all` | Lint in every target, tests included, and compile errors. When the web crate's build script reruns, a TypeScript error surfaces here too, as `npm run build failed` from `crates/web/build.rs` | Only on the trigger below | Yes, blocks | Same as Format |
 | Rust tests | `cargo test --workspace` | Unit and integration tests, insta snapshots, every tarball under `testdata/` loading at the current schema, the e2e fixture JSON structure, and a refine server driven over HTTP on an ephemeral port | Only on the trigger below | Yes, blocks | Same as Format, plus any change under `testdata/` |
 | Vitest | `npm run test` | Web UI unit tests, in jsdom | Never | Yes, blocks | Every PR that touches `crates/web/ui/`, and every PR that changes a web DTO or handler under `crates/web/src/`, because the hook does not run them |
-| Type check and bundle | `npm run build`, which is `tsc && vite build` | TypeScript errors under `crates/web/ui/src/` | Indirectly: `crates/web/build.rs` runs it inside the clippy and test gates when the UI source or build files changed since the last build. A mixed Rust and UI commit gets it; a frontend-only commit does not | Indirectly, the same way, inside the clippy, test, and build steps. There is no separate step | Same as Vitest |
+| Type check and bundle | `npm run build`, which is `tsc && vite build` | TypeScript errors under `crates/web/ui/src/` | Indirectly: `crates/web/build.rs` runs it inside the clippy and test gates when the UI source or build files changed since the last build. Any commit that changes those files gets it, a frontend-only commit included | Indirectly, the same way, inside the clippy, test, and build steps. There is no separate step | Same as Vitest |
 | Playwright e2e | `npm run test:e2e` | The UI in a real Chromium against a mocked API, plus one spec against a real refine server when one answers on `127.0.0.1:8642` | Never | Runs, does not block: the Playwright step has `continue-on-error: true`, and the run summary reports pass or fail | Same as Vitest. Report the skipped count separately from the passed count, every time |
 
-**The hook's trigger.** `.githooks/pre-commit` runs
-`git diff --cached --name-only --diff-filter=ACMR` and matches the result
-against `\.(rs)$|Cargo\.(toml|lock)$|build\.rs$`. When nothing matches it
-exits 0 without running any cargo gate. Before that test it always checks
-staged tarballs for preserved sensitive content; see the developer guide,
-§ Fixture tarballs are local-only. A commit that only deletes such files
-matches nothing (`D` is not in the filter), so the hook skips it and you
-run the three Rust gates by hand.
+**The hook's trigger.** `.githooks/pre-commit` runs the three Rust
+gates on every commit that adds, changes, deletes or renames a path
+outside the docs-only list in `.githooks/docs-only-paths`: `docs/`,
+`process-docs/`, `.github/`, `packaging/`, `.copr/`, `completions/`,
+top-level `*.md` files and `LICENSE`. A commit whose every path is on
+that list skips the gates and is never refused for other files. For any
+other commit the hook refuses, before fmt and again after test, while a
+path outside the list is edited and unstaged or untracked, so the gates
+test exactly the content being committed. It prints one line per gate
+and unsets `INSPECTAH_SKIP_UI`. Before any of this it always checks
+staged tarballs for preserved sensitive content; see the developer
+guide, § Fixture tarballs are local-only.
 
 **CI's trigger.** Every pull request to `main` runs the full job. Direct
 pushes to `main` run it only when a listed path changes; a docs-only
@@ -158,17 +162,15 @@ rather than the screen alone. Stop the server with Ctrl-C.
 
 ### The hook
 
-- **A passing hook says nothing about a frontend-only, docs-only,
-  fixture-only, snapshot-only, or deletion-only commit.** It exits 0
-  before any gate unless a staged added, copied, modified, or renamed path
-  matches its trigger. An edit to `crates/web/ui/e2e/fixtures/*.json`
-  skips the hook, so `crates/web/tests/fixture_structure_test.rs`, which
-  snapshots those files, runs only in CI or when you run `cargo test`
-  yourself. A `.snap`-only commit after `cargo insta review` skips too.
-- **The hook tests your working tree, not your commit.** It runs the
-  gates on the files on disk and never stashes unstaged changes. A fix
-  you forgot to `git add` makes the hook pass for a commit that fails. CI
-  is the first check of what you actually committed.
+- **A passing hook says nothing about vitest or Playwright.** It runs
+  the Rust gates only, and `tsc` only through `crates/web/build.rs`.
+- **A docs-only commit skips the gates on trust.** That is safe only
+  while no build input reads a path on the docs-only list.
+  `scripts/tests/docs-only-paths-test.sh` checks every Rust source under
+  `crates/` for an `include_str!`, an `include_bytes!` or a string literal
+  naming such a path. It cannot see a path assembled from fragments, one
+  read from the environment or a file, or a read by a non-Rust build
+  input such as the web UI's sources and config.
 - **The hook exists only if you installed it** with
   `git config core.hooksPath .githooks`, and `git commit --no-verify`
   bypasses it.
@@ -187,8 +189,8 @@ rather than the screen alone. Stop the server with Ctrl-C.
   without failing. The line that holds is `cargo test`:
   `crates/refine/tests/testdata_tarballs_load.rs` loads every tarball
   under `testdata/` at the current schema, so a missing or stale fixture
-  fails `cargo test`, which the hook runs only when a Rust or Cargo file
-  is also staged and which CI's Test step runs on every pull request.
+  fails `cargo test`, which the hook runs on any commit that changes
+  `testdata/` and which CI's Test step runs on every pull request.
 - **A retry pass looks the same as a clean pass.** Playwright retries
   once in CI, the `github` reporter shows no flake counts, and the HTML
   report is uploaded only when the step fails. Locally there are no

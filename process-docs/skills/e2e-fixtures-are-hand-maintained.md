@@ -48,11 +48,10 @@ drifted in two independent ways:
 
 **A fixture edit changes a Rust snapshot.**
 `crates/web/tests/fixture_structure_test.rs` snapshots several of these
-files with insta, so adding a field to a view fixture breaks it. The
-pre-commit hook skips every cargo gate when no Rust or Cargo file is
-staged, so a fixture-only commit lands with that test red, as one did
-when `declined_generated` and `generated_timers` were added. After any
-fixture edit, run it yourself and review the snapshot diff:
+files with insta, so adding a field to a view fixture breaks it. A
+fixture-only commit is gated like any code commit, so the pre-commit
+hook's `cargo test` refuses it while the snapshot is stale. After any
+fixture edit, run the test yourself first and review the snapshot diff:
 
 ```bash
 cargo test -p inspectah-web --test fixture_structure_test

@@ -165,6 +165,7 @@ REPO="$WORK/repo"
 git init -q "$REPO"
 mkdir -p "$REPO/.githooks" "$REPO/scripts"
 cp "$HOOK" "$REPO/.githooks/pre-commit"
+cp "$REPO_ROOT/.githooks/docs-only-paths" "$REPO/.githooks/docs-only-paths"
 cp "$SCRIPT" "$REPO/scripts/check-sensitive-tarballs.sh"
 git -C "$REPO" config core.hooksPath .githooks
 git -C "$REPO" config user.name "Test"
@@ -175,10 +176,20 @@ git -C "$REPO" commit -q --no-verify -m "chore: seed"
 
 GATE_BANNER="BLOCKED: inspectah output with preserved sensitive content"
 
+# testdata/ is gated, so an accepted commit reaches the cargo gates; a stub
+# cargo that passes stands in for them.
+PASS_STUB_BIN="$WORK/pass-stub-bin"
+mkdir -p "$PASS_STUB_BIN"
+printf '#!/bin/sh\nexit 0\n' > "$PASS_STUB_BIN/cargo"
+chmod +x "$PASS_STUB_BIN/cargo"
+
 # commit_expect <description> <want: refused|accepted> <output substring>
 commit_expect() {
-    local desc=$1 want=$2 want_text=$3 out rc=0
-    out=$(git -C "$REPO" commit -q -m "test: $desc" 2>&1) || rc=$?
+    local desc=$1 want=$2 want_text=$3 out rc=0 path=$PATH
+    if [ "$want" = accepted ]; then
+        path="$PASS_STUB_BIN:$PATH"
+    fi
+    out=$(PATH=$path git -C "$REPO" commit -q -m "test: $desc" 2>&1) || rc=$?
     if [ "$want" = refused ] && [ "$rc" -eq 0 ]; then
         fail "hook: $desc: commit was accepted"
         return
@@ -236,6 +247,13 @@ commit_expect "staged blob of a renamed archive is checked, not the working tree
     refused "testdata/sensitive.fixture"
 git -C "$REPO" reset -q -- testdata/sensitive.fixture
 
+# The hook refuses while an untracked non-docs path exists, so the renamed
+# archives left in testdata/ are parked outside the repository until the
+# --tracked section commits them.
+PARKED="$WORK/parked"
+mkdir -p "$PARKED"
+mv "$REPO"/testdata/sensitive.* "$PARKED/"
+
 # Non-archives pass, and a symlink is its target path, not the file it
 # points at.
 echo "plain text" > "$REPO/testdata/notes.txt"
@@ -244,6 +262,7 @@ git -C "$REPO" add testdata/notes.txt testdata/link-to-sensitive
 commit_expect "a text file and a symlink are accepted" accepted ""
 
 # --tracked: the same renamed archives, committed past the hook.
+mv "$PARKED"/sensitive.* "$REPO/testdata/"
 cp "$WORK/retained.tar.gz" "$REPO/testdata/sensitive.fixture"
 git -C "$REPO" add testdata/sensitive.fixture testdata/sensitive.tgz testdata/sensitive.tar
 git -C "$REPO" commit -q --no-verify -m "test: renamed archives past the hook"
@@ -261,7 +280,8 @@ done
 
 # The hook's fast path must not read an early match in a long staged list
 # as no match: under pipefail, a pipe into grep -q lets git die on SIGPIPE,
-# and the hook skipped every cargo gate. A stub cargo stands in for them.
+# and the hook skipped every cargo gate. A failing stub cargo stands in for
+# them; the failed gate prints the stub's output from its log file.
 STUB_BIN="$WORK/stub-bin"
 mkdir -p "$STUB_BIN"
 printf '#!/bin/sh\necho "cargo stub ran: $*"\nexit 1\n' > "$STUB_BIN/cargo"

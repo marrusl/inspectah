@@ -42,6 +42,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Test the gate
         run: scripts/tests/check-sensitive-tarballs-test.sh
+      - name: Test the pre-commit hook
+        if: ${{ !cancelled() }}
+        run: scripts/tests/pre-commit-hook-test.sh
+      - name: Check that no build input reads a docs-only path
+        if: ${{ !cancelled() }}
+        run: scripts/tests/docs-only-paths-test.sh
       - name: Check tracked tarballs
         if: ${{ !cancelled() }}
         run: scripts/check-sensitive-tarballs.sh --tracked

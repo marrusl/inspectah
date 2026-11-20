@@ -80,10 +80,16 @@ not a defence against someone concealing an archive on purpose.
 
 ## Ordering in the hook
 
-The check runs before the hook's Rust fast-path, which exits 0 on any
-commit with no staged `.rs` or Cargo file. A fixture-only commit is exactly
-that kind of commit, so a check placed after the fast-path never runs when
-it matters.
+The check is the hook's first step, before it loads
+`.githooks/docs-only-paths` and before its docs-only fast path, which
+exits 0 without running anything else. Keep it there: whatever sits after
+a fast path is skipped for every commit the fast path lets through, so a
+list entry that ever matched a tarball's path would let that tarball in
+unchecked. The hook runs the check inside an `if` and maps any non-zero
+status to exit 1, after printing
+`pre-commit: commit refused: sensitive-tarball check failed (exit <n>)`.
+With `--head` (for `git rebase --exec`) it runs the check as
+`--tracked`.
 
 ## Fail-closed rules
 

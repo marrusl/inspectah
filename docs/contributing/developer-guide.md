@@ -205,46 +205,79 @@ Two hooks run once `core.hooksPath` points at `.githooks/`.
 
 **`pre-commit`** first checks every staged tarball for preserved
 sensitive content (§ Fixture tarballs are local-only below), on every
-commit. It then runs three gates, in order: `cargo fmt --check`,
-`cargo clippy --workspace --all-targets -- -D clippy::all`, and
-`cargo test --workspace`. The first to fail blocks the commit and prints
-what to fix. The hook runs them only when a staged file could affect
-compilation or test outcomes. This is its test, quoted from
-`.githooks/pre-commit`:
+commit. It then decides whether the commit is docs-only: every path the
+commit adds, changes, deletes or renames matches the list in
+`.githooks/docs-only-paths`, one anchored extended regular expression
+per line:
 
-```bash
-    staged=$(git diff --cached --name-only --diff-filter=ACMR)
-    grep -qE '\.(rs)$|Cargo\.(toml|lock)$|build\.rs$' <<<"$staged"
+```text
+^docs/
+^process-docs/
+^\.github/
+^packaging/
+^\.copr/
+^completions/
+^[A-Za-z_]+\.md$
+^LICENSE$
 ```
 
-Three things follow from that expression.
+The hook reads the list from the index being committed, so an edit to
+the list takes effect only once it is staged. A docs-only commit, or an
+empty one, prints `pre-commit: docs-only, cargo gates skipped` and
+passes. Every other commit is gated, including one that only deletes a
+file, renames one, or changes a `.snap` file, a fixture under
+`testdata/`, or the web UI. For a gated commit the hook:
 
-- **A commit with no added, copied, modified, or renamed `.rs`,
-  `Cargo.toml`, `Cargo.lock`, or `build.rs` file gets no cargo gate.**
-  Only the tarball check runs.
-  A frontend-only commit under `crates/web/ui/`, a docs-only commit, a
-  fixture-only or `.snap`-only commit, and a commit that only deletes
-  `.rs` files (`D` is not in the filter) all exit 0 before any gate runs.
-  For those, run the gates yourself. CI runs them on the pull request.
-- **The gates test your working tree, not your commit.** The hook runs
-  `cargo fmt`, `cargo clippy` and `cargo test` on the files on disk and
-  never stashes unstaged changes. A fix you forgot to `git add` makes the
-  hook pass for a commit that fails. CI is the first check of what you
-  actually committed.
+1. Refuses while any path outside the list is edited and not staged, or
+   untracked and not ignored. It names every such path: commit it,
+   delete it, or ignore it.
+2. Runs three gates, in order: `cargo fmt --check`,
+   `cargo clippy --workspace --all-targets -- -D clippy::all`, and
+   `cargo test --workspace`. Each prints one line, such as
+   `pre-commit: clippy ok (41 s)`. The first to fail prints its output
+   and blocks the commit.
+3. Repeats the refusal in step 1, and also refuses if the index changed
+   while the gates ran.
+
+Four things follow.
+
+- **The gates test your commit.** They run on the files on disk, and
+  steps 1 and 3 refuse whenever those could differ from what you are
+  committing. That holds for `git commit -a` and
+  `git commit --only <paths>` too: git gives the hook the index it
+  builds for that commit, and the hook compares against it.
+- **A docs-only commit is never refused for other files.** Unstaged or
+  untracked code beside it does not block it, so a docs fix can land
+  while a code change is in progress in the same clone.
+- **`INSPECTAH_SKIP_UI` has no effect on the hook.** The hook unsets it,
+  so the gates never embed a stale `crates/web/ui/dist/`. A commit that
+  changes the web UI runs `tsc && vite build` through
+  `crates/web/build.rs` inside the gates. Vitest and Playwright run only
+  in CI.
 - **The hook exists only if you installed it**, and
   `git commit --no-verify` bypasses it. Use `--no-verify` as a last
   resort only.
 
-Staged sets and the hook's verdict, checked against that expression:
+To gate every commit of a rebase, run
+`git rebase --exec '.githooks/pre-commit --head'`: in that mode the hook
+checks the paths `HEAD` changed. The hook's own tests are
+`scripts/tests/pre-commit-hook-test.sh`, and
+`scripts/tests/docs-only-paths-test.sh` checks that no Rust source under
+`crates/` reads a docs-only path.
+
+Staged sets and the hook's verdict:
 
 | Staged | Hook |
 |---|---|
-| `crates/web/ui/src/App.tsx` only | skips |
+| `docs/contributing/testing.md` only | skips the gates |
+| a `docs/` edit, with `crates/core/src/lib.rs` edited and not staged | skips the gates and passes |
+| `crates/web/ui/src/App.tsx` only | runs all three gates |
 | `Cargo.lock` only | runs all three gates |
-| `crates/core/src/lib.rs` edited, with a clippy fix left unstaged | runs, and passes on the working tree while the commit itself would fail clippy |
-| a deleted `.rs` file only | skips |
-| `crates/web/tests/snapshots/contract_snapshots__contract_view.snap` only | skips |
-| `testdata/e2e-fixture.tar.gz` only, produced with `--preserve` | refuses, before the fast path |
+| `crates/core/src/lib.rs` edited, with a clippy fix left unstaged | refuses before the gates, naming `crates/core/src/lib.rs` |
+| `crates/core/src/lib.rs`, with an untracked `crates/core/src/new.rs` | refuses before the gates, naming `crates/core/src/new.rs` |
+| a deleted `.rs` file only | runs all three gates |
+| `crates/web/tests/snapshots/contract_snapshots__contract_view.snap` only | runs all three gates |
+| `testdata/e2e-fixture.tar.gz` only, produced with `--preserve` | refuses, before the docs-only check |
 
 ### Fixture tarballs are local-only
 

@@ -86,8 +86,8 @@ x86_64-unknown-linux-musl aarch64-unknown-linux-musl`. Verify all four
 before starting rather than discovering a gap mid-build.
 
 **Never set `INSPECTAH_SKIP_UI=1` for these builds.** That escape hatch
-exists only for the release *commit*, whose pre-commit hook touches no
-frontend source. A release binary must embed the built frontend, so
+is only for hand-run gate commands on a release commit that touches no
+frontend source; the pre-commit hook unsets it. A release binary must embed the built frontend, so
 `crates/web/build.rs` has to run `npm ci` and `npm run build` for real.
 A binary built with the variable set ships without a UI and the failure
 is invisible until someone runs `refine`.
@@ -261,9 +261,11 @@ Two sandbox traps make a clean tree look broken. Neither is a real
 failure, and both cost time on more than one release:
 
 - **`npm ci` hangs.** The `inspectah-web` `build.rs` runs it and it needs
-  network. Set `INSPECTAH_SKIP_UI=1` on `git commit`, and on the gate
-  commands above, when the release commit touches no frontend source.
-  Do not reach for `--no-verify`. (Never set it for release *binaries*
+  network. Set `INSPECTAH_SKIP_UI=1` on the gate commands above when the
+  release commit touches no frontend source. It has no effect on
+  `git commit`, because the pre-commit hook unsets it: run the commit
+  with the sandbox disabled, as the next item says. Do not reach for
+  `--no-verify`. (Never set it for release *binaries*
   -- see "Build targets".)
 - **`refine_e2e_test::refine_server_lifecycle` fails with
   `PermissionDenied`.** The test binds a TCP listener, which the sandbox
