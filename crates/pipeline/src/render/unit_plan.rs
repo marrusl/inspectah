@@ -1534,15 +1534,16 @@ pub fn manual_link_lines(link: &ManualLink, staged: &StagedWrites<'_>) -> Vec<St
             dir: DependencyDir::Requires,
             ..
         } => command("add-requires"),
+        // No release caveat: a drop-in `Upholds=` works on systemd 252
+        // (RHEL 9) and 257 (RHEL 10), measured; only the link does not.
         LinkName::Path {
             dir: DependencyDir::Upholds,
             ..
         } => format!(
             "#   An .upholds link starts {unit} while {parent} is active and restarts it \
              whenever it stops, so adding it for a unit that becomes inactive after it exits, \
-             such as a oneshot service without RemainAfterExit=yes, produces a restart loop. A \
-             RHEL 9 target does not honor it. To add it, put Upholds={unit} in a drop-in for \
-             {parent}."
+             such as a oneshot service without RemainAfterExit=yes, produces a restart loop. To \
+             add it, put Upholds={unit} in a drop-in for {parent}."
         ),
         // The `/etc` files that name the alias are copied, so the advice
         // never asks for an `Alias=` the export already carries.

@@ -23,7 +23,7 @@
     {
       "advisories": [
         "# Advisory: multi-user.target.upholds/driftify-upheld.service is not carried: the unit's [Install] section cannot be relied on (enabling the unit would also make an .upholds link).",
-        "#   An .upholds link starts driftify-upheld.service while multi-user.target is active and restarts it whenever it stops, so adding it for a unit that becomes inactive after it exits, such as a oneshot service without RemainAfterExit=yes, produces a restart loop. A RHEL 9 target does not honor it. To add it, put Upholds=driftify-upheld.service in a drop-in for multi-user.target."
+        "#   An .upholds link starts driftify-upheld.service while multi-user.target is active and restarts it whenever it stops, so adding it for a unit that becomes inactive after it exits, such as a oneshot service without RemainAfterExit=yes, produces a restart loop. To add it, put Upholds=driftify-upheld.service in a drop-in for multi-user.target."
       ],
       "cause": {
         "undetermined": {
@@ -169,7 +169,7 @@
       {
         "advisories": [
           "# Advisory: multi-user.target.upholds/driftify-upheld.service is not carried: the unit's [Install] section cannot be relied on (enabling the unit would also make an .upholds link).",
-          "#   An .upholds link starts driftify-upheld.service while multi-user.target is active and restarts it whenever it stops, so adding it for a unit that becomes inactive after it exits, such as a oneshot service without RemainAfterExit=yes, produces a restart loop. A RHEL 9 target does not honor it. To add it, put Upholds=driftify-upheld.service in a drop-in for multi-user.target."
+          "#   An .upholds link starts driftify-upheld.service while multi-user.target is active and restarts it whenever it stops, so adding it for a unit that becomes inactive after it exits, such as a oneshot service without RemainAfterExit=yes, produces a restart loop. To add it, put Upholds=driftify-upheld.service in a drop-in for multi-user.target."
         ],
         "cause": {
           "undetermined": {

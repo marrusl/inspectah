@@ -3381,8 +3381,14 @@ command line, since `systemctl` has no verb that makes one. Its second
 line is:
 
 ```
-#   An .upholds link starts <unit> while <parent> is active and restarts it whenever it stops, so adding it for a unit that becomes inactive after it exits, such as a oneshot service without RemainAfterExit=yes, produces a restart loop. A RHEL 9 target does not honor it. To add it, put Upholds=<unit> in a drop-in for <parent>.
+#   An .upholds link starts <unit> while <parent> is active and restarts it whenever it stops, so adding it for a unit that becomes inactive after it exits, such as a oneshot service without RemainAfterExit=yes, produces a restart loop. To add it, put Upholds=<unit> in a drop-in for <parent>.
 ```
+
+The line names no release. `Upholds=` in a drop-in for the target, the
+form the line asks for, starts and restarts the unit on RHEL 9 (systemd
+252) and RHEL 10 (systemd 257); only the `.upholds/` link directory and
+`UpheldBy=` are RHEL 10 only (measured 2026-11-19,
+`process-docs/skills/real-host-validation-runs.md`).
 
 An `Alias` link gets no command line either: `add-wants` and
 `add-requires` make no alias link. Its second line, for `StaticUnit`, `NotInInstall`, `PartialInstall` and

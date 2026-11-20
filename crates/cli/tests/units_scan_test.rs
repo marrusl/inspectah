@@ -11,6 +11,7 @@
 mod unit_hosts;
 
 use inspectah_core::aggregate::merge_snapshots;
+use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::FindingKind;
@@ -8270,7 +8271,10 @@ fn t23_link_advisory_table() {
 /// and the unit's own file is a config entry (the walk's positive
 /// control); then no state change, no instruction names the unit, the
 /// advisory holds the restart-loop text, and the link's path is in neither
-/// `config.files` nor the staged tree.
+/// `config.files` nor the staged tree. The advisory is the same text for a
+/// RHEL 9 and a RHEL 10 target and names neither: `Upholds=` in a drop-in
+/// for the target, which is what it tells the reader to add, works on both
+/// (measured 2026-11-19, systemd 252 and 257).
 #[test]
 fn t23_an_upholds_link_is_advised_and_never_carried() {
     const UNIT: &str = "watch.service";
@@ -8306,26 +8310,42 @@ fn t23_an_upholds_link_is_advised_and_never_carried() {
         "#   An .upholds link starts watch.service while multi-user.target is active and \
          restarts it whenever it stops, so adding it for a unit that becomes inactive after it \
          exits, such as a oneshot service without RemainAfterExit=yes, produces a restart loop. \
-         A RHEL 9 target does not honor it. To add it, put Upholds=watch.service in a drop-in \
-         for multi-user.target."
+         To add it, put Upholds=watch.service in a drop-in for multi-user.target."
             .to_owned(),
     ];
-    for (route, tree) in both_exports(&snap) {
-        let containerfile = containerfile_in(&tree);
-        assert_eq!(
-            block_from(&containerfile, first),
-            expected,
-            "{route}:\n{containerfile}"
-        );
-        assert!(
-            in_no_systemctl_instruction(&containerfile, UNIT),
-            "{route}:\n{containerfile}"
-        );
-        assert!(
-            staged_at(&tree, "/etc/systemd/system/watch.service"),
-            "{route}"
-        );
-        assert!(!staged_at(&tree, LINK), "{route}");
+    for image_ref in [
+        "registry.redhat.io/rhel9/rhel-bootc:9.6",
+        "registry.redhat.io/rhel10/rhel-bootc:10.2",
+    ] {
+        let mut snap = snap.clone();
+        snap.target_image = Some(TargetImageIdentity {
+            image_ref: image_ref.into(),
+            strategy: ResolutionStrategy::CliOverride,
+        });
+        for (route, tree) in both_exports(&snap) {
+            let containerfile = containerfile_in(&tree);
+            let route = format!("{image_ref} {route}");
+            assert!(
+                containerfile
+                    .lines()
+                    .any(|l| l == format!("FROM {image_ref}")),
+                "{route}:\n{containerfile}"
+            );
+            assert_eq!(
+                block_from(&containerfile, first),
+                expected,
+                "{route}:\n{containerfile}"
+            );
+            assert!(
+                in_no_systemctl_instruction(&containerfile, UNIT),
+                "{route}:\n{containerfile}"
+            );
+            assert!(
+                staged_at(&tree, "/etc/systemd/system/watch.service"),
+                "{route}"
+            );
+            assert!(!staged_at(&tree, LINK), "{route}");
+        }
     }
 }
 

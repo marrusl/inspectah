@@ -1079,7 +1079,8 @@ both releases unless it names one.
   restarted whenever it goes inactive, so a `Type=oneshot` unit without
   `RemainAfterExit=yes` loops until it hits its start limit and leaves
   the host degraded on every boot. Measured on RHEL 10 (RHEL 9 makes no
-  `.upholds` link, above).
+  `.upholds` link, above, and ignores one made by hand, though it honours
+  `Upholds=` in a drop-in: § 2026-11-19 below).
 - On a package-mode host with `tmp.mount` masked, after a reboot `/tmp`
   is a plain directory on the writable root filesystem.
 - Layout of both base images: `/home`, `/mnt`, `/root` (to
@@ -2259,6 +2260,31 @@ before its first-install check (read from `rpm -q --scripts`). Inferred,
 not measured: an upgrade of `systemd` in a layer does the same, and the
 image then ships one ID to every host deployed from it, with no first
 boot.
+
+### Measured, 2026-11-19: `Upholds=` and the `.upholds/` directory
+
+No inspectah build was involved. On `rhel9` (RHEL 9.8, `systemd 252
+(252-67.el9_8.6)`) and `rhel10` (RHEL 10.2, `systemd 257
+(257-23.el10_2.2-gbb93cb8)`), both aarch64, each reverted to its clean
+snapshot. Probe: `/etc/systemd/system/upprobe.service` with
+`ExecStart=/usr/bin/sleep infinity` and no `[Install]`. Each form was
+added, then `daemon-reload`, and read with `systemctl show -p Upholds
+multi-user.target`, `show -p UpheldBy upprobe.service`, `is-active` and
+the unit's journal, then after `systemctl kill -s KILL` and after
+`systemctl stop`.
+
+| Form | RHEL 9 (252) | RHEL 10 (257) |
+|---|---|---|
+| `Upholds=upprobe.service` in `/etc/systemd/system/multi-user.target.d/*.conf` | honoured: `Upholds=` and `UpheldBy=` set, started on `daemon-reload`, restarted after `kill -s KILL` and after `stop` | the same |
+| link in `/etc/systemd/system/multi-user.target.upholds/` | ignored: `Upholds=` empty, not started; killed it stays `failed` | honoured, as the drop-in |
+
+So a drop-in `Upholds=` is the form that works on both releases, and an
+advisory that tells the reader to add one needs no release caveat. A
+RHEL 9 source host's `.upholds/` link, like its `UpheldBy=` (§ 2026-11-13
+above), did nothing there. A first pass that stopped the probe before
+removing the drop-in left it running, because the drop-in restarted it:
+remove the configuration and `daemon-reload` before `stop` when cleaning
+up an upheld unit.
 
 ## A redaction test that checks for the secret proves nothing about the file
 
