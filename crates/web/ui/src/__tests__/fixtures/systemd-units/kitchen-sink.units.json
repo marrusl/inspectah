@@ -548,7 +548,7 @@
     },
     {
       "advisories": [
-        "# Advisory: multi-user.target.upholds/driftify-upheld.service is not carried: the unit's [Install] section cannot be relied on (enabling the unit would also make an .upholds link).",
+        "# Advisory: multi-user.target.upholds/driftify-upheld.service is not carried: the unit's [Install] section cannot be relied on (UpheldBy=, which systemctl enable on systemd 254 or later turns into an .upholds link).",
         "#   An .upholds link starts driftify-upheld.service while multi-user.target is active and restarts it whenever it stops, so adding it for a unit that becomes inactive after it exits, such as a oneshot service without RemainAfterExit=yes, produces a restart loop. To add it, put Upholds=driftify-upheld.service in a drop-in for multi-user.target."
       ],
       "cause": {
@@ -564,7 +564,7 @@
   "undetermined_installs": [
     {
       "advisories": [
-        "# Advisory: driftify-upheld.service is not carried: its [Install] section on the source host cannot be relied on (enabling the unit would also make an .upholds link), and these files under /etc/systemd/system change it: /etc/systemd/system/driftify-upheld.service.",
+        "# Advisory: driftify-upheld.service is not carried: its [Install] section on the source host cannot be relied on (UpheldBy=, which systemctl enable on systemd 254 or later turns into an .upholds link), and these files under /etc/systemd/system change it: /etc/systemd/system/driftify-upheld.service.",
         "#   The image's links for driftify-upheld.service can differ from the source host's, including links its package install made before these files are copied. Check them with systemctl is-enabled in the image."
       ],
       "install_files": [

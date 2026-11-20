@@ -2286,6 +2286,15 @@ removing the drop-in left it running, because the drop-in restarted it:
 remove the configuration and `daemon-reload` before `stop` when cleaning
 up an upheld unit.
 
+`systemctl enable` on 252 makes no `.upholds` link either: read from
+upstream source, not measured. v252's `src/shared/install.c` parses only
+`Alias=`, `WantedBy=`, `RequiredBy=`, `DefaultInstance=` and `Also=` in
+`[Install]`, so it skips `UpheldBy=`; v254 added the `UpheldBy=` key and
+the `.upholds/` directory together (its NEWS lists both in one item). The
+RHEL 9 measurement above, the directory ignored, is consistent with no
+downstream backport. Advice text about an `UpheldBy=` unit therefore names
+systemd 254 rather than claiming `enable` makes the link everywhere.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a

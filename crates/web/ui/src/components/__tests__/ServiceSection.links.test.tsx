@@ -86,7 +86,7 @@ function makeLink(overrides: Partial<ManualLinkView> = {}): ManualLinkView {
 
 const NEED_DROP_IN = "/etc/systemd/system/need.service.d/10-reset.conf";
 const UNDETERMINED_LINES = [
-  `# Advisory: need.service is not carried: its [Install] section on the source host cannot be relied on (enabling the unit would also make an .upholds link), and these files under /etc/systemd/system change it: ${NEED_DROP_IN}.`,
+  `# Advisory: need.service is not carried: its [Install] section on the source host cannot be relied on (UpheldBy=, which systemctl enable on systemd 254 or later turns into an .upholds link), and these files under /etc/systemd/system change it: ${NEED_DROP_IN}.`,
   "#   The image's links for need.service can differ from the source host's, including links its package install made before these files are copied. Check them with systemctl is-enabled in the image.",
 ];
 

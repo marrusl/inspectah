@@ -1338,7 +1338,12 @@ pub fn install_unknown_words(reason: InstallUnknown) -> &'static str {
     match reason {
         InstallUnknown::Specifier => "a specifier inspectah does not expand",
         InstallUnknown::ForeignName => "a name this model does not admit",
-        InstallUnknown::UpheldBy => "enabling the unit would also make an .upholds link",
+        // True on both targets: systemd 252 (RHEL 9) reads no UpheldBy=
+        // in [Install], so enable makes no link there; 254 added both the
+        // key and the `.upholds/` directory.
+        InstallUnknown::UpheldBy => {
+            "UpheldBy=, which systemctl enable on systemd 254 or later turns into an .upholds link"
+        }
         InstallUnknown::Unreadable => "a file of it inspectah could not read as text",
     }
 }

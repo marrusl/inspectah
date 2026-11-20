@@ -8303,8 +8303,8 @@ fn t23_an_upholds_link_is_advised_and_never_carried() {
     let units = snap.units.as_ref().expect("a units section");
     assert!(units.state_changes.is_empty(), "{:?}", units.state_changes);
     let first = "# Advisory: multi-user.target.upholds/watch.service is not carried: the unit's \
-                 [Install] section cannot be relied on (enabling the unit would also make an \
-                 .upholds link).";
+                 [Install] section cannot be relied on (UpheldBy=, which \
+                 systemctl enable on systemd 254 or later turns into an .upholds link).";
     let expected = [
         first.to_owned(),
         "#   An .upholds link starts watch.service while multi-user.target is active and \
@@ -8843,7 +8843,7 @@ fn t40_an_undetermined_section_with_an_etc_file_and_no_link() {
     for (drop_in, reason, words) in [(
         "[Install]\nUpheldBy=a.target\n",
         InstallUnknown::UpheldBy,
-        "enabling the unit would also make an .upholds link",
+        "UpheldBy=, which systemctl enable on systemd 254 or later turns into an .upholds link",
     )] {
         let snap = scan(t40_host(required, Some(drop_in)));
         let units = snap.units.as_ref().expect("a units section");
@@ -8960,8 +8960,8 @@ fn t40_an_upheld_vendor_unit_with_a_link_or_also() {
         "/usr/lib/systemd/system/need.service",
     ));
     let first = "# Advisory: multi-user.target.wants/need.service is not carried: the unit's \
-                 [Install] section cannot be relied on (enabling the unit would also make an \
-                 .upholds link).";
+                 [Install] section cannot be relied on (UpheldBy=, which \
+                 systemctl enable on systemd 254 or later turns into an .upholds link).";
     for (route, containerfile) in both_routes(&linked) {
         assert_eq!(
             block_from(&containerfile, first),
@@ -8986,7 +8986,7 @@ fn t40_an_upheld_vendor_unit_with_a_link_or_also() {
     assert!(units.undetermined_installs[0].install_files.is_empty());
     let expected = [
         "# Advisory: need.service is not carried: its [Install] section on the source host \
-         cannot be relied on (enabling the unit would also make an .upholds link). It assigns \
+         cannot be relied on (UpheldBy=, which systemctl enable on systemd 254 or later turns into an .upholds link). It assigns \
          Also=, so the units it names are enabled or disabled with it in the image, and \
          inspectah could not list them to check."
             .to_owned(),
@@ -9025,14 +9025,14 @@ fn a_vendor_side_undetermined_section_has_its_record() {
     let expected = [
         format!(
             "# Advisory: {DIFF_UNIT} is not carried: its [Install] section on the source host \
-             cannot be relied on (enabling the unit would also make an .upholds link), and \
+             cannot be relied on (UpheldBy=, which systemctl enable on systemd 254 or later turns into an .upholds link), and \
              these files under /etc/systemd/system change it: {DIFF_SHADOW}."
         ),
         undetermined_second_line(DIFF_UNIT),
     ];
     let link_line = format!(
         "# Advisory: multi-user.target.wants/{DIFF_UNIT} is not carried: the unit's [Install] \
-         section cannot be relied on (enabling the unit would also make an .upholds link)."
+         section cannot be relied on (UpheldBy=, which systemctl enable on systemd 254 or later turns into an .upholds link)."
     );
     // (case, the package's file, the shadow, the listed state, a link)
     for (case, vendor, shadow, state, linked) in [
@@ -11807,8 +11807,8 @@ fn t40_an_undetermined_owner_with_also_derives_no_instance() {
         )]
     );
     let first = "# Advisory: multi-user.target.wants/need.service is not carried: the unit's \
-                 [Install] section cannot be relied on (enabling the unit would also make an \
-                 .upholds link).";
+                 [Install] section cannot be relied on (UpheldBy=, which \
+                 systemctl enable on systemd 254 or later turns into an .upholds link).";
     for (route, containerfile) in both_routes(&snap) {
         assert_eq!(
             block_from(&containerfile, first),
