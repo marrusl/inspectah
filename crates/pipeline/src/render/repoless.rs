@@ -372,10 +372,16 @@ pub(crate) struct RepolessPlan {
 ///    so the filename is its NEVRA. A [`LocalRpm`] when included, a
 ///    commented block when pre-excluded, and a FIXME instead when that
 ///    NEVRA is not a name the allowlist admits.
-/// 4. Neither: the MANUAL comment block.
+/// 4. Neither: the MANUAL comment block, except for a package in
+///    `advised`, the demoted repo-enabling packages whose demotion FIXME
+///    the packages section already printed. That FIXME names the controls
+///    that restore the package; a MANUAL block beside it said to add a
+///    repo or uncomment an install that cannot work, so one package got
+///    two contradicting answers.
 pub(crate) fn repoless_plan(
     snap: &InspectionSnapshot,
     render_ctx: Option<&RenderContext>,
+    advised: &std::collections::BTreeSet<(&str, &str)>,
 ) -> RepolessPlan {
     let mut plan = RepolessPlan {
         local: Vec::new(),
@@ -394,7 +400,7 @@ pub(crate) fn repoless_plan(
     for pkg in &rpm_section.packages_added {
         match route_for(rpm_section, &repos, pkg, verified) {
             PackageRoute::Upload(upload) => plan.local.push(uploaded_rpm(pkg, upload)),
-            PackageRoute::Repoless => plan_repoless(pkg, &mut plan),
+            PackageRoute::Repoless => plan_repoless(pkg, advised, &mut plan),
             PackageRoute::ByName | PackageRoute::DisabledRepo(_) => {}
         }
     }
@@ -402,7 +408,11 @@ pub(crate) fn repoless_plan(
 }
 
 /// Outcomes 2 to 4 of [`repoless_plan`] for one package.
-fn plan_repoless(pkg: &PackageEntry, plan: &mut RepolessPlan) {
+fn plan_repoless(
+    pkg: &PackageEntry,
+    advised: &std::collections::BTreeSet<(&str, &str)>,
+    plan: &mut RepolessPlan,
+) {
     if pkg.uploaded && pkg.disposition.is_included() {
         plan.advice.push(format!(
             "# FIXME: upload the RPM for {} again in refine; the staged file \
@@ -411,6 +421,8 @@ fn plan_repoless(pkg: &PackageEntry, plan: &mut RepolessPlan) {
         ));
     } else if pkg.repoless_cached {
         plan_cached(pkg, plan);
+    } else if advised.contains(&(pkg.name.as_str(), pkg.arch.as_str())) {
+        // Its demotion FIXME is its advice.
     } else {
         // No cached RPM — manual resolution
         plan.advice.push(format!(

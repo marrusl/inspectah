@@ -1648,9 +1648,9 @@ fn an_upload_for_a_disabled_repo_package_exports_and_installs_from_the_upload() 
 /// The upload for the demoted `vendor-release`.
 const VENDOR_UPLOAD: &str = "vendor-release-1-1.el9.noarch.rpm";
 /// The FIXME a demoted `vendor-release` renders while nothing settles it.
-const VENDOR_FIXME: &str = "# FIXME: include /etc/yum.repos.d/bootstrap.repo under Configuration \
-                            Files, or re-include repo bootstrap, or upload the RPM; vendor-release \
-                            installs from that repo definition, which this export does not carry";
+const VENDOR_FIXME: &str = "# FIXME: re-include repo bootstrap, which also re-includes its \
+                            packages, or upload the RPM; vendor-release installs from repo \
+                            bootstrap, whose definition this export does not carry";
 
 /// `vendor-release`, installed `@commandline` and served by `[bootstrap]`,
 /// so it is repo-enabling and installs by name while `bootstrap.repo`
@@ -1755,6 +1755,45 @@ fn a_demoted_repo_enabling_package_takes_an_upload_until_its_repo_returns() {
         "the upload is not staged without a COPY"
     );
     assert_every_staged_file_is_copied(&served);
+}
+
+/// Every action the demotion FIXME names is one the refine session
+/// accepts, and following it settles the FIXME. A repo file has no
+/// Configuration Files row, so advice to include it there named a target
+/// the session refuses; the package also gets no second, MANUAL block.
+#[test]
+fn the_demotion_fixme_names_only_targets_the_session_accepts() {
+    let mut h = Harness::with_snapshot(repo_enabling_snapshot());
+    h.set_include("vendor-release", "noarch", true);
+    set_include_bootstrap(&mut h, false);
+
+    let (demoted, _) = h.export(None);
+    let file = containerfile(&demoted);
+    assert!(file.contains(VENDOR_FIXME), "{file}");
+    assert!(!file.contains("# MANUAL: vendor-release"), "{file}");
+    assert!(!file.contains("under Configuration Files"), "{file}");
+    assert!(
+        matches!(
+            h.session.apply(RefinementOp::SetInclude {
+                item_id: ItemId::Config {
+                    path: "/etc/yum.repos.d/bootstrap.repo".into(),
+                },
+                include: true,
+            }),
+            Err(RefineError::UnknownTarget(_))
+        ),
+        "the control: the repo file has no Configuration Files row"
+    );
+
+    set_include_bootstrap(&mut h, true);
+    let (followed, warnings) = h.export(None);
+    let file = containerfile(&followed);
+    assert_eq!(warnings, Vec::<ExportWarning>::new());
+    assert!(!file.contains("# FIXME: re-include"), "{file}");
+    assert!(
+        active_lines(&file).contains(&"    vendor-release \\"),
+        "following the advice installs it by name:\n{file}"
+    );
 }
 
 /// The uploaded package installs before anything that needs it: the

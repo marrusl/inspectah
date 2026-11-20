@@ -526,29 +526,36 @@ fn repo_enabling_narration(
 
 /// § 3.3's demotion line, printed in place of the active install when no
 /// serving repo definition survives the export.
+///
+/// Every action it names is one refine offers for this package: the repo
+/// toggle that [`serving_loss`] found serves it again, which also
+/// re-includes that repo's packages, and the RPM upload. It never tells
+/// the operator to include a repo file under Configuration Files: refine
+/// has no row for an owned, unmodified `.repo` file, and a row that does
+/// exist does not bring back the repo-file decision the install reads.
+/// The line is the package's only advice: [`repoless::repoless_plan`]
+/// leaves out the MANUAL block for it.
+///
+/// [`serving_loss`]: super::repo_enabling::serving_loss
+/// [`repoless::repoless_plan`]: super::repoless::repoless_plan
 fn demotion_fixme(pkg: &PackageEntry, loss: &super::repo_enabling::ServingLoss) -> String {
     let name = super::language_packages::sanitize_for_comment(&pkg.name);
     let id = super::language_packages::sanitize_for_comment(loss.id.as_str());
     let tail =
-        format!("{name} installs from that repo definition, which this export does not carry");
-    match &loss.file {
-        Some(file) => {
-            let path = super::language_packages::sanitize_for_comment(&file.path);
-            // A repo file is a Configuration Files row; a key has no row of
-            // its own, and refine carries it with a repo that names it.
-            let include = match file.kind {
-                super::repo_enabling::CaptureKind::RepoFile => {
-                    format!("include {path} under Configuration Files")
-                }
-                super::repo_enabling::CaptureKind::Key => {
-                    format!("include key {path} by re-including a repo whose gpgkey names it")
-                }
-            };
-            format!("# FIXME: {include}, or re-include repo {id}, or upload the RPM; {tail}")
+        format!("{name} installs from repo {id}, whose definition this export does not carry");
+    match &loss.repo {
+        Some(repo) => {
+            let repo = super::language_packages::sanitize_for_comment(repo);
+            format!(
+                "# FIXME: re-include repo {repo}, which also re-includes its packages, or \
+                 upload the RPM; {tail}"
+            )
         }
-        // Nothing captured defines the section, so there is no file to
-        // name; the advice that would name one is dropped, not invented.
-        None => format!("# FIXME: re-include repo {id}, or upload the RPM; {tail}"),
+        // No repo the toggle accepts restores it, so the advice that
+        // would name one is dropped, not invented.
+        None => format!(
+            "# FIXME: upload the RPM; {tail}, and re-including no repo in refine restores it"
+        ),
     }
 }
 
@@ -1075,7 +1082,13 @@ fn packages_section_lines(
     // may resolve against, and before the group and plain installs and
     // every service action, any of which can need it. Installing a
     // package early is harmless when nothing needs it.
-    let repoless = super::repoless::repoless_plan(snap, render_ctx);
+    // A demoted package's FIXME above is its advice; a MANUAL block for it
+    // would say the opposite.
+    let advised: std::collections::BTreeSet<(&str, &str)> = demoted
+        .iter()
+        .map(|(pkg, _)| (pkg.name.as_str(), pkg.arch.as_str()))
+        .collect();
+    let repoless = super::repoless::repoless_plan(snap, render_ctx, &advised);
     let mut names: Vec<&str> = disabled_repo_installs
         .values()
         .flatten()
@@ -1923,13 +1936,16 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 // --- Kernel/Boot section ---
 
-/// The `config.files` path of `profile`'s own `tuned.conf`, when that
+/// The `config.files` entry of `profile`'s own `tuned.conf`, when that
 /// entry exists and the export is not carrying it.
 ///
 /// `None` covers both the stock-profile case (no entry under
 /// `/etc/tuned/<profile>/`, because nothing there was collected) and the
 /// included case, which are the two ways activation is consistent.
-fn excluded_tuned_profile_file(snap: &InspectionSnapshot, profile: &str) -> Option<String> {
+fn excluded_tuned_profile_file<'a>(
+    snap: &'a InspectionSnapshot,
+    profile: &str,
+) -> Option<&'a inspectah_core::types::config::ConfigFileEntry> {
     let path = format!("/etc/tuned/{profile}/tuned.conf");
     let entry = snap
         .config
@@ -1937,7 +1953,7 @@ fn excluded_tuned_profile_file(snap: &InspectionSnapshot, profile: &str) -> Opti
         .files
         .iter()
         .find(|f| f.path == path)?;
-    (!entry.disposition.is_included()).then(|| entry.path.clone())
+    (!entry.disposition.is_included()).then_some(entry)
 }
 
 fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
@@ -1978,11 +1994,26 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 "# FIXME: tuned profile name contains unsafe characters: {:?}",
                 kb.tuned_active
             ));
-        } else if let Some(excluded) = excluded_tuned_profile_file(snap, &kb.tuned_active) {
-            body.push(format!(
-                "# FIXME: include {excluded} under Configuration Files or activate a stock \
-                 profile; the active profile is custom and its file is excluded"
-            ));
+        } else if let Some(entry) = excluded_tuned_profile_file(snap, &kb.tuned_active) {
+            // Name the Configuration Files row only when refine can include
+            // it: an advisory or inventory row, or a locked one, refuses.
+            let excluded = &entry.path;
+            let toggleable = matches!(
+                entry.disposition,
+                inspectah_core::types::FindingKind::Actionable { .. }
+            ) && !entry.locked;
+            body.push(if toggleable {
+                format!(
+                    "# FIXME: include {excluded} under Configuration Files or activate a stock \
+                     profile; the active profile is custom and its file is excluded"
+                )
+            } else {
+                format!(
+                    "# FIXME: activate a stock profile; the active profile is custom and its \
+                     file {excluded} is not carried, and refine cannot include its \
+                     Configuration Files row"
+                )
+            });
         } else {
             body.push(format!("# Tuned profile: {}", kb.tuned_active));
             body.push(format!(
@@ -2794,8 +2825,8 @@ mod tests {
 
     /// Refine renders the projected snapshot, where `epel-release` has
     /// already been demoted and annotated. The annotation used to send it
-    /// past the repo-enabling match, so the FIXME naming the file to
-    /// re-include never rendered and only the MANUAL block remained.
+    /// past the repo-enabling match, so the FIXME naming what to re-include
+    /// never rendered and only the MANUAL block remained.
     #[test]
     fn a_demoted_repo_enabling_package_keeps_its_fixme_after_projection() {
         let mut snap = snapshot_with_packages(&["epel-release", "htop"]);
@@ -2816,15 +2847,116 @@ mod tests {
         let output = render_containerfile(&snap, None, None);
 
         assert!(
-            output.contains(&format!(
-                "# FIXME: include {EPEL_REPO_PATH} under Configuration Files, or re-include \
-                 repo epel, or upload the RPM; epel-release installs from that repo \
-                 definition, which this export does not carry"
-            )),
+            output.contains(
+                "# FIXME: re-include repo epel, which also re-includes its packages, or \
+                 upload the RPM; epel-release installs from repo epel, whose definition \
+                 this export does not carry"
+            ),
             "{output}"
         );
-        assert!(output.contains("# MANUAL: epel-release"), "{output}");
+        // The FIXME is its only advice: no MANUAL block contradicts it.
+        assert!(!output.contains("# MANUAL: epel-release"), "{output}");
         assert!(!output.contains("    epel-release \\"), "{output}");
+    }
+
+    /// Re-include `repo` the way refine's repo toggle does: its member
+    /// packages, every captured repo file defining that exact section,
+    /// unless locked, and every key its sections name that the base image
+    /// does not ship.
+    fn reinclude_repo_as_refine_does(snap: &mut InspectionSnapshot, repo: &str) {
+        let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+        for pkg in rpm
+            .packages_added
+            .iter_mut()
+            .filter(|p| p.source_repo == repo && !p.locked)
+        {
+            pkg.disposition = FindingKind::included();
+        }
+        let mut key_paths: Vec<String> = Vec::new();
+        for file in rpm.repo_files.iter_mut() {
+            let sections = inspectah_core::types::repo::parse_repo_sections(&file.content);
+            let defining: Vec<_> = sections
+                .into_iter()
+                .filter(|s| s.id.as_str() == repo)
+                .collect();
+            if defining.is_empty() {
+                continue;
+            }
+            key_paths.extend(defining.into_iter().flat_map(|s| s.gpg_key_paths));
+            if !file.locked {
+                file.disposition = FindingKind::included();
+            }
+        }
+        for key in rpm.gpg_keys.iter_mut().filter(|k| {
+            k.shipped_by_base.is_none() && key_paths.iter().any(|p| k.is_key_named_by(p))
+        }) {
+            key.disposition = FindingKind::included();
+        }
+    }
+
+    /// The release check's case, measured on a RHEL 9 host: the operator
+    /// excluded repo `epel`, which dropped `epel.repo`, its key and every
+    /// EPEL package, then re-included `epel-release` alone. The FIXME told
+    /// them to include `epel.repo` under Configuration Files, which has no
+    /// row for it, and a MANUAL block for the same package said to add a
+    /// repo or uncomment an install that cannot work. The package now gets
+    /// one piece of advice, and every action in it is one refine offers.
+    #[test]
+    fn a_release_package_re_included_after_its_repo_gets_one_followable_advice() {
+        let mut snap = snapshot_with_packages(&["epel-release", "htop"]);
+        make_epel_repo_enabling(&mut snap, "epel-release");
+        {
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            rpm.packages_added[1].source_repo = "epel".into();
+        }
+        let host = snap.clone();
+        // What excluding repo epel did, then the package re-included.
+        {
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            rpm.packages_added[1].disposition = FindingKind::excluded();
+        }
+        // The key stays: on the host other enabled EPEL sections name it,
+        // so the exclude kept it carried.
+        repo_file_mut(&mut snap, EPEL_REPO_PATH).disposition = FindingKind::excluded();
+        let mut projected = snap.clone();
+        super::super::repo_enabling::demote_unserved_repo_enabling(&mut projected);
+
+        let output = render_containerfile(&projected, None, None);
+
+        let advice: Vec<&str> = output
+            .lines()
+            .filter(|l| {
+                ["# FIXME", "# MANUAL", "# TODO"]
+                    .iter()
+                    .any(|tag| l.starts_with(tag))
+            })
+            .filter(|l| l.contains("epel-release"))
+            .collect();
+        assert_eq!(
+            advice,
+            vec![
+                "# FIXME: re-include repo epel, which also re-includes its packages, or \
+                 upload the RPM; epel-release installs from repo epel, whose definition \
+                 this export does not carry"
+            ],
+            "{output}"
+        );
+        assert!(!output.contains("under Configuration Files"), "{output}");
+        assert!(!output.contains("RUN dnf install epel-release"), "{output}");
+
+        // Following the advice serves the package by name again.
+        reinclude_repo_as_refine_does(&mut snap, "epel");
+        super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+        let followed = render_containerfile(&snap, None, None);
+        assert!(
+            followed.contains("    epel-release \\") && !followed.contains("# FIXME: re-include"),
+            "{followed}"
+        );
+        assert_eq!(
+            render_containerfile(&host, None, None),
+            followed,
+            "following the advice restores the host's export"
+        );
     }
 
     /// A repo-enabling package served by `[epel]` alone, owning no file,
@@ -2885,21 +3017,18 @@ mod tests {
         const ON: &str = "[epel]\nbaseurl=https://example.invalid/epel\nenabled=1\n";
         const OFF: &str = "[epel]\nbaseurl=https://example.invalid/epel\nenabled=0\n";
         const OTHER: &str = "[other]\nbaseurl=https://example.invalid/other\n";
-        const NO_FILE: &str = "# FIXME: re-include repo epel, or upload the RPM; epel-release \
-                               installs from that repo definition, which this export does not carry";
-        let names = |file: &str| {
-            format!(
-                "# FIXME: include /etc/yum.repos.d/{file} under Configuration Files, or \
-                 re-include repo epel, or upload the RPM; epel-release installs from that \
-                 repo definition, which this export does not carry"
-            )
-        };
+        const UPLOAD_ONLY: &str = "# FIXME: upload the RPM; epel-release installs from repo \
+                                   epel, whose definition this export does not carry, and \
+                                   re-including no repo in refine restores it";
+        const REINCLUDE_EPEL: &str = "# FIXME: re-include repo epel, which also re-includes its \
+                                      packages, or upload the RPM; epel-release installs from \
+                                      repo epel, whose definition this export does not carry";
         type Case<'a> = (&'a str, Vec<(&'a str, &'a str, bool)>, Result<(), String>);
         let cases: Vec<Case> = vec![
             (
                 "the first file disables it, a shadowed one enables it",
                 vec![("a.repo", OFF, true), ("b.repo", ON, true)],
-                Err(NO_FILE.to_string()),
+                Err(UPLOAD_ONLY.to_string()),
             ),
             (
                 "the first file enables it, a shadowed one disables it",
@@ -2907,21 +3036,24 @@ mod tests {
                 Ok(()),
             ),
             (
-                // Re-including a.repo makes it dnf's definition again.
+                // Re-including repo epel brings a.repo back as dnf's
+                // definition.
                 "an excluded first file enables it",
                 vec![("a.repo", ON, false), ("b.repo", OFF, true)],
-                Err(names("a.repo")),
+                Err(REINCLUDE_EPEL.to_string()),
             ),
             (
-                // a.repo sorts first but would only disable it again; c.repo
-                // is the one whose re-inclusion serves the package.
+                // Only c.repo would serve it, and refine has no control for
+                // c.repo alone: the repo toggle brings a.repo back too, whose
+                // copy dnf reads first and which disables epel, so the
+                // toggle refuses epel as host-disabled.
                 "only the later excluded file would serve it",
                 vec![
                     ("a.repo", OFF, false),
                     ("c.repo", ON, false),
                     ("z.repo", OTHER, true),
                 ],
-                Err(names("c.repo")),
+                Err(UPLOAD_ONLY.to_string()),
             ),
         ];
         for (what, files, expected) in cases {
@@ -2952,15 +3084,12 @@ mod tests {
         const CLEARED: &str = "[epel]\nbaseurl=https://example.invalid/epel\nenabled=1\nbaseurl=\n";
         const CLEARED_IN_A_LATER_BLOCK: &str = "[epel]\nmetalink=https://example.invalid/epel\n\
                                                 enabled=1\n[epel]\nmetalink=\n";
-        const NO_FILE: &str = "# FIXME: re-include repo epel, or upload the RPM; epel-release \
-                               installs from that repo definition, which this export does not carry";
-        let names = |file: &str| {
-            format!(
-                "# FIXME: include /etc/yum.repos.d/{file} under Configuration Files, or \
-                 re-include repo epel, or upload the RPM; epel-release installs from that \
-                 repo definition, which this export does not carry"
-            )
-        };
+        const UPLOAD_ONLY: &str = "# FIXME: upload the RPM; epel-release installs from repo \
+                                   epel, whose definition this export does not carry, and \
+                                   re-including no repo in refine restores it";
+        const REINCLUDE_EPEL: &str = "# FIXME: re-include repo epel, which also re-includes its \
+                                      packages, or upload the RPM; epel-release installs from \
+                                      repo epel, whose definition this export does not carry";
         type Case<'a> = (String, Vec<(&'a str, &'a str, bool)>, Result<(), String>);
         let mut cases: Vec<Case> = Vec::new();
         for (how, source_less) in [
@@ -2974,14 +3103,14 @@ mod tests {
             cases.push((
                 format!("{how}, the working file sorts first and is excluded"),
                 vec![("a.repo", ON, false), ("b.repo", source_less, true)],
-                Err(names("a.repo")),
+                Err(REINCLUDE_EPEL.to_string()),
             ));
-            // The source-less copy sorts first, so re-including the working
-            // file would leave it shadowed: no file is named.
+            // The source-less copy sorts first, so re-including the repo
+            // would leave it shadowed: no repo is named.
             cases.push((
                 format!("{how}, the source-less copy sorts first"),
                 vec![("a.repo", source_less, true), ("b.repo", ON, false)],
-                Err(NO_FILE.to_string()),
+                Err(UPLOAD_ONLY.to_string()),
             ));
         }
         for (what, files, expected) in cases {
@@ -3035,27 +3164,24 @@ mod tests {
         }
     }
 
-    /// The file a demotion FIXME names is one whose inclusion, staged as
+    /// The repo a demotion FIXME names is one whose re-inclusion, staged as
     /// the export would stage it, serves the package again. An included
     /// config entry at `a.repo/stray` makes the stager withhold both it and
-    /// an included `a.repo`, so naming `a.repo` would send the operator in
-    /// a circle: while that conflict remains the FIXME names another file
-    /// that does serve, or none. Each case follows the advice and checks
-    /// the projection, the Containerfile and the audit again.
+    /// an included `a.repo`, so while that conflict remains the FIXME names
+    /// the repo only when another file it brings back serves. Each case
+    /// follows the advice and checks the projection, the Containerfile and
+    /// the audit again.
     #[test]
     fn following_the_recovery_advice_serves_the_package_through_staging() {
         const ON: &str = "[epel]\nbaseurl=https://example.invalid/epel\nenabled=1\n";
         const OTHER: &str = "[other]\nbaseurl=https://example.invalid/other\n";
         const STRAY: &str = "/etc/yum.repos.d/a.repo/stray";
-        const NO_FILE: &str = "# FIXME: re-include repo epel, or upload the RPM; epel-release \
-                               installs from that repo definition, which this export does not carry";
-        let names = |file: &str| {
-            format!(
-                "# FIXME: include /etc/yum.repos.d/{file} under Configuration Files, or \
-                 re-include repo epel, or upload the RPM; epel-release installs from that \
-                 repo definition, which this export does not carry"
-            )
-        };
+        const UPLOAD_ONLY: &str = "# FIXME: upload the RPM; epel-release installs from repo \
+                                   epel, whose definition this export does not carry, and \
+                                   re-including no repo in refine restores it";
+        const REINCLUDE_EPEL: &str = "# FIXME: re-include repo epel, which also re-includes its \
+                                      packages, or upload the RPM; epel-release installs from \
+                                      repo epel, whose definition this export does not carry";
         let build = |files: &[(&str, &str, bool)], stray: bool| {
             let mut snap = snapshot_with_packages(&["epel-release"]);
             let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
@@ -3084,26 +3210,26 @@ mod tests {
         type Case<'a> = (&'a str, Vec<(&'a str, &'a str, bool)>, bool, String);
         let cases: Vec<Case> = vec![
             (
-                "no conflict: a.repo is named",
+                "no conflict: epel is named",
                 vec![("a.repo", ON, false), ("z.repo", OTHER, true)],
                 false,
-                names("a.repo"),
+                REINCLUDE_EPEL.to_string(),
             ),
             (
                 "a.repo would be withheld: nothing is named",
                 vec![("a.repo", ON, false), ("z.repo", OTHER, true)],
                 true,
-                NO_FILE.to_string(),
+                UPLOAD_ONLY.to_string(),
             ),
             (
-                "a.repo would be withheld: the next file that serves is named",
+                "a.repo would be withheld: epel is named for c.repo, which serves",
                 vec![
                     ("a.repo", ON, false),
                     ("c.repo", ON, false),
                     ("z.repo", OTHER, true),
                 ],
                 true,
-                names("c.repo"),
+                REINCLUDE_EPEL.to_string(),
             ),
         ];
         for (what, files, stray, fixme) in cases {
@@ -3111,25 +3237,18 @@ mod tests {
             super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
             assert_eq!(epel_release_verdict(&snap), Err(fixme.clone()), "{what}");
 
-            // Follow the advice: include the file it names, from the
+            // Follow the advice: re-include the repo it names, from the
             // snapshot as it was before the projection demoted anything.
-            let Some(named) = files
-                .iter()
-                .map(|f| f.0)
-                .find(|name| fixme.contains(&format!("include /etc/yum.repos.d/{name} under")))
-            else {
+            if fixme != REINCLUDE_EPEL {
                 continue;
-            };
-            let followed: Vec<(&str, &str, bool)> = files
-                .iter()
-                .map(|&(name, content, included)| (name, content, included || name == named))
-                .collect();
-            let mut snap = build(&followed, stray);
+            }
+            let mut snap = build(&files, stray);
+            reinclude_repo_as_refine_does(&mut snap, "epel");
             super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
             assert_eq!(
                 epel_release_verdict(&snap),
                 Ok(()),
-                "{what}: including {named} serves the package"
+                "{what}: re-including epel serves the package"
             );
         }
     }
@@ -3216,7 +3335,7 @@ mod tests {
 
         // The control: no upload, so the leaf is a FIXME only.
         let output = render_containerfile(&host(false), None, Some(&RenderContext::default()));
-        assert!(output.contains("# FIXME: include"), "{output}");
+        assert!(output.contains("# FIXME: re-include repo epel"), "{output}");
         assert!(!output.contains(ENABLEREPO), "{output}");
         assert!(!output.lines().any(|l| l == "    openh264 \\"), "{output}");
         assert!(
@@ -4029,22 +4148,21 @@ RUN dnf install -y \
     }
 
     /// One way the export can lose a repo-enabling package's proof, and
-    /// the section and file the FIXME must then name.
+    /// the section and repo the FIXME must then name.
     struct DemotionCase {
         label: &'static str,
         mutate: fn(&mut InspectionSnapshot),
         id: &'static str,
-        /// The file the FIXME names, when re-including one would serve the
-        /// package again.
-        file: Option<&'static str>,
+        /// The repo the FIXME names, when re-including it in refine would
+        /// serve the package again.
+        repo: Option<&'static str>,
     }
 
     #[test]
     fn losing_the_serving_repo_demotes_the_package() {
-        const GPG_KEY_DIR: &str = "/etc/pki/rpm-gpg/";
         const ACTIVE_INSTALL: &str = "    vendor-release \\";
-        const FIXME_TAIL: &str = "vendor-release installs from that repo definition, \
-                                  which this export does not carry";
+        const FIXME_TAIL: &str = "vendor-release installs from repo bootstrap, whose \
+                                  definition this export does not carry";
 
         // The control: everything carried, so the demotion half below can
         // fail. Re-including bootstrap.repo is this same state.
@@ -4058,12 +4176,12 @@ RUN dnf install -y \
             "the carried case must not warn:\n{served}"
         );
 
-        // Each way the export can lose the proof, and the file the FIXME
-        // names for it. A file is named only when re-including it would
-        // serve the package again: bootstrap.repo carried with enabled=0,
-        // or carried without its key, is already included, so naming it
-        // would send the operator in a circle. The key [bootstrap] names
-        // is not the package's own, and is named all the same.
+        // Each way the export can lose the proof, and the repo the FIXME
+        // names for it. A repo is named only when the refine toggle accepts
+        // it and re-including it would serve the package again: [bootstrap]
+        // carried with enabled=0 is host-disabled, which the toggle
+        // refuses. A dropped file or key the package owns comes back only
+        // with [vendor], the repo its own file defines.
         let cases = [
             DemotionCase {
                 label: "bootstrap.repo excluded",
@@ -4072,7 +4190,7 @@ RUN dnf install -y \
                         FindingKind::excluded();
                 },
                 id: "bootstrap",
-                file: Some("/etc/yum.repos.d/bootstrap.repo"),
+                repo: Some("bootstrap"),
             },
             DemotionCase {
                 label: "[bootstrap] carried with enabled=0",
@@ -4082,7 +4200,7 @@ RUN dnf install -y \
                             .into();
                 },
                 id: "bootstrap",
-                file: None,
+                repo: None,
             },
             DemotionCase {
                 label: "[bootstrap]'s gpgkey excluded",
@@ -4097,7 +4215,7 @@ RUN dnf install -y \
                     }
                 },
                 id: "bootstrap",
-                file: Some("/etc/pki/rpm-gpg/RPM-GPG-KEY-BOOTSTRAP"),
+                repo: Some("bootstrap"),
             },
             DemotionCase {
                 label: "the vendor.repo the package owns is excluded",
@@ -4106,11 +4224,10 @@ RUN dnf install -y \
                         FindingKind::excluded();
                 },
                 id: "bootstrap",
-                file: Some("/etc/yum.repos.d/vendor.repo"),
+                repo: Some("vendor"),
             },
-            // The owned file is still named first when re-including it
-            // restores the proof, ahead of another left-out file that
-            // also defines the serving section.
+            // Re-including [bootstrap] brings z.repo back but leaves the
+            // owned vendor.repo dropped; [vendor] restores the proof.
             DemotionCase {
                 label: "the owned vendor.repo is excluded beside an excluded later [bootstrap]",
                 mutate: |s| {
@@ -4127,12 +4244,12 @@ RUN dnf install -y \
                         ));
                 },
                 id: "bootstrap",
-                file: Some("/etc/yum.repos.d/vendor.repo"),
+                repo: Some("vendor"),
             },
             // An included a.repo dnf reads before bootstrap.repo defines
-            // [bootstrap] disabled. Re-including the owned vendor.repo
-            // leaves that copy the one dnf uses, so naming it would not
-            // help, and no other single file restores the proof either.
+            // [bootstrap] disabled, which the toggle refuses as host-disabled.
+            // Re-including [vendor] leaves that copy the one dnf uses, so
+            // no repo is named.
             DemotionCase {
                 label: "the owned vendor.repo is excluded and a.repo shadows [bootstrap] disabled",
                 mutate: |s| {
@@ -4149,13 +4266,13 @@ RUN dnf install -y \
                         ));
                 },
                 id: "bootstrap",
-                file: None,
+                repo: None,
             },
             DemotionCase {
                 label: "the vendor key the package owns is excluded",
                 mutate: |s| exclude_key(s, "RPM-GPG-KEY-VENDOR"),
                 id: "bootstrap",
-                file: Some("/etc/pki/rpm-gpg/RPM-GPG-KEY-VENDOR"),
+                repo: Some("vendor"),
             },
             DemotionCase {
                 label: "the owned vendor key is excluded and a.repo shadows [bootstrap] disabled",
@@ -4172,7 +4289,7 @@ RUN dnf install -y \
                         ));
                 },
                 id: "bootstrap",
-                file: None,
+                repo: None,
             },
         ];
 
@@ -4180,45 +4297,35 @@ RUN dnf install -y \
             label,
             mutate,
             id,
-            file,
+            repo,
         } in cases
         {
             let mut snap = two_repository_snapshot();
             mutate(&mut snap);
 
-            // Following the advice must serve the package: including the
-            // named file alone restores the active install.
-            if let Some(file) = file {
+            // Following the advice must serve the package: re-including
+            // the named repo as refine does restores the active install.
+            if let Some(repo) = repo {
                 let mut followed = snap.clone();
-                let rpm = followed.rpm.as_mut().expect("fixture has an rpm section");
-                for entry in rpm
-                    .repo_files
-                    .iter_mut()
-                    .chain(rpm.gpg_keys.iter_mut())
-                    .filter(|f| f.path == file)
-                {
-                    entry.disposition = FindingKind::included();
-                }
+                reinclude_repo_as_refine_does(&mut followed, repo);
                 let restored = render_containerfile(&followed, None, None);
                 assert!(
                     restored.contains(ACTIVE_INSTALL) && !restored.contains("# FIXME:"),
-                    "{label}: including {file} must serve the package again:\n{restored}"
+                    "{label}: re-including {repo} must serve the package again:\n{restored}"
                 );
             }
 
             let output = render_containerfile(&snap, None, None);
-            // A key has no Configuration Files row to include it from:
-            // refine carries a key with a repo whose gpgkey names it.
-            let expected = match file {
-                Some(key) if key.starts_with(GPG_KEY_DIR) => format!(
-                    "# FIXME: include key {key} by re-including a repo whose gpgkey names \
-                     it, or re-include repo {id}, or upload the RPM; {FIXME_TAIL}"
+            assert_eq!(id, "bootstrap", "the tail names the first serving id");
+            let expected = match repo {
+                Some(repo) => format!(
+                    "# FIXME: re-include repo {repo}, which also re-includes its packages, or \
+                     upload the RPM; {FIXME_TAIL}"
                 ),
-                Some(file) => format!(
-                    "# FIXME: include {file} under Configuration Files, or re-include repo \
-                     {id}, or upload the RPM; {FIXME_TAIL}"
+                None => format!(
+                    "# FIXME: upload the RPM; {FIXME_TAIL}, and re-including no repo in refine \
+                     restores it"
                 ),
-                None => format!("# FIXME: re-include repo {id}, or upload the RPM; {FIXME_TAIL}"),
             };
             assert!(
                 output.contains(&expected),
@@ -4250,8 +4357,8 @@ RUN dnf install -y \
             );
             let after = render_containerfile(&snap, None, None);
             assert!(
-                after.contains("# MANUAL: vendor-release"),
-                "{label}: the demoted package must reach the repo-less block:\n{after}"
+                !after.contains("# MANUAL: vendor-release"),
+                "{label}: the FIXME is the demoted package's only advice:\n{after}"
             );
             assert!(
                 after.contains(&expected),
@@ -4263,8 +4370,8 @@ RUN dnf install -y \
             );
         }
 
-        // A serving id no captured file defines: there is no file to name,
-        // so the advice that names one is dropped rather than invented.
+        // A serving id no captured file defines: the toggle refuses it,
+        // and [vendor] does not restore it, so no repo is named.
         let mut snap = two_repository_snapshot();
         for pkg in snap
             .rpm
@@ -4278,9 +4385,11 @@ RUN dnf install -y \
         }
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains(&format!(
-                "# FIXME: re-include repo mirror, or upload the RPM; {FIXME_TAIL}"
-            )),
+            output.contains(
+                "# FIXME: upload the RPM; vendor-release installs from repo mirror, whose \
+                 definition this export does not carry, and re-including no repo in refine \
+                 restores it"
+            ),
             "an undefined serving id:\n{output}"
         );
         assert!(
@@ -5775,6 +5884,37 @@ RUN dnf install -y \
             !output.contains("COPY tuned/"),
             "the tuned/ promoted root is gone, got:\n{output}"
         );
+
+        // A row refine cannot include is not named as one to include.
+        for (what, disposition, locked) in [
+            (
+                "advisory",
+                FindingKind::advisory(
+                    inspectah_core::types::finding::AdvisoryType::Modernization,
+                    "test",
+                ),
+                false,
+            ),
+            ("locked", FindingKind::excluded(), true),
+        ] {
+            let mut snap = snap.clone();
+            let entry = &mut snap.config.as_mut().expect("config").files[0];
+            entry.disposition = disposition;
+            entry.locked = locked;
+            let output = render_containerfile(&snap, None, None);
+            assert!(
+                output.contains(
+                    "# FIXME: activate a stock profile; the active profile is custom and its \
+                     file /etc/tuned/my-profile/tuned.conf is not carried, and refine cannot \
+                     include its Configuration Files row"
+                ),
+                "{what}:\n{output}"
+            );
+            assert!(
+                !output.contains("under Configuration Files"),
+                "{what}:\n{output}"
+            );
+        }
     }
 
     #[test]

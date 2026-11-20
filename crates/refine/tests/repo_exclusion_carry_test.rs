@@ -357,8 +357,8 @@ fn excluding_a_repo_drops_its_file_and_key_despite_host_disabled_sections() {
                 // definition it installs from, and both surfaces say so.
                 assert!(
                     cf.contains(
-                        "epel-release installs from that repo definition, \
-                         which this export does not carry"
+                        "epel-release installs from repo epel, whose definition \
+                         this export does not carry"
                     ),
                     "{name}: the Containerfile names the loss:\n{cf}"
                 );

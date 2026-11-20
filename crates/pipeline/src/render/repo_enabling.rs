@@ -22,10 +22,15 @@
 //! the state the renderer and the refine view both read:
 //! [`repo_enabling_export`] is the only thing that decides which.
 
+use std::collections::BTreeSet;
+
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
-use inspectah_core::types::repo::{RepoId, RepoSectionDef, dnf_read_order, parse_repo_sections};
-use inspectah_core::types::rpm::{PackageEntry, RepoFile, RpmSection};
+use inspectah_core::types::repo::{
+    RepoId, RepoSectionDef, RepoTier, effective_definition, parse_repo_sections, repo_tier,
+    section_spelling,
+};
+use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
 use super::repoless::InstallRepos;
 
@@ -44,31 +49,11 @@ const REPO_FILE_SUFFIX: &str = ".repo";
 pub(crate) struct ServingLoss {
     /// The serving section the export no longer provides.
     pub id: RepoId,
-    /// The file that would restore it: a captured repo file or key the
-    /// export leaves out whose inclusion, staged as the export would stage
-    /// it, makes [`repo_enabling_export`] answer
-    /// [`RepoEnablingExport::Served`]. `None` when no single file would:
-    /// the advice that names a file is dropped rather than invented.
-    pub file: Option<RestoringFile>,
-}
-
-/// Which capture a [`RestoringFile`] is. The two come back in different
-/// places, so the advice that names one has to know which it names.
-#[derive(Clone, Copy)]
-pub(crate) enum CaptureKind {
-    /// A `.repo` file (`rpm.repo_files`).
-    RepoFile,
-    /// A GPG key (`rpm.gpg_keys`). Refine has no row of its own for a key:
-    /// re-including a repo whose `gpgkey=` names it carries it again.
-    Key,
-}
-
-/// A captured file whose inclusion alone restores a lost proof.
-pub(crate) struct RestoringFile {
-    /// Whether it is a repo file or a key.
-    pub kind: CaptureKind,
-    /// Its path on the source host.
-    pub path: String,
+    /// The repo, spelled as its section is, whose re-inclusion in refine
+    /// serves the package again ([`toggle_restores`]). `None` when no repo
+    /// the refine toggle accepts would: the advice that names one is
+    /// dropped rather than invented.
+    pub repo: Option<String>,
 }
 
 /// The export-time status of one package's repo-enabling proof.
@@ -118,59 +103,64 @@ pub(crate) fn repo_enabling_export(
 }
 
 /// What to name for `pkg`, a package whose proof this export lost
-/// ([`RepoEnablingExport::Lost`]): the first file whose inclusion alone
-/// would serve it again ([`restores`]), with the serving id it restores;
-/// the first serving id and no file otherwise. The candidates, in order:
+/// ([`RepoEnablingExport::Lost`]): its first serving id, and the first
+/// repo whose re-inclusion in refine would serve it again.
 ///
-/// 1. the package's own dropped repo files and keys, in the order its
-///    file ownership lists them ([`dropped_owned_files`]);
-/// 2. every other captured repo file the export leaves out that defines a
-///    serving id, per serving id in `repo_enabling_from` order, each in
-///    dnf's read order ([`left_out_defining`]);
-/// 3. every captured key the image lacks that a captured section defining
-///    a serving id names, in path order ([`left_out_named_keys`]): an
-///    included repo file whose definition names a dropped key loses the
-///    proof as surely as a dropped file does.
+/// **The advice names only a control refine offers.** Refine has no
+/// control for a repo file or a key on its own: an owned, unmodified
+/// `.repo` file has no Configuration Files row, and a row that does exist
+/// does not change the `rpm.repo_files` decision this proof and the
+/// Custom Repositories `COPY` read. What brings a repo file and its keys
+/// back is the repo toggle, which also re-includes the repo's packages.
+/// So the candidates are repos, each judged by doing what the toggle
+/// does ([`toggle_restores`]), in this order:
 ///
-/// An owned file is named only when including it really restores the
-/// proof: a disabled copy of the section in a file dnf reads earlier
-/// still wins after it is back, and while an owned file stays dropped no
-/// other file can restore it. `None` only for a package that is not
-/// repo-enabling or a snapshot with no RPM section, neither of which can
-/// lose a proof.
+/// 1. the serving ids, in `repo_enabling_from` order, spelled as a
+///    captured section spells them;
+/// 2. the sections the package's own repo files define, sorted: a dropped
+///    `vendor.repo` comes back only with a repo it defines.
+///
+/// Each must be a repo refine can toggle ([`toggleable`]). `None` only for
+/// a package that is not repo-enabling or a snapshot with no RPM section,
+/// neither of which can lose a proof.
 ///
 /// Separate from the verdict because answering it re-stages the export
-/// once per candidate file, which only the advice needs.
+/// once per candidate, which only the advice needs.
 pub(crate) fn serving_loss(snap: &InspectionSnapshot, pkg: &PackageEntry) -> Option<ServingLoss> {
     let rpm = snap.rpm.as_ref()?;
     let first_id = pkg.repo_enabling_from.first()?;
-    let owned = dropped_owned_files(rpm, pkg);
-    let others = pkg
-        .repo_enabling_from
+    let spellings: Vec<String> = rpm
+        .repo_files
         .iter()
-        .flat_map(|id| left_out_defining(rpm, id))
-        .map(|f| (CaptureKind::RepoFile, f));
-    let keys = left_out_named_keys(rpm, &pkg.repo_enabling_from)
-        .into_iter()
-        .map(|k| (CaptureKind::Key, k));
-    Some(
-        owned
-            .chain(others)
-            .chain(keys)
-            .find_map(|(kind, f)| {
-                restores(snap, pkg, f).map(|id| ServingLoss {
-                    id,
-                    file: Some(RestoringFile {
-                        kind,
-                        path: f.path.clone(),
-                    }),
-                })
-            })
-            .unwrap_or_else(|| ServingLoss {
-                id: first_id.clone(),
-                file: None,
-            }),
-    )
+        .flat_map(|f| parse_repo_sections(&f.content))
+        .map(|s| s.id.as_str().to_owned())
+        .collect();
+    let serving = pkg.repo_enabling_from.iter().filter_map(|id| {
+        section_spelling(spellings.iter().map(String::as_str), id.as_str()).map(str::to_owned)
+    });
+    let owned_paths: Vec<&str> = rpm
+        .file_ownership
+        .iter()
+        .filter(|entry| entry.package_name == pkg.name)
+        .flat_map(|entry| entry.paths.iter().map(String::as_str))
+        .collect();
+    let owned: BTreeSet<String> = rpm
+        .repo_files
+        .iter()
+        .filter(|f| owned_paths.contains(&f.path.as_str()))
+        .flat_map(|f| parse_repo_sections(&f.content))
+        .map(|s| s.id.as_str().to_owned())
+        .collect();
+    let mut tried: BTreeSet<String> = BTreeSet::new();
+    let repo = serving
+        .chain(owned)
+        .filter(|repo| tried.insert(repo.clone()))
+        .filter(|repo| toggleable(rpm, repo))
+        .find(|repo| toggle_restores(snap, pkg, repo));
+    Some(ServingLoss {
+        id: first_id.clone(),
+        repo,
+    })
 }
 
 /// Whether dnf can install a repo-enabling package from `sec`, the
@@ -182,91 +172,65 @@ fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDef) -> bool 
     sec.enabled && sec.has_source && keys_included(rpm, repos, &sec.gpg_key_paths)
 }
 
-/// The captured `.repo` files the export leaves out that define `id`, in
-/// dnf's read order: the candidates [`serving_loss`] tries after the
-/// package's own files.
-///
-/// Neither the order of `repo_files` nor the first file that merely
-/// defines `id` decides which is named: [`restores`] does.
-fn left_out_defining<'a>(rpm: &'a RpmSection, id: &RepoId) -> Vec<&'a RepoFile> {
-    let mut left_out: Vec<&RepoFile> = rpm
-        .repo_files
-        .iter()
-        .filter(|f| !f.disposition.is_included())
-        .filter(|f| parse_repo_sections(&f.content).iter().any(|s| s.id == *id))
-        .collect();
-    left_out.sort_by(|a, b| {
-        (dnf_read_order(&a.path), &a.content).cmp(&(dnf_read_order(&b.path), &b.content))
-    });
-    left_out
+/// Whether refine's repo toggle accepts `repo`: not a distro repo, and
+/// the definition the source host's dnf uses for it is enabled. The
+/// toggle refuses a host-disabled or undefined repo, so advice naming one
+/// would send the operator to a control that says no.
+fn toggleable(rpm: &RpmSection, repo: &str) -> bool {
+    !matches!(repo_tier(repo), RepoTier::Distro)
+        && effective_definition(
+            rpm.repo_files
+                .iter()
+                .map(|f| (f.path.as_str(), f.content.as_str())),
+            &RepoId::new(repo),
+        )
+        .is_some_and(|def| def.enabled)
 }
 
-/// The captured keys the image lacks ([`RepoFile::is_in_image`]) that a
-/// section defining one of `ids`, in any captured repo file, names with
-/// `gpgkey=`: the candidates [`serving_loss`] tries last. Sorted by path,
-/// then content, so the answer does not depend on the host's file order.
+/// Whether re-including `repo` in refine serves `pkg` again, judged by
+/// [`repo_enabling_export`] on the export re-staged as the toggle leaves
+/// it: every captured repo file defining that exact section included
+/// unless locked, and every key its sections name that the base image
+/// does not ship included.
 ///
-/// Every captured definition counts, not only the one dnf uses now:
-/// [`restores`] decides whether including the key is enough.
-///
-/// [`RepoFile::is_in_image`]: inspectah_core::types::rpm::RepoFile::is_in_image
-fn left_out_named_keys<'a>(rpm: &'a RpmSection, ids: &[RepoId]) -> Vec<&'a RepoFile> {
-    let named: Vec<String> = rpm
-        .repo_files
-        .iter()
-        .flat_map(|f| parse_repo_sections(&f.content))
-        .filter(|s| ids.contains(&s.id))
-        .flat_map(|s| s.gpg_key_paths)
-        .collect();
-    let mut keys: Vec<&RepoFile> = rpm
-        .gpg_keys
-        .iter()
-        .filter(|k| !k.is_in_image())
-        .filter(|k| named.iter().any(|path| k.is_key_named_by(path)))
-        .collect();
-    keys.sort_by(|a, b| (&a.path, &a.content).cmp(&(&b.path, &b.content)));
-    keys
-}
-
-/// The serving id that including `file` alone would make `pkg` installable
-/// from, judged by [`repo_enabling_export`] on the export re-staged with
-/// every repo file and key at that path and content included.
-///
-/// Re-staging, rather than adding the file to the current set, is what
-/// keeps the advice honest: including a file whose definition is
-/// disabled, one an earlier file still shadows, one the stager would
-/// withhold (a config entry at `a.repo/stray` withholds both it and
-/// `a.repo`), or any file while another file the package owns stays
-/// dropped would not recover the proof, and advice naming it would send
-/// the operator in a circle. A config entry at the same path replaces its
-/// content, and a default repo file does not bring the `COPY` on its own.
-fn restores(snap: &InspectionSnapshot, pkg: &PackageEntry, file: &RepoFile) -> Option<RepoId> {
+/// Re-staging, rather than adding files to the current set, is what keeps
+/// the advice honest: a repo whose file is disabled, shadowed by one dnf
+/// reads earlier, or withheld by the stager (a config entry at
+/// `a.repo/stray` withholds both it and `a.repo`), or one that leaves a
+/// file the package owns dropped, would not recover the proof, and advice
+/// naming it would send the operator in a circle. The packages the toggle
+/// also re-includes play no part in the proof.
+fn toggle_restores(snap: &InspectionSnapshot, pkg: &PackageEntry, repo: &str) -> bool {
     let mut proposed = snap.clone();
-    let rpm = proposed.rpm.as_mut()?;
-    for entry in rpm
-        .repo_files
-        .iter_mut()
-        .chain(rpm.gpg_keys.iter_mut())
-        .filter(|r| r.path == file.path && r.content == file.content)
-    {
-        entry.disposition = FindingKind::included();
+    let Some(rpm) = proposed.rpm.as_mut() else {
+        return false;
+    };
+    let mut key_paths: Vec<String> = Vec::new();
+    for file in rpm.repo_files.iter_mut() {
+        let defining: Vec<RepoSectionDef> = parse_repo_sections(&file.content)
+            .into_iter()
+            .filter(|s| s.id.as_str() == repo)
+            .collect();
+        if defining.is_empty() {
+            continue;
+        }
+        key_paths.extend(defining.into_iter().flat_map(|s| s.gpg_key_paths));
+        if !file.locked {
+            file.disposition = FindingKind::included();
+        }
+    }
+    for key in rpm.gpg_keys.iter_mut().filter(|k| {
+        k.shipped_by_base.is_none() && key_paths.iter().any(|path| k.is_key_named_by(path))
+    }) {
+        key.disposition = FindingKind::included();
     }
     let repos = InstallRepos::of(&proposed);
-    let rpm = proposed.rpm.as_ref()?;
-    if !matches!(
-        repo_enabling_export(rpm, &repos, pkg),
-        RepoEnablingExport::Served
-    ) {
-        return None;
-    }
-    pkg.repo_enabling_from
-        .iter()
-        .find(|id| {
-            repos
-                .effective(id)
-                .is_some_and(|sec| serves(rpm, &repos, &sec))
-        })
-        .cloned()
+    proposed.rpm.as_ref().is_some_and(|rpm| {
+        matches!(
+            repo_enabling_export(rpm, &repos, pkg),
+            RepoEnablingExport::Served
+        )
+    })
 }
 
 /// Whether every `gpgkey=file://` path a section names is a key the image
@@ -289,26 +253,6 @@ pub(crate) fn keys_included(rpm: &RpmSection, repos: &InstallRepos, paths: &[Str
             k.is_key_named_by(path) && (k.shipped_by_base.is_some() || repos.copies_key(&k.path))
         })
     })
-}
-
-/// The captured repo files and keys the package provides that this export
-/// has dropped, each with which it is: the files [`serving_loss`] tries
-/// first.
-fn dropped_owned_files<'a>(
-    rpm: &'a RpmSection,
-    pkg: &'a PackageEntry,
-) -> impl Iterator<Item = (CaptureKind, &'a RepoFile)> {
-    rpm.file_ownership
-        .iter()
-        .filter(move |entry| entry.package_name == pkg.name)
-        .flat_map(|entry| entry.paths.iter())
-        .flat_map(move |path| {
-            rpm.repo_files
-                .iter()
-                .map(|f| (CaptureKind::RepoFile, f))
-                .chain(rpm.gpg_keys.iter().map(|k| (CaptureKind::Key, k)))
-                .filter(move |(_, f)| f.path == *path && !f.is_in_image())
-        })
 }
 
 /// The first repo file or key the package provides that this export has

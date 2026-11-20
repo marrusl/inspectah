@@ -177,14 +177,15 @@ RUN dnf install -y \
 
 When a refine change removes the proof, for example by excluding the
 repository file or its key, the package is demoted. The Containerfile has
-no install line for it. A `FIXME` comment takes its place, naming the
-repository to re-include and offering the upload path: upload the RPM
-and it installs as a repo-less package. When including one left-out file
-alone would serve the package again, the comment names it first: a
-`.repo` file to include under Configuration Files, or a key, which
-refine carries again when you re-include a repository whose `gpgkey`
-names it. When no single file would, the comment names only the
-repository. This page does not show the demotion output: the host used
+no install line for it. A `FIXME` comment takes its place, and it is the
+package's only advice. It names the repository to re-include in refine,
+when re-including one would serve the package again, and offers the
+upload path: upload the RPM and it installs as a repo-less package.
+Re-including a repository also re-includes its packages, which the
+comment says. Refine has no control for a `.repo` file or a key on its
+own, so the comment never asks you to include one. When no repository
+refine can re-include would serve the package, the comment offers only
+the upload. This page does not show the demotion output: the host used
 for the examples had no way to reach that state, so the description above
 rests on the source and its tests.
 
