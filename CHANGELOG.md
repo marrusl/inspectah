@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-beta.6] - 2026-11-20
+
 ### Added
 - **The refine Export dialog shows the export's warnings**: when an export has warnings, the dialog stays open as "Downloaded, with warnings" and lists each one, notices as information and anything you asked for that is missing as a warning. Before download, a collapsed notice names not-carried packages that own an enabled unit and links to the Not carried group. Before, an uploaded RPM the export could not verify was dropped without a word.
 - **Refine lists the packages it does not carry and includes one with a click**: the Packages view has a "Not carried" group below the package list, packages that own an enabled unit first. Include on a row installs the package, enables its units again and stops provisioning its `/var` directories, and moves it to the package list, where you can exclude it again. Before, you had to know a package's name to carry it.
@@ -597,7 +599,8 @@ Final release of the Go implementation before the Rust rewrite.
 
 ---
 
-[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.5...HEAD
+[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.6...HEAD
+[0.9.0-beta.6]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.5...v0.9.0-beta.6
 [0.9.0-beta.5]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.4...v0.9.0-beta.5
 [0.9.0-beta.4]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.3...v0.9.0-beta.4
 [0.9.0-beta.3]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.2...v0.9.0-beta.3
