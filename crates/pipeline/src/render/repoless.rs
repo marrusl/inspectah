@@ -889,6 +889,67 @@ mod tests {
     }
 
     #[test]
+    fn a_case_variant_repo_id_routes_to_its_own_spelling() {
+        // dnf keys repos by exact spelling and `--enablerepo` takes one
+        // verbatim: `[ab]` and `[AB]` are two repos, in one file or in two,
+        // and a package from `ab` installs with `--enablerepo=ab`, never
+        // `--enablerepo=AB`. Both are disabled with a source, so either
+        // would route; only the id tells them apart. Each case runs with
+        // the files in both orders.
+        const LOWER: &str = "[ab]\nbaseurl=https://example.invalid/lower\nenabled=0\n";
+        const UPPER: &str = "[AB]\nbaseurl=https://example.invalid/upper\nenabled=0\n";
+        let d = "/etc/yum.repos.d";
+        let same_file = format!("{LOWER}{UPPER}");
+        let layouts: [(&str, Vec<(String, &str)>); 2] = [
+            (
+                "same file",
+                vec![(format!("{d}/a.repo"), same_file.as_str())],
+            ),
+            (
+                // `A.repo` sorts first, so a folded match would take `[AB]`.
+                "cross file",
+                vec![
+                    (format!("{d}/A.repo"), UPPER),
+                    (format!("{d}/b.repo"), LOWER),
+                ],
+            ),
+        ];
+        for (layout, files) in &layouts {
+            for wanted in ["ab", "AB"] {
+                let forward: Vec<RepoFile> = files
+                    .iter()
+                    .map(|(path, content)| repo_file(path, content, false))
+                    .collect();
+                let mut reverse = forward.clone();
+                reverse.reverse();
+                for (order, files) in [("in order", forward), ("reversed", reverse)] {
+                    let snap = snapshot_with(&from_repo(wanted, exact(wanted)), files);
+                    let rpm = snap.rpm.as_ref().expect("an rpm section");
+                    let what = format!("{layout}, {wanted}, {order}");
+                    match route_for(
+                        rpm,
+                        &InstallRepos::of(&snap),
+                        &rpm.packages_added[0],
+                        &VerifiedUploads::new(),
+                    ) {
+                        PackageRoute::DisabledRepo(id) => {
+                            assert_eq!(id.as_str(), wanted, "{what}: routed id")
+                        }
+                        other => panic!("{what}: {other:?}"),
+                    }
+                    let flags: Vec<String> =
+                        super::super::containerfile::render_containerfile(&snap, None, None)
+                            .split_whitespace()
+                            .filter(|w| w.starts_with("--enablerepo="))
+                            .map(str::to_string)
+                            .collect();
+                    assert_eq!(flags, vec![format!("--enablerepo={wanted}")], "{what}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_default_repo_file_or_a_pseudo_repo_never_routes_to_a_disabled_repo() {
         // The Custom Repositories `COPY` carries the whole staged directory
         // before the install, default repo files included, and renders only

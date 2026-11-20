@@ -35,9 +35,13 @@ different things, on purpose, for different questions:
      record how a package was installed, not a repo, so a `.repo` file
      with an `[anaconda]` section does not turn installer provenance into
      a repo the export could enable.
-   - Otherwise **Exact:** the recorded value equals some `.repo` section
-     id, case-insensitively, whether or not that section is enabled,
-     because dnf recorded that exact id.
+   - Otherwise **Exact:** the recorded value names some `.repo` section,
+     whether or not that section is enabled, because dnf recorded that
+     exact id. The section spelled exactly as recorded wins; a case variant
+     stands in only when it is the only one (`section_spelling`), and two
+     or more case variants with no exact spelling are `Ambiguous` among
+     them. dnf ids are case-sensitive, so a recorded `ab` is never
+     rewritten to `AB` because an `[AB]` exists beside `[ab]`.
    - Otherwise, case-insensitive **substring match against `enabled =
      true` sections only**: exactly one hit is `Resolved`; more than one
      is `Ambiguous` (`source_repo` is left as recorded).
@@ -62,9 +66,9 @@ A third, render-side question sits on top of the first:
 the scan left repo-less can install from its own repo with
 `--enablerepo`. It matches `source_repo` against the section ids of the
 `.repo` files the build has when it installs (`InstallRepos`, built
-once per export from `staged_writes`), by case-insensitive equality (the
-`Exact` rule, which is what `normalize_source_repos` already rewrote
-`source_repo` to), and accepts only a section that is disabled, defines a
+once per export from `staged_writes`), by the same exact-first spelling
+rule (`section_spelling`, which is what `normalize_source_repos` already
+rewrote `source_repo` by), returns the id as that section spells it, and accepts only a section that is disabled, defines a
 source, and names no `gpgkey=file://` key the export leaves out
 (`keys_included`, shared with the repo-enabling proof).
 

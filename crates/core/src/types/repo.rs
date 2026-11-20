@@ -171,8 +171,9 @@ pub enum PseudoRepo {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RepoAttribution {
-    /// The recorded value equals a section id on the host (case-insensitive),
-    /// whether or not that section is enabled.
+    /// The recorded value names a section on the host, whether or not that
+    /// section is enabled: the one spelled exactly as recorded, or else the
+    /// one case variant of it ([`section_spelling`]).
     Exact { id: RepoId },
     /// The recorded short name matched exactly one enabled section by
     /// substring.
@@ -197,10 +198,10 @@ pub enum RepoAttribution {
 impl RepoAttribution {
     /// The repo identity as the host originally recorded it.
     ///
-    /// For `Exact`, this returns the matched section's spelling, which may
-    /// differ from the host's recorded value in ASCII case -- the match is
-    /// case-insensitive, and the originally recorded spelling is not
-    /// retained. `Unrecorded` has nothing to report, so this returns `""`.
+    /// For `Exact`, this returns the matched section's spelling, which
+    /// differs from the host's recorded value in ASCII case only when no
+    /// section is spelled as recorded and exactly one case variant is; the
+    /// originally recorded spelling is not retained. `Unrecorded` has nothing to report, so this returns `""`.
     pub fn recorded(&self) -> &str {
         match self {
             RepoAttribution::Exact { id } => id.as_str(),
@@ -350,6 +351,37 @@ pub fn dnf_read_order(path: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Which of the section ids `defined` a recorded or requested `wanted`
+/// names: the one spelled exactly as `wanted`, or, when none is, the one
+/// case variant of it there is. Two or more case variants and no exact
+/// spelling is ambiguous, and names none.
+///
+/// dnf keys repos by their exact spelling, so `[r]` and `[R]` are two
+/// repos and `--enablerepo` takes the one spelled as given. [`RepoId`]'s
+/// folded equality is right for attribution, where a recorded short name
+/// is matched loosely, and wrong for choosing which section that is; this
+/// is the choice. Every place that turns a wanted id into one section asks
+/// it, so they cannot pick different case variants.
+pub fn section_spelling<'a>(
+    defined: impl IntoIterator<Item = &'a str>,
+    wanted: &str,
+) -> Option<&'a str> {
+    let mut folded: Option<&'a str> = None;
+    let mut ambiguous = false;
+    for spelling in defined {
+        if spelling == wanted {
+            return Some(spelling);
+        }
+        if spelling.eq_ignore_ascii_case(wanted) {
+            match folded {
+                Some(seen) if seen != spelling => ambiguous = true,
+                _ => folded = Some(spelling),
+            }
+        }
+    }
+    folded.filter(|_| !ambiguous)
+}
+
 /// The definition of `id` dnf uses, given every `.repo` file it reads as
 /// `(path, content)`.
 ///
@@ -362,6 +394,11 @@ pub fn dnf_read_order(path: &str) -> Vec<&str> {
 /// two files with the same path, which a host cannot have, fall back to
 /// their content so the answer is still the same in any order.
 ///
+/// Ids are case-sensitive to dnf, so the section is the one spelled as
+/// `id` is, in any file, and a case variant only when it is the one case
+/// variant any file defines ([`section_spelling`]). The returned section's
+/// id is that spelling.
+///
 /// Which files to pass is the caller's question, and the whole of it: the
 /// files the host's dnf reads, or the ones an image build will have. The
 /// answer is only as right as that set.
@@ -369,14 +406,19 @@ pub fn effective_definition<'a>(
     files: impl IntoIterator<Item = (&'a str, &'a str)>,
     id: &RepoId,
 ) -> Option<RepoSectionDef> {
-    files
+    let defs: Vec<(Vec<&str>, &str, RepoSectionDef)> = files
         .into_iter()
-        .filter_map(|(path, content)| {
-            let sec = parse_repo_sections(content)
+        .flat_map(|(path, content)| {
+            parse_repo_sections(content)
                 .into_iter()
-                .find(|sec| sec.id == *id)?;
-            Some((dnf_read_order(path), content, sec))
+                .filter(|sec| sec.id == *id)
+                .map(move |sec| (dnf_read_order(path), content, sec))
         })
+        .collect();
+    let spelling =
+        section_spelling(defs.iter().map(|(_, _, sec)| sec.id.as_str()), id.as_str())?.to_owned();
+    defs.into_iter()
+        .filter(|(_, _, sec)| sec.id.as_str() == spelling)
         .min_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)))
         .map(|(_, _, sec)| sec)
 }
@@ -577,6 +619,89 @@ enabled=1
             assert_eq!(r.enabled, case.enabled, "{}: enabled", case.name);
             assert_eq!(r.has_source, case.has_source, "{}: has_source", case.name);
             assert_eq!(r.gpg_key_paths, case.keys, "{}: gpg_key_paths", case.name);
+        }
+    }
+
+    #[test]
+    fn effective_definition_prefers_the_exact_spelling_of_a_case_variant_id() {
+        // dnf keys repos by exact spelling: `[ab]` and `[AB]` are two repos,
+        // in one file or in two. The wanted spelling picks its own section;
+        // a case variant stands in only when it is the only one, and two
+        // case variants with no exact spelling name none. Every case runs
+        // with the files in both orders.
+        const LOWER: &str = "[ab]\nbaseurl=https://example.invalid/lower\nenabled=0\n";
+        const UPPER: &str = "[AB]\nbaseurl=https://example.invalid/upper\nenabled=1\n";
+        const MIXED: &str = "[AB]\nenabled=0\n";
+        // `(what, files as (path, content), wanted, expected id and enabled)`.
+        type Case<'a> = (
+            &'a str,
+            &'a [(&'a str, &'a str)],
+            &'a str,
+            Option<(&'a str, bool)>,
+        );
+        const BOTH: &str = "[ab]\nbaseurl=https://example.invalid/lower\nenabled=0\n\
+                            [AB]\nbaseurl=https://example.invalid/upper\nenabled=1\n";
+        let same_file: &[(&str, &str)] = &[("/etc/yum.repos.d/a.repo", BOTH)];
+        let cases: &[Case] = &[
+            ("same file, wanted ab", same_file, "ab", Some(("ab", false))),
+            ("same file, wanted AB", same_file, "AB", Some(("AB", true))),
+            ("same file, wanted Ab: two variants", same_file, "Ab", None),
+            (
+                // `A.repo` sorts before `b.repo`, so a folded match that
+                // ignored the spelling would take `[AB]` for `ab`.
+                "cross file, wanted ab",
+                &[
+                    ("/etc/yum.repos.d/A.repo", UPPER),
+                    ("/etc/yum.repos.d/b.repo", LOWER),
+                ],
+                "ab",
+                Some(("ab", false)),
+            ),
+            (
+                "cross file, wanted AB",
+                &[
+                    ("/etc/yum.repos.d/A.repo", UPPER),
+                    ("/etc/yum.repos.d/b.repo", LOWER),
+                ],
+                "AB",
+                Some(("AB", true)),
+            ),
+            (
+                "cross file, wanted Ab: two variants",
+                &[
+                    ("/etc/yum.repos.d/A.repo", UPPER),
+                    ("/etc/yum.repos.d/b.repo", LOWER),
+                ],
+                "Ab",
+                None,
+            ),
+            (
+                "one case variant stands in",
+                &[("/etc/yum.repos.d/b.repo", UPPER)],
+                "ab",
+                Some(("AB", true)),
+            ),
+            (
+                "the one variant, in two files: dnf's first file",
+                &[
+                    ("/etc/yum.repos.d/b.repo", MIXED),
+                    ("/etc/yum.repos.d/a.repo", UPPER),
+                ],
+                "ab",
+                Some(("AB", true)),
+            ),
+        ];
+        for (what, files, wanted, expected) in cases {
+            let mut reversed = files.to_vec();
+            reversed.reverse();
+            for (order, set) in [("in order", files.to_vec()), ("reversed", reversed)] {
+                let got = effective_definition(set, &RepoId::new(*wanted));
+                assert_eq!(
+                    got.as_ref().map(|sec| (sec.id.as_str(), sec.enabled)),
+                    *expected,
+                    "{what}, {order}"
+                );
+            }
         }
     }
 }

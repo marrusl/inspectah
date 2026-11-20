@@ -10,7 +10,7 @@
 
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::repo::{
-    PseudoRepo, RepoAttribution, RepoId, RepoSectionDef, parse_repo_sections,
+    PseudoRepo, RepoAttribution, RepoId, RepoSectionDef, parse_repo_sections, section_spelling,
 };
 use inspectah_core::types::rpm::{PackageEntry, RepoFile};
 use std::collections::{HashMap, HashSet};
@@ -177,9 +177,11 @@ fn try_rpm_source_repo(
 ///    `Pseudo`, whatever the host's sections are called: they record how a
 ///    package was installed, not a repo, and a `.repo` section spelled the
 ///    same does not make one.
-/// 2. Otherwise, exact case-insensitive match against any section, enabled
-///    or not (`Exact`) -- dnf recorded that id, so the package keeps the
-///    attribution even if the section is now disabled.
+/// 2. Otherwise, a section dnf recorded, enabled or not (`Exact`): the one
+///    spelled exactly as recorded, or else the one case variant of it --
+///    dnf recorded that id, so the package keeps the attribution even if
+///    the section is now disabled. Two or more case variants and no exact
+///    spelling is `Ambiguous` among them.
 /// 3. Otherwise, case-insensitive substring match against `enabled = true`
 ///    sections only: exactly one match is `Resolved`; more than one is
 ///    `Ambiguous` and `source_repo` is left as recorded.
@@ -212,21 +214,30 @@ fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAt
         };
     }
 
-    // `.min_by` over the *raw* spelling (`as_str`), not `RepoId`'s own
-    // `Ord`: that `Ord` folds ASCII case to stay coherent with `Eq`
-    // (Review Focus 1), which means every section surviving the filter
-    // below compares `Equal` to every other -- `min_by` on the folded
-    // `Ord` degenerates to `.find()` and leaves the choice depending on
-    // `read_dir` order. Comparing raw spelling instead gives a real total
-    // order: ties occur only when the spelling is byte-identical, where
-    // either choice writes the same value to `source_repo` anyway.
-    if let Some(section) = sections
-        .iter()
-        .filter(|s| s.id == RepoId::new(recorded))
-        .min_by(|a, b| a.id.as_str().cmp(b.id.as_str()))
-    {
+    // The section dnf recorded: its exact spelling, or the one case
+    // variant there is ([`section_spelling`]). dnf ids are case-sensitive,
+    // so a recorded `r` is never rewritten to an `[R]` beside an `[r]`.
+    // Two or more case variants and no exact spelling is ambiguous among
+    // them, and `source_repo` is left as recorded.
+    let spellings = || {
+        sections
+            .iter()
+            .map(|s| s.id.as_str())
+            .filter(|id| id.eq_ignore_ascii_case(recorded))
+    };
+    if let Some(spelling) = section_spelling(spellings(), recorded) {
         return RepoAttribution::Exact {
-            id: section.id.clone(),
+            id: RepoId::new(spelling),
+        };
+    }
+    if spellings().next().is_some() {
+        // Sorted and deduplicated by raw spelling, not `RepoId`'s folded
+        // `Ord`, which calls every case variant equal: this list
+        // serializes straight into a byte-pinned contract snapshot.
+        let variants: std::collections::BTreeSet<&str> = spellings().collect();
+        return RepoAttribution::Ambiguous {
+            recorded: recorded.to_string(),
+            candidates: variants.into_iter().map(RepoId::new).collect(),
         };
     }
 
@@ -678,6 +689,84 @@ Repository  : baseos
             assert!(
                 matches!(&pkgs[0].repo_attribution, RepoAttribution::Exact { id } if id == &RepoId::new("epel"))
             );
+        }
+    }
+
+    #[test]
+    fn normalization_keeps_the_recorded_spelling_of_a_case_variant_id() {
+        // dnf ids are case-sensitive: `[ab]` and `[AB]` are two repos, in one
+        // file or in two, and a package dnf recorded from `ab` came from
+        // `[ab]`. A lone case variant stands in for the recorded spelling;
+        // two with no exact spelling are ambiguous. Every case runs with
+        // the files in both orders, and asserts the raw spelling, since
+        // `RepoId`'s own equality folds case.
+        let lower = "[ab]\nbaseurl=https://example.invalid/lower\nenabled=0\n";
+        let upper = "[AB]\nbaseurl=https://example.invalid/upper\nenabled=1\n";
+        let same_file = format!("{lower}{upper}");
+        // `(what, file contents, recorded, source_repo after, Exact id or
+        // the Ambiguous candidates)`.
+        type Case<'a> = (
+            &'a str,
+            Vec<&'a str>,
+            &'a str,
+            &'a str,
+            Result<&'a str, Vec<&'a str>>,
+        );
+        let cases: Vec<Case> = vec![
+            (
+                "same file, recorded ab",
+                vec![&same_file],
+                "ab",
+                "ab",
+                Ok("ab"),
+            ),
+            (
+                "same file, recorded AB",
+                vec![&same_file],
+                "AB",
+                "AB",
+                Ok("AB"),
+            ),
+            (
+                "cross file, recorded ab",
+                vec![upper, lower],
+                "ab",
+                "ab",
+                Ok("ab"),
+            ),
+            (
+                "cross file, recorded AB",
+                vec![upper, lower],
+                "AB",
+                "AB",
+                Ok("AB"),
+            ),
+            ("one case variant", vec![upper], "ab", "AB", Ok("AB")),
+            (
+                "two case variants, neither recorded",
+                vec![&same_file],
+                "Ab",
+                "Ab",
+                Err(vec!["AB", "ab"]),
+            ),
+        ];
+        for (what, contents, recorded, after, attribution) in cases {
+            let files: Vec<RepoFile> = contents.iter().map(|c| repo_file(c)).collect();
+            let mut reversed = files.clone();
+            reversed.reverse();
+            for (order, set) in [("in order", files), ("reversed", reversed)] {
+                let mut pkgs = vec![pkg_with_repo("tool", recorded)];
+                normalize_source_repos(&mut pkgs, &set);
+                assert_eq!(pkgs[0].source_repo, after, "{what}, {order}: source_repo");
+                let got = match &pkgs[0].repo_attribution {
+                    RepoAttribution::Exact { id } => Ok(id.as_str()),
+                    RepoAttribution::Ambiguous { candidates, .. } => {
+                        Err(candidates.iter().map(RepoId::as_str).collect())
+                    }
+                    other => panic!("{what}, {order}: {other:?}"),
+                };
+                assert_eq!(got, attribution, "{what}, {order}: attribution");
+            }
         }
     }
 
