@@ -467,11 +467,11 @@ fn format_validation_errors(errors: &[AggregateValidationError]) -> anyhow::Erro
                 scanned_at: Some(ts),
             } => {
                 format!(
-                    "the same scan appears more than once: a snapshot with no hostname, scanned at {ts}"
+                    "the same snapshot appears more than once: a snapshot with no hostname, scanned at {ts}, is given twice with identical content"
                 )
             }
             AggregateValidationError::DuplicateUnnamedScan { scanned_at: None } => {
-                "more than one snapshot has neither a hostname nor a scan timestamp, so they cannot be told apart".to_string()
+                "the same snapshot appears more than once: a snapshot with no hostname and no scan timestamp is given twice with identical content".to_string()
             }
             AggregateValidationError::ArchitectureMismatch { architectures } => {
                 format!("architecture mismatch: {}", architectures.join(", "))

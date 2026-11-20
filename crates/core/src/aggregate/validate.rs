@@ -17,9 +17,9 @@ pub enum AggregateValidationError {
     DuplicateHostname {
         hostname: String,
     },
-    /// Two snapshots with no hostname and the same scan timestamp: the same
-    /// scan given twice. `None` when neither recorded a timestamp, so
-    /// nothing tells them apart.
+    /// Two snapshots with no hostname and identical content: the same
+    /// snapshot given twice. `scanned_at` is their scan timestamp, `None`
+    /// when they recorded none.
     DuplicateUnnamedScan {
         scanned_at: Option<String>,
     },
@@ -113,7 +113,7 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
                     HostIdentity::Named(hostname) => {
                         AggregateValidationError::DuplicateHostname { hostname }
                     }
-                    HostIdentity::Unnamed { scanned_at } => {
+                    HostIdentity::Unnamed { scanned_at, .. } => {
                         AggregateValidationError::DuplicateUnnamedScan { scanned_at }
                     }
                 });
@@ -155,7 +155,7 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
     for snap in snapshots {
         if is_empty_snapshot(snap) {
             result.errors.push(AggregateValidationError::EmptySnapshot {
-                hostname: HostIdentity::of(snap).label(),
+                hostname: HostIdentity::of(snap).to_string(),
             });
         }
     }
@@ -245,42 +245,94 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
 /// one hostname are the same host scanned twice, or two hosts that cannot
 /// be told apart, and either way a duplicate. A snapshot with no hostname
 /// carries no host identity at all (the scan never records the
-/// machine-id), so it is identified by its scan: its collection
-/// timestamp. Two unnamed snapshots are a duplicate only when they are
-/// the same scan. The variants never compare equal to each other, so an
-/// unnamed snapshot cannot collide with a named host, and the derived
-/// order puts named hosts first, by name, then unnamed ones by scan time.
+/// machine-id), so it is identified by its content: a digest of the whole
+/// snapshot. Two unnamed snapshots are a duplicate only when their content
+/// is identical, which is the same snapshot given twice. A timestamp is
+/// not an identity: independent hosts can record the same one.
+///
+/// The variants never compare equal to each other, and the derived order
+/// puts named hosts first, by name, then unnamed ones by scan time and,
+/// where scan times tie, by digest, so the order never depends on the
+/// order the snapshots were given in.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HostIdentity {
     /// The snapshot's `meta["hostname"]`.
     Named(String),
-    /// No hostname; the snapshot's `meta["timestamp"]`, if it has one.
-    Unnamed { scanned_at: Option<String> },
+    /// No hostname.
+    Unnamed {
+        /// The snapshot's `meta["timestamp"]`, if it has one.
+        scanned_at: Option<String>,
+        /// SHA-256 of the snapshot's canonical JSON, in hex.
+        content_digest: String,
+    },
 }
 
 impl HostIdentity {
-    /// The identity a snapshot's metadata gives it.
+    /// The identity a snapshot's metadata, or failing that its content,
+    /// gives it.
     pub fn of(snap: &InspectionSnapshot) -> Self {
         match extract_meta_string(snap, "hostname").filter(|h| !h.trim().is_empty()) {
             Some(hostname) => Self::Named(hostname),
             None => Self::Unnamed {
                 scanned_at: extract_meta_string(snap, "timestamp"),
+                content_digest: content_digest(snap),
             },
         }
     }
+}
 
-    /// The host's name in the aggregate's host list. An unnamed host's
-    /// label is in angle brackets with a space, which no hostname can
-    /// contain, so it never reads as, or collides with, a real name.
-    pub fn label(&self) -> String {
+/// How a message names the host: its hostname, or for an unnamed host
+/// `<unnamed, scanned <time>>`. Not unique among unnamed hosts; the
+/// aggregate's host list uses [`host_labels`].
+impl std::fmt::Display for HostIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Named(hostname) => hostname.clone(),
+            Self::Named(hostname) => f.write_str(hostname),
             Self::Unnamed {
                 scanned_at: Some(ts),
-            } => format!("<unnamed, scanned {ts}>"),
-            Self::Unnamed { scanned_at: None } => "<unnamed>".to_string(),
+                ..
+            } => write!(f, "<unnamed, scanned {ts}>"),
+            Self::Unnamed {
+                scanned_at: None, ..
+            } => f.write_str("<unnamed>"),
         }
     }
+}
+
+/// The aggregate's host labels, one per identity, for identities already
+/// in canonical order.
+///
+/// A named host is its hostname. Unnamed hosts are numbered in that order,
+/// `<unnamed N, scanned <time>>` or `<unnamed N>`, so two unnamed hosts
+/// never share a label, even when their timestamps tie, and the number
+/// sits before the timestamp, where no timestamp text can reach it.
+pub fn host_labels(identities: &[HostIdentity]) -> Vec<String> {
+    let mut unnamed = 0;
+    identities
+        .iter()
+        .map(|identity| match identity {
+            HostIdentity::Named(hostname) => hostname.clone(),
+            HostIdentity::Unnamed { scanned_at, .. } => {
+                unnamed += 1;
+                match scanned_at {
+                    Some(ts) => format!("<unnamed {unnamed}, scanned {ts}>"),
+                    None => format!("<unnamed {unnamed}>"),
+                }
+            }
+        })
+        .collect()
+}
+
+/// SHA-256 of the snapshot's canonical JSON. The snapshot goes through
+/// `serde_json::Value`, whose objects keep their keys sorted, so two
+/// snapshots equal field for field get one digest whatever order their
+/// hash maps iterate in.
+fn content_digest(snap: &InspectionSnapshot) -> String {
+    use sha2::{Digest, Sha256};
+    let canonical = serde_json::to_value(snap)
+        .and_then(|value| serde_json::to_vec(&value))
+        .expect("an InspectionSnapshot serializes to JSON, as every snapshot write relies on");
+    format!("{:x}", Sha256::digest(&canonical))
 }
 
 /// Extract a string value from the snapshot's meta HashMap.
@@ -346,41 +398,33 @@ mod tests {
     use crate::types::FindingKind;
 
     #[test]
-    fn test_host_identity_and_label() {
-        // (case, hostname, timestamp, expected identity, expected label)
-        type Case<'a> = (
-            &'a str,
-            Option<&'a str>,
-            Option<&'a str>,
-            HostIdentity,
-            &'a str,
-        );
+    fn test_host_identity_and_display() {
+        // (case, hostname, timestamp, named?, expected display)
+        type Case<'a> = (&'a str, Option<&'a str>, Option<&'a str>, bool, &'a str);
         let cases: &[Case] = &[
             (
                 "named",
                 Some("web-01"),
                 Some("2026-11-19T10:00:00+00:00"),
-                HostIdentity::Named("web-01".into()),
+                true,
                 "web-01",
             ),
             (
                 "unnamed with a timestamp",
                 None,
                 Some("2026-11-19T10:00:00+00:00"),
-                HostIdentity::Unnamed {
-                    scanned_at: Some("2026-11-19T10:00:00+00:00".into()),
-                },
+                false,
                 "<unnamed, scanned 2026-11-19T10:00:00+00:00>",
             ),
             (
                 "empty hostname is unnamed",
                 Some(" "),
                 None,
-                HostIdentity::Unnamed { scanned_at: None },
+                false,
                 "<unnamed>",
             ),
         ];
-        for (case, hostname, timestamp, identity, label) in cases {
+        for (case, hostname, timestamp, named, display) in cases {
             let mut snap = InspectionSnapshot::new();
             if let Some(h) = hostname {
                 snap.meta.insert("hostname".into(), serde_json::json!(h));
@@ -389,9 +433,50 @@ mod tests {
                 snap.meta.insert("timestamp".into(), serde_json::json!(ts));
             }
             let actual = HostIdentity::of(&snap);
-            assert_eq!(&actual, identity, "case: {case}");
-            assert_eq!(actual.label(), *label, "case: {case}");
+            match (&actual, named) {
+                (HostIdentity::Named(h), true) => assert_eq!(Some(h.as_str()), *hostname),
+                (
+                    HostIdentity::Unnamed {
+                        scanned_at,
+                        content_digest,
+                    },
+                    false,
+                ) => {
+                    assert_eq!(scanned_at.as_deref(), *timestamp, "case: {case}");
+                    assert_eq!(content_digest.len(), 64, "case: {case}: SHA-256 hex");
+                }
+                _ => panic!("case: {case}: unexpected identity {actual:?}"),
+            }
+            assert_eq!(actual.to_string(), *display, "case: {case}");
         }
+    }
+
+    /// The digest is over content, not over hash-map iteration order: two
+    /// snapshots built with their meta keys inserted in opposite orders
+    /// digest equally, and any change to content changes the digest.
+    #[test]
+    fn test_content_digest_is_canonical() {
+        let keys = [
+            "timestamp",
+            "inspectah_version",
+            "hostname_source",
+            "a",
+            "b",
+            "c",
+        ];
+        let mut forward = InspectionSnapshot::new();
+        for k in keys {
+            forward.meta.insert(k.into(), serde_json::json!(k));
+        }
+        let mut reverse = InspectionSnapshot::new();
+        for k in keys.iter().rev() {
+            reverse.meta.insert((*k).into(), serde_json::json!(k));
+        }
+        assert_eq!(content_digest(&forward), content_digest(&reverse));
+        reverse
+            .meta
+            .insert("a".into(), serde_json::json!("changed"));
+        assert_ne!(content_digest(&forward), content_digest(&reverse));
     }
 
     #[test]

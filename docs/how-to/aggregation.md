@@ -58,7 +58,7 @@ hosts.
   the one `hostname` prints. `aggregate` refuses two scans that share a
   hostname with `duplicate hostname: <name>`. A host with no name at all
   (its transient name is `localhost`) still aggregates, listed as
-  `<unnamed, scanned <time>>`. To give it a readable name, run
+  `<unnamed N, scanned <time>>`. To give it a readable name, run
   `hostnamectl set-hostname` before you scan.
 - The same OS major version on every host. `aggregate` refuses a mix, for
   example RHEL 9 and RHEL 10, with `OS major version mismatch`.

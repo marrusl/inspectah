@@ -315,10 +315,12 @@ transient name from `/proc/sys/kernel/hostname`. It records which file
 supplied the name in `meta["hostname_source"]`, written whenever
 `meta["hostname"]` is. A kernel name of `(none)`, `localhost` or
 `localhost.localdomain` counts as no name, so a host that nothing named
-still carries no hostname. `aggregate` identifies such a snapshot by its
-scan timestamp (`HostIdentity::Unnamed` in `aggregate/validate.rs`), lists
-it as `<unnamed, scanned <time>>` after the named hosts, and refuses two
-only when they are the same scan.
+still carries no hostname. `aggregate` identifies such a snapshot by a
+SHA-256 digest of its content (`HostIdentity::Unnamed` in
+`aggregate/validate.rs`), never by its timestamp, which independent hosts
+can share. It lists unnamed hosts after the named ones, ordered by scan
+time and then digest, numbered as `<unnamed N, scanned <time>>`, and
+refuses two only when their content is identical.
 
 Fixtures all set a static hostname, so the fallback only appears on real
 hardware. On a real-host run, check `hostname_source` in the snapshot

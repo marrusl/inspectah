@@ -15,7 +15,7 @@ use self::merge::{
     merge_selinux_sections, merge_service_sections, merge_storage_sections,
     merge_unmanaged_file_sections, merge_usersgroups_sections,
 };
-use self::validate::{AggregateValidationError, AggregateWarning, HostIdentity};
+use self::validate::{AggregateValidationError, AggregateWarning, HostIdentity, host_labels};
 
 /// Classify an aggregate prevalence into a zone based on its distribution across hosts.
 ///
@@ -52,18 +52,20 @@ pub fn merge_snapshots(
     let total = snapshots.len();
 
     // CANONICAL HOST ORDERING: sort snapshots by host identity FIRST
-    // (named hosts by hostname, then unnamed ones by scan time), then
-    // derive the hostnames vec. All downstream code uses index into
-    // this sorted vec as host_idx. This is the SINGLE source of truth
-    // for host ordering. Validation has refused duplicate identities,
-    // so every label is distinct.
+    // (named hosts by hostname, then unnamed ones by scan time and
+    // content digest), then derive the hostnames vec. All downstream code
+    // uses index into this sorted vec as host_idx. This is the SINGLE
+    // source of truth for host ordering. Validation has refused duplicate
+    // identities, and host_labels numbers the unnamed ones, so every
+    // label is distinct.
     let mut indexed: Vec<(HostIdentity, InspectionSnapshot)> = snapshots
         .into_iter()
         .map(|s| (HostIdentity::of(&s), s))
         .collect();
     indexed.sort_by(|(a, _), (b, _)| a.cmp(b));
-    let hostnames: Vec<String> = indexed.iter().map(|(h, _)| h.label()).collect();
-    let sorted_snapshots: Vec<InspectionSnapshot> = indexed.into_iter().map(|(_, s)| s).collect();
+    let (identities, sorted_snapshots): (Vec<HostIdentity>, Vec<InspectionSnapshot>) =
+        indexed.into_iter().unzip();
+    let hostnames = host_labels(&identities);
 
     let section_host_counts = compute_section_host_counts(&sorted_snapshots);
 
@@ -733,11 +735,86 @@ mod tests {
             vec![
                 "web-01",
                 "web-02",
-                "<unnamed, scanned 2026-11-19T10:00:00+00:00>",
-                "<unnamed, scanned 2026-11-19T10:05:00+00:00>",
+                "<unnamed 1, scanned 2026-11-19T10:00:00+00:00>",
+                "<unnamed 2, scanned 2026-11-19T10:05:00+00:00>",
             ],
         );
         assert_eq!(meta.host_count, 4);
+    }
+
+    /// An unnamed snapshot with the given packages and scan timestamp.
+    fn unnamed_with_packages(ts: &str, packages: &[&str]) -> InspectionSnapshot {
+        let mut s = valid_snap("");
+        s.meta.remove("hostname");
+        s.meta.insert("timestamp".into(), serde_json::json!(ts));
+        s.rpm = Some(crate::types::rpm::RpmSection {
+            packages_added: packages
+                .iter()
+                .map(|name| crate::types::rpm::PackageEntry {
+                    name: (*name).into(),
+                    arch: "x86_64".into(),
+                    disposition: crate::types::FindingKind::included(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        s
+    }
+
+    /// The hosts and prevalence the merge recorded for one package.
+    fn package_hosts(merged: &InspectionSnapshot, name: &str) -> (Vec<String>, i32, i32) {
+        let pkg = merged
+            .rpm
+            .as_ref()
+            .expect("rpm section")
+            .packages_added
+            .iter()
+            .find(|p| p.name == name)
+            .unwrap_or_else(|| panic!("package {name} in the merge"));
+        let agg = pkg.aggregate.as_ref().expect("aggregate prevalence");
+        (agg.hosts.clone(), agg.count, agg.total)
+    }
+
+    /// Two unnamed hosts scanned at the same instant are two hosts, with
+    /// distinct labels, and the merge does not depend on input order: the
+    /// same content gets the same label, and a host-specific package is
+    /// attributed to it, whichever way round the inputs come.
+    #[test]
+    fn test_merge_unnamed_hosts_with_tied_timestamps() {
+        const T: &str = "2026-11-19T10:00:00+00:00";
+        let a = || unnamed_with_packages(T, &["bash", "httpd"]);
+        let b = || unnamed_with_packages(T, &["bash", "nginx"]);
+
+        let mut results = Vec::new();
+        for inputs in [vec![a(), b()], vec![b(), a()]] {
+            let (merged, _) = merge_snapshots(inputs, None, None).expect("merge should succeed");
+            let hostnames = merged
+                .aggregate_meta
+                .as_ref()
+                .expect("meta")
+                .hostnames
+                .clone();
+            assert_eq!(
+                hostnames,
+                vec![
+                    format!("<unnamed 1, scanned {T}>"),
+                    format!("<unnamed 2, scanned {T}>")
+                ],
+            );
+            let (bash_hosts, bash_count, bash_total) = package_hosts(&merged, "bash");
+            assert_eq!((bash_count, bash_total), (2, 2), "bash is on both hosts");
+            assert_eq!(bash_hosts, hostnames);
+            let (httpd_hosts, httpd_count, _) = package_hosts(&merged, "httpd");
+            let (nginx_hosts, nginx_count, _) = package_hosts(&merged, "nginx");
+            assert_eq!((httpd_count, nginx_count), (1, 1));
+            assert_ne!(httpd_hosts, nginx_hosts);
+            results.push((httpd_hosts, nginx_hosts));
+        }
+        assert_eq!(
+            results[0], results[1],
+            "attribution follows content, not input order"
+        );
     }
 
     #[test]

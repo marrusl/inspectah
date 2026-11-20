@@ -456,9 +456,10 @@ fn test_is_ok_with_only_warnings() {
     assert!(!result.warnings.is_empty(), "should have warnings");
 }
 
-/// A snapshot that recorded no hostname is identified by its scan, not by
-/// a shared placeholder name: several unnamed hosts aggregate, while the
-/// same scan twice, or the same hostname twice, is still a duplicate.
+/// A snapshot that recorded no hostname is identified by its content, not
+/// by a shared placeholder name or by its timestamp: several unnamed hosts
+/// aggregate, even when their timestamps tie, while the same snapshot
+/// twice, or the same hostname twice, is still a duplicate.
 #[test]
 fn test_unnamed_snapshot_identity() {
     /// An unnamed snapshot: no hostname, optionally a scan timestamp.
@@ -479,6 +480,18 @@ fn test_unnamed_snapshot_identity() {
             "timestamp".to_string(),
             serde_json::Value::String(scanned_at.to_string()),
         );
+        snap
+    }
+    /// The snapshot with one more package, so its content differs.
+    fn with_package(mut snap: InspectionSnapshot, name: &str) -> InspectionSnapshot {
+        let rpm = snap.rpm.get_or_insert_with(Default::default);
+        rpm.packages_added
+            .push(inspectah_core::types::rpm::PackageEntry {
+                name: name.into(),
+                arch: "x86_64".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            });
         snap
     }
     const T1: &str = "2026-11-19T10:00:00.000000001+00:00";
@@ -502,14 +515,24 @@ fn test_unnamed_snapshot_identity() {
             vec![],
         ),
         (
-            "the same unnamed scan twice",
+            "two unnamed hosts with different content and one timestamp",
+            vec![unnamed(Some(T1)), with_package(unnamed(Some(T1)), "httpd")],
+            vec![],
+        ),
+        (
+            "two unnamed hosts with different content and no timestamp",
+            vec![unnamed(None), with_package(unnamed(None), "httpd")],
+            vec![],
+        ),
+        (
+            "the same unnamed snapshot twice",
             vec![unnamed(Some(T1)), unnamed(Some(T1)), unnamed(Some(T2))],
             vec![AggregateValidationError::DuplicateUnnamedScan {
                 scanned_at: Some(T1.to_string()),
             }],
         ),
         (
-            "two unnamed snapshots with no timestamp",
+            "the same unnamed snapshot twice, with no timestamp",
             vec![unnamed(None), unnamed(None)],
             vec![AggregateValidationError::DuplicateUnnamedScan { scanned_at: None }],
         ),
