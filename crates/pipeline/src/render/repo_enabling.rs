@@ -23,8 +23,10 @@
 //! [`repo_enabling_export`] is the only thing that decides which.
 
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::repo::{RepoId, parse_repo_sections};
-use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+use inspectah_core::types::repo::{RepoId, RepoSectionDef, dnf_read_order, parse_repo_sections};
+use inspectah_core::types::rpm::{PackageEntry, RepoFile, RpmSection};
+
+use super::repoless::InstallRepos;
 
 /// Where a `.repo` file lives.
 const YUM_REPOS_DIR: &str = "/etc/yum.repos.d/";
@@ -41,9 +43,10 @@ const REPO_FILE_SUFFIX: &str = ".repo";
 pub(crate) struct ServingLoss {
     /// The serving section the export no longer provides.
     pub id: RepoId,
-    /// The `.repo` file that would restore it. `None` when the export
-    /// captured no file defining any serving section at all: there is then
-    /// nothing to re-include, and the advice that names a file is dropped
+    /// The `.repo` file that would restore it: a captured file the export
+    /// leaves out whose re-inclusion makes dnf's definition of `id` serve
+    /// the package again, or the package's own dropped file. `None` when
+    /// no single file would: the advice that names a file is dropped
     /// rather than invented.
     pub file: Option<String>,
 }
@@ -62,24 +65,33 @@ pub(crate) enum RepoEnablingExport {
 
 /// Decide whether `pkg`'s repo-enabling proof survives this export.
 ///
-/// A serving section survives when its `.repo` file is *carried* (included
-/// in `repo_files`), the section is *enabled* in the content that file
-/// carries, and it is *keyed* (every `gpgkey=file://` path it names is an
-/// included `gpg_keys` entry). The files and keys the package itself owns
-/// are checked too: a dropped `epel.repo` leaves nothing to install from
-/// even when another file still defines the serving section.
-pub(crate) fn repo_enabling_export(rpm: &RpmSection, pkg: &PackageEntry) -> RepoEnablingExport {
+/// A serving id survives when the definition dnf uses for it among the
+/// repo files the build has when it installs ([`InstallRepos::effective`]:
+/// the first file in dnf's read order, with the content the export
+/// stages) is *enabled* and *keyed* (every `gpgkey=file://` path it names
+/// is a key the image has, [`keys_included`]). Another file defining the
+/// same id does not count: dnf drops it as "listed more than once". The
+/// files and keys the package itself owns are checked too: a dropped
+/// `epel.repo` leaves nothing to install from even when another file
+/// still defines the serving section.
+pub(crate) fn repo_enabling_export(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+    pkg: &PackageEntry,
+) -> RepoEnablingExport {
     let Some(first_id) = pkg.repo_enabling_from.first() else {
         return RepoEnablingExport::NotEnabling;
     };
 
-    // Prefer an id the export has a definition for, so the advice points
-    // at a file that exists; fall back to the first id when none does.
-    let (named_id, named_file) = pkg
+    // The advice names a serving id and, when one exists, a file whose
+    // re-inclusion would serve the package again; the first id otherwise.
+    let recovery = pkg
         .repo_enabling_from
         .iter()
-        .find_map(|id| defining_file(rpm, id).map(|f| (id.clone(), Some(f.to_string()))))
-        .unwrap_or_else(|| (first_id.clone(), None));
+        .find_map(|id| restoring_file(rpm, repos, id).map(|f| (id.clone(), f)));
+    let named_id = recovery
+        .as_ref()
+        .map_or_else(|| first_id.clone(), |(id, _)| id.clone());
 
     if let Some(dropped) = dropped_owned_path(rpm, pkg) {
         return RepoEnablingExport::Lost(ServingLoss {
@@ -91,37 +103,50 @@ pub(crate) fn repo_enabling_export(rpm: &RpmSection, pkg: &PackageEntry) -> Repo
     if pkg
         .repo_enabling_from
         .iter()
-        .any(|id| section_survives(rpm, id))
+        .any(|id| repos.effective(id).is_some_and(|sec| serves(rpm, &sec)))
     {
         RepoEnablingExport::Served
     } else {
         RepoEnablingExport::Lost(ServingLoss {
             id: named_id,
-            file: named_file,
+            file: recovery.map(|(_, f)| f.to_string()),
         })
     }
 }
 
-/// The path of the first captured `.repo` file defining `id`, whether or
-/// not the export is carrying it.
-fn defining_file<'a>(rpm: &'a RpmSection, id: &RepoId) -> Option<&'a str> {
-    rpm.repo_files
-        .iter()
-        .find(|f| parse_repo_sections(&f.content).iter().any(|s| s.id == *id))
-        .map(|f| f.path.as_str())
+/// Whether dnf can install a repo-enabling package from `sec`, the
+/// definition it uses for a serving id: enabled, and every key it names
+/// in the image.
+fn serves(rpm: &RpmSection, sec: &RepoSectionDef) -> bool {
+    sec.enabled && keys_included(rpm, &sec.gpg_key_paths)
 }
 
-/// Whether an included `.repo` file defines `id` as enabled with every key
-/// it names included.
-fn section_survives(rpm: &RpmSection, id: &RepoId) -> bool {
-    rpm.repo_files
+/// The first captured `.repo` file, in dnf's read order, that the export
+/// leaves out and whose re-inclusion alone would make dnf's definition of
+/// `id` serve the package ([`InstallRepos::effective_with`]).
+///
+/// Neither the order of `repo_files` nor the first file that merely
+/// defines `id` decides it: re-including a file whose definition is
+/// disabled, or one an earlier file still shadows, would not recover the
+/// proof, and advice naming it would send the operator in a circle.
+fn restoring_file<'a>(rpm: &'a RpmSection, repos: &InstallRepos, id: &RepoId) -> Option<&'a str> {
+    let mut left_out: Vec<&RepoFile> = rpm
+        .repo_files
         .iter()
-        .filter(|f| f.disposition.is_included())
-        .any(|f| {
-            parse_repo_sections(&f.content)
-                .iter()
-                .any(|s| s.id == *id && s.enabled && keys_included(rpm, &s.gpg_key_paths))
+        .filter(|f| !f.disposition.is_included())
+        .filter(|f| parse_repo_sections(&f.content).iter().any(|s| s.id == *id))
+        .collect();
+    left_out.sort_by(|a, b| {
+        (dnf_read_order(&a.path), &a.content).cmp(&(dnf_read_order(&b.path), &b.content))
+    });
+    left_out
+        .into_iter()
+        .find(|f| {
+            repos
+                .effective_with(f, id)
+                .is_some_and(|sec| serves(rpm, &sec))
         })
+        .map(|f| f.path.as_str())
 }
 
 /// Whether every `gpgkey=file://` path a section names is a key the image
@@ -188,6 +213,7 @@ pub(crate) fn owned_repo_file_name<'a>(rpm: &'a RpmSection, pkg: &PackageEntry) 
 /// rendered Containerfile. Excluded packages are left alone: a package the
 /// export is not installing has no proof to lose.
 pub fn demote_unserved_repo_enabling(snap: &mut InspectionSnapshot) {
+    let repos = InstallRepos::of(snap);
     let Some(rpm) = snap.rpm.as_mut() else {
         return;
     };
@@ -197,7 +223,7 @@ pub fn demote_unserved_repo_enabling(snap: &mut InspectionSnapshot) {
             .iter()
             .enumerate()
             .filter(|(_, pkg)| pkg.disposition.is_included())
-            .filter_map(|(i, pkg)| match repo_enabling_export(read, pkg) {
+            .filter_map(|(i, pkg)| match repo_enabling_export(read, &repos, pkg) {
                 RepoEnablingExport::Lost(loss) => Some((
                     i,
                     format!(
@@ -279,8 +305,13 @@ mod tests {
             disposition: FindingKind::included(),
             ..Default::default()
         };
+        let snap = InspectionSnapshot {
+            rpm: Some(rpm),
+            ..Default::default()
+        };
+        let rpm = snap.rpm.as_ref().expect("an rpm section");
         assert!(matches!(
-            repo_enabling_export(&rpm, &pkg),
+            repo_enabling_export(rpm, &InstallRepos::of(&snap), &pkg),
             RepoEnablingExport::Served
         ));
     }

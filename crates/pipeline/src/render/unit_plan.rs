@@ -142,7 +142,11 @@ pub(crate) fn installs_on_its_own_route(
             PackageRoute::DisabledRepo(_) => true,
             PackageRoute::Upload(_) | PackageRoute::Repoless => pkg.uploaded || pkg.repoless_cached,
         }
-        && (pkg.uploaded || !matches!(repo_enabling_export(rpm, pkg), RepoEnablingExport::Lost(_)))
+        && (pkg.uploaded
+            || !matches!(
+                repo_enabling_export(rpm, repos, pkg),
+                RepoEnablingExport::Lost(_)
+            ))
 }
 
 /// The canonical `name.arch` ids of `packages_added` entries that a leaf

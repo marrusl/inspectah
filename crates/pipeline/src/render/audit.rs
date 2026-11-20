@@ -307,7 +307,12 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
                 if let Some(rpm) = &snap.rpm {
                     group_lines.push("### Packages".into());
                     group_lines.push(String::new());
-                    render_packages_section(rpm, &not_carried_packages(snap), &mut group_lines);
+                    render_packages_section(
+                        rpm,
+                        &super::repoless::InstallRepos::of(snap),
+                        &not_carried_packages(snap),
+                        &mut group_lines,
+                    );
                 }
             }
             SectionGroup::SystemConfig => {
@@ -389,6 +394,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
 /// `not_carried` is the [`not_carried_packages`] list for the same snapshot.
 fn render_packages_section(
     rpm: &inspectah_core::types::rpm::RpmSection,
+    repos: &super::repoless::InstallRepos,
     not_carried: &[NotCarriedPackage],
     lines: &mut Vec<String>,
 ) {
@@ -461,7 +467,7 @@ fn render_packages_section(
                 .map(|id| id.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            let carried = match super::repo_enabling::repo_enabling_export(rpm, p) {
+            let carried = match super::repo_enabling::repo_enabling_export(rpm, repos, p) {
                 super::repo_enabling::RepoEnablingExport::Served => "yes",
                 _ => "no",
             };

@@ -992,7 +992,7 @@ fn packages_section_lines(
         // proof carries the repo-less annotation `demote_unserved_repo_enabling`
         // gave it, and still owes the operator the FIXME naming what to
         // re-include.
-        match super::repo_enabling::repo_enabling_export(rpm, pkg) {
+        match super::repo_enabling::repo_enabling_export(rpm, &install_repos, pkg) {
             super::repo_enabling::RepoEnablingExport::NotEnabling => match route {
                 PackageRoute::ByName => install_names.push(install_name),
                 PackageRoute::DisabledRepo(id) => disabled_repo_installs
@@ -2778,6 +2778,116 @@ mod tests {
         assert!(!output.contains("    epel-release \\"), "{output}");
     }
 
+    /// A repo-enabling package served by `[epel]` alone, owning no file,
+    /// with `files` as `(name under /etc/yum.repos.d, content, included)`,
+    /// demoted as refine projects it.
+    fn epel_served_by(files: &[(&str, &str, bool)]) -> InspectionSnapshot {
+        let mut snap = snapshot_with_packages(&["epel-release"]);
+        let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+        rpm.packages_added[0].source_repo = "@commandline".into();
+        rpm.packages_added[0].repo_enabling_from =
+            vec![inspectah_core::types::repo::RepoId::new("epel")];
+        rpm.repo_files = files
+            .iter()
+            .map(|(name, content, included)| {
+                repo_file(&format!("/etc/yum.repos.d/{name}"), content, *included)
+            })
+            .collect();
+        super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+        snap
+    }
+
+    /// The export's verdict on `epel-release`, asked three ways that must
+    /// agree: the rendered install, the projection's demotion and the
+    /// audit's "Carried by Export". `Ok(())` is served; `Err(fixme)` is
+    /// demoted, with the FIXME the Containerfile prints.
+    fn epel_release_verdict(snap: &InspectionSnapshot) -> Result<(), String> {
+        let output = render_containerfile(snap, None, None);
+        let installed = output
+            .lines()
+            .any(|l| l.trim_end_matches(" \\") == "    epel-release");
+        let fixme = output
+            .lines()
+            .find(|l| l.starts_with("# FIXME:") && l.contains("epel-release installs"))
+            .map(str::to_string);
+        let demoted = !snap.rpm.as_ref().expect("an rpm section").packages_added[0]
+            .repoless_annotation
+            .is_empty();
+        let audit = crate::render::audit::render_audit(snap);
+        let carried = audit.lines().any(|l| l == "| epel-release | epel | yes |");
+        let not_carried = audit.lines().any(|l| l == "| epel-release | epel | no |");
+        assert_eq!(installed, fixme.is_none(), "install or FIXME:\n{output}");
+        assert_eq!(installed, !demoted, "install and demotion disagree");
+        assert_eq!(
+            (installed, !installed),
+            (carried, not_carried),
+            "audit:\n{audit}"
+        );
+        fixme.map_or(Ok(()), Err)
+    }
+
+    /// The proof judges the definition dnf uses among the repo files the
+    /// build has: the first file in dnf's read order to define the serving
+    /// id. A shadowed copy, enabled, does not keep the package served, and
+    /// the FIXME names a file whose re-inclusion would serve it again.
+    /// Every case runs with the files in both orders.
+    #[test]
+    fn the_repo_enabling_proof_reads_dnfs_definition_in_either_file_order() {
+        const ON: &str = "[epel]\nbaseurl=https://example.invalid/epel\nenabled=1\n";
+        const OFF: &str = "[epel]\nbaseurl=https://example.invalid/epel\nenabled=0\n";
+        const OTHER: &str = "[other]\nbaseurl=https://example.invalid/other\n";
+        const NO_FILE: &str = "# FIXME: re-include repo epel, or upload the RPM; epel-release \
+                               installs from that repo definition, which this export does not carry";
+        let names = |file: &str| {
+            format!(
+                "# FIXME: include /etc/yum.repos.d/{file} under Configuration Files, or \
+                 re-include repo epel, or upload the RPM; epel-release installs from that \
+                 repo definition, which this export does not carry"
+            )
+        };
+        type Case<'a> = (&'a str, Vec<(&'a str, &'a str, bool)>, Result<(), String>);
+        let cases: Vec<Case> = vec![
+            (
+                "the first file disables it, a shadowed one enables it",
+                vec![("a.repo", OFF, true), ("b.repo", ON, true)],
+                Err(NO_FILE.to_string()),
+            ),
+            (
+                "the first file enables it, a shadowed one disables it",
+                vec![("a.repo", ON, true), ("b.repo", OFF, true)],
+                Ok(()),
+            ),
+            (
+                // Re-including a.repo makes it dnf's definition again.
+                "an excluded first file enables it",
+                vec![("a.repo", ON, false), ("b.repo", OFF, true)],
+                Err(names("a.repo")),
+            ),
+            (
+                // a.repo sorts first but would only disable it again; c.repo
+                // is the one whose re-inclusion serves the package.
+                "only the later excluded file would serve it",
+                vec![
+                    ("a.repo", OFF, false),
+                    ("c.repo", ON, false),
+                    ("z.repo", OTHER, true),
+                ],
+                Err(names("c.repo")),
+            ),
+        ];
+        for (what, files, expected) in cases {
+            let mut reversed = files.clone();
+            reversed.reverse();
+            for (order, set) in [("in order", files.clone()), ("reversed", reversed)] {
+                assert_eq!(
+                    epel_release_verdict(&epel_served_by(&set)),
+                    expected,
+                    "{what}, {order}"
+                );
+            }
+        }
+    }
+
     /// A demoted repo-enabling leaf the operator uploaded installs from the
     /// upload, so dnf resolves its dependencies: an excluded dependency
     /// from a host-disabled repo is still named in that repo's
@@ -3671,7 +3781,9 @@ RUN dnf install -y \
         label: &'static str,
         mutate: fn(&mut InspectionSnapshot),
         id: &'static str,
-        file: &'static str,
+        /// The file the FIXME names, when re-including one would serve the
+        /// package again.
+        file: Option<&'static str>,
     }
 
     #[test]
@@ -3693,7 +3805,10 @@ RUN dnf install -y \
         );
 
         // Each way the export can lose the proof, and the file the FIXME
-        // names for it.
+        // names for it. A file is named only when re-including it would
+        // serve the package again: bootstrap.repo carried with enabled=0,
+        // or carried without its key, is already included, so naming it
+        // would send the operator in a circle.
         let cases = [
             DemotionCase {
                 label: "bootstrap.repo excluded",
@@ -3702,7 +3817,7 @@ RUN dnf install -y \
                         FindingKind::excluded();
                 },
                 id: "bootstrap",
-                file: "/etc/yum.repos.d/bootstrap.repo",
+                file: Some("/etc/yum.repos.d/bootstrap.repo"),
             },
             DemotionCase {
                 label: "[bootstrap] carried with enabled=0",
@@ -3712,7 +3827,7 @@ RUN dnf install -y \
                             .into();
                 },
                 id: "bootstrap",
-                file: "/etc/yum.repos.d/bootstrap.repo",
+                file: None,
             },
             DemotionCase {
                 label: "[bootstrap]'s gpgkey excluded",
@@ -3727,7 +3842,7 @@ RUN dnf install -y \
                     }
                 },
                 id: "bootstrap",
-                file: "/etc/yum.repos.d/bootstrap.repo",
+                file: None,
             },
             DemotionCase {
                 label: "the vendor.repo the package owns is excluded",
@@ -3736,7 +3851,7 @@ RUN dnf install -y \
                         FindingKind::excluded();
                 },
                 id: "bootstrap",
-                file: "/etc/yum.repos.d/vendor.repo",
+                file: Some("/etc/yum.repos.d/vendor.repo"),
             },
         ];
 
@@ -3750,10 +3865,13 @@ RUN dnf install -y \
             let mut snap = two_repository_snapshot();
             mutate(&mut snap);
             let output = render_containerfile(&snap, None, None);
-            let expected = format!(
-                "# FIXME: include {file} under Configuration Files, or re-include repo {id}, \
-                 or upload the RPM; {FIXME_TAIL}"
-            );
+            let expected = match file {
+                Some(file) => format!(
+                    "# FIXME: include {file} under Configuration Files, or re-include repo \
+                     {id}, or upload the RPM; {FIXME_TAIL}"
+                ),
+                None => format!("# FIXME: re-include repo {id}, or upload the RPM; {FIXME_TAIL}"),
+            };
             assert!(
                 output.contains(&expected),
                 "{label}:\nexpected:\n{expected}\ngot:\n{output}"

@@ -2,7 +2,7 @@ use inspectah_core::rpm_filename::StagedName;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::repo::{RepoAttribution, RepoId, RepoSectionDef, effective_definition};
-use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+use inspectah_core::types::rpm::{PackageEntry, RepoFile, RpmSection};
 use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 
 use super::configtree::{StagedWrites, is_staged, staged_writes};
@@ -212,8 +212,9 @@ const YUM_REPOS_DIR: &str = "/etc/yum.repos.d";
 pub struct InstallRepos {
     /// How many included, non-default repo files are staged.
     custom: usize,
-    /// `(destination, staged content)` of each `.repo` file dnf reads
-    /// from the directory at install time.
+    /// `(destination, staged content)` of each `.repo` file staged in the
+    /// directory: what dnf reads at install time when the `COPY` renders
+    /// (`custom > 0`), and nothing otherwise.
     files: Vec<(String, String)>,
 }
 
@@ -232,9 +233,6 @@ impl InstallRepos {
                 .filter(|r| is_staged(staged, &r.path))
                 .count()
         });
-        if custom == 0 {
-            return Self::default();
-        }
         // dnf reads `<reposdir>/*.repo`: directly in the directory, and a
         // glob, so not a name starting with a dot.
         let files = staged
@@ -259,10 +257,34 @@ impl InstallRepos {
     /// The definition of `id` dnf uses when the package phase installs
     /// ([`effective_definition`] over this set).
     pub fn effective(&self, id: &RepoId) -> Option<RepoSectionDef> {
+        if self.custom == 0 {
+            return None;
+        }
         effective_definition(
             self.files
                 .iter()
                 .map(|(path, content)| (path.as_str(), content.as_str())),
+            id,
+        )
+    }
+
+    /// The definition of `id` dnf would use if the export also staged
+    /// `file`, as re-including it would: the question recovery advice
+    /// asks before it names a file. A file already staged at that path
+    /// changes nothing (dnf reads what is staged there), and a default
+    /// repo file does not bring the `COPY` on its own.
+    pub(crate) fn effective_with(&self, file: &RepoFile, id: &RepoId) -> Option<RepoSectionDef> {
+        if self.files.iter().any(|(path, _)| *path == file.path) {
+            return self.effective(id);
+        }
+        if self.custom == 0 && file.is_default_repo {
+            return None;
+        }
+        effective_definition(
+            self.files
+                .iter()
+                .map(|(path, content)| (path.as_str(), content.as_str()))
+                .chain(std::iter::once((file.path.as_str(), file.content.as_str()))),
             id,
         )
     }

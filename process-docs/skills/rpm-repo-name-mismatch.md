@@ -160,6 +160,35 @@ are answering (repo-less yes/no, full attribution, or install from a
 disabled repo) before reusing any of the functions — they are no longer
 the same logic wearing different names.
 
+## One resolver per question
+
+Which definition of a repo id applies is decided in one place for each
+of the two questions that ask it. Never resolve an id by walking
+`repo_files` and taking the first or last section that matches.
+
+- **Host questions** (what the source host's dnf uses: refine's repo
+  provenance and its repo-toggle gate) ask
+  `inspectah_core::types::repo::effective_definition` over the captured
+  repo files.
+- **Export questions** (what the image build's dnf uses: the
+  disabled-repo route, the repo-enabling proof, its demotion FIXME and the
+  audit's "Carried by Export") ask `InstallRepos::effective`, which is
+  `effective_definition` over the staged files and nothing when the
+  Custom Repositories `COPY` does not render. Recovery advice asks
+  `InstallRepos::effective_with`: it names a left-out file only when
+  re-including that file alone would make dnf's definition serve the
+  package, so the FIXME never points at a file that is already included
+  or one an earlier file would still shadow.
+
+Both are exact-first and case-aware. dnf keys repos by exact spelling,
+so `[ab]` and `[AB]` are two repos, in one file or in two;
+`section_spelling` picks the section spelled as asked, falls back to a
+case variant only when it is the only one, and names none when two
+variants compete. `RepoId`'s folded equality is for attribution and
+inventory maps, never for choosing which section dnf uses. Other files
+defining the id stay in the inventory (`RepoIndex::repo_file_by_section`,
+`gpg_keys_by_section`), which exclusion needs whichever definition wins.
+
 ## Edge case: anaconda
 
 `anaconda` is NOT a real repo. It is the install-time source recorded by

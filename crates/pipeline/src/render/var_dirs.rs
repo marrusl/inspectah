@@ -193,7 +193,7 @@ impl<'a> Evidence<'a> {
                     installs_on_its_own_route(rpm, &repos, pkg)
                         || (pulled_in.contains(&format!("{}.{}", pkg.name, pkg.arch))
                             && !matches!(
-                                super::repo_enabling::repo_enabling_export(rpm, pkg),
+                                super::repo_enabling::repo_enabling_export(rpm, &repos, pkg),
                                 super::repo_enabling::RepoEnablingExport::Lost(_)
                             ))
                 })
