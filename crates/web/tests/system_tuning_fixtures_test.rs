@@ -8,7 +8,7 @@
 //! frontend receives fails here until the fixtures are re-recorded:
 //!
 //! ```text
-//! UPDATE_SYSTEM_TUNING_FIXTURES=1 cargo test -p inspectah-web --test system_tuning_fixtures_test
+//! UPDATE_SYSTEM_TUNING_FIXTURES=1 cargo test -p inspectah-web --test integration system_tuning_fixtures_test::
 //! ```
 
 #[path = "../../cli/tests/support/sysctl_hosts.rs"]

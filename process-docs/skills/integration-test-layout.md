@@ -5,7 +5,7 @@ Cargo builds every top-level `tests/*.rs` file as its own test binary, and
 each binary is linked separately. With about 86 such files across the
 workspace, a core edit relinks every binary that depends on core, and
 those links are a large part of the commit gate's test step. The crates are moving to one binary
-each: refine, pipeline, core and collect so far, the other crates one binary per file until their
+each: every crate except cli so far, cli one binary per file until its
 turn comes.
 
 ## Layout

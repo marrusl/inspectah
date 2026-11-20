@@ -7,7 +7,7 @@
 // This does NOT validate against Rust response types (they lack Deserialize).
 // Rust-type compatibility is proven by Task 8's real-server smoke tests.
 //
-// Run with: INSPECTAH_SKIP_UI=1 cargo test -p inspectah-web --test fixture_structure_test
+// Run with: INSPECTAH_SKIP_UI=1 cargo test -p inspectah-web --test integration fixture_structure_test::
 
 fn fixture_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/e2e/fixtures")

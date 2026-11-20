@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 build = "build.rs"
+autotests = false
 
 [dependencies]
 inspectah-core = { path = "../core" }
@@ -32,3 +33,7 @@ http-body-util = "0.1"
 insta = { workspace = true }
 tar = "0.4"
 flate2 = "1"
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

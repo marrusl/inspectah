@@ -54,7 +54,7 @@ hook's `cargo test` refuses it while the snapshot is stale. After any
 fixture edit, run the test yourself first and review the snapshot diff:
 
 ```bash
-cargo test -p inspectah-web --test fixture_structure_test
+cargo test -p inspectah-web --test integration fixture_structure_test::
 ```
 
 **A new always-present view key goes into every view fixture.** The
@@ -67,7 +67,7 @@ added to the response and not to both goes red in
 `fixture_structure_test` or `system_tuning_fixtures_test`. Add it to the
 hand-written fixtures by script, then re-record the system-tuning ones
 with `UPDATE_SYSTEM_TUNING_FIXTURES=1 cargo test -p inspectah-web --test
-system_tuning_fixtures_test` and read the diff. A key skipped when empty
+integration system_tuning_fixtures_test::` and read the diff. A key skipped when empty
 or absent (`default_target`, a unit row's `also`) needs neither.
 
 **The compensating control named in `fixture_structure_test.rs`'s header
@@ -94,7 +94,7 @@ differs from the body the handler returns. After a deliberate DTO
 change, re-record and review the diff:
 
 ```bash
-UPDATE_SYSTEM_TUNING_FIXTURES=1 cargo test -p inspectah-web --test system_tuning_fixtures_test
+UPDATE_SYSTEM_TUNING_FIXTURES=1 cargo test -p inspectah-web --test integration system_tuning_fixtures_test::
 ```
 
 Anything run-specific in a body has to be pinned at the input, not
