@@ -173,14 +173,17 @@ fn try_rpm_source_repo(
 ///
 /// Resolution order, applied independently per package so the result never
 /// depends on section order:
-/// 1. Exact case-insensitive match against any section, enabled or not,
-///    wins first (`Exact`) -- dnf recorded that id, so the package keeps
-///    the attribution even if the section is now disabled.
-/// 2. Otherwise, case-insensitive substring match against `enabled = true`
+/// 1. `@commandline`, `anaconda`, `@System` (case-insensitive) are
+///    `Pseudo`, whatever the host's sections are called: they record how a
+///    package was installed, not a repo, and a `.repo` section spelled the
+///    same does not make one.
+/// 2. Otherwise, exact case-insensitive match against any section, enabled
+///    or not (`Exact`) -- dnf recorded that id, so the package keeps the
+///    attribution even if the section is now disabled.
+/// 3. Otherwise, case-insensitive substring match against `enabled = true`
 ///    sections only: exactly one match is `Resolved`; more than one is
 ///    `Ambiguous` and `source_repo` is left as recorded.
-/// 3. Otherwise: `@commandline`, `anaconda`, `@System` are `Pseudo`; empty
-///    is `Unrecorded`; anything else is `Stale`.
+/// 4. Otherwise: empty is `Unrecorded`; anything else is `Stale`.
 pub fn normalize_source_repos(packages: &mut [PackageEntry], repo_files: &[RepoFile]) {
     let sections: Vec<RepoSectionDef> = repo_files
         .iter()
@@ -202,6 +205,13 @@ pub fn normalize_source_repos(packages: &mut [PackageEntry], repo_files: &[RepoF
 /// parsed `.repo` sections. See [`normalize_source_repos`] for the
 /// resolution order.
 fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAttribution {
+    if let Some(which) = pseudo_repo(recorded) {
+        return RepoAttribution::Pseudo {
+            which,
+            recorded: recorded.to_string(),
+        };
+    }
+
     // `.min_by` over the *raw* spelling (`as_str`), not `RepoId`'s own
     // `Ord`: that `Ord` folds ASCII case to stay coherent with `Eq`
     // (Review Focus 1), which means every section surviving the filter
@@ -253,28 +263,24 @@ fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAt
                 candidates,
             }
         }
-        // Pseudo repo names are matched case-insensitively, same as the
-        // exact-match rule above: dnf has been observed to record
-        // `@CommandLine` (see repo_tier's `@CommandLine` case), not just
-        // the lowercase spelling.
-        _ => match recorded.to_ascii_lowercase().as_str() {
-            "@commandline" => RepoAttribution::Pseudo {
-                which: PseudoRepo::Commandline,
-                recorded: recorded.to_string(),
-            },
-            "anaconda" => RepoAttribution::Pseudo {
-                which: PseudoRepo::Anaconda,
-                recorded: recorded.to_string(),
-            },
-            "@system" => RepoAttribution::Pseudo {
-                which: PseudoRepo::System,
-                recorded: recorded.to_string(),
-            },
-            "" => RepoAttribution::Unrecorded,
-            _ => RepoAttribution::Stale {
-                recorded: recorded.to_string(),
-            },
+        _ if recorded.is_empty() => RepoAttribution::Unrecorded,
+        _ => RepoAttribution::Stale {
+            recorded: recorded.to_string(),
         },
+    }
+}
+
+/// The pseudo repo a recorded value names, if it names one.
+///
+/// Matched case-insensitively, same as the exact-match rule: dnf has been
+/// observed to record `@CommandLine` (see repo_tier's `@CommandLine`
+/// case), not just the lowercase spelling.
+fn pseudo_repo(recorded: &str) -> Option<PseudoRepo> {
+    match recorded.to_ascii_lowercase().as_str() {
+        "@commandline" => Some(PseudoRepo::Commandline),
+        "anaconda" => Some(PseudoRepo::Anaconda),
+        "@system" => Some(PseudoRepo::System),
+        _ => None,
     }
 }
 
@@ -739,6 +745,40 @@ Repository  : baseos
             &pkgs[0].repo_attribution,
             RepoAttribution::Pseudo { which: PseudoRepo::Commandline, recorded } if recorded == "@CommandLine"
         ));
+    }
+
+    #[test]
+    fn a_pseudo_repo_stays_pseudo_whatever_a_section_is_called() {
+        // A pseudo source names no repo, so a `.repo` section spelled the
+        // same, enabled or not, or one containing it, does not turn it
+        // into one: pseudo names are recognized before section matching.
+        let sections = "[anaconda]\nenabled=0\nbaseurl=https://example.invalid/a\n\
+                        [@commandline]\nbaseurl=https://example.invalid/c\n\
+                        [@System]\nbaseurl=https://example.invalid/s\n\
+                        [anaconda-extras]\nbaseurl=https://example.invalid/x\n";
+        let files = vec![repo_file(sections)];
+        let cases = [
+            ("anaconda", PseudoRepo::Anaconda),
+            ("Anaconda", PseudoRepo::Anaconda),
+            ("@commandline", PseudoRepo::Commandline),
+            ("@System", PseudoRepo::System),
+        ];
+        for (recorded, which) in cases {
+            let mut pkgs = vec![pkg_with_repo("tool", recorded)];
+            normalize_source_repos(&mut pkgs, &files);
+            assert_eq!(
+                pkgs[0].repo_attribution,
+                RepoAttribution::Pseudo {
+                    which,
+                    recorded: recorded.into()
+                },
+                "{recorded}"
+            );
+            assert_eq!(
+                pkgs[0].source_repo, recorded,
+                "{recorded} is left as recorded"
+            );
+        }
     }
 
     #[test]

@@ -872,6 +872,59 @@ mod tests {
     }
 
     #[test]
+    fn an_anaconda_package_never_routes_to_a_section_named_anaconda() {
+        // The scan's own path, not a hand-built attribution: normalization
+        // classifies the recorded `anaconda`, repo-less detection flags the
+        // package, and the route reads what the two left behind. A disabled
+        // `[anaconda]` section with a source is exactly what the route
+        // would otherwise accept.
+        use inspectah_collect::executor::mock::MockExecutor;
+        use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
+        use inspectah_collect::inspectors::rpm::source_repos::normalize_source_repos;
+        use inspectah_core::traits::executor::ExecResult;
+
+        let ok = |stdout: &str| ExecResult {
+            stdout: stdout.into(),
+            exit_code: 0,
+            ..Default::default()
+        };
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repolist --enabled -q",
+                ok("repo id  repo name\nbaseos  BaseOS\n"),
+            )
+            .with_command(
+                "dnf repoquery --available --queryformat %{name} %{reponame}\n -q",
+                ok("bash baseos\n"),
+            )
+            .with_command("find /var/cache/dnf -name *.rpm -type f", ok(""));
+
+        let mut pkg = from_repo("anaconda", RepoAttribution::Unrecorded);
+        pkg.repoless_annotation.clear();
+        let mut rpm = RpmSection {
+            packages_added: vec![pkg],
+            repo_files: vec![repo_file(
+                "/etc/yum.repos.d/custom.repo",
+                "[anaconda]\nbaseurl=https://example.invalid/a\nenabled=0\n",
+                false,
+            )],
+            ..Default::default()
+        };
+        normalize_source_repos(&mut rpm.packages_added, &rpm.repo_files);
+        scan_dnf_cache_for_repoless(&exec, &mut rpm);
+
+        let pkg = &rpm.packages_added[0];
+        assert!(
+            !pkg.repoless_annotation.is_empty(),
+            "the scan leaves the package repo-less"
+        );
+        assert_eq!(
+            route_for(&rpm, pkg, &VerifiedUploads::new()),
+            PackageRoute::Repoless
+        );
+    }
+
+    #[test]
     fn an_uploaded_package_with_no_verified_upload_is_demoted() {
         // `uploaded` and `cache_path` are `#[serde(default)]` and arrive
         // from the scanned host. With no verified map this entry claims an

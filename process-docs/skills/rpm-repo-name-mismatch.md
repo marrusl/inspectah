@@ -30,15 +30,19 @@ different things, on purpose, for different questions:
    `normalize_source_repos()` — replaced. Produces a `RepoAttribution`
    (`crates/core/src/types/repo.rs`) per package and rewrites
    `source_repo` to the canonical id where the rule resolves one:
-   - **Exact:** the recorded value equals some `.repo` section id,
-     case-insensitively, whether or not that section is enabled. Wins
-     first, over every other rule, because dnf recorded that exact id.
+   - **Pseudo:** `@commandline`, `anaconda`, `@System`
+     (case-insensitive) win first, before any section is looked at. They
+     record how a package was installed, not a repo, so a `.repo` file
+     with an `[anaconda]` section does not turn installer provenance into
+     a repo the export could enable.
+   - Otherwise **Exact:** the recorded value equals some `.repo` section
+     id, case-insensitively, whether or not that section is enabled,
+     because dnf recorded that exact id.
    - Otherwise, case-insensitive **substring match against `enabled =
      true` sections only**: exactly one hit is `Resolved`; more than one
      is `Ambiguous` (`source_repo` is left as recorded).
-   - Otherwise: `@commandline`, `anaconda`, `@System` (case-insensitive)
-     are `Pseudo`; an empty recorded value is `Unrecorded`; anything
-     else is `Stale`.
+   - Otherwise: an empty recorded value is `Unrecorded`; anything else
+     is `Stale`.
 
    This resolution order is applied independently per package, so the
    result never depends on the order `.repo` files were read in —
@@ -135,8 +139,11 @@ the same logic wearing different names.
 the Anaconda installer. No RHEL repo ID contains "anaconda", so
 `repo_matches_enabled()`'s substring check correctly leaves it unmatched
 and `classify_recorded_repo()` gives it `Pseudo { which: Anaconda, .. }`
-rather than `Stale`. Packages from `anaconda` are properly flagged as
-repo-less.
+rather than `Stale`, even on a host whose `.repo` files define an
+`[anaconda]` section. Packages from `anaconda` are properly flagged as
+repo-less. A test of this belongs on the scan's path (normalization, then
+`scan_dnf_cache_for_repoless`, then the route), not on a hand-built
+`Pseudo`: that is how the classifier's order once went unnoticed.
 
 ## Method constant registry
 
