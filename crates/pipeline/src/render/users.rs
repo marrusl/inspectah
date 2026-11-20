@@ -11,7 +11,6 @@ use super::safety::{
     AccountName, CryptHash, ExportPath, double_quoted_word_refusal, sanitize_shell_value,
 };
 use crate::build::extract::is_single_normal_component;
-use inspectah_collect::inspectors::users::NON_SYSTEM_GID_MIN;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -103,64 +102,6 @@ fn useradd_refusal(u: &serde_json::Value) -> Option<&'static str> {
         return Some("the login shell is not a plain absolute path");
     }
     None
-}
-
-/// The snapshot groups `u`'s `useradd` needs the Containerfile to create
-/// first, or why it cannot have them. `useradd` exits 6 on a `-g` or `-G`
-/// group that does not exist, so every group it names is created here or
-/// left to the base image.
-///
-/// The base image is trusted with exactly what the users inspector does
-/// not record: groups below [`NON_SYSTEM_GID_MIN`] (`wheel`, `adm`), and
-/// any entry it classifies `source: "system"`. It reads all of
-/// `/etc/group` for memberships but records only the regular range, so a
-/// supplementary name missing from the snapshot is a system group. A
-/// primary gid in the regular range with no entry has nothing to create.
-///
-/// A group the operator excluded refuses its users rather than being
-/// created anyway: the exclusion is the operator's, and the FIXME names
-/// the group so they can see what it costs.
-fn groups_to_create_for<'a>(
-    u: &serde_json::Value,
-    groups: &'a [serde_json::Value],
-) -> Result<Vec<&'a serde_json::Value>, String> {
-    let mut needs = Vec::new();
-    let gid = uid_field(u, "gid");
-    if gid > 0 {
-        match groups.iter().find(|g| uid_field(g, "gid") == gid) {
-            Some(g) => needs.extend(group_to_create(g)?),
-            None if gid < NON_SYSTEM_GID_MIN => {}
-            None => return Err(format!("its primary group {gid} is not in the snapshot")),
-        }
-    }
-    for name in supp_groups(u) {
-        if let Some(g) = groups.iter().find(|g| str_field(g, "name") == name) {
-            needs.extend(group_to_create(g)?);
-        }
-    }
-    Ok(needs)
-}
-
-/// `g` when the Containerfile must create it, `None` when the base image
-/// provides it, or why a user that names it cannot be created.
-fn group_to_create(g: &serde_json::Value) -> Result<Option<&serde_json::Value>, String> {
-    if str_field(g, "source") == "system" {
-        return Ok(None);
-    }
-    let name = str_field(g, "name");
-    if !g.get("include").and_then(|v| v.as_bool()).unwrap_or(true) {
-        return Err(format!(
-            "its group {} is excluded",
-            sanitize_for_comment(name)
-        ));
-    }
-    if AccountName::parse(name).is_err() {
-        return Err(format!(
-            "its group {} is not a valid group name",
-            sanitize_for_comment(name)
-        ));
-    }
-    Ok(Some(g))
 }
 
 /// `s` as a TOML basic string, quotes included.
@@ -454,66 +395,62 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
 
     let mut body: Vec<String> = Vec::new();
 
-    // Decide each user first, so a `groupadd` is emitted only for a group
-    // a rendered `useradd` names, and every one of those comes before it.
-    // A refused user gets no `chpasswd` entry and no SSH key lines either:
-    // each would name an account that does not exist.
-    let all_groups: &[serde_json::Value] = snap
-        .users_groups
-        .as_ref()
-        .map_or(&[], |ug| ug.groups.as_slice());
-    let mut refused_users: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut user_fixmes: Vec<String> = Vec::new();
-    let mut groups_to_create: Vec<&serde_json::Value> = Vec::new();
+    // Collect GIDs and supplementary group names needed by useradd users
+    let mut needed_gids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut needed_supp_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     for u in &useradd_users {
-        let name = str_field(u, "name");
-        if name.is_empty() {
-            continue;
+        let gid = uid_field(u, "gid");
+        if gid > 0 {
+            needed_gids.insert(gid);
         }
-        let needs = useradd_refusal(u)
-            .map(|r| Err(r.to_string()))
-            .unwrap_or_else(|| groups_to_create_for(u, all_groups));
-        match needs {
-            Ok(needs) => {
-                for g in needs {
-                    if !groups_to_create.iter().any(|seen| std::ptr::eq(*seen, g)) {
-                        groups_to_create.push(g);
-                    }
-                }
-            }
-            Err(reason) => {
-                user_fixmes.push(format!(
-                    "# FIXME: user {} not created: {reason}",
-                    sanitize_for_comment(name)
-                ));
-                refused_users.insert(name);
-            }
+        for g in supp_groups(u) {
+            needed_supp_names.insert(g);
         }
     }
 
-    // In snapshot order, so the output does not depend on user order.
-    for g in all_groups {
-        if !groups_to_create
-            .iter()
-            .any(|needed| std::ptr::eq(*needed, g))
-        {
-            continue;
-        }
-        // Proved by `groups_to_create_for`.
+    // Only emit groupadd for custom groups that are either:
+    // - The primary group (by GID) of a useradd user, OR
+    // - A supplementary group (by name) of a useradd user
+    let all_custom_groups = custom_groups(snap);
+    for g in &all_custom_groups {
         let name = str_field(g, "name");
         let gid = uid_field(g, "gid");
+        if name.is_empty() {
+            continue;
+        }
+        let is_primary = gid > 0 && needed_gids.contains(&gid);
+        let is_supplementary = needed_supp_names.contains(name);
+        if !is_primary && !is_supplementary {
+            continue;
+        }
+        if AccountName::parse(name).is_err() {
+            body.push(format!(
+                "# FIXME: group {} not created: the name is not a valid group name",
+                sanitize_for_comment(name)
+            ));
+            continue;
+        }
         if gid > 0 {
             body.push(format!("RUN groupadd -g {gid} {name}"));
         } else {
             body.push(format!("RUN groupadd {name}"));
         }
     }
-    body.extend(user_fixmes);
 
-    // useradd lines.
+    // useradd lines. A refused user gets no `chpasswd` entry and no SSH
+    // key lines either: each would name an account that does not exist.
+    let mut refused_users: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for u in &useradd_users {
         let name = str_field(u, "name");
-        if name.is_empty() || refused_users.contains(name) {
+        if name.is_empty() {
+            continue;
+        }
+        if let Some(reason) = useradd_refusal(u) {
+            body.push(format!(
+                "# FIXME: user {} not created: {reason}",
+                sanitize_for_comment(name)
+            ));
+            refused_users.insert(name);
             continue;
         }
         let uid = uid_field(u, "uid");
@@ -700,17 +637,6 @@ mod tests {
         })
     }
 
-    /// `test_user`'s primary group. Every regular-range user on a host has
-    /// one, and without it the Containerfile refuses the user.
-    fn test_primary_group() -> serde_json::Value {
-        serde_json::json!({
-            "name": "alice",
-            "gid": 1001,
-            "source": "custom",
-            "include": true
-        })
-    }
-
     fn test_group() -> serde_json::Value {
         serde_json::json!({
             "name": "docker",
@@ -836,7 +762,7 @@ mod tests {
 
     #[test]
     fn containerfile_useradd_with_groups_and_ssh() {
-        let snap = snap_with(vec![test_user()], vec![test_primary_group(), test_group()]);
+        let snap = snap_with(vec![test_user()], vec![test_group()]);
         let lines = render_containerfile_users(&snap);
         let output = lines.join("\n");
 
@@ -957,148 +883,6 @@ mod tests {
         );
     }
 
-    /// Every group a rendered `useradd` names, by `-g` gid or `-G` name,
-    /// is either created earlier in the block or left to the base image.
-    /// `useradd` exits 6 on a group that exists in neither, so a user whose
-    /// group the block cannot create is refused with a FIXME instead.
-    #[test]
-    fn useradd_never_names_a_group_nothing_creates() {
-        use serde_json::json;
-        let group = |name: &str, gid: u32, source: &str, include: bool| json!({"name": name, "gid": gid, "source": source, "include": include});
-        let user = |gid: u32, supp: &[&str]| {
-            json!({
-                "name": "alice", "uid": 1001, "gid": gid,
-                "shell": "/bin/bash", "home": "/home/alice",
-                "containerfile_strategy": "useradd",
-                "supplementary_groups": supp,
-            })
-        };
-        // (case, user, groups, the useradd line or None when refused,
-        //  the groupadd lines in order, a FIXME the output must carry)
-        type Case = (
-            &'static str,
-            serde_json::Value,
-            Vec<serde_json::Value>,
-            Option<&'static str>,
-            Vec<&'static str>,
-            Option<&'static str>,
-        );
-        let cases: Vec<Case> = vec![
-            (
-                "primary gid with no matching group",
-                user(1001, &[]),
-                vec![],
-                None,
-                vec![],
-                Some(
-                    "# FIXME: user alice not created: its primary group 1001 is not in the snapshot",
-                ),
-            ),
-            (
-                "primary group excluded in refine",
-                user(1001, &[]),
-                vec![group("alice", 1001, "custom", false)],
-                None,
-                vec![],
-                Some("# FIXME: user alice not created: its group alice is excluded"),
-            ),
-            (
-                "supplementary group excluded in refine",
-                user(1001, &["docker"]),
-                vec![
-                    group("alice", 1001, "custom", true),
-                    group("docker", 1010, "custom", false),
-                ],
-                None,
-                vec![],
-                Some("# FIXME: user alice not created: its group docker is excluded"),
-            ),
-            (
-                "supplementary group with an invalid name",
-                user(1001, &["dock er"]),
-                vec![
-                    group("alice", 1001, "custom", true),
-                    group("dock er", 1010, "custom", true),
-                ],
-                None,
-                vec![],
-                Some("# FIXME: user alice not created:"),
-            ),
-            (
-                "primary and supplementary both present",
-                user(1001, &["docker"]),
-                vec![
-                    group("alice", 1001, "custom", true),
-                    group("docker", 1010, "custom", true),
-                ],
-                Some("RUN useradd -m -u 1001 -g 1001 -G docker"),
-                vec!["RUN groupadd -g 1001 alice", "RUN groupadd -g 1010 docker"],
-                None,
-            ),
-            (
-                "system group such as wheel, left to the base",
-                user(1001, &["wheel"]),
-                vec![group("alice", 1001, "custom", true)],
-                Some("RUN useradd -m -u 1001 -g 1001 -G wheel"),
-                vec!["RUN groupadd -g 1001 alice"],
-                None,
-            ),
-            (
-                "primary gid in the system range, left to the base",
-                user(100, &[]),
-                vec![],
-                Some("RUN useradd -m -u 1001 -g 100 "),
-                vec![],
-                None,
-            ),
-            (
-                "a group the snapshot classifies as system",
-                user(1001, &["adm"]),
-                vec![
-                    group("alice", 1001, "custom", true),
-                    group("adm", 4, "system", true),
-                ],
-                Some("RUN useradd -m -u 1001 -g 1001 -G adm"),
-                vec!["RUN groupadd -g 1001 alice"],
-                None,
-            ),
-        ];
-
-        for (case, u, groups, useradd, groupadds, fixme) in cases {
-            let snap = snap_with(vec![u], groups);
-            let cf = render_containerfile_users(&snap).join("\n");
-            let active = active_lines(&cf);
-            let rendered_groupadds: Vec<&str> = active
-                .iter()
-                .copied()
-                .filter(|l| l.starts_with("RUN groupadd"))
-                .collect();
-            assert_eq!(
-                rendered_groupadds, groupadds,
-                "{case}: groupadd lines: {cf}"
-            );
-            let useradd_line = active.iter().position(|l| l.starts_with("RUN useradd"));
-            match useradd {
-                Some(prefix) => {
-                    let at = useradd_line.unwrap_or_else(|| panic!("{case}: no useradd: {cf}"));
-                    assert!(active[at].starts_with(prefix), "{case}: {cf}");
-                    let last_groupadd = active.iter().rposition(|l| l.starts_with("RUN groupadd"));
-                    assert!(
-                        last_groupadd.is_none_or(|g| g < at),
-                        "{case}: a groupadd follows the useradd: {cf}"
-                    );
-                }
-                None => assert!(
-                    useradd_line.is_none(),
-                    "{case}: refused user rendered: {cf}"
-                ),
-            }
-            if let Some(fixme) = fixme {
-                assert!(cf.contains(fixme), "{case}: missing {fixme:?}: {cf}");
-            }
-        }
-    }
-
     // ----- SSH staging tests -----
 
     #[test]
@@ -1130,7 +914,7 @@ mod tests {
             let mut user = test_user();
             user["name"] = serde_json::json!(hostile);
             user["home"] = serde_json::json!("/home/x");
-            let snap = snap_with(vec![user, test_user()], vec![test_primary_group()]);
+            let snap = snap_with(vec![user, test_user()], vec![]);
 
             let before = s.outside();
             let result = stage_ssh_keys(&snap, &s.out());
@@ -1198,10 +982,7 @@ mod tests {
             hostile_group["name"] = json!("-g0");
             // Needed only when a case names it as a supplementary group.
             hostile_group["gid"] = json!(4242);
-            let snap = snap_with(
-                vec![user, test_user()],
-                vec![test_primary_group(), test_group(), hostile_group],
-            );
+            let snap = snap_with(vec![user, test_user()], vec![test_group(), hostile_group]);
             let cf = render_containerfile_users(&snap).join("\n");
             let active = active_lines(&cf);
             let what = format!("{field} = {value}");

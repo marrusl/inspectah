@@ -74,22 +74,12 @@ fn snapshot_with_alice() -> InspectionSnapshot {
                 "groups": ["docker"],
                 "supplementary_groups": ["docker"]
             })],
-            // alice's primary group as well: without it `useradd -g 1001`
-            // exits 6, and the Containerfile refuses the user.
-            groups: vec![
-                serde_json::json!({
-                    "name": "alice",
-                    "gid": 1001,
-                    "source": "custom",
-                    "include": true
-                }),
-                serde_json::json!({
-                    "name": "docker",
-                    "gid": 1010,
-                    "source": "custom",
-                    "include": true
-                }),
-            ],
+            groups: vec![serde_json::json!({
+                "name": "docker",
+                "gid": 1010,
+                "source": "custom",
+                "include": true
+            })],
             ..Default::default()
         }),
         ..Default::default()

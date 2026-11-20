@@ -30,17 +30,6 @@ fn test_user() -> serde_json::Value {
     })
 }
 
-/// `test_user`'s primary group. Without it `useradd -g 1001` exits 6, and
-/// the Containerfile refuses the user.
-fn test_primary_group() -> serde_json::Value {
-    serde_json::json!({
-        "name": "alice",
-        "gid": 1001,
-        "source": "custom",
-        "include": true
-    })
-}
-
 fn test_group() -> serde_json::Value {
     serde_json::json!({
         "name": "docker",
@@ -141,7 +130,7 @@ fn toml_multi_key_uses_first_with_comment() {
 
 #[test]
 fn containerfile_useradd_with_groups_and_ssh() {
-    let snap = snap_with(vec![test_user()], vec![test_primary_group(), test_group()]);
+    let snap = snap_with(vec![test_user()], vec![test_group()]);
     let lines = users::render_containerfile_users(&snap);
     let output = lines.join("\n");
 

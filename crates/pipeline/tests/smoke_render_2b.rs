@@ -137,14 +137,6 @@ fn snapshot_with_useradd_users() -> InspectionSnapshot {
             "include": true,
             "containerfile_strategy": "useradd"
         })],
-        // The primary group: without it `useradd -g 1500` exits 6, and the
-        // Containerfile refuses the user.
-        groups: vec![serde_json::json!({
-            "name": "appuser",
-            "gid": 1500,
-            "include": true,
-            "source": "custom"
-        })],
         ..Default::default()
     });
     snap
