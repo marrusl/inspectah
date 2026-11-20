@@ -96,6 +96,9 @@ export function ExportDialog({
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
+        // Stay open: the stale alert explains the failed export, and the
+        // re-fetched view brings the current generation in, so Export
+        // downloads that state when clicked again.
         setStale(true);
         try {
           const view = await fetchView();
@@ -103,7 +106,6 @@ export function ExportDialog({
         } catch {
           // If re-fetch also fails, stale alert is still visible
         }
-        onClose();
       } else if (err instanceof ApiError && err.status === 428) {
         // Server requires sensitive acknowledgment
         setError(

@@ -676,13 +676,13 @@ describe("ExportDialog", () => {
     });
   });
 
-  it("handles 409 stale generation: re-fetches view and closes", async () => {
+  it("handles 409 stale generation: stays open with the stale alert and exports at the new generation", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     const onViewUpdate = vi.fn();
 
-    // First call: POST /api/tarball returns 409
-    // Second call: GET /api/view returns fresh view
+    // POST /api/tarball returns 409, GET /api/view returns the fresh view,
+    // and the second POST /api/tarball succeeds.
     mockFetch
       .mockResolvedValueOnce({
         ok: false,
@@ -692,27 +692,50 @@ describe("ExportDialog", () => {
       .mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ ...MOCK_VIEW, generation: 42 }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ "x-export-warnings": "[]" }),
+        blob: () => Promise.resolve(new Blob(["tarball"])),
       });
 
-    render(
-      <ExportDialog
-        isOpen={true}
-        onClose={onClose}
-        stats={MOCK_STATS}
-        generation={7}
-        sessionIsSensitive={false}
-        onViewUpdate={onViewUpdate}
-      />,
-    );
+    const props = {
+      isOpen: true,
+      onClose,
+      stats: MOCK_STATS,
+      sessionIsSensitive: false,
+      onViewUpdate,
+    };
+    const { rerender } = render(<ExportDialog {...props} generation={7} />);
 
     await user.click(screen.getByRole("button", { name: "Export" }));
 
-    await waitFor(() => {
-      // Should have called fetchView to re-fetch
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-      expect(onViewUpdate).toHaveBeenCalled();
-      expect(onClose).toHaveBeenCalled();
+    expect(await screen.findByText("Stale state")).toBeInTheDocument();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(onViewUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ generation: 42 }),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+
+    // The owner passes the re-fetched generation back in; Export then
+    // downloads at it.
+    rerender(<ExportDialog {...props} generation={42} />);
+    const origCreateObjectURL = URL.createObjectURL;
+    const origRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:http://localhost/fake-url");
+    URL.revokeObjectURL = vi.fn();
+
+    await user.click(screen.getByRole("button", { name: "Export" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mockFetch).toHaveBeenLastCalledWith("/api/tarball", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ generation: 42 }),
     });
+
+    URL.createObjectURL = origCreateObjectURL;
+    URL.revokeObjectURL = origRevokeObjectURL;
   });
 
   it("shows error alert on non-409 failure", async () => {
