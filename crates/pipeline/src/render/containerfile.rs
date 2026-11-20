@@ -4012,6 +4012,13 @@ RUN dnf install -y \
             .unwrap_or_else(|| panic!("fixture carries {path}"))
     }
 
+    fn exclude_key(snap: &mut InspectionSnapshot, name: &str) {
+        let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+        for key in rpm.gpg_keys.iter_mut().filter(|k| k.path.ends_with(name)) {
+            key.disposition = FindingKind::excluded();
+        }
+    }
+
     /// One way the export can lose a repo-enabling package's proof, and
     /// the section and file the FIXME must then name.
     struct DemotionCase {
@@ -4089,6 +4096,72 @@ RUN dnf install -y \
                 },
                 id: "bootstrap",
                 file: Some("/etc/yum.repos.d/vendor.repo"),
+            },
+            // The owned file is still named first when re-including it
+            // restores the proof, ahead of another left-out file that
+            // also defines the serving section.
+            DemotionCase {
+                label: "the owned vendor.repo is excluded beside an excluded later [bootstrap]",
+                mutate: |s| {
+                    repo_file_mut(s, "/etc/yum.repos.d/vendor.repo").disposition =
+                        FindingKind::excluded();
+                    s.rpm
+                        .as_mut()
+                        .expect("fixture has an rpm section")
+                        .repo_files
+                        .push(repo_file(
+                            "/etc/yum.repos.d/z.repo",
+                            "[bootstrap]\nbaseurl=https://example.invalid/z\nenabled=1\n",
+                            false,
+                        ));
+                },
+                id: "bootstrap",
+                file: Some("/etc/yum.repos.d/vendor.repo"),
+            },
+            // An included a.repo dnf reads before bootstrap.repo defines
+            // [bootstrap] disabled. Re-including the owned vendor.repo
+            // leaves that copy the one dnf uses, so naming it would not
+            // help, and no other single file restores the proof either.
+            DemotionCase {
+                label: "the owned vendor.repo is excluded and a.repo shadows [bootstrap] disabled",
+                mutate: |s| {
+                    repo_file_mut(s, "/etc/yum.repos.d/vendor.repo").disposition =
+                        FindingKind::excluded();
+                    s.rpm
+                        .as_mut()
+                        .expect("fixture has an rpm section")
+                        .repo_files
+                        .push(repo_file(
+                            "/etc/yum.repos.d/a.repo",
+                            "[bootstrap]\nbaseurl=https://example.invalid/a\nenabled=0\n",
+                            true,
+                        ));
+                },
+                id: "bootstrap",
+                file: None,
+            },
+            DemotionCase {
+                label: "the vendor key the package owns is excluded",
+                mutate: |s| exclude_key(s, "RPM-GPG-KEY-VENDOR"),
+                id: "bootstrap",
+                file: Some("/etc/pki/rpm-gpg/RPM-GPG-KEY-VENDOR"),
+            },
+            DemotionCase {
+                label: "the owned vendor key is excluded and a.repo shadows [bootstrap] disabled",
+                mutate: |s| {
+                    exclude_key(s, "RPM-GPG-KEY-VENDOR");
+                    s.rpm
+                        .as_mut()
+                        .expect("fixture has an rpm section")
+                        .repo_files
+                        .push(repo_file(
+                            "/etc/yum.repos.d/a.repo",
+                            "[bootstrap]\nbaseurl=https://example.invalid/a\nenabled=0\n",
+                            true,
+                        ));
+                },
+                id: "bootstrap",
+                file: None,
             },
         ];
 

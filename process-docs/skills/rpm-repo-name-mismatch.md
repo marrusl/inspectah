@@ -196,14 +196,18 @@ of the two questions that ask it. Never resolve an id by walking
   source (`has_source`): an enabled copy with no `baseurl`, `metalink`
   or `mirrorlist`, or one whose source a later assignment cleared,
   cannot supply the package. Recovery advice (`serving_loss`, asked
-  only once the verdict is `Lost`) asks `InstallRepos::with_included`,
-  which re-stages the whole export with the candidate file included: it
-  names a left-out file only when including that file alone would make
-  dnf's definition serve the package, so the FIXME never points at a
-  file that is already included, one an earlier file would still shadow,
-  or one the stager would withhold. Adding the candidate to the staged
-  set by hand is not enough: a config entry at `a.repo/stray` makes the
-  stager withhold both it and an included `a.repo`.
+  only once the verdict is `Lost`) asks `restores`, which re-stages the
+  whole export with the candidate repo file or key included and asks the
+  verdict again: it names a left-out file only when including that file
+  alone makes the verdict `Served`, so the FIXME never points at a file
+  that is already included, one an earlier file would still shadow, or
+  one the stager would withhold. The package's own dropped files go
+  through the same check, first: re-including an owned `epel.repo` does
+  not help while an included `a.repo` dnf reads earlier defines
+  `[epel]` disabled, and while an owned file stays dropped no other file
+  can restore the proof. Adding the candidate to the staged set by hand
+  is not enough: a config entry at `a.repo/stray` makes the stager
+  withhold both it and an included `a.repo`.
 
 Both are exact-first and case-aware. dnf keys repos by exact spelling,
 so `[ab]` and `[AB]` are two repos, in one file or in two;

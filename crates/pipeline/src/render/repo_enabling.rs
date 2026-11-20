@@ -23,6 +23,7 @@
 //! [`repo_enabling_export`] is the only thing that decides which.
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::repo::{RepoId, RepoSectionDef, dnf_read_order, parse_repo_sections};
 use inspectah_core::types::rpm::{PackageEntry, RepoFile, RpmSection};
 
@@ -43,11 +44,11 @@ const REPO_FILE_SUFFIX: &str = ".repo";
 pub(crate) struct ServingLoss {
     /// The serving section the export no longer provides.
     pub id: RepoId,
-    /// The `.repo` file that would restore it: a captured file the export
-    /// leaves out whose inclusion, staged as the export would stage it,
-    /// makes dnf's definition of `id` serve the package again, or the
-    /// package's own dropped file. `None` when no single file would: the
-    /// advice that names a file is dropped rather than invented.
+    /// The file that would restore it: a captured repo file or key the
+    /// export leaves out whose inclusion, staged as the export would stage
+    /// it, makes [`repo_enabling_export`] answer
+    /// [`RepoEnablingExport::Served`]. `None` when no single file would:
+    /// the advice that names a file is dropped rather than invented.
     pub file: Option<String>,
 }
 
@@ -98,11 +99,16 @@ pub(crate) fn repo_enabling_export(
 }
 
 /// What to name for `pkg`, a package whose proof this export lost
-/// ([`RepoEnablingExport::Lost`]): the package's own dropped repo file or
-/// key when it has one, else the first captured file whose inclusion
-/// would serve it again ([`restoring_file`]), with the serving id that
-/// file restores; the first serving id and no file otherwise. `None` only
-/// for a package that is not repo-enabling or a snapshot with no RPM
+/// ([`RepoEnablingExport::Lost`]): the first file whose inclusion alone
+/// would serve it again ([`restores`]), with the serving id it restores;
+/// the first serving id and no file otherwise. The package's own dropped
+/// repo files and keys are tried first, then every other captured repo
+/// file the export leaves out that defines a serving id, in dnf's read
+/// order ([`left_out_defining`]). An owned file is named only when
+/// including it really restores the proof: a disabled copy of the
+/// section in a file dnf reads earlier still wins after it is back, and
+/// while an owned file stays dropped no other file can restore it. `None`
+/// only for a package that is not repo-enabling or a snapshot with no RPM
 /// section, neither of which can lose a proof.
 ///
 /// Separate from the verdict because answering it re-stages the export
@@ -110,19 +116,18 @@ pub(crate) fn repo_enabling_export(
 pub(crate) fn serving_loss(snap: &InspectionSnapshot, pkg: &PackageEntry) -> Option<ServingLoss> {
     let rpm = snap.rpm.as_ref()?;
     let first_id = pkg.repo_enabling_from.first()?;
-    if let Some(dropped) = dropped_owned_path(rpm, pkg) {
-        return Some(ServingLoss {
-            id: first_id.clone(),
-            file: Some(dropped.to_string()),
-        });
-    }
+    let owned = dropped_owned_files(rpm, pkg);
+    let others = pkg
+        .repo_enabling_from
+        .iter()
+        .flat_map(|id| left_out_defining(rpm, id));
     Some(
-        pkg.repo_enabling_from
-            .iter()
-            .find_map(|id| {
-                restoring_file(snap, rpm, id).map(|f| ServingLoss {
-                    id: id.clone(),
-                    file: Some(f.to_string()),
+        owned
+            .chain(others)
+            .find_map(|f| {
+                restores(snap, pkg, f).map(|id| ServingLoss {
+                    id,
+                    file: Some(f.path.clone()),
                 })
             })
             .unwrap_or_else(|| ServingLoss {
@@ -141,22 +146,13 @@ fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDef) -> bool 
     sec.enabled && sec.has_source && keys_included(rpm, repos, &sec.gpg_key_paths)
 }
 
-/// The first captured `.repo` file, in dnf's read order, that the export
-/// leaves out and whose inclusion alone would make dnf's definition of
-/// `id` serve the package, judged on the export re-staged with that file
-/// included ([`InstallRepos::with_included`]).
+/// The captured `.repo` files the export leaves out that define `id`, in
+/// dnf's read order: the candidates [`serving_loss`] tries after the
+/// package's own files.
 ///
 /// Neither the order of `repo_files` nor the first file that merely
-/// defines `id` decides it: including a file whose definition is
-/// disabled, one an earlier file still shadows, or one the stager would
-/// withhold (a config entry at `a.repo/stray` withholds both it and
-/// `a.repo`) would not recover the proof, and advice naming it would send
-/// the operator in a circle.
-fn restoring_file<'a>(
-    snap: &InspectionSnapshot,
-    rpm: &'a RpmSection,
-    id: &RepoId,
-) -> Option<&'a str> {
+/// defines `id` decides which is named: [`restores`] does.
+fn left_out_defining<'a>(rpm: &'a RpmSection, id: &RepoId) -> Vec<&'a RepoFile> {
     let mut left_out: Vec<&RepoFile> = rpm
         .repo_files
         .iter()
@@ -167,14 +163,47 @@ fn restoring_file<'a>(
         (dnf_read_order(&a.path), &a.content).cmp(&(dnf_read_order(&b.path), &b.content))
     });
     left_out
-        .into_iter()
-        .find(|f| {
-            let restored = InstallRepos::with_included(snap, f);
-            restored
+}
+
+/// The serving id that including `file` alone would make `pkg` installable
+/// from, judged by [`repo_enabling_export`] on the export re-staged with
+/// every repo file and key at that path and content included.
+///
+/// Re-staging, rather than adding the file to the current set, is what
+/// keeps the advice honest: including a file whose definition is
+/// disabled, one an earlier file still shadows, one the stager would
+/// withhold (a config entry at `a.repo/stray` withholds both it and
+/// `a.repo`), or any file while another file the package owns stays
+/// dropped would not recover the proof, and advice naming it would send
+/// the operator in a circle. A config entry at the same path replaces its
+/// content, and a default repo file does not bring the `COPY` on its own.
+fn restores(snap: &InspectionSnapshot, pkg: &PackageEntry, file: &RepoFile) -> Option<RepoId> {
+    let mut proposed = snap.clone();
+    let rpm = proposed.rpm.as_mut()?;
+    for entry in rpm
+        .repo_files
+        .iter_mut()
+        .chain(rpm.gpg_keys.iter_mut())
+        .filter(|r| r.path == file.path && r.content == file.content)
+    {
+        entry.disposition = FindingKind::included();
+    }
+    let repos = InstallRepos::of(&proposed);
+    let rpm = proposed.rpm.as_ref()?;
+    if !matches!(
+        repo_enabling_export(rpm, &repos, pkg),
+        RepoEnablingExport::Served
+    ) {
+        return None;
+    }
+    pkg.repo_enabling_from
+        .iter()
+        .find(|id| {
+            repos
                 .effective(id)
-                .is_some_and(|sec| serves(rpm, &restored, &sec))
+                .is_some_and(|sec| serves(rpm, &repos, &sec))
         })
-        .map(|f| f.path.as_str())
+        .cloned()
 }
 
 /// Whether every `gpgkey=file://` path a section names is a key the image
@@ -197,6 +226,24 @@ pub(crate) fn keys_included(rpm: &RpmSection, repos: &InstallRepos, paths: &[Str
             k.is_key_named_by(path) && (k.shipped_by_base.is_some() || repos.copies_key(&k.path))
         })
     })
+}
+
+/// The captured repo files and keys the package provides that this export
+/// has dropped: the files [`serving_loss`] tries first.
+fn dropped_owned_files<'a>(
+    rpm: &'a RpmSection,
+    pkg: &'a PackageEntry,
+) -> impl Iterator<Item = &'a RepoFile> {
+    rpm.file_ownership
+        .iter()
+        .filter(move |entry| entry.package_name == pkg.name)
+        .flat_map(|entry| entry.paths.iter())
+        .flat_map(move |path| {
+            rpm.repo_files
+                .iter()
+                .chain(rpm.gpg_keys.iter())
+                .filter(move |f| f.path == *path && !f.is_in_image())
+        })
 }
 
 /// The first repo file or key the package provides that this export has
