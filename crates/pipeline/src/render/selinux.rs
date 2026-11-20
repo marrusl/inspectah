@@ -1050,7 +1050,7 @@ fn equivalence_operand_fault(operand: &str) -> Option<&'static str> {
 /// carries unquoted, so this check, and not any quoting, is what keeps them
 /// inert. It is coupled to the emission conditions in [`rule1_args`]: a field
 /// is checked exactly when it is emitted.
-fn bare_token_fault(token: &str) -> Option<&'static str> {
+pub(super) fn bare_token_fault(token: &str) -> Option<&'static str> {
     let ok = !token.is_empty()
         && token
             .chars()

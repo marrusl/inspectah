@@ -1254,6 +1254,67 @@ fn selinux_port_label_disposition_gates_the_line_and_the_precondition() {
     );
 }
 
+/// A port label renders as `semanage port` only when its type, protocol and
+/// port are ones semanage takes: a type of SELinux identifier characters,
+/// `tcp` or `udp`, and a port or ascending range within 1..=65535. Anything
+/// else takes the FIXME path and, being the only label, installs nothing.
+#[test]
+fn selinux_port_label_operands_are_validated_before_rendering() {
+    const FIXME_PREFIX: &str = "# FIXME: port label";
+    // (type, protocol, port, renders)
+    let cases: &[(&str, &str, &str, bool)] = &[
+        ("http_port_t", "tcp", "8080", true),
+        ("http_port_t", "udp", "1", true),
+        ("http_port_t", "tcp", "65535", true),
+        ("http_port_t", "tcp", "9000-9010", true),
+        ("http_port_t", "tcp", "8080-8080", true),
+        ("http_port_t", "tcp", "abc", false),
+        ("http_port_t", "tcp", "0", false),
+        ("http_port_t", "tcp", "70000", false),
+        ("http_port_t", "tcp", "65536", false),
+        ("http_port_t", "tcp", "9000-8000", false),
+        ("http_port_t", "tcp", "0-80", false),
+        ("http_port_t", "tcp", "8080-70000", false),
+        ("http_port_t", "tcp", "+80", false),
+        ("http_port_t", "tcp", "80-", false),
+        ("http_port_t", "tcp", "", false),
+        ("http_port_t", "bogus", "8080", false),
+        ("http_port_t", "TCP", "8080", false),
+        ("http*", "tcp", "8080", false),
+        ("http_port_t,x", "tcp", "8080", false),
+    ];
+    let mut failures = Vec::new();
+    for &(label_type, protocol, port, renders) in cases {
+        let out = containerfile::render_containerfile(
+            &sel::snapshot(
+                Vec::new(),
+                FcontextSource::PolicyStore,
+                vec![sel::port_label(label_type, protocol, port)],
+            ),
+            None,
+            None,
+        );
+        let command = format!("RUN semanage port -a -t {label_type} -p {protocol} {port}");
+        let has_command = out
+            .lines()
+            .any(|l| !l.starts_with('#') && l.contains("semanage port"));
+        let has_fixme = out.lines().any(|l| l.starts_with(FIXME_PREFIX));
+        let has_install = out.contains(sel::SEMANAGE_PACKAGE);
+        let ok = if renders {
+            out.contains(&command) && !has_fixme && has_install
+        } else {
+            has_fixme && !has_command && !has_install
+        };
+        if !ok {
+            failures.push(format!(
+                "({label_type:?}, {protocol:?}, {port:?}) expected renders={renders}: \
+                 command={has_command} fixme={has_fixme} install={has_install}\n{out}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
 #[test]
 fn selinux_install_precondition_absent_without_rules_or_port_labels() {
     // The fixture `containerfile.rs`'s section-ordering test uses: a block

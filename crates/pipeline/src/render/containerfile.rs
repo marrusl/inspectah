@@ -1979,11 +1979,41 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 // --- Security & Access Control section ---
 
+/// Protocols a port label renders with: the two the collector reads from
+/// `semanage port -l -C`. semanage also takes `dccp` and `sctp`, but no scan
+/// records them.
+const PORT_LABEL_PROTOCOLS: [&str; 2] = ["tcp", "udp"];
+
+/// The port numbers `semanage port` accepts.
+const PORT_NUMBERS: std::ops::RangeInclusive<u16> = 1..=u16::MAX;
+
+/// `port` as semanage takes it: one number, or an ascending `low-high`
+/// range, each in [`PORT_NUMBERS`] and written in decimal digits only.
+fn port_operand_ok(port: &str) -> bool {
+    let number = |s: &str| {
+        (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| s.parse::<u16>().ok())
+            .flatten()
+            .filter(|n| PORT_NUMBERS.contains(n))
+    };
+    match port.split_once('-') {
+        None => number(port).is_some(),
+        Some((low, high)) => matches!((number(low), number(high)), (Some(l), Some(h)) if l <= h),
+    }
+}
+
 /// Whether a port label renders as a `semanage port` command rather than a
 /// FIXME. The install precondition and the port loop read the same answer, so
 /// the block never installs `semanage` for a command it will not emit.
+///
+/// The three operands are written unquoted, so each is held to the values
+/// semanage takes rather than to the shell-safety check alone, which admits
+/// glob characters and words semanage refuses.
 fn port_label_renders(pl: &inspectah_core::types::selinux::SelinuxPortLabel) -> bool {
-    is_shell_operand(&pl.protocol) && is_shell_operand(&pl.port) && is_shell_operand(&pl.label_type)
+    PORT_LABEL_PROTOCOLS.contains(&pl.protocol.as_str())
+        && port_operand_ok(&pl.port)
+        && is_shell_operand(&pl.label_type)
+        && super::selinux::bare_token_fault(&pl.label_type).is_none()
 }
 
 fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
@@ -2081,7 +2111,7 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 ));
             } else {
                 body.push(format!(
-                    "# FIXME: port label contains unsafe characters, skipped: {:?} {:?} {:?}",
+                    "# FIXME: port label is not one semanage port takes, skipped: {:?} {:?} {:?}",
                     pl.label_type, pl.protocol, pl.port
                 ));
             }
