@@ -48,6 +48,32 @@ this failure.
 
 **Status.** Planned for a later release.
 
+## `podman build` fails on a carried user whose group is missing from the image
+
+**Symptom.** The build stops at a `RUN useradd ... -g <gid>` or
+`RUN useradd ... -G <group>` line in the Containerfile's "Users and Groups"
+section. `useradd` exits 6 because that group does not exist in the image.
+
+**Cause.** The export does not create every group a carried user's `useradd`
+names.
+
+**Who is affected.** Any export that carries a user (Containerfile strategy
+`useradd`) whose primary gid or supplementary group is not created by a
+`RUN groupadd` line above it and is not already in the base image. Typical
+cases are a group excluded in refine while a user still names it, and a group
+the scan did not record.
+
+**Workarounds.** Pick one.
+
+1. Exclude the user before export. In `inspectah refine`, open Users & Groups
+   and clear the user's include checkbox.
+
+2. Edit the generated Containerfile. Add `RUN groupadd -g <gid> <name>` before
+   that user's `useradd` line, using the gid or group name from the failing
+   line.
+
+**Status.** Planned for a later release.
+
 ## A redacted quoted or XML value loses its closing quote or tag
 
 **Symptom.** A configuration file in the export no longer parses where
