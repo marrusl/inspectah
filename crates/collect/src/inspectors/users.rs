@@ -33,7 +33,10 @@ pub const NON_SYSTEM_UID_MIN: u32 = 1000;
 /// bound sits below the `setup` package's `nobody` (65534, home `/`, also the
 /// kernel's default `overflowuid`) and the `(uid_t)-2` sentinel 4294967294.
 pub const NON_SYSTEM_UID_MAX: u32 = 60000;
-const NON_SYSTEM_GID_MIN: u32 = 1000;
+/// Lowest regular-group GID (`GID_MIN` in `/etc/login.defs`). Groups below
+/// it are system groups: the inspector does not record them, and the
+/// Containerfile leaves them to the base image.
+pub const NON_SYSTEM_GID_MIN: u32 = 1000;
 const NON_SYSTEM_GID_MAX: u32 = 60000; // exclusive
 
 const VALID_LOGIN_SHELLS: &[&str] = &[
@@ -437,7 +440,11 @@ fn parse_group(
             vec![]
         };
 
-        let source = if gid >= 1000 { "custom" } else { "system" };
+        let source = if gid >= NON_SYSTEM_GID_MIN {
+            "custom"
+        } else {
+            "system"
+        };
 
         section.groups.push(serde_json::json!({
             "name": group_name,
