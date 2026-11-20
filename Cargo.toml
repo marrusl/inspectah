@@ -22,3 +22,12 @@ thiserror = "2"
 insta = { version = "1", features = ["json"] }
 tempfile = "3"
 walkdir = "2"
+
+# Optimise third-party dependencies in dev and test builds (test inherits
+# from dev). Reported test time fell from 37 s to 19 s and units_scan_test
+# from 17 s to 6 s (measured 2026-11-19 at load 42 to 71, so treat these as
+# an upper bound). Costs one full rebuild of the dependencies when it first
+# applies. Workspace crates are not matched by "*" and stay at opt-level 0,
+# so our own code still debugs normally.
+[profile.dev.package."*"]
+opt-level = 2
