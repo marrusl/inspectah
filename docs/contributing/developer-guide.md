@@ -177,7 +177,7 @@ prove, is on [Testing](testing.md).
 | Skill file: a non-obvious pattern or correctness requirement | `process-docs/skills/<topic>.md`, with a row in `process-docs/skills/index.md`. When a crate, command, or major directory changes, update `process-docs/skills/codebase-layout.md` too |
 | Changelog entry | `CHANGELOG.md` under `## [Unreleased]`, per [`process-docs/changelog-policy.md`](https://github.com/marrusl/inspectah/blob/main/process-docs/changelog-policy.md): every user-visible change gets one; test-only, CI, docs, and internal refactors do not |
 | User documentation | `docs/` (GitHub Pages). Never a spec or a plan |
-| Rust tests | Beside the code: `#[cfg(test)]` modules in the source file, integration tests in `crates/*/tests/`, built as one binary per crate (refine, pipeline and core so far; other crates one binary per file): `tests/main.rs` declares each file as a module (`autotests = false`); run one file with `cargo test -p <package> --test integration <file stem>::` |
+| Rust tests | Beside the code: `#[cfg(test)]` modules in the source file, integration tests in `crates/*/tests/`, built as one binary per crate (refine, pipeline, core and collect so far; other crates one binary per file): `tests/main.rs` declares each file as a module (`autotests = false`); run one file with `cargo test -p <package> --test integration <file stem>::` |
 | Web UI unit tests | `crates/web/ui/src/**/*.test.ts` and `*.test.tsx` (vitest) |
 | Web UI end-to-end tests | `crates/web/ui/e2e/` (Playwright) |
 
