@@ -61,6 +61,13 @@ different things, on purpose, for different questions:
    because it is the reason `Ord`-based tie-breaking there uses the raw
    string, not `RepoId`'s own folded `Ord`.
 
+   The same folding makes `RepoId` the wrong key for any set of ids that
+   is emitted, such as the ids that become `--enablerepo` flags. A
+   `BTreeSet<RepoId>` keeps one of `site` and `SITE` and drops the other,
+   though dnf treats them as two repos. Collect emitted ids as exact
+   strings (`render/containerfile.rs::crb_ids` does), and prove it with a
+   case-variant pair in both file orders (`crb_flags_every_dnf_transaction`).
+
 A third, render-side question sits on top of the first:
 **`render/repoless.rs::disabled_repo_install()`** asks whether a package
 the scan left repo-less can install from its own repo with

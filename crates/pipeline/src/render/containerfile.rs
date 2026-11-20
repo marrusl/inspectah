@@ -21,7 +21,7 @@ use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
-use inspectah_core::types::repo::{RepoId, parse_repo_sections};
+use inspectah_core::types::repo::parse_repo_sections;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::units::UnitAction;
 
@@ -328,12 +328,16 @@ const CRB_BANNER: &str = "# CRB was enabled on the source host; EPEL packages ma
 
 /// The CRB section ids this export carries enabled, as the host wrote them.
 ///
+/// The set is keyed on the exact spelling, not on `RepoId`, whose
+/// equality folds ASCII case: dnf treats `codeready-builder-site` and
+/// `codeready-builder-SITE` as two repos, so each gets its own flag.
+///
 /// `--enablerepo` takes an id verbatim: nothing here reconstructs one from
 /// a prefix. That is also why no `$(arch)` can reach a `RUN` line -- an id
 /// containing it fails `sanitize_shell_value`, which rejects `$`, `(` and
 /// `)`, so the property is the filter's rather than a separate check's.
-fn crb_ids(rpm: &RpmSection) -> Vec<RepoId> {
-    let mut ids: std::collections::BTreeSet<RepoId> = std::collections::BTreeSet::new();
+fn crb_ids(rpm: &RpmSection) -> Vec<String> {
+    let mut ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in rpm
         .repo_files
         .iter()
@@ -346,7 +350,7 @@ fn crb_ids(rpm: &RpmSection) -> Vec<RepoId> {
                 && !CRB_ID_EXCLUDED_INFIXES.iter().any(|m| lower.contains(m))
                 && sanitize_shell_value(sec.id.as_str()).is_some()
             {
-                ids.insert(sec.id);
+                ids.insert(sec.id.as_str().to_owned());
             }
         }
     }
@@ -4317,6 +4321,53 @@ RUN dnf install -y \
             !output.contains("--enablerepo"),
             "an excluded repo file enables nothing:\n{output}"
         );
+
+        // Ids are case-sensitive to dnf: two CRB sections whose ids differ
+        // only by case are two repos, and each keeps its own flag with its
+        // own spelling, whichever file comes first.
+        const CRB_LOWER: &str = "codeready-builder-site-rpms";
+        const CRB_UPPER: &str = "codeready-builder-SITE-rpms";
+        let lower_file = repo_file(
+            "/etc/yum.repos.d/crb-lower.repo",
+            &format!("[{CRB_LOWER}]\nenabled=1\n"),
+            true,
+        );
+        let upper_file = repo_file(
+            "/etc/yum.repos.d/crb-upper.repo",
+            &format!("[{CRB_UPPER}]\nenabled=1\n"),
+            true,
+        );
+        for files in [
+            [lower_file.clone(), upper_file.clone()],
+            [upper_file.clone(), lower_file.clone()],
+        ] {
+            let mut snap = snapshot_with_packages(&["epel-release", "htop"]);
+            make_epel_repo_enabling(&mut snap, "epel-release");
+            snap.rpm
+                .as_mut()
+                .expect("fixture has an rpm section")
+                .repo_files
+                .extend(files);
+            let output = render_containerfile(&snap, None, None);
+            let transactions: Vec<&str> = output
+                .lines()
+                .filter(|l| l.starts_with("RUN dnf "))
+                .collect();
+            assert_eq!(
+                transactions.len(),
+                2,
+                "bootstrap and package list:\n{output}"
+            );
+            for line in &transactions {
+                for id in [CRB_LOWER, CRB_UPPER] {
+                    // The trailing space keeps a prefix match from passing.
+                    assert!(
+                        line.contains(&format!("--enablerepo={id} ")),
+                        "case-variant CRB id {id} lost its own flag: {line}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
