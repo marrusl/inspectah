@@ -168,8 +168,8 @@ average before and after; every sample started between 8.2 and 9.9.
 | `crates/core/src/lib.rs` (core) | A, per-file | 113.18, 111.35, 111.62, 116.13, 114.51 s | **113.18s** | 98-102s | 8.1-19.1 |
 | `crates/core/src/lib.rs` (core) | B, per-crate | 63.40, 57.34, 58.82, 61.10, 59.14 s | **59.14s** | 47-51s | 9.1-14.0 |
 
-A warm `cargo test --workspace` with nothing to rebuild took 26.73 and
-27.16 s on A (97 test result lines) and 22.62 and 22.98 s on B (18).
+A warm `cargo test --workspace` with nothing to rebuild took 27.16 s on
+A (97 test result lines) and 22.98 s on B (18).
 Both run the same 1,629 integration tests; B adds the 3 guard tests in
 each of its six `integration` binaries (3,940 tests passed on A, 3,958
 on B).
