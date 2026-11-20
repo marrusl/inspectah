@@ -62,6 +62,13 @@ which is what `normalize_source_repos` already rewrote `source_repo`
 to), and accepts only a section that is disabled, defines a source, and
 names no `gpgkey=file://` key the export leaves out (`keys_included`,
 shared with the repo-enabling proof).
+When more than one file defines the id, the section it judges is the one
+dnf 4 uses (`carried_definition`): files sorted by path with `.repo` cut
+off, compared by component, first definition wins (dnf's `RepoDict.add`
+drops later ones with "listed more than once"). A header repeated inside
+one file is one section to dnf, later keys overriding earlier ones, and
+`parse_repo_sections` merges it the same way. Never decide by the order of
+`repo_files`: it is the host's `read_dir` order.
 It is decided at render rather than at scan because whether the `.repo`
 file ships is a refine decision. It also requires the package to be
 installable by name (`is_package_installable`), and it does **not** read

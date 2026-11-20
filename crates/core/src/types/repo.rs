@@ -253,27 +253,42 @@ fn is_enabled_value(value: &str) -> bool {
 /// Lines before the first section header, and lines without a `key=value`
 /// form, are dropped rather than rejected -- malformed INI should degrade,
 /// not fail the scan.
+///
+/// A header repeated in the same content reopens its section rather than
+/// starting another, as libdnf's `ConfigParser` does: keys from every
+/// block apply, a later `enabled=` overrides an earlier one, and the
+/// section keeps its first position. The match is on the exact spelling,
+/// since dnf keys repos case-sensitively; [`RepoId`]'s folded equality is
+/// not used here. `gpg_key_paths` collects every block's keys, a superset
+/// of the last `gpgkey=` dnf keeps, so a check that every key is present
+/// never passes on a key dnf would still ask for.
 pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
-    let mut sections = Vec::new();
-    let mut current: Option<RepoSectionDef> = None;
+    let mut sections: Vec<RepoSectionDef> = Vec::new();
+    let mut current: Option<usize> = None;
 
     for line in content.lines() {
         let trimmed = line.trim();
 
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if let Some(section) = current.take() {
-                sections.push(section);
-            }
-            current = Some(RepoSectionDef {
-                id: RepoId::new(&trimmed[1..trimmed.len() - 1]),
-                enabled: true,
-                has_source: false,
-                gpg_key_paths: Vec::new(),
-            });
+            let header = &trimmed[1..trimmed.len() - 1];
+            current = Some(
+                match sections.iter().position(|s| s.id.as_str() == header) {
+                    Some(idx) => idx,
+                    None => {
+                        sections.push(RepoSectionDef {
+                            id: RepoId::new(header),
+                            enabled: true,
+                            has_source: false,
+                            gpg_key_paths: Vec::new(),
+                        });
+                        sections.len() - 1
+                    }
+                },
+            );
             continue;
         }
 
-        let Some(section) = current.as_mut() else {
+        let Some(section) = current.map(|idx| &mut sections[idx]) else {
             continue; // line outside any section
         };
         let Some((key, value)) = trimmed.split_once('=') else {
@@ -296,10 +311,6 @@ pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
             }
             _ => {}
         }
-    }
-
-    if let Some(section) = current.take() {
-        sections.push(section);
     }
 
     sections
@@ -413,5 +424,34 @@ enabled=yes
             vec!["/etc/pki/rpm-gpg/RPM-GPG-KEY-C"]
         );
         assert!(by("d").enabled);
+    }
+
+    #[test]
+    fn parse_repo_sections_merges_a_repeated_header_as_dnf_does() {
+        // libdnf's ConfigParser keeps one section per exact header: a
+        // repeated `[r]` reopens it, and a later key overwrites an earlier
+        // one. A header differing only in case is a different repo to dnf.
+        let content = "\
+[r]
+baseurl=https://example.invalid/r
+gpgkey=file:///etc/pki/rpm-gpg/KEY-1
+[other]
+enabled=0
+[r]
+enabled=0
+gpgkey=file:///etc/pki/rpm-gpg/KEY-2
+[R]
+enabled=1
+";
+        let got = parse_repo_sections(content);
+        let spellings: Vec<&str> = got.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(spellings, vec!["r", "other", "R"]);
+        let r = &got[0];
+        assert!(!r.enabled, "the second block's enabled=0 applies");
+        assert!(r.has_source, "the first block's baseurl still applies");
+        assert_eq!(
+            r.gpg_key_paths,
+            vec!["/etc/pki/rpm-gpg/KEY-1", "/etc/pki/rpm-gpg/KEY-2"]
+        );
     }
 }

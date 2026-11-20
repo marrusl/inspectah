@@ -1,7 +1,7 @@
 use inspectah_core::rpm_filename::StagedName;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::group_render::RenderContext;
-use inspectah_core::types::repo::{RepoId, parse_repo_sections};
+use inspectah_core::types::repo::{RepoId, RepoSectionDef, parse_repo_sections};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 
@@ -139,8 +139,9 @@ pub fn write_cached_rpms(
 /// hold: it carries a repo-less annotation, it is installable by name
 /// ([`is_package_installable`]: not a local install or no-repo state, and
 /// its `source_repo` is a real repo id rather than `@commandline`), its
-/// `source_repo` is not another `@` pseudo-repo, an included repo file has
-/// a section with that id that is disabled and defines a source, every
+/// `source_repo` is not another `@` pseudo-repo, the definition dnf would
+/// use among the included repo files ([`carried_definition`]) is disabled
+/// and defines a source, every
 /// `gpgkey=file://` key that section names is an included key (dnf cannot
 /// verify the package without it), and the id and the package's name and arch pass `sanitize_shell_value`. The id
 /// is returned as the `.repo` file spells it, since `--enablerepo` takes
@@ -163,11 +164,7 @@ fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId>
     {
         return None;
     }
-    rpm.repo_files
-        .iter()
-        .filter(|f| f.disposition.is_included())
-        .flat_map(|f| parse_repo_sections(&f.content))
-        .find(|sec| sec.id.as_str().eq_ignore_ascii_case(&pkg.source_repo))
+    carried_definition(rpm, &RepoId::new(pkg.source_repo.as_str()))
         .filter(|sec| {
             !sec.enabled
                 && sec.has_source
@@ -175,6 +172,42 @@ fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId>
                 && sanitize_shell_value(sec.id.as_str()).is_some()
         })
         .map(|sec| sec.id)
+}
+
+/// The definition of `id` dnf uses on the image, among the `.repo` files
+/// the export carries.
+///
+/// dnf 4 reads `.repo` files sorted by their path with `.repo` cut off,
+/// compared component by component (`dnf/conf/read.py`, `RepoReader`), and
+/// the first file to define an id wins: `RepoDict.add` refuses a later one
+/// with "Repository ... is listed more than once in the configuration"
+/// and dnf goes on without it. Repeated headers inside one file are
+/// already merged by [`parse_repo_sections`]. The order of `repo_files`,
+/// which is the host's `read_dir` order, does not enter into it; files
+/// with the same path, which a host cannot have, fall back to their
+/// content so the answer is still the same in any order.
+fn carried_definition(rpm: &RpmSection, id: &RepoId) -> Option<RepoSectionDef> {
+    rpm.repo_files
+        .iter()
+        .filter(|f| f.disposition.is_included())
+        .filter_map(|f| {
+            let sec = parse_repo_sections(&f.content)
+                .into_iter()
+                .find(|sec| sec.id == *id)?;
+            Some((dnf_read_order(&f.path), f.content.as_str(), sec))
+        })
+        .min_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)))
+        .map(|(_, _, sec)| sec)
+}
+
+/// The key dnf 4 sorts `.repo` files by: the path without its `.repo`
+/// suffix, split into components (`dnf.util.split_path`). Without the cut,
+/// `x-y.repo` would sort before `x.repo`; dnf reads `x` first.
+fn dnf_read_order(path: &str) -> Vec<&str> {
+    path.strip_suffix(".repo")
+        .unwrap_or(path)
+        .split('/')
+        .collect()
 }
 
 /// The commented `COPY`/`RUN` pair a pre-excluded cached RPM offers.
@@ -364,7 +397,8 @@ fn plan_cached(pkg: &PackageEntry, plan: &mut RepolessPlan) {
 mod tests {
     use super::*;
     use inspectah_core::types::FindingKind;
-    use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+    use inspectah_core::types::repo::RepoAttribution;
+    use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 
     /// The rendered Containerfile, line by line: repo-less packages are
     /// planned here and rendered in the package phase's combined install,
@@ -642,6 +676,128 @@ mod tests {
                 "    && rm /tmp/evil-1-1.x86_64.rpm \\",
             ]
         );
+    }
+
+    /// A `[r]` section, disabled, with a source: one dnf can install from
+    /// with `--enablerepo=r`.
+    const R_DISABLED: &str = "[r]\nbaseurl=https://example.invalid/r\nenabled=0\n";
+    /// A `[r]` section dnf keeps enabled.
+    const R_ENABLED: &str = "[r]\nbaseurl=https://example.invalid/r\nenabled=1\n";
+
+    /// An included `.repo` file at `path`.
+    fn repo_file(path: &str, content: &str, is_default_repo: bool) -> RepoFile {
+        RepoFile {
+            path: path.into(),
+            content: content.into(),
+            is_default_repo,
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }
+    }
+
+    /// A repo-less package the host installed from `source_repo`.
+    fn from_repo(source_repo: &str, attribution: RepoAttribution) -> PackageEntry {
+        PackageEntry {
+            name: "tool".into(),
+            version: "1".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: source_repo.into(),
+            repo_attribution: attribution,
+            disposition: FindingKind::included(),
+            repoless_annotation: format!(
+                "No repo source: repo '{source_repo}' not in enabled repos"
+            ),
+            ..Default::default()
+        }
+    }
+
+    fn exact(id: &str) -> RepoAttribution {
+        RepoAttribution::Exact {
+            id: RepoId::new(id),
+        }
+    }
+
+    /// Whether `pkg` routes to its disabled repo, given `files`.
+    fn installs_from_disabled_repo(pkg: &PackageEntry, files: Vec<RepoFile>) -> bool {
+        let rpm = RpmSection {
+            packages_added: vec![pkg.clone()],
+            repo_files: files,
+            ..Default::default()
+        };
+        matches!(
+            route_for(&rpm, pkg, &VerifiedUploads::new()),
+            PackageRoute::DisabledRepo(_)
+        )
+    }
+
+    /// `(file name, content)` pairs under `/etc/yum.repos.d`.
+    type RepoFileNames = &'static [(&'static str, &'static str)];
+
+    #[test]
+    fn a_duplicate_repo_id_resolves_to_dnfs_definition_in_either_file_order() {
+        // dnf 4 reads `.repo` files sorted by path with `.repo` cut off, and
+        // the first file to define an id wins; a later one is dropped with
+        // "listed more than once". Inside one file, a repeated header
+        // reopens the section and later keys overwrite earlier ones. Each
+        // case runs with the files in both orders: the answer is dnf's,
+        // never `read_dir`'s.
+        let d = "/etc/yum.repos.d";
+        let cases: &[(&str, RepoFileNames, bool)] = &[
+            (
+                "first file disabled, second enabled",
+                &[("a.repo", R_DISABLED), ("b.repo", R_ENABLED)],
+                true,
+            ),
+            (
+                "first file enabled, second disabled",
+                &[("a.repo", R_ENABLED), ("b.repo", R_DISABLED)],
+                false,
+            ),
+            (
+                // `x` sorts before `x-y`, though `x-y.repo` sorts before
+                // `x.repo`: dnf compares the names without `.repo`.
+                "dnf compares names without .repo",
+                &[("x.repo", R_DISABLED), ("x-y.repo", R_ENABLED)],
+                true,
+            ),
+            (
+                "one file, a later block disables it",
+                &[(
+                    "a.repo",
+                    "[r]\nbaseurl=https://example.invalid/r\n[r]\nenabled=0\n",
+                )],
+                true,
+            ),
+            (
+                "one file, a later block enables it",
+                &[(
+                    "a.repo",
+                    "[r]\nbaseurl=https://example.invalid/r\nenabled=0\n[r]\nenabled=1\n",
+                )],
+                false,
+            ),
+        ];
+        for (what, files, expected) in cases {
+            let pkg = from_repo("r", exact("r"));
+            let forward: Vec<RepoFile> = files
+                .iter()
+                .map(|(name, content)| repo_file(&format!("{d}/{name}"), content, false))
+                .collect();
+            let mut reverse = forward.clone();
+            reverse.reverse();
+            assert_eq!(
+                installs_from_disabled_repo(&pkg, forward),
+                *expected,
+                "{what}, listed in order"
+            );
+            assert_eq!(
+                installs_from_disabled_repo(&pkg, reverse),
+                *expected,
+                "{what}, listed reversed"
+            );
+        }
     }
 
     #[test]
