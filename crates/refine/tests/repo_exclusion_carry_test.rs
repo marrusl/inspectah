@@ -496,3 +496,137 @@ fn no_exclusion_changes_nothing() {
         assert!(export.stages(path), "{path}");
     }
 }
+
+/// Whether the Containerfile names `name` as a `dnf install` operand.
+fn installs(containerfile: &str, name: &str) -> bool {
+    containerfile
+        .lines()
+        .any(|l| l.trim_end_matches(" \\").trim() == name)
+}
+
+/// `[site]` and `[SITE]` are two repos to dnf, each in its own file with
+/// its own key and its own package. Excluding one spelling leaves the
+/// other's package, file and key carried and its package installed; the
+/// exclusion never reaches across a case variant. Each spelling is
+/// excluded in turn, with the files in both orders.
+#[test]
+fn excluding_one_case_variant_of_a_repo_keeps_the_other() {
+    // Paths that differ in more than case: the stager treats two
+    // spellings of one path as one file.
+    const LOWER_PATH: &str = "/etc/yum.repos.d/site-lower.repo";
+    const UPPER_PATH: &str = "/etc/yum.repos.d/site-upper.repo";
+    const LOWER_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-site-lower";
+    const UPPER_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-site-upper";
+    let lower_repo = format!(
+        "[site]\nbaseurl=https://repo.example.com/lower\nenabled=1\ngpgkey=file://{LOWER_KEY}\n"
+    );
+    let upper_repo = format!(
+        "[SITE]\nbaseurl=https://repo.example.com/upper\nenabled=1\ngpgkey=file://{UPPER_KEY}\n"
+    );
+    // `(spelling, its file, its key, its package)`.
+    let lower = ("site", LOWER_PATH, LOWER_KEY, "site-tool");
+    let upper = ("SITE", UPPER_PATH, UPPER_KEY, "site-agent");
+
+    for (excluded, kept) in [(lower, upper), (upper, lower)] {
+        for reverse in [false, true] {
+            let what = format!("exclude {}, files reversed {reverse}", excluded.0);
+            let mut snap = InspectionSnapshot::new();
+            let mut repo_files = vec![
+                repo_file(LOWER_PATH, &lower_repo),
+                repo_file(UPPER_PATH, &upper_repo),
+            ];
+            if reverse {
+                repo_files.reverse();
+            }
+            snap.rpm = Some(RpmSection {
+                packages_added: vec![package(lower.3, lower.0), package(upper.3, upper.0)],
+                repo_files,
+                gpg_keys: vec![key(LOWER_KEY), key(UPPER_KEY)],
+                ..Default::default()
+            });
+            snap.baseline = Some(baseline());
+            let mut session = RefineSession::new(snap);
+
+            set_repo(&mut session, excluded.0, false);
+
+            let rpm = session.snapshot_projected().rpm.expect("rpm section");
+            let included = |name: &str| {
+                rpm.packages_added
+                    .iter()
+                    .find(|p| p.name == name)
+                    .is_some_and(|p| p.disposition.is_included())
+            };
+            assert!(!included(excluded.3), "{what}: {} excluded", excluded.3);
+            assert!(included(kept.3), "{what}: {} kept", kept.3);
+            assert!(!carried(&session, excluded.1), "{what}: {}", excluded.1);
+            assert!(!carried(&session, excluded.2), "{what}: {}", excluded.2);
+            assert!(carried(&session, kept.1), "{what}: {}", kept.1);
+            assert!(carried(&session, kept.2), "{what}: {}", kept.2);
+
+            let export = Export::of(&session);
+            let cf = &export.containerfile;
+            assert!(
+                export.stages(kept.1) && export.stages(kept.2),
+                "{what}: the kept repo's file and key are staged"
+            );
+            assert!(
+                !export.stages(excluded.1) && !export.stages(excluded.2),
+                "{what}: the excluded repo's file and key are not"
+            );
+            assert!(installs(cf, kept.3), "{what}:\n{cf}");
+            assert!(!installs(cf, excluded.3), "{what}:\n{cf}");
+            assert_eq!(
+                session.pending_changes().repos_excluded(),
+                [excluded.0.to_string()],
+                "{what}"
+            );
+        }
+    }
+}
+
+/// A package recorded in another case than the one section that defines
+/// it still belongs to that section: excluding the section takes the
+/// package, file and key, from either spelling, and re-including it with
+/// the package's spelling brings them back.
+#[test]
+fn a_lone_case_variant_still_answers_for_a_repo_toggle() {
+    const PATH: &str = "/etc/yum.repos.d/vendor.repo";
+    const KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-vendor";
+    let content =
+        format!("[vendor]\nbaseurl=https://repo.example.com/v\nenabled=1\ngpgkey=file://{KEY}\n");
+    for (exclude_as, include_as) in [("vendor", "Vendor"), ("Vendor", "vendor")] {
+        let what = format!("exclude {exclude_as}, include {include_as}");
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![package("vendor-tool", "Vendor")],
+            repo_files: vec![repo_file(PATH, &content)],
+            gpg_keys: vec![key(KEY)],
+            ..Default::default()
+        });
+        snap.baseline = Some(baseline());
+        let mut session = RefineSession::new(snap);
+        let included = |session: &RefineSession| {
+            session
+                .snapshot_projected()
+                .rpm
+                .expect("rpm section")
+                .packages_added[0]
+                .disposition
+                .is_included()
+        };
+
+        set_repo(&mut session, exclude_as, false);
+        assert!(!included(&session), "{what}: package excluded");
+        assert!(!carried(&session, PATH), "{what}: file");
+        assert!(!carried(&session, KEY), "{what}: key");
+
+        set_repo(&mut session, include_as, true);
+        assert!(included(&session), "{what}: package back");
+        assert!(carried(&session, PATH), "{what}: file back");
+        assert!(carried(&session, KEY), "{what}: key back");
+        assert!(
+            session.pending_changes().repos_excluded().is_empty(),
+            "{what}"
+        );
+    }
+}

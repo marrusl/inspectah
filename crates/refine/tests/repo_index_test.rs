@@ -115,14 +115,8 @@ fn test_repo_index_packages_by_repo() {
 fn test_repo_index_multi_section_repo_file() {
     let snap = make_snap_with_repos();
     let index = RepoIndex::build(&snap);
-    let baseos_files = index
-        .repo_file_by_section()
-        .get(&RepoId::new("baseos"))
-        .unwrap();
-    let appstream_files = index
-        .repo_file_by_section()
-        .get(&RepoId::new("appstream"))
-        .unwrap();
+    let baseos_files = index.repo_file_by_section().get("baseos").unwrap();
+    let appstream_files = index.repo_file_by_section().get("appstream").unwrap();
     assert!(baseos_files.contains(&"/etc/yum.repos.d/centos.repo".to_string()));
     assert!(appstream_files.contains(&"/etc/yum.repos.d/centos.repo".to_string()));
 }
@@ -161,7 +155,7 @@ fn a_key_named_literally_and_with_a_variable_is_one_shared_key() {
 
     for id in ["epel", "mirror"] {
         assert_eq!(
-            index.gpg_keys_by_section().get(&RepoId::new(id)),
+            index.gpg_keys_by_section().get(id),
             Some(&vec![KEY.to_string()]),
             "{id} names the key at its captured path"
         );
@@ -183,7 +177,7 @@ fn test_repo_index_gpg_shared_key() {
     let index = RepoIndex::build(&snap);
     for id in ["baseos", "appstream"] {
         assert_eq!(
-            index.gpg_keys_by_section().get(&RepoId::new(id)),
+            index.gpg_keys_by_section().get(id),
             Some(&vec![
                 "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".to_string()
             ]),
@@ -465,11 +459,11 @@ fn only_host_enabled_sections_keep_a_file_or_key_carried() {
     });
     let index = RepoIndex::build(&snap);
     let none = HashSet::new();
-    let site = HashSet::from([RepoId::new("site")]);
+    let site = HashSet::from(["site".to_string()]);
     let disabled = HashSet::from([
-        RepoId::new("site-testing"),
-        RepoId::new("site-testing-source"),
-        RepoId::new("site-source"),
+        "site-testing".to_string(),
+        "site-testing-source".to_string(),
+        "site-source".to_string(),
     ]);
 
     // (what, carried with nothing excluded, with [site] excluded,
@@ -590,7 +584,7 @@ fn a_duplicate_repo_id_takes_dnfs_definition_in_either_file_order() {
                 provenance,
                 "{what}, {order}: provenance"
             );
-            let mut defining = index.repo_file_by_section()[&RepoId::new("r")].clone();
+            let mut defining = index.repo_file_by_section()["r"].clone();
             defining.sort();
             assert_eq!(
                 defining,

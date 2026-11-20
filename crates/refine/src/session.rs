@@ -253,23 +253,22 @@ fn sweep_part_files(dir: &Path) -> Result<(), RefineError> {
     Ok(())
 }
 
-/// Whether a package's `source_repo` resolves to the given repo section's
-/// `RepoId` -- `Exact` or `Resolved` attribution (§ 3.2). Attribution
-/// classification (`normalize_source_repos`) already rewrites `source_repo`
-/// to the matched section's own spelling for `Exact`/`Resolved`; every other
-/// attribution variant leaves `source_repo` as the recorded value, which
-/// cannot case-fold-equal any section id (an exact match against all
-/// sections is checked first during normalization, so a value that matched
-/// would already be `Exact`). A case-insensitive compare is therefore
-/// equivalent to checking the attribution kind directly, and is what the
-/// existing repo-toggle cascade (`session.rs`'s `ItemId::Repo` projection
-/// arm) already uses.
-fn package_attributed_to_repo(pkg: &PackageEntry, id: &RepoId) -> bool {
-    pkg.source_repo.eq_ignore_ascii_case(id.as_str())
+/// Whether a package's `source_repo` names `repo`, an identity from
+/// [`RepoIndex::repo_identity`] (§ 3.2). The package's spelling resolves
+/// the same way a toggle target does: the section spelled exactly as
+/// recorded, or the one case variant of it. `normalize_source_repos`
+/// already rewrites `source_repo` to the section's own spelling for
+/// `Exact`/`Resolved`, so this is usually an exact match; the lone-variant
+/// fallback covers a snapshot that was not normalized. A folded compare
+/// would put a package from `[SITE]` under `[site]` as well, and a toggle of
+/// one would reach both.
+fn package_attributed_to_repo(pkg: &PackageEntry, index: &RepoIndex, repo: &str) -> bool {
+    index.repo_identity(&pkg.source_repo) == repo
 }
 
 /// The package half of the `ItemId::Repo` cascade (§ 3.2): set every
-/// package attributed to `section_id` to `include`, skipping locked
+/// package attributed to `repo` ([`package_attributed_to_repo`]) to
+/// `include`, skipping locked
 /// packages -- they are outside both the effective-member counts
 /// (`group_state::is_effective_member`) and this cascade. Extracted so it
 /// can be unit-tested directly: `project_snapshot`'s final
@@ -279,10 +278,10 @@ fn package_attributed_to_repo(pkg: &PackageEntry, id: &RepoId) -> bool {
 /// indistinguishable from before it when observed through `view()` /
 /// `snapshot_projected()` -- this function's own `rpm.packages_added` is
 /// the only place the behavior this fixes is actually visible.
-fn cascade_repo_packages(rpm: &mut RpmSection, section_id: &str, include: bool) {
+fn cascade_repo_packages(rpm: &mut RpmSection, index: &RepoIndex, repo: &str, include: bool) {
     let disposition = FindingKind::from_bool(include);
     for pkg in &mut rpm.packages_added {
-        if pkg.source_repo.eq_ignore_ascii_case(section_id) && !pkg.locked {
+        if package_attributed_to_repo(pkg, index, repo) && !pkg.locked {
             pkg.disposition = disposition.clone();
         }
     }
@@ -1406,7 +1405,7 @@ impl RefineSession {
     pub fn repo_effective(&self, id: &RepoId) -> RepoEffective {
         self.view()
             .repo_effective
-            .get(id)
+            .get(self.repo_index.repo_identity(id.as_str()))
             .copied()
             .unwrap_or_default()
     }
@@ -2725,8 +2724,8 @@ impl RefineSession {
     /// repo-exclusion history plays no part: a history bit cannot say
     /// whether an op changes a member (position 29).
     fn check_repo_noop(&self, section_id: &str, include: bool) -> Result<(), RefineError> {
-        let id = RepoId::new(section_id);
-        let effective = self.repo_effective(&id);
+        let effective = self.repo_effective(&RepoId::new(section_id));
+        let repo = self.repo_index.repo_identity(section_id);
 
         if effective.member_count == 0 {
             let projected = self.project_snapshot();
@@ -2736,7 +2735,7 @@ impl RefineSession {
                 .map(|r| {
                     r.packages_added
                         .iter()
-                        .filter(|p| package_attributed_to_repo(p, &id))
+                        .filter(|p| package_attributed_to_repo(p, &self.repo_index, repo))
                         .filter(|p| group_state::is_actionable(p))
                         .count()
                 })
@@ -2839,15 +2838,19 @@ impl RefineSession {
                                 }
                             }
                             ItemId::Repo { path: section_id } => {
-                                let id = RepoId::new(section_id.as_str());
+                                // The one repo the target names, by its
+                                // exact spelling: `[site]` and `[SITE]` are
+                                // two repos, and a toggle reaches only the
+                                // packages, files and keys of its own.
+                                let repo = self.repo_index.repo_identity(section_id);
                                 if !*include {
                                     // Exclude repo: cascade to packages, repo files, GPG keys
                                     let excluded_sections = self.excluded_sections_at(&snap);
 
                                     if let Some(ref mut rpm) = snap.rpm {
-                                        // 1. Exclude all packages from this repo (case-insensitive),
+                                        // 1. Exclude all packages from this repo,
                                         // skipping locked members (§ 3.2).
-                                        cascade_repo_packages(rpm, section_id, false);
+                                        cascade_repo_packages(rpm, &self.repo_index, repo, false);
 
                                         // 2. and 3. The repo files defining this
                                         // section and the keys it names, each
@@ -2855,7 +2858,7 @@ impl RefineSession {
                                         // keeps it (`RepoIndex::repo_file_carried`,
                                         // `RepoIndex::gpg_key_carried`).
                                         if let Some(file_paths) =
-                                            self.repo_index.repo_file_by_section().get(&id)
+                                            self.repo_index.repo_file_by_section().get(repo)
                                         {
                                             for file_path in file_paths {
                                                 if !self.repo_index.repo_file_carried(
@@ -2871,7 +2874,7 @@ impl RefineSession {
                                             }
                                         }
                                         if let Some(key_paths) =
-                                            self.repo_index.gpg_keys_by_section().get(&id)
+                                            self.repo_index.gpg_keys_by_section().get(repo)
                                         {
                                             for key_path in key_paths {
                                                 if self
@@ -2897,13 +2900,13 @@ impl RefineSession {
                                 } else {
                                     // Include repo: re-enable packages, repo files, GPG keys
                                     if let Some(ref mut rpm) = snap.rpm {
-                                        // 1. Include all packages from this repo (case-insensitive),
+                                        // 1. Include all packages from this repo,
                                         // skipping locked members (§ 3.2).
-                                        cascade_repo_packages(rpm, section_id, true);
+                                        cascade_repo_packages(rpm, &self.repo_index, repo, true);
 
                                         // 2. Re-enable repo files for this section
                                         if let Some(file_paths) =
-                                            self.repo_index.repo_file_by_section().get(&id)
+                                            self.repo_index.repo_file_by_section().get(repo)
                                         {
                                             for file_path in file_paths {
                                                 if let Some(rf) = rpm
@@ -2920,7 +2923,7 @@ impl RefineSession {
                                         // except one the base image ships: the
                                         // repo exclude did not decide that one.
                                         if let Some(key_paths) =
-                                            self.repo_index.gpg_keys_by_section().get(&id)
+                                            self.repo_index.gpg_keys_by_section().get(repo)
                                         {
                                             for key_path in key_paths {
                                                 for k in rpm.gpg_keys.iter_mut().filter(|g| {
@@ -3277,9 +3280,10 @@ impl RefineSession {
     /// Compute the set of section IDs that are currently excluded based on the
     /// active op stack. A SetInclude(Repo, false) adds to the set, SetInclude(Repo, true) removes.
     ///
-    /// Keyed by `RepoId` so a mixed-case `SetInclude` target still matches
-    /// an already-excluded section of a different case.
-    fn excluded_sections_at(&self, _snap: &InspectionSnapshot) -> HashSet<RepoId> {
+    /// Keyed by [`RepoIndex::repo_identity`], so a target spelled as the
+    /// lone case variant of a section still matches that section, while
+    /// `[site]` and `[SITE]` stay two entries.
+    fn excluded_sections_at(&self, _snap: &InspectionSnapshot) -> HashSet<String> {
         let mut excluded = HashSet::new();
         for entry in &self.timeline[..self.cursor] {
             let ops: &[RefinementOp] = match entry {
@@ -3293,11 +3297,11 @@ impl RefineSession {
                     include,
                 } = op
                 {
-                    let id = RepoId::new(section_id.as_str());
+                    let repo = self.repo_index.repo_identity(section_id);
                     if *include {
-                        excluded.remove(&id);
+                        excluded.remove(repo);
                     } else {
-                        excluded.insert(id);
+                        excluded.insert(repo.to_owned());
                     }
                 }
             }
@@ -3601,13 +3605,15 @@ impl RefineSession {
             .iter()
             .map(|p| canonical_package_id(&p.entry.name, &p.entry.arch))
             .collect();
-        let mut repo_effective: BTreeMap<RepoId, RepoEffective> = BTreeMap::new();
+        // Keyed by `RepoIndex::repo_identity`, the identity a repo toggle
+        // reaches its packages by, so the counts and the cascade agree.
+        let mut repo_effective: BTreeMap<String, RepoEffective> = BTreeMap::new();
         for pkg in &effective_packages {
             if pkg.source_repo.is_empty() {
                 continue;
             }
             let entry = repo_effective
-                .entry(RepoId::new(pkg.source_repo.clone()))
+                .entry(self.repo_index.repo_identity(&pkg.source_repo).to_owned())
                 .or_default();
             entry.member_count += 1;
             if pkg.disposition.is_included() {
@@ -6430,7 +6436,8 @@ mod tests {
             packages_added: vec![pkg("locked", true, true), pkg("free", false, true)],
             ..Default::default()
         };
-        cascade_repo_packages(&mut rpm, "vendor", false);
+        let index = RepoIndex::build(&InspectionSnapshot::default());
+        cascade_repo_packages(&mut rpm, &index, "vendor", false);
         assert!(
             rpm.packages_added[0].disposition.is_included(),
             "exclude-all must not touch the locked member"
@@ -6447,7 +6454,7 @@ mod tests {
             packages_added: vec![pkg("locked", true, false), pkg("free", false, false)],
             ..Default::default()
         };
-        cascade_repo_packages(&mut rpm, "vendor", true);
+        cascade_repo_packages(&mut rpm, &index, "vendor", true);
         assert!(
             !rpm.packages_added[0].disposition.is_included(),
             "include-all must not touch the locked member"

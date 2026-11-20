@@ -545,7 +545,9 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroup> {
                 RepoIndex::is_distro_repo(&section_id)
             };
             let tier = RepoIndex::repo_tier(&section_id);
-            let enabled = !excluded.contains(section_id.as_str());
+            // The excluded set holds `RepoIndex::repo_identity`s; a group
+            // spelled as the lone case variant of a section is that repo.
+            let enabled = !excluded.contains(repo_index.repo_identity(&section_id));
             RepoGroup {
                 section_id,
                 provenance,

@@ -198,10 +198,21 @@ Both are exact-first and case-aware. dnf keys repos by exact spelling,
 so `[ab]` and `[AB]` are two repos, in one file or in two;
 `section_spelling` picks the section spelled as asked, falls back to a
 case variant only when it is the only one, and names none when two
-variants compete. `RepoId`'s folded equality is for attribution and
-inventory maps, never for choosing which section dnf uses. Other files
-defining the id stay in the inventory (`RepoIndex::repo_file_by_section`,
-`gpg_keys_by_section`), which exclusion needs whichever definition wins.
+variants compete. `RepoId`'s folded equality is for loose attribution
+and grouping by recorded name (`RepoIndex::packages_by_repo`), never for
+choosing which section dnf uses or which repo a toggle reaches. Other
+files defining the id stay in the inventory
+(`RepoIndex::repo_file_by_section`, `gpg_keys_by_section`), which
+exclusion needs whichever definition wins.
+
+Refine's repo toggle works in one identity, `RepoIndex::repo_identity`:
+the section spelled exactly as given, else the lone case variant, else
+the given spelling itself. The toggle target, each package's
+`source_repo`, the excluded set, the file and key inventories, the
+effective-member counts and the repo groups' enabled state all go
+through it, so excluding `[site]` leaves `[SITE]`'s packages, files and
+keys carried, while a package recorded `Vendor` still follows the one
+`[vendor]` section.
 
 ## Edge case: anaconda
 

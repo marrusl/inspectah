@@ -14,27 +14,30 @@ pub use repo::OFFICIAL_OPTIONAL_REPOS;
 /// Index mapping repo section IDs to packages, repo file paths, and GPG keys.
 /// Built once at session construction from snapshot data.
 ///
-/// The inventory maps are keyed by [`RepoId`]: a package's recorded
-/// `source_repo` and a `.repo` file's `[section]` header fold ASCII case
-/// against each other, so a mixed-case spelling on either side still
-/// resolves to the same entry. Provenance is judged on the one definition
-/// dnf uses, per exact spelling ([`Self::provenance`]).
+/// `packages_by_repo` is keyed by [`RepoId`], which folds ASCII case, so a
+/// package's recorded spelling groups with any case of it. Everything a
+/// repo toggle acts on is keyed by the section's exact spelling instead:
+/// dnf keys repos case-sensitively, so `[site]` and `[SITE]` are two repos
+/// with their own files and keys. A toggle and a package each name one of
+/// them through [`Self::repo_identity`]. Provenance is judged on the one
+/// definition dnf uses, per exact spelling ([`Self::provenance`]).
 pub struct RepoIndex {
     /// Packages grouped by their `source_repo` section ID.
     packages_by_repo: BTreeMap<RepoId, Vec<String>>,
-    /// Repo file paths that define each section ID.
-    repo_file_by_section: BTreeMap<RepoId, Vec<String>>,
-    /// GPG key paths referenced by each section ID: the `path` of each
-    /// captured key the section names, or the path as written when no
-    /// captured key answers it.
-    gpg_keys_by_section: BTreeMap<RepoId, Vec<String>>,
-    /// Repo file path -> the sections it defines that the host enabled.
-    /// Only these keep the file carried ([`Self::repo_file_carried`]).
-    enabled_sections_by_file: BTreeMap<String, BTreeSet<RepoId>>,
-    /// GPG key path (as in `gpg_keys_by_section`) -> the host-enabled
-    /// sections that name it. Only these keep the key carried
-    /// ([`Self::gpg_key_carried`]).
-    enabled_sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>>,
+    /// Repo file paths that define each section, by exact spelling.
+    repo_file_by_section: BTreeMap<String, Vec<String>>,
+    /// GPG key paths referenced by each section, by exact spelling: the
+    /// `path` of each captured key the section names, or the path as
+    /// written when no captured key answers it.
+    gpg_keys_by_section: BTreeMap<String, Vec<String>>,
+    /// Repo file path -> the exact spellings of the sections it defines
+    /// that the host enabled. Only these keep the file carried
+    /// ([`Self::repo_file_carried`]).
+    enabled_sections_by_file: BTreeMap<String, BTreeSet<String>>,
+    /// GPG key path (as in `gpg_keys_by_section`) -> the exact spellings of
+    /// the host-enabled sections that name it. Only these keep the key
+    /// carried ([`Self::gpg_key_carried`]).
+    enabled_sections_by_gpg_key: BTreeMap<String, BTreeSet<String>>,
     /// Provenance per section id, keyed by the id's exact spelling: dnf
     /// keys repos case-sensitively, so `[ab]` and `[AB]` each have their
     /// own. Read through [`Self::provenance`], which picks the spelling.
@@ -81,17 +84,18 @@ impl RepoIndex {
         // These are the inventory of every defining file and key, which
         // exclusion needs whichever definition dnf uses; provenance is
         // judged on that one definition alone, in step 3.
-        let mut repo_file_by_section: BTreeMap<RepoId, Vec<String>> = BTreeMap::new();
-        let mut gpg_keys_by_section: BTreeMap<RepoId, Vec<String>> = BTreeMap::new();
-        let mut enabled_sections_by_file: BTreeMap<String, BTreeSet<RepoId>> = BTreeMap::new();
-        let mut enabled_sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>> = BTreeMap::new();
+        let mut repo_file_by_section: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut gpg_keys_by_section: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut enabled_sections_by_file: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut enabled_sections_by_gpg_key: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         // Every exact spelling any file defines.
         let mut spellings: BTreeSet<String> = BTreeSet::new();
 
         for repo_file in &rpm.repo_files {
             for section in repo::parse_repo_sections(&repo_file.content) {
+                let spelling = section.id.as_str();
                 repo_file_by_section
-                    .entry(section.id.clone())
+                    .entry(spelling.to_owned())
                     .or_default()
                     .push(repo_file.path.clone());
                 // Recorded per file, not per id: the same id can be enabled
@@ -100,7 +104,7 @@ impl RepoIndex {
                     enabled_sections_by_file
                         .entry(repo_file.path.clone())
                         .or_default()
-                        .insert(section.id.clone());
+                        .insert(spelling.to_owned());
                 }
 
                 for key_path in section
@@ -109,7 +113,7 @@ impl RepoIndex {
                     .flat_map(|reference| captured_key_paths(&rpm.gpg_keys, reference))
                 {
                     gpg_keys_by_section
-                        .entry(section.id.clone())
+                        .entry(spelling.to_owned())
                         .or_default()
                         .push(key_path.clone());
 
@@ -117,11 +121,11 @@ impl RepoIndex {
                         enabled_sections_by_gpg_key
                             .entry(key_path)
                             .or_default()
-                            .insert(section.id.clone());
+                            .insert(spelling.to_owned());
                     }
                 }
 
-                spellings.insert(section.id.as_str().to_owned());
+                spellings.insert(spelling.to_owned());
             }
         }
 
@@ -183,19 +187,36 @@ impl RepoIndex {
         &self.packages_by_repo
     }
 
-    /// Repo file paths that define each section ID.
-    pub fn repo_file_by_section(&self) -> &BTreeMap<RepoId, Vec<String>> {
+    /// Repo file paths that define each section, keyed by the section's
+    /// exact spelling ([`Self::repo_identity`] names the key).
+    pub fn repo_file_by_section(&self) -> &BTreeMap<String, Vec<String>> {
         &self.repo_file_by_section
     }
 
-    /// GPG key paths referenced by each section ID.
-    pub fn gpg_keys_by_section(&self) -> &BTreeMap<RepoId, Vec<String>> {
+    /// GPG key paths referenced by each section, keyed by the section's
+    /// exact spelling ([`Self::repo_identity`] names the key).
+    pub fn gpg_keys_by_section(&self) -> &BTreeMap<String, Vec<String>> {
         &self.gpg_keys_by_section
     }
 
+    /// The repo a toggle target or a package's recorded `source_repo`
+    /// names: the section spelled exactly as `recorded`, or the one case
+    /// variant of it any file defines ([`repo::section_spelling`]). When no
+    /// section answers, because none is defined or two case variants
+    /// compete, it is `recorded` itself, so it matches nothing but the same
+    /// spelling.
+    ///
+    /// This is the one identity the repo-toggle cascade works in: which
+    /// packages, files and keys a toggle reaches, which repos are excluded,
+    /// and the effective-member counts.
+    pub fn repo_identity<'a>(&'a self, recorded: &'a str) -> &'a str {
+        repo::section_spelling(self.provenance_map.keys().map(String::as_str), recorded)
+            .unwrap_or(recorded)
+    }
+
     /// Whether the repo file at `path` stays carried when the sections in
-    /// `excluded` are excluded: at least one section the host enabled in it
-    /// is not excluded.
+    /// `excluded`, by exact spelling, are excluded: at least one section
+    /// the host enabled in it is not excluded.
     ///
     /// A section the host disabled does not count. The image never uses
     /// it, so it cannot be what keeps the file: EPEL's `epel.repo` holds
@@ -203,7 +224,7 @@ impl RepoIndex {
     /// `[epel-source]`, and excluding `[epel]` has to drop the file. A file
     /// with no host-enabled section at all is therefore not carried once a
     /// repo exclusion reaches it.
-    pub fn repo_file_carried(&self, path: &str, excluded: &HashSet<RepoId>) -> bool {
+    pub fn repo_file_carried(&self, path: &str, excluded: &HashSet<String>) -> bool {
         self.enabled_sections_by_file
             .get(path)
             .is_some_and(|ids| ids.iter().any(|id| !excluded.contains(id)))
@@ -215,7 +236,7 @@ impl RepoIndex {
     /// not excluded, so the file holding that section is itself carried
     /// ([`Self::repo_file_carried`]). Sections the host disabled do not
     /// count, for the same reason they do not keep a file.
-    pub fn gpg_key_carried(&self, key_path: &str, excluded: &HashSet<RepoId>) -> bool {
+    pub fn gpg_key_carried(&self, key_path: &str, excluded: &HashSet<String>) -> bool {
         self.enabled_sections_by_gpg_key
             .get(key_path)
             .is_some_and(|ids| ids.iter().any(|id| !excluded.contains(id)))

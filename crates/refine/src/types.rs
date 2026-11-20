@@ -4,7 +4,6 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::{AggregateSnapshotMeta, PrevalenceZone, RepoSourceEntry};
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
-use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::units::{SystemdDropIn, UnitName, UnitStateChange};
 use inspectah_core::types::users::UserContainerfileStrategy;
@@ -596,13 +595,14 @@ pub struct RefinedView {
     pub config_files: Vec<RefinedConfig>,
     pub containerfile_preview: String,
     pub stats: RefineStats,
-    /// Per-`RepoId` effective-member counts (§ 3.2). Not part of the wire
+    /// Effective-member counts per repo (§ 3.2), keyed by
+    /// `RepoIndex::repo_identity`. Not part of the wire
     /// contract: the web `ViewResponse` lists `RefinedView`'s other fields
     /// itself and drops this one, an internal computation the session reads
     /// through `repo_effective`, not a field the client sees -- the client
     /// sees `RepoGroupInfo`'s three counts instead.
     #[serde(skip)]
-    pub repo_effective: BTreeMap<RepoId, RepoEffective>,
+    pub repo_effective: BTreeMap<String, RepoEffective>,
     pub generation: u64,
 }
 
