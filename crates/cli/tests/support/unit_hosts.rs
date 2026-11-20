@@ -38,6 +38,7 @@ use inspectah_pipeline::build::extract::TarballExtractor;
 use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::redaction::{RedactOptions, redact};
 use inspectah_pipeline::render;
+use inspectah_pipeline::render::safety::shell_word;
 use inspectah_pipeline::render::tarball::create_tarball;
 use inspectah_pipeline::validate::validate;
 use inspectah_refine::session::RefineSession;
@@ -693,10 +694,10 @@ pub fn systemctl_instructions(containerfile: &str) -> Vec<String> {
 }
 
 /// Whether a `RUN systemctl <verb> --` instruction in `containerfile`
-/// names `unit` as one of its quoted operands after `--`.
+/// names `unit` as one of its operands after `--`, quoted when it needs it.
 pub fn acts(containerfile: &str, verb: &str, unit: &str) -> bool {
     let prefix = format!("RUN systemctl {verb} -- ");
-    let operand = format!("'{unit}'");
+    let operand = shell_word(unit);
     systemctl_instructions(containerfile).iter().any(|i| {
         i.strip_prefix(&prefix)
             .is_some_and(|operands| operands.split_whitespace().any(|w| w == operand))

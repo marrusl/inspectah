@@ -210,8 +210,8 @@ line (`containerfile.rs:1400`) write names unquoted. Both sites refuse names
 that fail `shell_operand_refusal` (`crates/pipeline/src/render/safety.rs:142`),
 which rejects shell metacharacters and a leading `-` or `#`. It does not
 reject `*`, `?` or `[`, and it does reject `\`, which legitimate escaped unit
-names contain (`\x2d`). The repository's own quoting rule says a bare token in
-a command should be quoted and never blacklisted
+names contain (`\x2d`). The repository's own quoting rule says a token in a
+command is quoted by one function when it needs it and never blacklisted
 (`process-docs/skills/containerfile-value-quoting.md`).
 
 **A masked unit is recorded twice, once wrongly.** `masked` produces a state
@@ -1666,7 +1666,7 @@ host where the administrator disabled only the socket, the socket is
 `Unlinked`, `Disabled` at its own preset and without a row; the owner
 becomes an `Enabled` row, and the Containerfile holds rule 7's advisory
 naming `multipathd.socket`, with `RUN systemctl enable --
-'multipathd.service'` and `RUN systemctl disable -- 'multipathd.socket'`
+multipathd.service` and `RUN systemctl disable -- multipathd.socket`
 as the lines to add, and no `systemctl` instruction for either unit. On a
 host where both are as the package left them, the socket is `Installed`,
 the owner has no row, and this check emits nothing. The socket's own
@@ -2295,27 +2295,37 @@ section header:
 # === Systemd Unit State ===
 # Omitted: cockpit.socket (package 'cockpit-ws' was excluded)
 # Omitted: wg-quick@wg0.service (its configuration /etc/wireguard/wg0.conf holds a redacted value; provision the secret on the deployed host and enable the unit there)
-RUN systemctl set-default -- 'multi-user.target'
+RUN systemctl set-default -- multi-user.target
 RUN systemctl enable -- \
-    'openvpn-client@site.service' \
-    'cockpit.socket' \
-    'myapp.path' \
-    'report.timer'
+    openvpn-client@site.service \
+    cockpit.socket \
+    myapp.path \
+    report.timer
 RUN systemctl disable -- \
-    'kdump.service'
+    kdump.service
 RUN systemctl mask -- \
-    'bluetooth.service' \
-    'dev-hugepages.mount'
+    bluetooth.service \
+    dev-hugepages.mount
 ```
 
 - One `RUN` per verb. Units within it are ordered by kind, then name, so the
   output is stable and a reader finds the sockets together. Instances,
   masked templates and package-owned storage units sit in the same lines.
-- **Every unit is single-quoted and each list is preceded by `--`.** The
-  operand is a proved `UnitName`, whose character set holds no quote and no
-  line break, so `single_quote` (`safety.rs:162`) is total on it. Quoting
-  replaces the refusal: a name with `\x2d` is legal and now renders, and
-  `-.slice` is safe after `--`. Both forms work in a build (measured).
+- **Each unit is quoted only when it needs it, by one function, and each
+  list is preceded by `--`. (Mark Russell, 2026-11-18)** Quoting a name
+  that does not need it suggests it is required, and the Containerfile
+  should read as a person would write it. `shell_word` (`safety.rs`) leaves
+  a word bare when it is non-empty and every byte is in
+  `[A-Za-z0-9@%+=:,./_-]`, and single-quotes it otherwise; the test is an
+  allowlist, not "quote if it holds a backslash", so the rendering stays
+  correct if the `UnitName` character set widens. The operand is a proved
+  `UnitName`, whose character set holds no quote and no line break, so
+  `shell_word` is total on it. Of that set only `\` is outside the bare
+  set, so in practice only an escaped name such as one with `\x2d` is
+  quoted. Quoting replaces the refusal: a name with `\x2d` is legal and
+  renders quoted, and `-.slice` is safe bare after `--`, which ends the
+  options; the quotes never protected a leading `-`. Both forms work in a
+  build (measured).
 - **`systemctl_lines` takes the planned default target and
   `&[PlannedUnit]`, and nothing else.** A `PlannedTarget` and a
   `PlannedUnit` are built only by the check in § 10.2, so no line can name
@@ -2940,8 +2950,8 @@ advisory, for a links mismatch:
 ```
 # Advisory: libvirtd.service is enabled on the source host. Not carried: systemctl enable on it also enables libvirtd.socket (named by Also=), which is not enabled there.
 #   To reproduce the source host, add after the configuration COPY:
-#     RUN systemctl enable -- 'libvirtd.service'
-#     RUN systemctl disable -- 'libvirtd.socket'
+#     RUN systemctl enable -- libvirtd.service
+#     RUN systemctl disable -- libvirtd.socket
 #   Each command follows Also= in its turn. Check the result with systemctl is-enabled.
 ```
 
@@ -2980,7 +2990,7 @@ command. (Mark Russell, 2026-11-15)** The plural holds even when one host
 recorded the unit. For `RowNotCarried` and `NeedsOwnRow` the block names
 the members and gives no line. A links mismatch whose `add` is empty, all
 its failing members `Other`, also gives no line. Each line to add reads
-`#     RUN systemctl <verb> -- '<unit>'`.
+`#     RUN systemctl <verb> -- <unit>`.
 
 **Rule 7's recipe never suggests disabling a protected unit (§ 10.3): it
 names the unit and says the image needs it. The "To reproduce the source
@@ -3109,7 +3119,7 @@ otherwise only migrated to the new types.
 
 ### 10.5 The default target
 
-**`RUN systemctl set-default -- '<target>'` is emitted whenever the source
+**`RUN systemctl set-default -- <target>` is emitted whenever the source
 host set a default target, with no test of what the target is and no
 comment beside it. (Mark Russell, 2026-11-13)** A host that boots to
 `graphical.target` produces an image that does. `default_target` is
@@ -3148,7 +3158,7 @@ with the presence tiers' reason.
 `/usr/lib/systemd/system/multi-user.target` owned by no package, while
 both bootc base images default to `graphical.target` (measured on both
 releases). So a stock RHEL 9 or RHEL 10 host's Containerfile holds `RUN
-systemctl set-default -- 'multi-user.target'`, which moves the image to
+systemctl set-default -- multi-user.target`, which moves the image to
 the host's target, as the decision above asks.
 
 ### 10.6 Mount, automount and swap advisories
@@ -3168,7 +3178,7 @@ condition, computed from `mount_point`:
 | `mount_point` is, or is under, `/opt` | `#   /opt is a directory of the read-only image in the RHEL bootc base image, not a link into /var. The unit keeps its name. The mount point must already exist in the image, and a mount there hides the image's own content under <path>.` |
 | The unit is `tmp.mount` and its file is in `staged_writes` | `#   The bootc base image starts tmp.mount from a link it ships, so this file replaces the unit that mounts /tmp on the target.` |
 | A mount or swap with `nofail` absent | `#   No nofail option. If the unit is started at boot and its device is missing, units that require it fail, and boot can stop in emergency mode.` |
-| The state is enabled or masked, and the unit is not a masked `tmp.mount` | `#   To carry it, add after the configuration COPY: RUN systemctl <verb> -- '<unit>'` |
+| The state is enabled or masked, and the unit is not a masked `tmp.mount` | `#   To carry it, add after the configuration COPY: RUN systemctl <verb> -- <unit>` |
 
 **Layout claims are tied to a base.** The two symlink lists are named
 constants beside `VAR_SYMLINKED_TOPLEVELS`
@@ -3349,7 +3359,7 @@ the install differences of a unit at its preset (§ 7.4) are here too:
 | `Undetermined` | `# Advisory: <parent>.<relation>/<unit> is not carried: the unit's [Install] section cannot be relied on (<cause>).` The cause is the link's recorded `InstallUnknown` reason in words: for `Specifier`, `a specifier inspectah does not expand`; for `ForeignName`, `a name this model does not admit`; for `UpheldBy`, `enabling the unit would also make an .upholds link`; for `Unreadable`, `a file of it inspectah could not read as text`. |
 | `HostDevice` | `# Advisory: <unit> is tied to a device of the source host. Not carried.` |
 | `HostInstallOnly` | `# Advisory: <parent>.<relation>/<unit> is on the source host because <unit>'s files under /etc/systemd/system name it, and the package's unit does not. The image was linked from the package's unit, so it lacks this link. Not carried.` |
-| `VendorInstallOnly` | `# Advisory: <parent>.<relation>/<unit> is not on the source host: <unit>'s files under /etc/systemd/system do not name it, and the package's unit does. The image was linked from the package's unit, so it has this link.` Then the removal line, `#   To remove it, add after the configuration COPY: RUN test -L '<path>' && rm -- '<path>'`, where `<path>` is `/etc/systemd/system/<parent>.<relation>/<unit>`. |
+| `VendorInstallOnly` | `# Advisory: <parent>.<relation>/<unit> is not on the source host: <unit>'s files under /etc/systemd/system do not name it, and the package's unit does. The image was linked from the package's unit, so it has this link.` Then the removal line, `#   To remove it, add after the configuration COPY: RUN test -L <path> && rm -- <path>`, where `<path>` is `/etc/systemd/system/<parent>.<relation>/<unit>`. |
 
 **Alias forms. (Mark Russell, 2026-11-15)** For a link with relation
 `Alias`, the texts that open with the link's path open instead with
@@ -3363,7 +3373,7 @@ For the first four causes and `HostInstallOnly`, with relation `Wants` or
 `Requires`, one more line gives the command:
 
 ```
-#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- '<parent>' '<unit>'
+#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- <parent> <unit>
 ```
 
 with `add-requires` for a `.requires` link. An `Upholds` link gets no
@@ -3395,18 +3405,19 @@ excluded, the block has already given way to the unit's `# Omitted:`
 line below, so the line appears only when the files are copied.
 
 A `HostDevice` link gets no command at all, and both operands are quoted
-like every other.
+when they need it, like every other.
 
 **The removal line never deletes a file.** It tests that the path is a
 link before it removes it, so a destination that is not a link fails the
 build where the operator sees it. When the export itself stages a file at
 the link's path, the copied file replaces the link in the image, and the
 removal line gives way to `#   The export copies a file to <path>, which
-replaces this link in the image, so no line removes it.` The path is
-single-quoted after `--` for the same reason the operands are: an escaped
-unit name holds backslashes the shell would otherwise take. `test` takes
+replaces this link in the image, so no line removes it.` The path goes
+through `shell_word` after `--` for the same reason the operands do: an
+escaped unit name holds backslashes the shell would otherwise take, so a
+path holding one is single-quoted. `test` takes
 no `--`; the path always starts with `/etc`. For a `VendorInstallOnly`
-alias the path is `'/etc/systemd/system/<alias>'`.
+alias the path is `/etc/systemd/system/<alias>`.
 
 **Relation `Also`. (Mark Russell, 2026-11-15)** There is no link and no
 command. The two texts are:
@@ -3803,9 +3814,10 @@ Phase 2 (every kind):
   the view response as a structured reason on the owning row, for a row
   whose `attention_reason` is null.
 - **T13. Order and quoting.** A local service with no paired timer: the
-  config `COPY` and the enable both exist, and the enable follows. A unit
-  named with `\x2d` and one named `-.slice` appear as quoted operands
-  after `--`.
+  config `COPY` and the enable both exist, and the enable follows. After
+  `--`, a unit named with `\x2d` is a single-quoted operand and `sh` reads
+  it back with its backslash; `-.slice`, `getty@tty2.service` and
+  `httpd.service` are bare operands.
 - **T15. Unit file.** A local enabled socket whose config entry is
   excluded: no staged file, the `UnitFileNotStaged` line, no enable. Each
   of the two toggles is driven through `RefineSession` on its own and
@@ -4108,7 +4120,7 @@ Phase 4 (the `/etc/systemd/system` scan):
   beside one `Unlinked`, in either order: the partial header and no
   footer.
 - **T26. Default target.** A `default.target` link to `graphical.target`
-  yields `RUN systemctl set-default -- 'graphical.target'` with no
+  yields `RUN systemctl set-default -- graphical.target` with no
   comment beside it; no link, no line. The row's toggle removes and
   restores the line. A local target whose config row is excluded is
   omitted with `UnitFileNotStaged`. Through the scan export, the refine
@@ -4188,8 +4200,8 @@ Phase 4 (the `/etc/systemd/system` scan):
   no `systemctl` line.
 - **T32. The advisories, rendered.** For T30 (d): the `HostInstallOnly`
   block with its `add-wants` line, the `VendorInstallOnly` block with
-  `RUN test -L '<path>' && rm -- '<path>'`, a unit named with `\x2d` keeping its backslashes
-  inside the quotes, no `systemctl` instruction naming the unit, and two refine
+  `RUN test -L <path> && rm -- <path>`, a unit named with `\x2d` keeping its backslashes
+  inside single quotes, no `systemctl` instruction naming the unit, and two refine
   rows with no include field. For (f) and the first case of (k): the
   removal line, and no `systemctl` instruction naming the unit. For (g):
   the `Also` text and no command line. A `VendorInstallOnly` alias names
@@ -4268,8 +4280,8 @@ Phase 4 (the `/etc/systemd/system` scan):
   `Enabled` state change with the attention note, `t@two` in its `also`
   as `Unlinked`; the plan declines it with `AlsoWhy::LinksDiffer`; the
   Containerfile holds rule 7's advisory naming `t@two.service`, with
-  `RUN systemctl enable -- 'p.service'` and `RUN systemctl disable --
-  't@two.service'` as the lines to add, and no `systemctl` instruction
+  `RUN systemctl enable -- p.service` and `RUN systemctl disable --
+  t@two.service` as the lines to add, and no `systemctl` instruction
   names either unit. The control: the same host with
   `multi-user.target.wants/t@two.service` linked: `t@two` is `Installed`,
   `p.service` has no row, and no line of the Containerfile names
@@ -4281,7 +4293,7 @@ Phase 4 (the `/etc/systemd/system` scan):
   `m.socket` (`WantedBy=sockets.target`) under `disable *` with no link:
   `m.socket` is `Disabled` with no row, `m.service` an `Enabled` row with
   `m.socket` `Unlinked`, rule 7's advisory with `RUN systemctl enable --
-  'm.service'` and `RUN systemctl disable -- 'm.socket'`, and no
+  m.service` and `RUN systemctl disable -- m.socket`, and no
   `systemctl` instruction for either. Its stock control, `m.socket`
   linked as the package left it: `Installed`, no owner row, and only
   `m.socket`'s own `enable` row against its `disable` preset (§ 7.4's

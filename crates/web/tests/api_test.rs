@@ -1413,7 +1413,7 @@ async fn set_include(
 async fn a_generated_timer_row_is_decided_on_its_row() {
     let app = app(scheduled_timer_state());
     let generated = serde_json::json!({"kind": "GeneratedTimer", "key": {"name": "cron-backup"}});
-    let enable = "'cron-backup.timer'";
+    let enable = "cron-backup.timer";
 
     let (status, view) = get_json(&app, "/api/view").await;
     assert_eq!(status, StatusCode::OK);
@@ -1564,7 +1564,7 @@ fn two_source_generated_state(first: &str, second: &str) -> Arc<AppState> {
 async fn a_generated_name_with_one_included_source_shows_included() {
     const EXCLUDED: &str = "/etc/cron.d/crontab";
     const INCLUDED: &str = "/etc/crontab";
-    let enable = "'cron-crontab.timer'";
+    let enable = "cron-crontab.timer";
     let generated = serde_json::json!({"kind": "GeneratedTimer", "key": {"name": "cron-crontab"}});
     for (first, second) in [(EXCLUDED, INCLUDED), (INCLUDED, EXCLUDED)] {
         let app = app(two_source_generated_state(first, second));
@@ -5959,7 +5959,7 @@ fn default_target_host(link: Option<&str>) -> unit_hosts::UnitHost {
 /// no default target the key is absent and the operation is refused.
 #[tokio::test]
 async fn the_default_target_row_toggles_its_set_default_line() {
-    const SET_DEFAULT: &str = "RUN systemctl set-default -- 'graphical.target'";
+    const SET_DEFAULT: &str = "RUN systemctl set-default -- graphical.target";
     let app = scanned_app(default_target_host(Some(
         "/usr/lib/systemd/system/graphical.target",
     )));

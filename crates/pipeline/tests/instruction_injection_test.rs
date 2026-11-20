@@ -880,28 +880,37 @@ fn operands_never_start_like_an_option_or_a_comment() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
-/// A unit-state operand is not refused, it is quoted (§ 10.1): a value a
-/// [`UnitName`] admits, `-` first included, renders as one single-quoted
-/// operand after `--`, for each verb. A value outside the systemd
-/// character set (`#foo.service`) is refused by the type when the snapshot
-/// loads, so the renderer never sees it.
+/// A unit-state operand is not refused, it is quoted when it needs it
+/// (§ 10.1): a value a [`UnitName`] admits, `-` first included, renders
+/// as one operand after `--`, for each verb, bare when every byte is
+/// shell-inert and single-quoted otherwise, and `sh` reads it back as the
+/// name. A value outside the systemd character set (`#foo.service`) is
+/// refused by the type when the snapshot loads, so the renderer never
+/// sees it.
 #[test]
-fn unit_state_operands_are_quoted_after_the_end_of_options() {
-    for value in OPERAND_VALUES {
-        let unit = format!("{value}.service");
-        if let Err(e) = UnitName::try_from(unit.clone()) {
-            assert!(
-                matches!(e, UnitNameError::InvalidCharacter { .. }),
-                "{unit:?}: expected a character refusal, got {e}"
-            );
-            continue;
-        }
+fn unit_state_operands_are_quoted_only_when_needed_after_the_end_of_options() {
+    assert!(matches!(
+        UnitName::try_from("#foo.service".to_owned()),
+        Err(UnitNameError::InvalidCharacter { .. })
+    ));
+    // (unit, operand as rendered). A name of shell-inert bytes is bare,
+    // one with a leading `-` is safe because `--` ends the options, and a
+    // name with `\` is quoted, or `sh` would drop the backslash.
+    let cases: &[(&str, &str)] = &[
+        ("httpd.service", "httpd.service"),
+        ("getty@tty2.service", "getty@tty2.service"),
+        ("--nogpgcheck.service", "--nogpgcheck.service"),
+        ("-oalice.service", "-oalice.service"),
+        ("-.slice", "-.slice"),
+        (r"backup\x2djob.service", r"'backup\x2djob.service'"),
+    ];
+    for (unit, operand) in cases {
         for (state, verb) in [
             (UnitState::Enabled, "enable"),
             (UnitState::Disabled, "disable"),
             (UnitState::Masked, "mask"),
         ] {
-            let output = service(&unit, state);
+            let output = service(unit, state);
             let lines: Vec<&str> = output.split(LINE_TERMINATORS).collect();
             let at = lines
                 .iter()
@@ -909,16 +918,21 @@ fn unit_state_operands_are_quoted_after_the_end_of_options() {
                 .unwrap_or_else(|| panic!("{unit} {verb}: no RUN line\n{output}"));
             assert_eq!(
                 lines[at + 1],
-                format!("    '{unit}'"),
+                format!("    {operand}"),
                 "{unit} {verb}\n{output}"
             );
-            for line in lines.iter().filter(|l| !l.starts_with('#')) {
-                assert!(
-                    line.split_whitespace().all(|w| w != unit),
-                    "{unit} {verb}: the name reached a command line unquoted: {line:?}"
-                );
-            }
         }
+        // The operand reaches the command as the unit's own name.
+        let printed = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("printf '%s\\n' {operand}"))
+            .output()
+            .expect("run sh");
+        assert_eq!(
+            String::from_utf8_lossy(&printed.stdout),
+            format!("{unit}\n"),
+            "{unit}: {operand}"
+        );
     }
 }
 
@@ -947,7 +961,7 @@ fn operands_render_benign_values() {
         ),
         (
             service("httpd.service", UnitState::Enabled),
-            "    'httpd.service'",
+            "    httpd.service",
         ),
     ];
     for (out, line) in cases {
@@ -1426,14 +1440,15 @@ fn test_carried_unit(
         .expect("a test unit is carried")
 }
 
-/// § 15: every `systemctl` site writes `--` and then single-quoted
-/// operands, the timer, `@reboot` and flatpak requests included, which the
-/// plan writes in their own sections. Each benign value renders exactly
-/// that line, and no `systemctl` instruction anywhere in the output names
-/// an operand without the quotes. The hostile values of the timer rows are
-/// refused by `OPERAND_ROWS` as before.
+/// § 15: every `systemctl` site writes `--` and then its operands, each
+/// bare only when every byte is shell-inert and single-quoted otherwise,
+/// the timer, `@reboot` and flatpak requests included, which the plan
+/// writes in their own sections. Each benign value renders exactly that
+/// line, and no `systemctl` instruction anywhere in the output names an
+/// operand that needs quotes without them. The hostile values of the timer
+/// rows are refused by `OPERAND_ROWS` as before.
 #[test]
-fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
+fn every_systemctl_site_quotes_its_operands_when_needed_after_the_end_of_options() {
     // Each scheduled unit has a body, so the stager writes the file its
     // enable names: an `@reboot` entry has a service and no timer.
     let timer = |cron: &str| {
@@ -1458,17 +1473,17 @@ fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
         (
             "cron timer",
             timer("0 3 * * *"),
-            "RUN systemctl enable -- 'backup.timer'",
+            "RUN systemctl enable -- backup.timer",
         ),
         (
             "@reboot service",
             timer("@reboot"),
-            "RUN systemctl enable -- 'backup.service'",
+            "RUN systemctl enable -- backup.service",
         ),
         (
             "flatpak",
             render_containerfile(&flatpak, None, None),
-            "RUN systemctl enable -- 'flatpak-provision.service'",
+            "RUN systemctl enable -- flatpak-provision.service",
         ),
     ];
     for (label, output, line) in cases {
@@ -1488,11 +1503,17 @@ fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
                 operands
                     .split_whitespace()
                     .filter(|w| *w != "\\")
-                    .all(|w| w.starts_with('\'') && w.ends_with('\'')),
-                "{label}: an unquoted operand in {l:?}"
+                    .all(|w| (w.starts_with('\'') && w.ends_with('\''))
+                        || w.bytes().all(is_bare_shell_byte)),
+                "{label}: an operand that needs quotes is bare in {l:?}"
             );
         }
     }
+}
+
+/// A byte the shell reads as itself in an unquoted word.
+fn is_bare_shell_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"@%+=:,./_-".contains(&b)
 }
 
 /// Each line of `output`, with an instruction's `\` continuation lines

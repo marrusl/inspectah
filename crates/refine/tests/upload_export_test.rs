@@ -1814,7 +1814,7 @@ fn an_uploaded_package_installs_before_its_units_and_its_dependents() {
             .unwrap_or_else(|| panic!("missing {needle:?}:\n{file}"))
     };
     let install = at(&format!("    /tmp/{OPENH264_UPLOAD} \\"));
-    let enable = at(&format!("    '{UNIT}'"));
+    let enable = at(&format!("    {UNIT}"));
     let dependent = at("    vlc \\");
     assert!(
         install < enable && install < dependent,

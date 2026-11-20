@@ -142,7 +142,7 @@ The inspector reports what the links and `[Install]` sections say that a `system
 | A link under `/etc/systemd/system/` the unit's `[Install]` does not make: one made by hand, one for a unit with no `[Install]` links, one of a unit with only some of its links, an `.upholds` link, or an alias | Why it is not carried, and the `RUN systemctl add-wants` or `add-requires` line that recreates a `.wants` or `.requires` link, or how to add an `.upholds` link or an alias by hand (for an alias: make the link after the configuration `COPY`, or add `Alias=` in a drop-in and enable the unit after that `COPY`) |
 | A link to an instance of `systemd-cryptsetup@.service` or `systemd-fsck@.service`, which names a volume or device of the source host | Why it is not carried, with no command |
 | A unit whose `[Install]` holds an `UpheldBy=`, a specifier the scan does not expand (any but `%i`, `%p` and `%N`), or a name it does not admit, or whose unit file or `[Install]` drop-in cannot be read as text | Each of its links with the reason; and, when it has an `[Install]` file under `/etc` or assigns `Also=`, one block saying the image's links can differ from the source host's. The unit gets no `enable` or `disable` then |
-| A preset-enabled packaged unit whose `/etc` files drop or replace a link the package's unit makes, or change its `Also=` | One advisory per difference: the `add-wants` or `add-requires` line for a link only the source host has, a quoted `RUN test -L '<path>' && rm -- '<path>'` line for a link only the package install makes (or, when the export copies a file to that path, a line saying that file replaces the link), and no command for an `Also=` difference |
+| A preset-enabled packaged unit whose `/etc` files drop or replace a link the package's unit makes, or change its `Also=` | One advisory per difference: the `add-wants` or `add-requires` line for a link only the source host has, a `RUN test -L <path> && rm -- <path>` line for a link only the package install makes (or, when the export copies a file to that path, a line saying that file replaces the link), and no command for an `Also=` difference |
 
 While the export leaves out one of a unit's `[Install]` files, that unit's advisories become one `# Omitted:` line naming the files that are not in the export. A link a package ships under `/usr/lib/systemd/system/` is never reported, and a link whose parent or own name is not a unit name gets a warning.
 
@@ -154,16 +154,16 @@ When `/etc/systemd/system/default.target` links to a target with a unit file the
 
 #### What the export does with each state change
 
-The Containerfile writes the commands in a `# === Systemd Unit State ===` section after the configuration `COPY`, so each command runs after the files it names are in place. The default target comes first, then each verb is one `RUN` (`enable`, then `disable`, then `mask`), with every unit single-quoted after `--`:
+The Containerfile writes the commands in a `# === Systemd Unit State ===` section after the configuration `COPY`, so each command runs after the files it names are in place. The default target comes first, then each verb is one `RUN` (`enable`, then `disable`, then `mask`), with every unit after `--`. A unit name is single-quoted only when the shell would otherwise change it, as it would the `\` in an escaped name such as `backup\x2djob.service`:
 
 ```dockerfile
 # === Systemd Unit State ===
-RUN systemctl set-default -- 'multi-user.target'
+RUN systemctl set-default -- multi-user.target
 RUN systemctl enable -- \
-    'httpd.service' \
-    'cockpit.socket'
+    httpd.service \
+    cockpit.socket
 RUN systemctl mask -- \
-    'kdump.service'
+    kdump.service
 ```
 
 A command the export cannot reproduce is left out with a `# Omitted:` line naming the unit and the reason, and `refine` shows the same reason on the unit row:

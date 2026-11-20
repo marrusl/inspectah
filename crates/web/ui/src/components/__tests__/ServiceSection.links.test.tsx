@@ -62,7 +62,7 @@ function makeDropin(overrides: Partial<DropInDecisionDto> = {}): DropInDecisionD
 
 const STATIC_LINES = [
   "# Advisory: multi-user.target.wants/backup.service is a link on the source host that backup.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-  "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'backup.service'",
+  "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target backup.service",
 ];
 
 const ALSO_LINES = [

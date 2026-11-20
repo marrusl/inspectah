@@ -31,7 +31,7 @@ use super::configtree::{
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
 use super::repoless::{InstallRepos, PackageRoute, route_for};
-use super::safety::{operand_refusal, single_quote};
+use super::safety::{operand_refusal, shell_word};
 use super::selinux::{
     BASE_IMAGE_DIRECTORIES, BASE_VAR_SYMLINKS, BOOTC_OWNED_MOUNT_POINTS, IMAGE_USR,
 };
@@ -833,13 +833,15 @@ enum PresenceDecision {
 
 /// `RUN systemctl set-default --` for `default_target` on one line, then
 /// one `RUN systemctl <verb> --` per verb, enable then disable then mask,
-/// each unit single-quoted on its own continuation line, ordered by kind
+/// each unit on its own continuation line, ordered by kind
 /// and then by name (§ 10.1). Takes only a [`PlannedTarget`] and
 /// [`PlannedUnit`]s, which only [`plan_units`] builds.
 ///
-/// [`single_quote`] is total on a [`UnitName`]: its character set holds no
-/// quote and no line break. `--` ends the options, so a name that starts
-/// with `-` (`-.slice`) is an operand.
+/// Each name goes through [`shell_word`], which leaves it bare unless it
+/// holds a byte the shell would read, in practice the `\` of an escaped
+/// name such as `\x2d`, and is total on a [`UnitName`]: its character set
+/// holds no quote and no line break. `--` ends the options, so a name that
+/// starts with `-` (`-.slice`) is an operand.
 pub fn systemctl_lines(
     default_target: Option<&PlannedTarget>,
     units: &[PlannedUnit],
@@ -848,7 +850,7 @@ pub fn systemctl_lines(
         .map(|target| {
             format!(
                 "RUN systemctl set-default -- {}",
-                single_quote(target.name.as_unit_name().as_str())
+                shell_word(target.name.as_unit_name().as_str())
             )
         })
         .into_iter()
@@ -866,7 +868,7 @@ pub fn systemctl_lines(
         lines.push(format!("RUN systemctl {action} -- \\"));
         let last = names.len() - 1;
         for (i, name) in names.into_iter().enumerate() {
-            let operand = single_quote(name.as_str());
+            let operand = shell_word(name.as_str());
             lines.push(if i < last {
                 format!("    {operand} \\")
             } else {
@@ -1212,11 +1214,11 @@ fn also_clause(why: &AlsoWhy, verb: UnitAction, named: &[UnitName]) -> &'static 
     }
 }
 
-/// One line to add: `RUN systemctl <verb> -- '<unit>'`, as a comment.
+/// One line to add: `RUN systemctl <verb> -- <unit>`, as a comment.
 fn line_to_add(verb: UnitAction, unit: &UnitName) -> String {
     format!(
         "#     RUN systemctl {verb} -- {}",
-        single_quote(unit.as_str())
+        shell_word(unit.as_str())
     )
 }
 
@@ -1429,7 +1431,7 @@ const LINK_VENDOR_INSTALL_ONLY_REST: &str = "files under /etc/systemd/system do 
      and the package's unit does. The image was linked from the package's unit, so it has this \
      link.";
 
-/// § 10.9's start of the removal line, before the quoted path. The line
+/// § 10.9's start of the removal line, before the path. The line
 /// tests that the path is a link before it removes it, so it never deletes
 /// a file.
 const LINK_REMOVE_PREFIX: &str = "#   To remove it, add after the configuration COPY: RUN test -L";
@@ -1450,12 +1452,12 @@ const LINK_STAGED_FILE_REST: &str = "which replaces this link in the image, so n
 /// - The first line by cause. For an alias, the link is named
 ///   `<alias> is a link to <unit>` in place of its path ([`LinkName`]).
 /// - For the first four causes and `HostInstallOnly`, one more line by
-///   relation: the `add-wants` or `add-requires` command, quoted after
-///   `--`, for a `.wants` or `.requires` link; for an `.upholds` link, what
+///   relation: the `add-wants` or `add-requires` command, its operands
+///   after `--`, for a `.wants` or `.requires` link; for an `.upholds` link, what
 ///   the link does and how to add it, since no verb makes one; for an
 ///   alias, how to carry it. A `HostDevice` link gets no command.
 /// - For `VendorInstallOnly`, the line that removes the link the image
-///   has, its path quoted, after a test that the path is a link. When
+///   has, after a test that the path is a link. When
 ///   `staged` writes a file at that path, the copied file replaces the
 ///   link, and a line says so in place of the removal line.
 /// - Relation `Also` is not a link: [`also_lines`].
@@ -1509,7 +1511,7 @@ pub fn manual_link_lines(link: &ManualLink, staged: &StagedWrites<'_>) -> Vec<St
                     if is_staged(staged, &path) {
                         format!("{LINK_STAGED_FILE_PREFIX} {path}, {LINK_STAGED_FILE_REST}")
                     } else {
-                        let path = single_quote(&path);
+                        let path = shell_word(&path);
                         format!("{LINK_REMOVE_PREFIX} {path} && rm -- {path}")
                     }
                 },
@@ -1519,8 +1521,8 @@ pub fn manual_link_lines(link: &ManualLink, staged: &StagedWrites<'_>) -> Vec<St
     let command = |verb: &str| {
         format!(
             "{LINK_COMMAND_PREFIX} {verb} -- {} {}",
-            single_quote(parent),
-            single_quote(unit)
+            shell_word(parent),
+            shell_word(unit)
         )
     };
     let second = match name {
@@ -1836,7 +1838,7 @@ pub fn mount_advisory_lines(
     if let Some(verb) = verb {
         lines.push(format!(
             "#   To carry it, add after the configuration COPY: RUN systemctl {verb} -- {}",
-            single_quote(unit.as_str())
+            shell_word(unit.as_str())
         ));
     }
     lines

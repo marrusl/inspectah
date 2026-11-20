@@ -381,13 +381,13 @@ The Containerfile action depends on the item type:
 |---|---|
 | RPM package | `RUN dnf install -y <names>`, followed by `dnf clean all` |
 | Config file | `COPY config/<root>/ /<root>/`, one per top-level directory of the included files (for example `COPY config/etc/ /etc/`) |
-| Unit enable/disable/mask | `RUN systemctl enable -- 'unit' ...`, then `disable`, then `mask`, each unit single-quoted, in the `Systemd Unit State` section after the configuration `COPY`. A command the export cannot reproduce is an `# Omitted:` line with the reason instead |
+| Unit enable/disable/mask | `RUN systemctl enable -- unit ...`, then `disable`, then `mask`, each unit single-quoted only when its name needs it (a name holding `\`), in the `Systemd Unit State` section after the configuration `COPY`. A command the export cannot reproduce is an `# Omitted:` line with the reason instead |
 | Unit drop-in or full unit shadow | `COPY drop-ins/etc/systemd/system/ /etc/systemd/system/` |
 | Administrator's mount, automount or swap unit | No instruction: an advisory comment in the `Systemd Unit State` section. Its unit file is a config file |
 | Quadlet unit | `COPY quadlet/ /etc/containers/systemd/` |
 | Sysctl file (`/etc/sysctl.conf`, `/etc/sysctl.d/*.conf`) | A config file: carried unchanged by the `COPY config/etc/ /etc/` line |
-| Scheduled task: a timer converted from cron | `COPY config/etc/systemd/system/ /etc/systemd/system/` and `RUN systemctl enable -- '<name>.timer'` in the Scheduled Tasks section, unless a unit collected from the host has the name of one of its files (a `# FIXME:` instead) |
-| Scheduled task: an `@reboot` service converted from cron | `COPY config/etc/systemd/system/ /etc/systemd/system/` and `RUN systemctl enable -- '<name>.service'` in the Scheduled Tasks section, unless a unit collected from the host has its name (a `# FIXME:` instead) |
+| Scheduled task: a timer converted from cron | `COPY config/etc/systemd/system/ /etc/systemd/system/` and `RUN systemctl enable -- <name>.timer` in the Scheduled Tasks section, unless a unit collected from the host has the name of one of its files (a `# FIXME:` instead) |
+| Scheduled task: an `@reboot` service converted from cron | `COPY config/etc/systemd/system/ /etc/systemd/system/` and `RUN systemctl enable -- <name>.service` in the Scheduled Tasks section, unless a unit collected from the host has its name (a `# FIXME:` instead) |
 | Scheduled task: an existing timer | No instruction of its own: a description. Its file is a config file or a unit drop-in row, and its state a unit row in the `Systemd Unit State` section |
 
 Advisory and Inventory findings produce no Containerfile line, apart from

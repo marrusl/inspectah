@@ -13,7 +13,7 @@
     {
       "advisories": [
         "# Advisory: multi-user.target.wants/driftify-static.service is a link on the source host that driftify-static.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'driftify-static.service'"
+        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target driftify-static.service"
       ],
       "cause": "static_unit",
       "parent": "multi-user.target",
@@ -37,7 +37,7 @@
     {
       "advisories": [
         "# Advisory: multi-user.target.wants/data-demo.mount is not carried: the unit's [Install] section cannot be relied on (a specifier inspectah does not expand).",
-        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'data-demo.mount'"
+        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target data-demo.mount"
       ],
       "cause": {
         "undetermined": {
@@ -61,7 +61,7 @@
     {
       "advisories": [
         "# Advisory: multi-user.target.wants/vendor-link-demo.service is not on the source host: vendor-link-demo.service's files under /etc/systemd/system do not name it, and the package's unit does. The image was linked from the package's unit, so it has this link.",
-        "#   To remove it, add after the configuration COPY: RUN test -L '/etc/systemd/system/multi-user.target.wants/vendor-link-demo.service' && rm -- '/etc/systemd/system/multi-user.target.wants/vendor-link-demo.service'"
+        "#   To remove it, add after the configuration COPY: RUN test -L /etc/systemd/system/multi-user.target.wants/vendor-link-demo.service && rm -- /etc/systemd/system/multi-user.target.wants/vendor-link-demo.service"
       ],
       "cause": "vendor_install_only",
       "parent": "multi-user.target",
@@ -71,7 +71,7 @@
     {
       "advisories": [
         "# Advisory: multi-user.target.wants/multi-link-demo.service is a link on the source host that multi-link-demo.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'multi-link-demo.service'"
+        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target multi-link-demo.service"
       ],
       "cause": "static_unit",
       "parent": "multi-user.target",
@@ -81,7 +81,7 @@
     {
       "advisories": [
         "# Advisory: graphical.target.wants/multi-link-demo.service is a link on the source host that multi-link-demo.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'graphical.target' 'multi-link-demo.service'"
+        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- graphical.target multi-link-demo.service"
       ],
       "cause": "static_unit",
       "parent": "graphical.target",
@@ -91,7 +91,7 @@
     {
       "advisories": [
         "# Advisory: multi-user.target.requires/multi-link-demo.service is a link on the source host that multi-link-demo.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-        "#   To carry it, add after the configuration COPY: RUN systemctl add-requires -- 'multi-user.target' 'multi-link-demo.service'"
+        "#   To carry it, add after the configuration COPY: RUN systemctl add-requires -- multi-user.target multi-link-demo.service"
       ],
       "cause": "static_unit",
       "parent": "multi-user.target",
@@ -101,7 +101,7 @@
     {
       "advisories": [
         "# Advisory: multi-user.target.wants/dup-link-demo.service is a link on the source host that dup-link-demo.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'dup-link-demo.service'"
+        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target dup-link-demo.service"
       ],
       "cause": "static_unit",
       "parent": "multi-user.target",
@@ -111,7 +111,7 @@
     {
       "advisories": [
         "# Advisory: multi-user.target.wants/dup-link-demo.service is a link on the source host that dup-link-demo.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'dup-link-demo.service'"
+        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target dup-link-demo.service"
       ],
       "cause": "static_unit",
       "parent": "multi-user.target",
@@ -121,7 +121,7 @@
     {
       "advisories": [
         "# Advisory: multi-user.target.wants/dup-link-demo-other.service is a link on the source host that dup-link-demo-other.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'dup-link-demo-other.service'"
+        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target dup-link-demo-other.service"
       ],
       "cause": "static_unit",
       "parent": "multi-user.target",
@@ -134,7 +134,7 @@
       "advisories": [
         "# Advisory: data-demo.mount is enabled on the source host. inspectah does not enable, disable or mask a mount, automount or swap unit the administrator wrote.",
         "#   Its unit file is copied into the image. No enable line is written, but the unit still starts if another unit requires it or names its mount point in RequiresMountsFor=, and it replaces a unit of the same name that the image ships.",
-        "#   To carry it, add after the configuration COPY: RUN systemctl enable -- 'data-demo.mount'"
+        "#   To carry it, add after the configuration COPY: RUN systemctl enable -- data-demo.mount"
       ],
       "fragment": "local",
       "kind": "mount",
@@ -159,7 +159,7 @@
       {
         "advisories": [
           "# Advisory: multi-user.target.wants/driftify-static.service is a link on the source host that driftify-static.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'driftify-static.service'"
+          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target driftify-static.service"
         ],
         "cause": "static_unit",
         "parent": "multi-user.target",
@@ -183,7 +183,7 @@
       {
         "advisories": [
           "# Advisory: multi-user.target.wants/data-demo.mount is not carried: the unit's [Install] section cannot be relied on (a specifier inspectah does not expand).",
-          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'data-demo.mount'"
+          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target data-demo.mount"
         ],
         "cause": {
           "undetermined": {
@@ -207,7 +207,7 @@
       {
         "advisories": [
           "# Advisory: multi-user.target.wants/vendor-link-demo.service is not on the source host: vendor-link-demo.service's files under /etc/systemd/system do not name it, and the package's unit does. The image was linked from the package's unit, so it has this link.",
-          "#   To remove it, add after the configuration COPY: RUN test -L '/etc/systemd/system/multi-user.target.wants/vendor-link-demo.service' && rm -- '/etc/systemd/system/multi-user.target.wants/vendor-link-demo.service'"
+          "#   To remove it, add after the configuration COPY: RUN test -L /etc/systemd/system/multi-user.target.wants/vendor-link-demo.service && rm -- /etc/systemd/system/multi-user.target.wants/vendor-link-demo.service"
         ],
         "cause": "vendor_install_only",
         "parent": "multi-user.target",
@@ -217,7 +217,7 @@
       {
         "advisories": [
           "# Advisory: multi-user.target.wants/multi-link-demo.service is a link on the source host that multi-link-demo.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'multi-link-demo.service'"
+          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target multi-link-demo.service"
         ],
         "cause": "static_unit",
         "parent": "multi-user.target",
@@ -227,7 +227,7 @@
       {
         "advisories": [
           "# Advisory: graphical.target.wants/multi-link-demo.service is a link on the source host that multi-link-demo.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'graphical.target' 'multi-link-demo.service'"
+          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- graphical.target multi-link-demo.service"
         ],
         "cause": "static_unit",
         "parent": "graphical.target",
@@ -237,7 +237,7 @@
       {
         "advisories": [
           "# Advisory: multi-user.target.requires/multi-link-demo.service is a link on the source host that multi-link-demo.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-          "#   To carry it, add after the configuration COPY: RUN systemctl add-requires -- 'multi-user.target' 'multi-link-demo.service'"
+          "#   To carry it, add after the configuration COPY: RUN systemctl add-requires -- multi-user.target multi-link-demo.service"
         ],
         "cause": "static_unit",
         "parent": "multi-user.target",
@@ -247,7 +247,7 @@
       {
         "advisories": [
           "# Advisory: multi-user.target.wants/dup-link-demo.service is a link on the source host that dup-link-demo.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'dup-link-demo.service'"
+          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target dup-link-demo.service"
         ],
         "cause": "static_unit",
         "parent": "multi-user.target",
@@ -257,7 +257,7 @@
       {
         "advisories": [
           "# Advisory: multi-user.target.wants/dup-link-demo.service is a link on the source host that dup-link-demo.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'dup-link-demo.service'"
+          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target dup-link-demo.service"
         ],
         "cause": "static_unit",
         "parent": "multi-user.target",
@@ -267,7 +267,7 @@
       {
         "advisories": [
           "# Advisory: multi-user.target.wants/dup-link-demo-other.service is a link on the source host that dup-link-demo-other.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'dup-link-demo-other.service'"
+          "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target dup-link-demo-other.service"
         ],
         "cause": "static_unit",
         "parent": "multi-user.target",
@@ -280,7 +280,7 @@
         "advisories": [
           "# Advisory: data-demo.mount is enabled on the source host. inspectah does not enable, disable or mask a mount, automount or swap unit the administrator wrote.",
           "#   Its unit file is copied into the image. No enable line is written, but the unit still starts if another unit requires it or names its mount point in RequiresMountsFor=, and it replaces a unit of the same name that the image ships.",
-          "#   To carry it, add after the configuration COPY: RUN systemctl enable -- 'data-demo.mount'"
+          "#   To carry it, add after the configuration COPY: RUN systemctl enable -- data-demo.mount"
         ],
         "fragment": "local",
         "kind": "mount",

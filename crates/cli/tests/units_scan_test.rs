@@ -20,6 +20,7 @@ use inspectah_core::types::units::{
     MountUnitFinding, PresetDefault, UnitFragment, UnitName, UnitState,
 };
 use inspectah_pipeline::render;
+use inspectah_pipeline::render::safety::shell_word;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
 use unit_hosts::{
@@ -722,10 +723,10 @@ fn systemctl_instructions(containerfile: &str) -> Vec<String> {
 }
 
 /// Whether a `RUN systemctl <verb> --` instruction in `containerfile`
-/// names `unit` as one of its quoted operands after `--`.
+/// names `unit` as one of its operands after `--`, quoted when it needs it.
 fn acts(containerfile: &str, verb: &str, unit: &str) -> bool {
     let prefix = format!("RUN systemctl {verb} -- ");
-    let operand = format!("'{unit}'");
+    let operand = shell_word(unit);
     systemctl_instructions(containerfile).iter().any(|i| {
         i.strip_prefix(&prefix)
             .is_some_and(|operands| operands.split_whitespace().any(|w| w == operand))
@@ -869,7 +870,7 @@ fn the_scan_and_refine_exports_carry_the_same_unit_lines() {
     let scanned = unit_lines(&containerfile_in(&render_export(&snap)));
     assert_eq!(
         scanned,
-        ["RUN systemctl enable -- \\", "    'cockpit.socket'"],
+        ["RUN systemctl enable -- \\", "    cockpit.socket"],
         "the scan carries the enable"
     );
     let refined = unit_lines(&containerfile_in(&export_session(&session(&snap))));
@@ -892,7 +893,7 @@ fn the_scan_and_refine_exports_carry_the_same_unit_lines_with_no_baseline() {
     let scanned = unit_lines(&containerfile_in(&render_export(&snap)));
     assert_eq!(
         scanned,
-        ["RUN systemctl enable -- \\", "    'app.socket'"],
+        ["RUN systemctl enable -- \\", "    app.socket"],
         "the scan carries the enable"
     );
     let refined = unit_lines(&containerfile_in(&export_session(&session(&snap))));
@@ -1703,9 +1704,9 @@ fn t13_unusual_unit_names_are_quoted_operands_through_both_exports() {
         "RUN systemctl enable -- \\".to_owned(),
         r"    'probe-a\x2db.service' \".to_owned(),
         r"    'probe@a\x2db.service' \".to_owned(),
-        "    '-.slice'".to_owned(),
+        "    -.slice".to_owned(),
         "RUN systemctl disable -- \\".to_owned(),
-        format!("    '{long}'"),
+        format!("    {long}"),
     ];
     let scanned = unit_lines(&containerfile_in(&render_export(&snap)));
     assert_eq!(scanned, expected, "scan route");
@@ -2398,7 +2399,7 @@ fn t13_a_local_unit_is_enabled_after_the_copy_of_its_file() {
         .find("\nCOPY config/etc/ /etc/\n")
         .unwrap_or_else(|| panic!("no config COPY:\n{containerfile}"));
     let enable = containerfile
-        .find("\n    'local.service'")
+        .find("\n    local.service")
         .unwrap_or_else(|| panic!("no enable:\n{containerfile}"));
     assert!(
         acts(&containerfile, "enable", "local.service"),
@@ -2432,7 +2433,7 @@ fn a_full_shadow_is_enabled_after_the_copy_of_its_shadow() {
         "{containerfile}"
     );
     let enable = containerfile
-        .find("\n    'shadow.service'")
+        .find("\n    shadow.service")
         .expect("the enable's operand line");
     assert!(
         copy < enable,
@@ -2593,7 +2594,7 @@ const NOFAIL_LINE: &str = "#   No nofail option in the unit file. If the unit is
      boot and its device is missing, units that require it fail, and boot can stop in emergency \
      mode.";
 fn carry_line(verb: &str, unit: &str) -> String {
-    format!("#   To carry it, add after the configuration COPY: RUN systemctl {verb} -- '{unit}'")
+    format!("#   To carry it, add after the configuration COPY: RUN systemctl {verb} -- {unit}")
 }
 
 /// The advisory for `unit`: its `# Advisory:` line and the indented lines
@@ -4442,7 +4443,7 @@ fn t19_an_enabled_local_timer_is_enabled_from_the_unit_state_section() {
     assert!(
         unit_lines(&containerfile)
             .iter()
-            .any(|l| l.contains("'report.timer'")),
+            .any(|l| l.trim_end_matches(" \\").trim() == "report.timer"),
         "{containerfile}"
     );
     assert!(
@@ -4737,7 +4738,7 @@ fn t21_a_generated_timer_named_for_a_vendor_timer_is_declined() {
         assert!(
             unit_lines(&cf)
                 .iter()
-                .any(|l| l.contains("'cron-backup.timer'")),
+                .any(|l| l.trim_end_matches(" \\").trim() == "cron-backup.timer"),
             "{route}: the enable is the unit state section's:\n{cf}"
         );
         assert!(
@@ -4761,7 +4762,7 @@ fn t21_a_generated_timer_named_for_a_vendor_timer_is_declined() {
         assert!(
             scheduled_lines(&cf)
                 .iter()
-                .any(|l| l.contains("'cron-backup.timer'")),
+                .any(|l| l.trim_end_matches(" \\").trim() == "cron-backup.timer"),
             "{route}: the scheduled section enables the generated timer:\n{cf}"
         );
         assert!(acts(&cf, "enable", CRON_BACKUP_TIMER), "{route}:\n{cf}");
@@ -4814,7 +4815,7 @@ fn a_disabled_local_timer_named_like_a_generated_one_stays_disabled() {
         assert!(
             unit_lines(&cf)
                 .iter()
-                .any(|l| l.contains("'cron-backup.timer'")),
+                .any(|l| l.trim_end_matches(" \\").trim() == "cron-backup.timer"),
             "{route}:\n{cf}"
         );
         assert!(
@@ -4860,7 +4861,7 @@ fn t21_the_flatpak_enable_is_quoted_and_follows_its_copy() {
         let copy = line_index(&cf, FLATPAK_PROVISION_COPY)
             .unwrap_or_else(|| panic!("{route}: no COPY:\n{cf}"));
         let enable = line_index(&cf, "RUN systemctl enable -- \\")
-            .filter(|i| cf.lines().nth(i + 1) == Some("    'flatpak-provision.service'"))
+            .filter(|i| cf.lines().nth(i + 1) == Some("    flatpak-provision.service"))
             .unwrap_or_else(|| panic!("{route}: no quoted enable:\n{cf}"));
         assert!(enable > copy, "{route}: the enable follows its COPY:\n{cf}");
         assert!(acts(&cf, "enable", FLATPAK_PROVISION), "{route}:\n{cf}");
@@ -4913,7 +4914,7 @@ fn a_rescanned_flatpak_provisioning_service_keeps_the_collected_copy() {
         assert!(
             unit_lines(&cf)
                 .iter()
-                .any(|l| l.contains("'flatpak-provision.service'")),
+                .any(|l| l.trim_end_matches(" \\").trim() == "flatpak-provision.service"),
             "{route}:\n{cf}"
         );
     }
@@ -5060,7 +5061,7 @@ fn t21_tuned_service_is_enabled_from_its_unit_row_only() {
         assert!(
             unit_lines(&cf)
                 .iter()
-                .any(|l| l.contains("'tuned.service'")),
+                .any(|l| l.trim_end_matches(" \\").trim() == "tuned.service"),
             "{route}: the enable is the unit state section's:\n{cf}"
         );
     }
@@ -5128,7 +5129,12 @@ fn systemctl_commands(containerfile: &str) -> Vec<(String, String)> {
                     let unit = operand
                         .strip_prefix('\'')
                         .and_then(|o| o.strip_suffix('\''))
-                        .unwrap_or_else(|| panic!("an unquoted operand: {operand:?}"));
+                        .unwrap_or(operand);
+                    assert_eq!(
+                        shell_word(unit),
+                        operand,
+                        "an operand not quoted as it needs: {operand:?}"
+                    );
                     (verb.clone(), unit.to_owned())
                 })
                 .collect::<Vec<_>>()
@@ -5941,7 +5947,7 @@ fn a_local_and_a_generated_timer_of_one_name_on_two_hosts_in_both_orders() {
         assert!(
             unit_lines(&cf)
                 .iter()
-                .any(|l| l.contains("'cron-backup.timer'")),
+                .any(|l| l.trim_end_matches(" \\").trim() == "cron-backup.timer"),
             "{label}:\n{cf}"
         );
 
@@ -8045,7 +8051,7 @@ fn a_partial_unit_reports_a_link_its_section_does_not_name_as_hand_made() {
                  carried. Present: multi-user.target.wants/part.service."
                     .to_owned(),
                 "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
-                 'multi-user.target' 'part.service'"
+                 multi-user.target part.service"
                     .to_owned(),
             ],
         ),
@@ -8057,7 +8063,7 @@ fn a_partial_unit_reports_a_link_its_section_does_not_name_as_hand_made() {
                  carried."
                     .to_owned(),
                 "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
-                 'rescue.target' 'part.service'"
+                 rescue.target part.service"
                     .to_owned(),
             ],
         ),
@@ -8144,7 +8150,7 @@ fn t23_a_link_to_a_unit_with_no_install_section_is_advised_with_its_command() {
          Also=, or a list a drop-in reset to empty). Not carried."
             .to_owned(),
         "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
-         'multi-user.target' 'backup.service'"
+         multi-user.target backup.service"
             .to_owned(),
     ];
     assert_eq!(rows[0].advisories, expected, "the refine row");
@@ -8195,7 +8201,7 @@ fn t23_link_advisory_table() {
                  none, only Also=, or a list a drop-in reset to empty). Not carried."
                     .to_owned(),
                 "#   To carry it, add after the configuration COPY: RUN systemctl add-requires \
-                 -- 'a.target' 'backup.service'"
+                 -- a.target backup.service"
                     .to_owned(),
             ],
         ),
@@ -8213,7 +8219,7 @@ fn t23_link_advisory_table() {
                  [Install] section cannot be relied on (a specifier inspectah does not expand)."
                     .to_owned(),
                 "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
-                 'multi-user.target' 'host.service'"
+                 multi-user.target host.service"
                     .to_owned(),
             ],
         ),
@@ -8378,7 +8384,7 @@ fn t24_reset_links_are_advised() {
             [
                 static_first.to_owned(),
                 "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
-                 'multi-user.target' 'app.service'"
+                 multi-user.target app.service"
                     .to_owned()
             ],
             "{route}:\n{containerfile}"
@@ -8388,7 +8394,7 @@ fn t24_reset_links_are_advised() {
             [
                 reset_first.to_owned(),
                 "#   To carry it, add after the configuration COPY: RUN systemctl add-requires \
-                 -- 'a.target' 'need.service'"
+                 -- a.target need.service"
                     .to_owned()
             ],
             "{route}:\n{containerfile}"
@@ -8942,7 +8948,7 @@ fn t40_an_upheld_vendor_unit_with_a_link_or_also() {
             [
                 first.to_owned(),
                 "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
-                 'multi-user.target' 'need.service'"
+                 multi-user.target need.service"
                     .to_owned()
             ],
             "{route}:\n{containerfile}"
@@ -9231,7 +9237,9 @@ fn host_only_block(parent: &str, unit: &str) -> [String; 2] {
         ),
         format!(
             "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
-             '{parent}' '{unit}'"
+             {} {}",
+            shell_word(parent),
+            shell_word(unit)
         ),
     ]
 }
@@ -9246,8 +9254,9 @@ fn vendor_only_block(link: &str, unit: &str, path: &str) -> [String; 2] {
              linked from the package's unit, so it has this link."
         ),
         format!(
-            "#   To remove it, add after the configuration COPY: RUN test -L '{path}' && rm -- \
-             '{path}'"
+            "#   To remove it, add after the configuration COPY: RUN test -L {path} && rm -- \
+             {path}",
+            path = shell_word(path)
         ),
     ]
 }
@@ -9313,7 +9322,7 @@ fn t31_added_links_are_enabled_after_the_copy() {
                 .rfind("\nCOPY ")
                 .unwrap_or_else(|| panic!("{case} {route}: no COPY:\n{containerfile}"));
             let enable = containerfile
-                .find(&format!("'{DIFF_UNIT}'"))
+                .find(&format!("\n    {DIFF_UNIT}"))
                 .unwrap_or_else(|| panic!("{case} {route}: no enable:\n{containerfile}"));
             assert!(
                 copy < enable,
@@ -10052,7 +10061,7 @@ fn t27_an_enabled_instance_found_by_its_link_is_carried() {
     assert_instance_carried(&snap, UNIT, "two parents");
     for (route, containerfile) in both_routes(&snap) {
         assert_eq!(
-            count_lines(&containerfile, &format!("    '{UNIT}'")),
+            count_lines(&containerfile, &format!("    {UNIT}")),
             1,
             "{route}:\n{containerfile}"
         );
@@ -11786,7 +11795,7 @@ fn t40_an_undetermined_owner_with_also_derives_no_instance() {
             [
                 first.to_owned(),
                 "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
-                 'multi-user.target' 'need.service'"
+                 multi-user.target need.service"
                     .to_owned()
             ],
             "{route}:\n{containerfile}"
@@ -12773,9 +12782,9 @@ const ROW_NOT_CARRIED: &str = "whose own row is not carried with this command";
 fn also_lines(verb: &str, unit: &str, members: &[(&str, &str)]) -> Vec<String> {
     let mut lines =
         vec!["#   To reproduce the source host, add after the configuration COPY:".to_owned()];
-    lines.push(format!("#     RUN systemctl {verb} -- '{unit}'"));
+    lines.push(format!("#     RUN systemctl {verb} -- {unit}"));
     for (member_verb, member) in members {
-        lines.push(format!("#     RUN systemctl {member_verb} -- '{member}'"));
+        lines.push(format!("#     RUN systemctl {member_verb} -- {member}"));
     }
     lines.push(
         "#   Each command follows Also= in its turn. Check the result with systemctl is-enabled."
@@ -12794,7 +12803,7 @@ fn install_file_block(unit: &str, verb: &str, path: &str, of: &str) -> Vec<Strin
              image may not be the ones recorded."
         ),
         "#   After reading that file, add after the configuration COPY:".to_owned(),
-        format!("#     RUN systemctl {verb} -- '{unit}'"),
+        format!("#     RUN systemctl {verb} -- {unit}"),
     ]
 }
 
@@ -12878,8 +12887,8 @@ fn t39_an_owner_whose_member_is_off_is_an_advisory() {
         "# Advisory: m.service is enabled on the source host. Not carried: systemctl enable on it \
          also enables m.socket (named by Also=), which is not enabled there.",
         "#   To reproduce the source host, add after the configuration COPY:",
-        "#     RUN systemctl enable -- 'm.service'",
-        "#     RUN systemctl disable -- 'm.socket'",
+        "#     RUN systemctl enable -- m.service",
+        "#     RUN systemctl disable -- m.socket",
         "#   Each command follows Also= in its turn. Check the result with systemctl is-enabled.",
     ]
     .map(str::to_owned);
@@ -13135,8 +13144,8 @@ fn rule_7_never_suggests_disabling_a_protected_member_through_both_exports() {
         "#   These lines do not reproduce the source host. Check each unit, then add after the \
          configuration COPY:"
             .to_owned(),
-        format!("#     RUN systemctl enable -- '{BUNDLE}'"),
-        "#     RUN systemctl disable -- 'helper.socket'".to_owned(),
+        format!("#     RUN systemctl enable -- {BUNDLE}"),
+        "#     RUN systemctl disable -- helper.socket".to_owned(),
         format!("#   No disable line for {TIMER}: the image needs this unit."),
     ];
     assert_also_advisory(&snap, BUNDLE, &block, &[TIMER, "helper.socket"]);
@@ -13626,7 +13635,7 @@ fn fleet_block(unit: &str, verb: &str, members: &str) -> Vec<String> {
             "#   Before adding this after the configuration COPY, check the effective [Install] \
              and Also= of {unit} in the image, and the intended state of each member:"
         ),
-        format!("#     RUN systemctl {verb} -- '{unit}'"),
+        format!("#     RUN systemctl {verb} -- {unit}"),
     ]
 }
 
@@ -13908,7 +13917,7 @@ fn target_host(link: Option<&str>) -> UnitHost {
 
 /// The `set-default` line for `target`.
 fn set_default_line(target: &str) -> String {
-    format!("RUN systemctl set-default -- '{target}'")
+    format!("RUN systemctl set-default -- {target}")
 }
 
 /// The lines of `containerfile` that name `unit`.
@@ -13918,7 +13927,7 @@ fn lines_naming<'a>(containerfile: &'a str, unit: &str) -> Vec<&'a str> {
 
 /// T26: a `default.target` link to `graphical.target` is recorded as an
 /// included default target and yields `RUN systemctl set-default --
-/// 'graphical.target'`, the only line naming the target, after the unit
+/// graphical.target`, the only line naming the target, after the unit
 /// state section's `# Omitted:` lines and before its `enable` (§ 10.1).
 /// No link: no record and no `set-default`.
 #[test]

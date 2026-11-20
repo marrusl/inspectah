@@ -13,6 +13,7 @@ use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
 use inspectah_pipeline::render::not_carried::not_carried_packages;
 use inspectah_pipeline::render::repoless::InstallRepos;
+use inspectah_pipeline::render::safety::shell_word;
 use inspectah_pipeline::render::unit_plan::{
     AdvisoryReason, AlsoWhy, DeclinedMarker, OmissionReason, ServiceAdvisory, UnitPlan,
     declined_line, effective_target_packages, is_package_installable, mount_advisory_lines,
@@ -1030,10 +1031,10 @@ fn systemctl_instructions(lines: &[String]) -> Vec<String> {
     instructions
 }
 
-/// Whether the unit is a quoted operand, after `--`, of a
-/// `RUN systemctl <verb> --` instruction of the plan.
+/// Whether the unit is an operand, after `--` and quoted when it needs
+/// it, of a `RUN systemctl <verb> --` instruction of the plan.
 fn acted_on(lines: &[String], unit: &str) -> bool {
-    let operand = format!("'{unit}'");
+    let operand = shell_word(unit);
     systemctl_instructions(lines).iter().any(|i| {
         i.strip_prefix("RUN systemctl ")
             .and_then(|rest| rest.split_once(" -- "))
@@ -1043,7 +1044,8 @@ fn acted_on(lines: &[String], unit: &str) -> bool {
 
 /// Whether the unit's name appears in no `systemctl` instruction of the
 /// plan, in any form: quoted, bare or inside another word. The absence
-/// half of [`acted_on`], so a regression that wrote a bare name fails it.
+/// half of [`acted_on`], so a regression that wrote the name in another
+/// form fails it.
 fn in_no_systemctl_instruction(lines: &[String], unit: &str) -> bool {
     systemctl_instructions(lines)
         .iter()
@@ -1719,16 +1721,16 @@ fn one_run_per_verb_with_units_in_kind_then_name_order() {
         render(&snap).lines,
         [
             "RUN systemctl enable -- \\",
-            "    'alpha.service' \\",
-            "    'zeta.service' \\",
-            "    'cockpit.socket' \\",
-            "    'myapp.path' \\",
-            "    'report.timer'",
+            "    alpha.service \\",
+            "    zeta.service \\",
+            "    cockpit.socket \\",
+            "    myapp.path \\",
+            "    report.timer",
             "RUN systemctl disable -- \\",
-            "    'kdump.service'",
+            "    kdump.service",
             "RUN systemctl mask -- \\",
-            "    'bluetooth.service' \\",
-            "    'dev-hugepages.mount'",
+            "    bluetooth.service \\",
+            "    dev-hugepages.mount",
         ]
     );
 }
@@ -1785,7 +1787,7 @@ fn t15_a_withheld_unit_file_declines_its_enable() {
     let lines = render(&snap).lines;
     assert_eq!(
         lines,
-        ["RUN systemctl enable -- \\", "    'worker.service'"],
+        ["RUN systemctl enable -- \\", "    worker.service"],
         "control: the staged unit file carries its enable"
     );
 }
@@ -1836,7 +1838,7 @@ fn rule_5_reads_a_path_spelled_two_ways_as_one_file() {
     );
     assert_eq!(
         render(&control).lines,
-        ["RUN systemctl enable -- \\", "    'sshd.service'"]
+        ["RUN systemctl enable -- \\", "    sshd.service"]
     );
 }
 
@@ -2054,7 +2056,7 @@ fn t12_a_protected_unit_is_never_disabled_or_masked() {
             render(&snap).lines,
             [
                 "RUN systemctl enable -- \\".to_owned(),
-                format!("    '{unit}'")
+                format!("    {unit}")
             ],
             "{unit}: the enable is carried"
         );
@@ -2123,7 +2125,7 @@ fn t12_a_masked_tmp_mount_is_refused_and_its_other_states_are_carried() {
             render(&tmp(state)).lines,
             [
                 format!("RUN systemctl {verb} -- \\"),
-                "    'tmp.mount'".to_owned()
+                "    tmp.mount".to_owned()
             ],
             "{verb}"
         );
@@ -2138,7 +2140,7 @@ fn t12_a_masked_tmp_mount_is_refused_and_its_other_states_are_carried() {
     );
     assert_eq!(
         render(&hugepages).lines,
-        ["RUN systemctl mask -- \\", "    'dev-hugepages.mount'"]
+        ["RUN systemctl mask -- \\", "    dev-hugepages.mount"]
     );
 }
 
@@ -2160,10 +2162,7 @@ fn t8_a_package_owned_mount_unit_acts_only_on_the_package_file() {
         let carried = units_snapshot(vec![change()], vec![]);
         assert_eq!(
             render(&carried).lines,
-            [
-                format!("RUN systemctl {verb} -- \\"),
-                format!("    '{UNIT}'")
-            ],
+            [format!("RUN systemctl {verb} -- \\"), format!("    {UNIT}")],
             "{verb}: the package's file"
         );
 
@@ -2237,7 +2236,7 @@ fn t16_a_mask_needs_its_path_free() {
     );
     assert_eq!(
         render(&control).lines,
-        ["RUN systemctl mask -- \\", "    'kdump.service'"]
+        ["RUN systemctl mask -- \\", "    kdump.service"]
     );
 }
 
@@ -2400,10 +2399,7 @@ fn a_masked_unit_withholds_a_generated_unit_of_its_name() {
             vec![(PATH, "")],
         )
     };
-    let mask_lines = [
-        "RUN systemctl mask -- \\".to_owned(),
-        format!("    '{UNIT}'"),
-    ];
+    let mask_lines = ["RUN systemctl mask -- \\".to_owned(), format!("    {UNIT}")];
 
     let with_generated = with_generated_cron_backup(masked());
     assert_eq!(
@@ -2511,7 +2507,7 @@ fn an_imported_local_row_over_a_mask_file_is_not_enabled_against_a_generated_fil
         render(&control).lines,
         [
             "RUN systemctl enable -- \\".to_owned(),
-            format!("    '{UNIT}'")
+            format!("    {UNIT}")
         ]
     );
     assert_eq!(
@@ -2573,7 +2569,7 @@ const NOFAIL_LINE: &str = "#   No nofail option in the unit file. If the unit is
      boot and its device is missing, units that require it fail, and boot can stop in emergency \
      mode.";
 fn carry_line(verb: &str, unit: &str) -> String {
-    format!("#   To carry it, add after the configuration COPY: RUN systemctl {verb} -- '{unit}'")
+    format!("#   To carry it, add after the configuration COPY: RUN systemctl {verb} -- {unit}")
 }
 
 /// A finding for `unit` as the collector records one whose unit file it
@@ -3285,7 +3281,7 @@ fn mount_advisories_render_in_the_unit_state_section_after_its_commands() {
     let expected = [
         FIXME.to_owned(),
         "RUN systemctl enable -- \\".to_owned(),
-        "    'var-lib-pkg.mount'".to_owned(),
+        "    var-lib-pkg.mount".to_owned(),
         advisory_fact("srv.mount", "enabled"),
         FILE_STAGED_LINE.to_owned(),
         var_symlink_line("/srv"),
@@ -3387,10 +3383,7 @@ fn an_excluded_runtime_updater_is_named_in_an_omitted_line() {
         let snap = units_snapshot(vec![row(unit, state, true)], vec![]);
         assert_eq!(
             render(&snap).lines,
-            [
-                format!("RUN systemctl {verb} -- \\"),
-                format!("    '{unit}'")
-            ],
+            [format!("RUN systemctl {verb} -- \\"), format!("    {unit}")],
             "{unit} included"
         );
     }
@@ -3565,12 +3558,7 @@ fn t34_a_mask_follows_its_package() {
     const OWNER: &str = "kexec-tools";
     let masked =
         |unit: &str, fragment: UnitFragment| change_with(unit, fragment, UnitState::Masked);
-    let mask_line = |unit: &str| {
-        vec![
-            "RUN systemctl mask -- \\".to_owned(),
-            format!("    '{unit}'"),
-        ]
-    };
+    let mask_line = |unit: &str| vec!["RUN systemctl mask -- \\".to_owned(), format!("    {unit}")];
 
     let excluded = mask_snapshot(
         &["bash"],
@@ -4631,7 +4619,7 @@ fn rule_7_line_rules() {
              {verb} on it also {verb}s {named} (named by Also=), {clause}."
         )
     };
-    let add = |verb: &str, unit: &str| format!("#     RUN systemctl {verb} -- '{unit}'");
+    let add = |verb: &str, unit: &str| format!("#     RUN systemctl {verb} -- {unit}");
 
     let (why, lines) = plan_of(
         UnitState::Enabled,
@@ -4782,7 +4770,7 @@ fn rule_7_never_suggests_disabling_a_protected_member() {
         );
         render(&snap).lines
     };
-    let add = |verb: &str, unit: &str| format!("#     RUN systemctl {verb} -- '{unit}'");
+    let add = |verb: &str, unit: &str| format!("#     RUN systemctl {verb} -- {unit}");
 
     let control = plan_of(vec![also_member("b.service", Unlinked)]);
     assert_eq!(
@@ -4815,7 +4803,7 @@ fn rule_7_never_suggests_disabling_a_protected_member() {
     assert!(
         lines
             .iter()
-            .all(|l| !(l.contains("disable") && l.contains("'bootc-x.timer'"))),
+            .all(|l| !l.contains("disable -- bootc-x.timer")),
         "{lines:?}"
     );
 }
@@ -5077,7 +5065,7 @@ fn t25_h_install_files_for_rule_7() {
                  in the image may not be the ones recorded."
             ),
             "#   After reading that file, add after the configuration COPY:".to_owned(),
-            "#     RUN systemctl enable -- 'a-b.service'".to_owned(),
+            "#     RUN systemctl enable -- a-b.service".to_owned(),
         ]
     );
 

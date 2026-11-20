@@ -539,7 +539,7 @@
     {
       "advisories": [
         "# Advisory: multi-user.target.wants/driftify-static.service is a link on the source host that driftify-static.service's [Install] section there does not make (it names no link: none, only Also=, or a list a drop-in reset to empty). Not carried.",
-        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- 'multi-user.target' 'driftify-static.service'"
+        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- multi-user.target driftify-static.service"
       ],
       "cause": "static_unit",
       "parent": "multi-user.target",

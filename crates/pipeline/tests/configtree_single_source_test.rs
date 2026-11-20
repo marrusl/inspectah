@@ -576,7 +576,7 @@ fn the_scheduled_copy_follows_what_the_export_writes() {
 const FLATPAK_UNIT: &str = "/etc/systemd/system/flatpak-provision.service";
 const FLATPAK_COPY: &str =
     "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service";
-const FLATPAK_ENABLE: &str = "RUN systemctl enable -- \\\n    'flatpak-provision.service'";
+const FLATPAK_ENABLE: &str = "RUN systemctl enable -- \\\n    flatpak-provision.service";
 
 fn with_flatpak(mut snap: InspectionSnapshot) -> InspectionSnapshot {
     use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
@@ -871,7 +871,7 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
         }
         assert!(containerfile.contains(copy), "{label}:\n{containerfile}");
         assert_eq!(
-            containerfile.contains("RUN systemctl enable -- \\\n    'cron-backup.timer'"),
+            containerfile.contains("RUN systemctl enable -- \\\n    cron-backup.timer"),
             !collided,
             "{label}: the scheduled section enables only its own pair:\n{containerfile}"
         );

@@ -492,8 +492,8 @@ Compare it with the Containerfile inside the scan tarball from Step 1:
   instead of `# === Service Enablement ===`, after the
   `COPY config/etc/ /etc/` line instead of before it, so each command
   runs after the files it names are in place, and as
-  `RUN systemctl enable -- \` with each unit single-quoted on its own
-  line (`'httpd.service' \`).
+  `RUN systemctl enable -- \` with each unit on its own line
+  (`httpd.service \`).
 
 The rest of the Containerfile covers the Python virtual environments, the npm application, the three
 Quadlet units, the Compose file as a reference, the

@@ -3787,7 +3787,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {needle:?}:\n{output}"))
         };
         let install = at("    /tmp/custom-tool-1.0-1.el9.x86_64.rpm \\");
-        let enable = at("    'custom-tool.service'");
+        let enable = at("    custom-tool.service");
         assert!(install < enable, "{output}");
         assert_eq!(
             output
@@ -4666,11 +4666,11 @@ RUN dnf install -y \
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl enable -- \\\n    'httpd.service' \\\n    'sshd.service'"),
+            output.contains("systemctl enable -- \\\n    httpd.service \\\n    sshd.service"),
             "enable must use multi-line continuation"
         );
         assert!(
-            output.contains("systemctl disable -- \\\n    'cups.service'"),
+            output.contains("systemctl disable -- \\\n    cups.service"),
             "disable must use multi-line continuation"
         );
         // Preset-matching units from the inventory must NOT appear
@@ -5106,7 +5106,7 @@ RUN dnf install -y \
             output
         );
         assert!(
-            output.contains("    'httpd.service' \\"),
+            output.contains("    httpd.service \\"),
             "services on indented lines with continuation"
         );
     }
@@ -5134,7 +5134,7 @@ RUN dnf install -y \
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl enable -- \\\n    'httpd.service' \\\n    'sshd.service'"),
+            output.contains("systemctl enable -- \\\n    httpd.service \\\n    sshd.service"),
             "2 services must use multi-line continuation"
         );
     }
@@ -5162,12 +5162,12 @@ RUN dnf install -y \
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl mask -- \\\n    'cups.service'"),
+            output.contains("systemctl mask -- \\\n    cups.service"),
             "masked service must produce systemctl mask with continuation, got:\n{}",
             output
         );
         assert!(
-            output.contains("systemctl enable -- \\\n    'httpd.service'"),
+            output.contains("systemctl enable -- \\\n    httpd.service"),
             "enabled service must still work alongside masked"
         );
     }
@@ -5543,15 +5543,15 @@ RUN dnf install -y \
 
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl enable -- \\\n    'httpd.service'"),
+            output.contains("systemctl enable -- \\\n    httpd.service"),
             "enabled service must produce systemctl enable with continuation"
         );
         assert!(
-            output.contains("systemctl mask -- \\\n    'cups.service'"),
+            output.contains("systemctl mask -- \\\n    cups.service"),
             "masked service must produce systemctl mask with continuation"
         );
         assert!(
-            output.contains("systemctl disable -- \\\n    'avahi-daemon.service'"),
+            output.contains("systemctl disable -- \\\n    avahi-daemon.service"),
             "disabled service must produce systemctl disable with continuation"
         );
     }
@@ -7250,7 +7250,7 @@ RUN dnf install -y \
         assert!(
             active
                 .windows(2)
-                .any(|w| w == ["RUN systemctl enable -- \\", "    'backup.timer'"]),
+                .any(|w| w == ["RUN systemctl enable -- \\", "    backup.timer"]),
             "the generated timer is not enabled: {active:#?}"
         );
         assert!(

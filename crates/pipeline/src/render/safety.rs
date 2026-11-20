@@ -163,6 +163,35 @@ pub fn single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// A byte a POSIX shell reads as itself in an unquoted word, in any
+/// position: `[A-Za-z0-9@%+=:,./_-]`. It holds no metacharacter, no glob
+/// character, no quote, no `\`, no `$`, no `~` and no `#`.
+fn is_bare_shell_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric()
+        || matches!(
+            b,
+            b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'_' | b'-'
+        )
+}
+
+/// `s` as one POSIX shell word, quoted only when it needs it: bare when it
+/// is non-empty and every byte is in `[A-Za-z0-9@%+=:,./_-]`, otherwise
+/// [`single_quote`]d. Generated commands should read as a person would
+/// write them, and quoting a word that does not need it suggests it does
+/// (Mark Russell, 2026-11-18).
+///
+/// Total over any input: the decision is an allowlist, not a list of
+/// characters known to be dangerous, so a value set that later widens
+/// still renders correctly. A leading `-` is not handled here: put `--`
+/// before the operands. The line-break caveat of [`single_quote`] applies.
+pub fn shell_word(s: &str) -> String {
+    if !s.is_empty() && s.bytes().all(is_bare_shell_byte) {
+        s.to_owned()
+    } else {
+        single_quote(s)
+    }
+}
+
 /// Returns true if the given string is a valid tuned profile name.
 pub fn is_valid_tuned_profile(name: &str) -> bool {
     TUNED_PROFILE_RE.is_match(name)
@@ -634,6 +663,39 @@ pub fn operator_kargs(cmdline: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A word made only of the bare set stays bare; anything else, the
+    /// empty word included, is single-quoted. A leading `-` is not the
+    /// quoting's job: the caller puts `--` first.
+    #[test]
+    fn shell_word_quotes_only_what_needs_it() {
+        let cases: &[(&str, &str)] = &[
+            ("", "''"),
+            ("httpd.service", "httpd.service"),
+            ("getty@tty2.service", "getty@tty2.service"),
+            ("a%b", "a%b"),
+            ("a+b", "a+b"),
+            ("a=b", "a=b"),
+            ("a:b", "a:b"),
+            ("a,b", "a,b"),
+            ("a.b", "a.b"),
+            ("a/b", "a/b"),
+            ("a_b", "a_b"),
+            ("a-b", "a-b"),
+            ("-.slice", "-.slice"),
+            (r"backup\x2djob.service", r"'backup\x2djob.service'"),
+            ("a b", "'a b'"),
+            ("a*", "'a*'"),
+            ("a?", "'a?'"),
+            ("a[b]", "'a[b]'"),
+            ("it's", r"'it'\''s'"),
+            ("$HOME", "'$HOME'"),
+            ("`id`", "'`id`'"),
+        ];
+        for (word, expected) in cases {
+            assert_eq!(shell_word(word), *expected, "{word:?}");
+        }
+    }
 
     #[test]
     fn test_sanitize_shell_value_safe() {

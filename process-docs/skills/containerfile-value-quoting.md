@@ -15,12 +15,12 @@ has produced both over-rejection of legal paths and live command injection.
 | Context | Example site | Treatment | Predicate that matters |
 |---|---|---|---|
 | Inside single quotes in a command | `RUN python3 -m venv '{abs_path}'` | quote at the site | `'` and the line terminators only: everything else is inert inside the quotes |
-| Bare token in a command | none left: the npm global list was the last, now `RUN npm install -g -- '{name}@{version}' ...` | quote it, never blacklist; put `--` before a token list that could hold a word starting with `-` | a blacklist here is structurally incomplete, so this row should stay empty |
+| Token in a command that may be bare | `RUN systemctl enable -- {unit}` | quote it when it needs it, by one function, never blacklist: `shell_word()` leaves a word bare only when it is non-empty and every byte is in `[A-Za-z0-9@%+=:,./_-]`, and single-quotes it otherwise (Mark Russell, 2026-11-18); put `--` before a token list that could hold a word starting with `-` | an allowlist of bytes the shell reads as themselves; a blacklist, or "quote if it holds a `\`", is structurally incomplete |
 | Comment text | `# npm global packages: {prefix}` | escaped for you by `comment::join_lines()`, the join every line-vector renderer goes through (the string-built files in `configtree.rs` escape at the site or carry fixed text); `sanitize_for_comment()` per value where the quotes should double | `\n` closes the comment; every other Unicode mandatory line break (`\r`, VT, FF, U+0085, U+2028, U+2029) is escaped too, since a viewer may break the line there whether or not the build parser does, and so is every other control but tab, since ESC starts a terminal escape sequence |
 
 `contains_unsafe_chars` refuses `'` and every character in
 `LINE_TERMINATORS`, one check serving every command site, which is
-correct only because every command site single-quotes. A new
+correct only because every command site in `language_packages.rs` single-quotes. A new
 interpolation added bare inherits a predicate that admits `;`, `$` and `>`.
 The quotes make a carriage return or U+2028 inert to the shell but not to
 a terminal, which breaks the line there, so every terminator is refused,
@@ -170,14 +170,22 @@ the emitting function takes the type rather than a `&str`. The guarantee
 belongs to the type, so a new emission site cannot forget the check; a
 site check closes one site, the type closes the class.
 
-**Unit operands are quoted after `--`, with no refusal at the site.**
-`systemctl_lines` in `render/unit_plan.rs` writes one
-`RUN systemctl <verb> -- \` per verb, each operand on its own
-continuation line as `single_quote(name)`. The operand is a `UnitName`,
+**Unit operands are quoted when they need it, after `--`, with no
+refusal at the site.** `systemctl_lines` in `render/unit_plan.rs` writes
+one `RUN systemctl <verb> -- \` per verb, each operand on its own
+continuation line as `shell_word(name)`, and every advisory that shows a
+`systemctl` command, or the `test -L <path> && rm -- <path>` line, goes
+through the same function. The generated Containerfile should read like
+something a person would write, and quoting a name that does not need it
+suggests it does (Mark Russell, 2026-11-18). The operand is a `UnitName`,
 proved when the collector parsed it, so the site has nothing left to
-refuse: `single_quote` is total on the type's character set, which holds
-no quote and no line break, and `--` makes a name that starts with `-`
-(`-.slice`) an operand. No `systemctl` line is written outside the plan:
+refuse: `shell_word` is total on the type's character set, which holds no
+quote and no line break. Of that set only `\` is outside the bare set, so
+`httpd.service` and `getty@tty2.service` render bare and
+`foo\x2dbar.service` renders quoted; unquoted, `sh` would read it as
+`foox2dbar.service`. `--` makes a name that starts with `-` (`-.slice`)
+an operand; quotes never did. Decide by the allowlist, never by "quote if
+it holds a backslash", so a wider `UnitName` set still renders correctly. No `systemctl` line is written outside the plan:
 converted cron timers and `@reboot` services, and
 `flatpak-provision.service`, are plan requests whose enables
 `systemctl_lines` writes in their own sections, and `tuned.service` is a
