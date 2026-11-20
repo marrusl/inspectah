@@ -1,7 +1,7 @@
 use inspectah_core::rpm_filename::StagedName;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::group_render::RenderContext;
-use inspectah_core::types::repo::{RepoId, RepoSectionDef, parse_repo_sections};
+use inspectah_core::types::repo::{RepoAttribution, RepoId, RepoSectionDef, parse_repo_sections};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 
@@ -139,9 +139,10 @@ pub fn write_cached_rpms(
 /// hold: it carries a repo-less annotation, it is installable by name
 /// ([`is_package_installable`]: not a local install or no-repo state, and
 /// its `source_repo` is a real repo id rather than `@commandline`), its
-/// `source_repo` is not another `@` pseudo-repo, the definition dnf would
-/// use among the included repo files ([`carried_definition`]) is disabled
-/// and defines a source, every
+/// the scan did not attribute it to a pseudo repo
+/// ([`RepoAttribution::Pseudo`]: `@System`, `anaconda`), the definition dnf
+/// would use among the repo files the export carries
+/// ([`carried_definition`]) is disabled and defines a source, every
 /// `gpgkey=file://` key that section names is an included key (dnf cannot
 /// verify the package without it), and the id and the package's name and arch pass `sanitize_shell_value`. The id
 /// is returned as the `.repo` file spells it, since `--enablerepo` takes
@@ -158,7 +159,7 @@ fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId>
     if !is_package_installable(pkg)
         || pkg.repoless_annotation.is_empty()
         || pkg.source_repo.is_empty()
-        || pkg.source_repo.starts_with('@')
+        || matches!(pkg.repo_attribution, RepoAttribution::Pseudo { .. })
         || sanitize_shell_value(&pkg.name).is_none()
         || sanitize_shell_value(&pkg.arch).is_none()
     {
@@ -177,6 +178,10 @@ fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId>
 /// The definition of `id` dnf uses on the image, among the `.repo` files
 /// the export carries.
 ///
+/// Those are the included files that are not default repo files: the
+/// Custom Repositories `COPY` leaves a default file out, so its sections
+/// are not the image's, and do not compete for an id either.
+///
 /// dnf 4 reads `.repo` files sorted by their path with `.repo` cut off,
 /// compared component by component (`dnf/conf/read.py`, `RepoReader`), and
 /// the first file to define an id wins: `RepoDict.add` refuses a later one
@@ -189,7 +194,7 @@ fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId>
 fn carried_definition(rpm: &RpmSection, id: &RepoId) -> Option<RepoSectionDef> {
     rpm.repo_files
         .iter()
-        .filter(|f| f.disposition.is_included())
+        .filter(|f| f.disposition.is_included() && !f.is_default_repo)
         .filter_map(|f| {
             let sec = parse_repo_sections(&f.content)
                 .into_iter()
@@ -397,7 +402,7 @@ fn plan_cached(pkg: &PackageEntry, plan: &mut RepolessPlan) {
 mod tests {
     use super::*;
     use inspectah_core::types::FindingKind;
-    use inspectah_core::types::repo::RepoAttribution;
+    use inspectah_core::types::repo::PseudoRepo;
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 
     /// The rendered Containerfile, line by line: repo-less packages are
@@ -796,6 +801,62 @@ mod tests {
                 installs_from_disabled_repo(&pkg, reverse),
                 *expected,
                 "{what}, listed reversed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_default_repo_file_or_a_pseudo_repo_never_routes_to_a_disabled_repo() {
+        // The Custom Repositories `COPY` leaves default repo files out, so a
+        // section only a default file defines is not one the image has. And
+        // a pseudo repo is not a repo, whatever a `.repo` file calls a
+        // section: the scan's typed attribution says so, not a spelling.
+        let cases: &[(&str, PackageEntry, Vec<RepoFile>, bool)] = &[
+            (
+                "control: a custom file",
+                from_repo("r", exact("r")),
+                vec![repo_file("/etc/yum.repos.d/custom.repo", R_DISABLED, false)],
+                true,
+            ),
+            (
+                "only a default file defines it",
+                from_repo("r", exact("r")),
+                vec![repo_file("/etc/yum.repos.d/redhat.repo", R_DISABLED, true)],
+                false,
+            ),
+            (
+                // A default file that dnf on the host would read first does
+                // not compete: the image does not get this copy of it.
+                "a default file sorts first and enables it",
+                from_repo("r", exact("r")),
+                vec![
+                    repo_file("/etc/yum.repos.d/a-default.repo", R_ENABLED, true),
+                    repo_file("/etc/yum.repos.d/custom.repo", R_DISABLED, false),
+                ],
+                true,
+            ),
+            (
+                "anaconda, attributed as a pseudo repo",
+                from_repo(
+                    "anaconda",
+                    RepoAttribution::Pseudo {
+                        which: PseudoRepo::Anaconda,
+                        recorded: "anaconda".into(),
+                    },
+                ),
+                vec![repo_file(
+                    "/etc/yum.repos.d/custom.repo",
+                    "[anaconda]\nbaseurl=https://example.invalid/a\nenabled=0\n",
+                    false,
+                )],
+                false,
+            ),
+        ];
+        for (what, pkg, files, expected) in cases {
+            assert_eq!(
+                installs_from_disabled_repo(pkg, files.clone()),
+                *expected,
+                "{what}"
             );
         }
     }

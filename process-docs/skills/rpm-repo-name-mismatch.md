@@ -57,7 +57,9 @@ A third, render-side question sits on top of the first:
 **`render/repoless.rs::disabled_repo_install()`** asks whether a package
 the scan left repo-less can install from its own repo with
 `--enablerepo`. It matches `source_repo` against the section ids of the
-*included* repo files by case-insensitive equality (the `Exact` rule,
+repo files the export carries, *included* and not `is_default_repo`
+(the Custom Repositories `COPY` leaves default files out), by
+case-insensitive equality (the `Exact` rule,
 which is what `normalize_source_repos` already rewrote `source_repo`
 to), and accepts only a section that is disabled, defines a source, and
 names no `gpgkey=file://` key the export leaves out (`keys_included`,
@@ -68,7 +70,10 @@ off, compared by component, first definition wins (dnf's `RepoDict.add`
 drops later ones with "listed more than once"). A header repeated inside
 one file is one section to dnf, later keys overriding earlier ones, and
 `parse_repo_sections` merges it the same way. Never decide by the order of
-`repo_files`: it is the host's `read_dir` order.
+`repo_files`: it is the host's `read_dir` order. A package the scan
+attributed to a pseudo repo (`RepoAttribution::Pseudo`: `anaconda`,
+`@System`) never takes this route, whatever a `.repo` section is called;
+test the attribution, not the spelling of `source_repo`.
 It is decided at render rather than at scan because whether the `.repo`
 file ships is a refine decision. It also requires the package to be
 installable by name (`is_package_installable`), and it does **not** read
