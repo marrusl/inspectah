@@ -42,10 +42,15 @@ run again inside the clone (see `release-process.md`).
 **The hook type-checks TypeScript but runs no web test.** It gates
 every commit that changes a path outside `.githooks/docs-only-paths`, a
 frontend-only commit included, and runs only the three cargo gates, one
-output line each. `crates/web/build.rs:30-35` runs `npm run build`
+output line each. `crates/web/build.rs:35-40` runs `npm run build`
 (`tsc && vite build`) inside the clippy gate whenever the UI source or
 build files changed, and the hook unsets `INSPECTAH_SKIP_UI`, so setting
-it does not skip that step. It never runs vitest (`npm test`) or
+it does not skip that step. The unset only works because `build.rs`
+prints `cargo:rerun-if-env-changed=INSPECTAH_SKIP_UI` before its early
+return: without that line Cargo reuses a result cached by a skipped
+build, and the hook passes a UI change it never type-checked.
+`scripts/tests/web-build-skip-ui-test.sh` guards it with real cargo
+builds of a throwaway crate that copies `build.rs`. It never runs vitest (`npm test`) or
 Playwright (`npm run test:e2e`). A passing hook on a frontend change
 says nothing about either.
 

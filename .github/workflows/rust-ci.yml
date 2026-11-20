@@ -48,6 +48,9 @@ jobs:
       - name: Check that no build input reads a docs-only path
         if: ${{ !cancelled() }}
         run: scripts/tests/docs-only-paths-test.sh
+      - name: Check that unsetting INSPECTAH_SKIP_UI reruns the UI build
+        if: ${{ !cancelled() }}
+        run: scripts/tests/web-build-skip-ui-test.sh
       - name: Check tracked tarballs
         if: ${{ !cancelled() }}
         run: scripts/check-sensitive-tarballs.sh --tracked

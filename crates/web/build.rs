@@ -3,6 +3,11 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() {
+    // Rerun when the variable is set or unset. Without this, a result cached
+    // from a skipped build is reused after unsetting it, and the pre-commit
+    // hook, which unsets it, would never build or type-check the UI.
+    println!("cargo:rerun-if-env-changed=INSPECTAH_SKIP_UI");
+
     // Allow skipping UI build entirely for Rust-only development
     if env::var("INSPECTAH_SKIP_UI").is_ok() {
         return;
