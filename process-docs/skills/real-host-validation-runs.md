@@ -309,14 +309,17 @@ unit. It does not — systemd treats a zero-length unit file as masked, and
 ## `/etc/hostname` is often empty
 
 A DHCP-named host has an empty `/etc/hostname` and only a transient
-hostname; `hostnamectl --static` is empty too. `collect.rs` reads only
-`/etc/hostname` and inserts `meta["hostname"]` only when non-empty, so
-the snapshot carries no hostname at all. Consequences reach the refine
-header, the export filename (`inspectah-inspectah-refined.tar.gz`, the
-fallback doubled against the prefix), the README, the kickstart, and
-`aggregate/validate.rs`, which keys the host as `<unknown>`.
+hostname; `hostnamectl --static` is empty too. `collect.rs` reads
+`/etc/hostname` first and, when it is empty or whitespace, the kernel's
+transient name from `/proc/sys/kernel/hostname`. It records which file
+supplied the name in `meta["hostname_source"]`, written whenever
+`meta["hostname"]` is. A kernel name of `(none)`, `localhost` or
+`localhost.localdomain` counts as no name, so a host that nothing named
+still carries no hostname.
 
-Fixtures all set a hostname, so this only appears on real hardware.
+Fixtures all set a static hostname, so the fallback only appears on real
+hardware. On a real-host run, check `hostname_source` in the snapshot
+against `hostnamectl` on the host.
 
 ## Persistent SELinux booleans read as non-customised
 

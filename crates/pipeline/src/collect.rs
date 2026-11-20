@@ -213,15 +213,14 @@ pub fn collect(
     snapshot.system_type = source_system_type(source);
 
     // Populate meta with provenance information
-    let hostname = executor
-        .read_file(std::path::Path::new("/etc/hostname"))
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if !hostname.is_empty() {
+    if let Some((hostname, source)) = resolve_hostname(executor) {
         snapshot
             .meta
             .insert("hostname".into(), serde_json::Value::String(hostname));
+        snapshot.meta.insert(
+            "hostname_source".into(),
+            serde_json::Value::String(source.into()),
+        );
     }
     snapshot.meta.insert(
         "timestamp".into(),
@@ -237,6 +236,45 @@ pub fn collect(
     Pipeline {
         state: Collected { snapshot },
     }
+}
+
+/// The static hostname, set by `hostnamectl set-hostname` or the installer.
+const STATIC_HOSTNAME_PATH: &str = "/etc/hostname";
+
+/// The kernel's current hostname: the transient name, which is what
+/// `hostname` and `uname -n` print. On a DHCP-named host (a cloud
+/// instance, a provisioned VM) this is the only name there is, and
+/// `/etc/hostname` is empty.
+const KERNEL_HOSTNAME_PATH: &str = "/proc/sys/kernel/hostname";
+
+/// Kernel names that mean nothing set one: the kernel's own default and
+/// systemd's fallback when there is no static or transient name. Taking
+/// them as hostnames would give every unnamed host in a fleet the same
+/// name.
+const PLACEHOLDER_KERNEL_HOSTNAMES: &[&str] = &["(none)", "localhost", "localhost.localdomain"];
+
+/// The host's name and the file it was read from, recorded in the
+/// snapshot as `meta["hostname"]` and `meta["hostname_source"]`.
+///
+/// The static name wins; an empty or whitespace-only `/etc/hostname`
+/// falls back to the kernel's transient name, unless that is a
+/// placeholder. `None` when neither file names the host. The source is
+/// written whenever the hostname is, so a snapshot with a hostname and no
+/// source predates this rule.
+fn resolve_hostname(executor: &dyn Executor) -> Option<(String, &'static str)> {
+    let read = |path: &str| {
+        executor
+            .read_file(std::path::Path::new(path))
+            .ok()
+            .map(|content| content.trim().to_string())
+            .filter(|name| !name.is_empty())
+    };
+    if let Some(name) = read(STATIC_HOSTNAME_PATH) {
+        return Some((name, STATIC_HOSTNAME_PATH));
+    }
+    read(KERNEL_HOSTNAME_PATH)
+        .filter(|name| !PLACEHOLDER_KERNEL_HOSTNAMES.contains(&name.as_str()))
+        .map(|name| (name, KERNEL_HOSTNAME_PATH))
 }
 
 /// Reconcile facts that span two inspectors, once, after every inspector
@@ -785,6 +823,109 @@ mod tests {
         // version and timestamp still present
         assert!(snap.meta.contains_key("inspectah_version"));
         assert!(snap.meta.contains_key("timestamp"));
+    }
+
+    /// The hostname falls back from the static name to the kernel's
+    /// (transient) name, and `meta["hostname_source"]` names the file that
+    /// supplied it. A host whose `/etc/hostname` is empty and whose name
+    /// comes from DHCP is the measured real-host case (`rhel9`).
+    #[test]
+    fn test_collect_hostname_source_order() {
+        const STATIC: &str = "/etc/hostname";
+        const KERNEL: &str = "/proc/sys/kernel/hostname";
+        /// (case, /etc/hostname, /proc/sys/kernel/hostname, expected (hostname, source))
+        type Case<'a> = (
+            &'a str,
+            Option<&'a str>,
+            Option<&'a str>,
+            Option<(&'a str, &'a str)>,
+        );
+        let cases: &[Case] = &[
+            (
+                "static present wins over kernel",
+                Some("web-01\n"),
+                Some("dhcp-10-0-0-5\n"),
+                Some(("web-01", STATIC)),
+            ),
+            (
+                "static present, no kernel file",
+                Some("web-01\n"),
+                None,
+                Some(("web-01", STATIC)),
+            ),
+            (
+                "empty static falls back to kernel",
+                Some(""),
+                Some("rhel9\n"),
+                Some(("rhel9", KERNEL)),
+            ),
+            (
+                "whitespace-only static falls back to kernel",
+                Some("  \n\t\n"),
+                Some("rhel9\n"),
+                Some(("rhel9", KERNEL)),
+            ),
+            (
+                "missing static falls back to kernel",
+                None,
+                Some("ip-10-0-0-5.ec2.internal\n"),
+                Some(("ip-10-0-0-5.ec2.internal", KERNEL)),
+            ),
+            ("both absent", None, None, None),
+            ("empty static, empty kernel", Some(""), Some("\n"), None),
+            (
+                "kernel default name is not a hostname",
+                Some(""),
+                Some("(none)\n"),
+                None,
+            ),
+            (
+                "systemd fallback name is not a hostname",
+                Some(""),
+                Some("localhost\n"),
+                None,
+            ),
+            (
+                "systemd fallback FQDN is not a hostname",
+                None,
+                Some("localhost.localdomain\n"),
+                None,
+            ),
+        ];
+
+        for (case, static_name, kernel_name, expected) in cases {
+            let mut exec = MockExecutor::new();
+            if let Some(content) = static_name {
+                exec = exec.with_file(STATIC, content);
+            }
+            if let Some(content) = kernel_name {
+                exec = exec.with_file(KERNEL, content);
+            }
+            let source = SourceSystem::PackageBased {
+                os_release: test_os_release(),
+            };
+            let pipeline = collect(
+                &source,
+                &exec,
+                &[],
+                None,
+                &NullProgress,
+                &AtomicBool::new(false),
+            );
+            let meta = &pipeline.state.snapshot.meta;
+            let actual = meta
+                .get("hostname")
+                .and_then(|v| v.as_str())
+                .map(|h| (h, meta.get("hostname_source").and_then(|v| v.as_str())));
+            let expected = expected.map(|(h, s)| (h, Some(s)));
+            assert_eq!(actual, expected, "case: {case}");
+            if expected.is_none() {
+                assert!(
+                    !meta.contains_key("hostname_source"),
+                    "case: {case}: no source without a hostname"
+                );
+            }
+        }
     }
 
     // --- Completeness tracking tests ---
