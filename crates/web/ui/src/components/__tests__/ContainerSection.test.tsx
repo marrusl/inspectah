@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 // Rendered with a real pending guard, as its owner supplies one in the app.
 import { ContainerSectionWithGuard as ContainerSection } from "../../test-utils/withPendingGuard";
@@ -310,4 +310,34 @@ describe("ContainerSection", () => {
     await user.keyboard("G");
     expect(flatpak).toHaveFocus();
   });
+
+  it.each(
+    ["ctrlKey", "metaKey", "altKey"].flatMap((modifier) =>
+      ["myapp.container", "org.mozilla.firefox"].flatMap((name) =>
+        [
+          { label: "x", key: "x" },
+          { label: "Space", key: " " },
+        ].map(({ label, key }) => ({ modifier, name, label, key })),
+      ),
+    ),
+  )(
+    "$label with $modifier held leaves $name alone",
+    ({ modifier, name, key }) => {
+      render(
+        <ContainerSection
+          quadlets={[makeQuadlet()]}
+          flatpaks={[makeFlatpak()]}
+          onViewUpdate={onViewUpdate}
+          onMutationError={onMutationError}
+        />,
+      );
+
+      const row = screen.getByRole("row", { name });
+      row.focus();
+      // fireEvent returns false when a handler called preventDefault.
+      const notPrevented = fireEvent.keyDown(row, { key, [modifier]: true });
+      expect(mockApplyOp).not.toHaveBeenCalled();
+      expect(notPrevented).toBe(true);
+    },
+  );
 });

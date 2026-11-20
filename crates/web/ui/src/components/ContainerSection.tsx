@@ -10,7 +10,7 @@ import type {
 } from "../api/types";
 import { applyOp } from "../api/client";
 import type { PendingGuard } from "../hooks/usePendingGuard";
-import { useRowNavigation } from "../hooks/useRowNavigation";
+import { isRowToggleKey, useRowNavigation } from "../hooks/useRowNavigation";
 import {
   attentionLabelColor,
   formatTriageReason,
@@ -181,7 +181,7 @@ export function ContainerSection({
             style={{ borderLeft }}
             onKeyDown={(e) => {
               if (e.target !== e.currentTarget) return;
-              if (e.key === " " || e.key === "x") {
+              if (isRowToggleKey(e)) {
                 e.preventDefault();
                 handleToggleQuadlet(q.path, q.include);
               }
@@ -333,7 +333,7 @@ export function ContainerSection({
             style={{ borderLeft }}
             onKeyDown={(e) => {
               if (e.target !== e.currentTarget) return;
-              if (e.key === " " || e.key === "x") {
+              if (isRowToggleKey(e)) {
                 e.preventDefault();
                 handleToggleFlatpak(f.app_id, f.remote, f.branch, f.include);
               }

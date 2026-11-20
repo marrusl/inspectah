@@ -6,7 +6,7 @@ import { ExcludedZone } from "./ExcludedZone";
 import { GroupRow } from "./GroupRow";
 import { RepoConflictPopover } from "./aggregate/RepoConflictPopover";
 import { PrevalenceBadge } from "./PrevalenceBadge";
-import { useRowNavigation } from "../hooks/useRowNavigation";
+import { isRowToggleKey, useRowNavigation } from "../hooks/useRowNavigation";
 import type {
   GroupInfo,
   PackageProvenance,
@@ -637,7 +637,7 @@ function PackageRow({
       className={rowClassName}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
-        if ((e.key === " " || e.key === "x") && !isBlocked && !isPending) {
+        if (isRowToggleKey(e) && !isBlocked && !isPending) {
           e.preventDefault();
           onToggle(pkg.name);
         }

@@ -19,6 +19,17 @@ export function rowNavigationTarget(
 }
 
 /**
+ * Whether a keydown toggles a row: x or Space, with none of the Ctrl, Meta
+ * or Alt modifiers the navigation keys also leave alone, so Ctrl+X and the
+ * like never change a decision.
+ */
+export function isRowToggleKey(e: React.KeyboardEvent<HTMLElement>): boolean {
+  return (
+    (e.key === " " || e.key === "x") && !e.ctrlKey && !e.metaKey && !e.altKey
+  );
+}
+
+/**
  * A keydown handler for a list container whose rows are the elements
  * matching `rowSelector`, in document order. A navigation key pressed on a
  * row focuses the row it names. Keys pressed on a control inside a row, or

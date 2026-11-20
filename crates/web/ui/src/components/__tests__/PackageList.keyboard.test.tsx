@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PackageList } from "../PackageList";
 import type { GroupInfo, RepoGroupInfo } from "../../api/types";
@@ -56,6 +56,16 @@ function renderList(
 
 const row = (name: string) => screen.getByTestId(`package-row-${name}`);
 
+/** The two toggle keys, as `user.keyboard` and `KeyboardEvent.key` name them. */
+const TOGGLE_KEYS = [
+  { label: "x", typed: "x", key: "x" },
+  { label: "Space", typed: " ", key: " " },
+] as const;
+const MODIFIERS = ["ctrlKey", "metaKey", "altKey"] as const;
+const MODIFIED_TOGGLES = MODIFIERS.flatMap((modifier) =>
+  TOGGLE_KEYS.map(({ label, key }) => ({ modifier, label, key })),
+);
+
 describe("PackageList row shortcuts", () => {
   it("j and k move between package rows", async () => {
     const user = userEvent.setup();
@@ -98,16 +108,53 @@ describe("PackageList row shortcuts", () => {
     expect(onToggle).toHaveBeenCalledTimes(2);
   });
 
-  it("x does nothing while the package's request is in flight", async () => {
-    const user = userEvent.setup();
-    const { onToggle } = renderList({
-      pendingKeys: new Set(["bat.aarch64"]),
-    });
+  it.each(TOGGLE_KEYS)(
+    "$label does nothing while the package's request is in flight",
+    async ({ typed }) => {
+      const user = userEvent.setup();
+      const { onToggle } = renderList({
+        pendingKeys: new Set(["bat.aarch64"]),
+      });
 
-    await user.click(screen.getByText("bat.aarch64"));
-    await user.keyboard("x");
-    expect(onToggle).not.toHaveBeenCalled();
-  });
+      await user.click(screen.getByText("bat.aarch64"));
+      await user.keyboard(typed);
+      expect(onToggle).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(TOGGLE_KEYS)(
+    "$label does nothing on a row waiting for an RPM upload",
+    async ({ typed }) => {
+      const user = userEvent.setup();
+      const onUploadClick = vi.fn();
+      const { onToggle } = renderList({
+        rpmRowStates: { "bat.aarch64": "needs_upload" },
+        onUploadClick,
+      });
+
+      row("bat.aarch64").focus();
+      await user.keyboard(typed);
+      expect(onToggle).not.toHaveBeenCalled();
+      expect(onUploadClick).not.toHaveBeenCalled();
+      expect(row("bat.aarch64")).toHaveFocus();
+    },
+  );
+
+  it.each(MODIFIED_TOGGLES)(
+    "$label with $modifier held leaves the package alone",
+    ({ modifier, key }) => {
+      const { onToggle } = renderList();
+
+      row("bat.aarch64").focus();
+      // fireEvent returns false when a handler called preventDefault.
+      const notPrevented = fireEvent.keyDown(row("bat.aarch64"), {
+        key,
+        [modifier]: true,
+      });
+      expect(onToggle).not.toHaveBeenCalled();
+      expect(notPrevented).toBe(true);
+    },
+  );
 
   it("Space on the checkbox toggles once, not twice", async () => {
     const user = userEvent.setup();
