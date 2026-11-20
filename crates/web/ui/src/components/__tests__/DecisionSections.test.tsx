@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TriageBucketGroup } from "../TriageBucketGroup";
 import { DecisionItem } from "../DecisionItem";
@@ -441,6 +447,35 @@ describe("DecisionItem", () => {
     expect(onToggle).toHaveBeenCalled();
   });
 
+  it.each(
+    (["ctrlKey", "metaKey", "altKey"] as const).flatMap((modifier) =>
+      [
+        { label: "x", key: "x" },
+        { label: "Space", key: " " },
+      ].map(({ label, key }) => ({ modifier, label, key })),
+    ),
+  )(
+    "$label with $modifier held leaves a config row alone",
+    ({ modifier, key }) => {
+      const onToggle = vi.fn();
+      const item: DecisionItemKind = { type: "config", data: makeConfig() };
+      render(
+        <DecisionItem
+          item={item}
+          {...defaultProps}
+          onToggleInclude={onToggle}
+        />,
+      );
+
+      const row = screen.getByRole("row");
+      row.focus();
+      // fireEvent returns false when a handler called preventDefault.
+      const notPrevented = fireEvent.keyDown(row, { key, [modifier]: true });
+      expect(onToggle).not.toHaveBeenCalled();
+      expect(notPrevented).toBe(true);
+    },
+  );
+
   it("expands detail on Enter key", async () => {
     const item: DecisionItemKind = {
       type: "package",
@@ -676,6 +711,38 @@ describe("DecisionList", () => {
       "attention-group-informational",
     );
     expect(groups[2]).toHaveAttribute("data-testid", "attention-group-routine");
+  });
+
+  it("Ctrl+K on a focused config row leaves focus on the row", async () => {
+    const items: DecisionItemKind[] = [
+      {
+        type: "config",
+        data: makeConfig({ path: "/etc/a.conf" }, [NEEDS_REVIEW_TAG]),
+      },
+      {
+        type: "config",
+        data: makeConfig({ path: "/etc/b.conf" }, [NEEDS_REVIEW_TAG]),
+      },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Configuration Files"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const first = screen.getByTestId("decision-item-configs:/etc/a.conf");
+    first.focus();
+    // fireEvent returns false when a handler called preventDefault.
+    const notPrevented = fireEvent.keyDown(first, { key: "k", ctrlKey: true });
+    expect(first).toHaveFocus();
+    expect(notPrevented).toBe(true);
   });
 
   it("only shows groups that have items", async () => {

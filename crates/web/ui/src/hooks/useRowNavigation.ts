@@ -19,14 +19,21 @@ export function rowNavigationTarget(
 }
 
 /**
+ * Whether a keydown carries Ctrl, Meta or Alt. Row keys leave such presses
+ * to the browser or the app (Ctrl+K is global search). Shift does not
+ * count: `G` needs it.
+ */
+export function hasRowKeyModifier(e: React.KeyboardEvent): boolean {
+  return e.ctrlKey || e.metaKey || e.altKey;
+}
+
+/**
  * Whether a keydown toggles a row: x or Space, with none of the Ctrl, Meta
  * or Alt modifiers the navigation keys also leave alone, so Ctrl+X and the
  * like never change a decision.
  */
-export function isRowToggleKey(e: React.KeyboardEvent<HTMLElement>): boolean {
-  return (
-    (e.key === " " || e.key === "x") && !e.ctrlKey && !e.metaKey && !e.altKey
-  );
+export function isRowToggleKey(e: React.KeyboardEvent): boolean {
+  return (e.key === " " || e.key === "x") && !hasRowKeyModifier(e);
 }
 
 /**
@@ -38,7 +45,7 @@ export function isRowToggleKey(e: React.KeyboardEvent<HTMLElement>): boolean {
 export function useRowNavigation(rowSelector: string) {
   return useCallback(
     (e: React.KeyboardEvent<HTMLElement>) => {
-      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.defaultPrevented || hasRowKeyModifier(e)) return;
       const rows = Array.from(
         e.currentTarget.querySelectorAll<HTMLElement>(rowSelector),
       );

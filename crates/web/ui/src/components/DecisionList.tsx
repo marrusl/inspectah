@@ -20,7 +20,10 @@ import { isIncluded } from "../api/disposition";
 import { ApiError } from "../api/types";
 import { useMutation } from "../hooks/useMutation";
 import { useViewed } from "../hooks/useViewed";
-import { rowNavigationTarget } from "../hooks/useRowNavigation";
+import {
+  hasRowKeyModifier,
+  rowNavigationTarget,
+} from "../hooks/useRowNavigation";
 import { TriageBucketGroup } from "./TriageBucketGroup";
 import { RepoGroup } from "./RepoGroup";
 import { RoutineSummary } from "./RoutineSummary";
@@ -538,6 +541,7 @@ export function DecisionList({
 
   const handleRowKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (hasRowKeyModifier(e)) return;
       const nextIndex = rowNavigationTarget(
         e.key,
         focusedIndex,

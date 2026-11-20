@@ -13,6 +13,7 @@ import type {
   TriageReason,
 } from "../api/types";
 import { advisoryTypeLabel, isIncluded, isToggleable } from "../api/disposition";
+import { isRowToggleKey } from "../hooks/useRowNavigation";
 import {
   attentionLabelColor,
   extractTriageBucket,
@@ -205,7 +206,7 @@ export function DecisionItem({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.target !== e.currentTarget) return;
-      if (e.key === " " || e.key === "x") {
+      if (isRowToggleKey(e)) {
         e.preventDefault();
         handleToggle();
       } else if (e.key === "Enter") {
