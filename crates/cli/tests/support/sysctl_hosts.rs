@@ -79,6 +79,8 @@ pub struct SysctlHost {
     rpm_va: Vec<(String, String)>,
     sysctl_a: Option<ExecResult>,
     tuned_active: Option<String>,
+    /// `hostnamectl --json=short` stdout.
+    hostnamectl: Option<String>,
 }
 
 impl SysctlHost {
@@ -150,6 +152,15 @@ impl SysctlHost {
         self
     }
 
+    /// hostnamed describes the host's current name as `hostname`, from
+    /// `source` (`static`, `transient` or `default`), as
+    /// `hostnamectl --json=short` prints it.
+    pub fn hostnamectl(mut self, hostname: &str, source: &str) -> Self {
+        self.hostnamectl =
+            Some(serde_json::json!({"Hostname": hostname, "HostnameSource": source}).to_string());
+        self
+    }
+
     /// Listing `dir` fails with `kind`.
     pub fn dir_error(mut self, dir: &str, kind: std::io::ErrorKind) -> Self {
         self.dir_errors.insert(dir.into(), kind);
@@ -192,6 +203,9 @@ impl SysctlHost {
             .with_command("lsmod", ok(LSMOD));
         if let Some(result) = self.sysctl_a {
             mock = mock.with_command("sysctl -a", result);
+        }
+        if let Some(stdout) = &self.hostnamectl {
+            mock = mock.with_command("hostnamectl --json=short", ok(stdout));
         }
         if let Some(profile) = &self.tuned_active {
             mock = mock.with_command(
