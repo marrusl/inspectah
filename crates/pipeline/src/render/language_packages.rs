@@ -2329,18 +2329,19 @@ mod tests {
             !output.contains("WARNING: path contains unsafe"),
             "normal paths must not trigger warnings: {output}"
         );
-        // All should render with quotes (defensive).
+        // A path with no shell characters renders bare; only one that
+        // needs quoting is quoted.
         assert!(
             output.contains("RUN python3 -m venv /opt/app/venv"),
-            "pip path must be quoted: {output}"
+            "a shell-safe pip path must render bare: {output}"
         );
         assert!(
             output.contains("RUN cd /opt/webapp"),
-            "npm path must be quoted: {output}"
+            "a shell-safe npm path must render bare: {output}"
         );
         assert!(
             output.contains("RUN cd /opt/gemapp"),
-            "gem path must be quoted: {output}"
+            "a shell-safe gem path must render bare: {output}"
         );
     }
 
