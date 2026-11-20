@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Debug builds report `commit dev, built dev`**: `inspectah --version` and `inspectah version` from a debug build, such as plain `cargo build`, no longer show the git commit and build date, so the CLI is not recompiled after every commit. Version metadata in release builds and packaged binaries is unchanged.
 
+### Fixed
+- **The `/srv` note gives the symlink target as `/var/srv`**: the Containerfile comment and the audit report note for unmanaged files under `/srv` said `/srv` is a symlink to `var/srv`, the raw relative link text, which reads as a path missing its leading slash. Both now name the absolute target, `/var/srv`.
+
 ## [0.9.0-beta.6] - 2026-11-20
 
 ### Added

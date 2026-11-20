@@ -36,7 +36,7 @@ fn symlink_refusal(file: &UnmanagedFile) -> Option<String> {
 /// The scan root that the bootc target family links into `/var`.
 ///
 /// On fedora-bootc, centos-bootc and rhel-bootc `/srv` is a symlink to
-/// `var/srv`, so a `COPY` into it writes into `/var/srv`, which is unpacked
+/// `/var/srv`, so a `COPY` into it writes into `/var/srv`, which is unpacked
 /// once on first boot and never touched by a later image update.
 const VAR_BACKED_SCAN_ROOT: &str = "srv";
 
@@ -81,7 +81,7 @@ pub fn included_var_srv_paths(snap: &InspectionSnapshot) -> Vec<&str> {
 fn var_srv_comment_lines(paths: &[&str]) -> Vec<String> {
     let mut lines = vec![
         "#".into(),
-        "# Not copied: /srv is a symlink to var/srv on bootc images, so content".into(),
+        "# Not copied: /srv is a symlink to /var/srv on bootc images, so content".into(),
         "# there is machine-local data that belongs to the /var lifecycle, not".into(),
         "# image content. A COPY would land in /var/srv once, on first boot, and".into(),
         "# no later image update would change it. Carry it with your /var".into(),
@@ -354,7 +354,7 @@ mod tests {
             "no directive may name /srv, got: {lines:?}"
         );
         assert!(
-            lines.iter().any(|l| l.contains("symlink to var/srv")),
+            lines.iter().any(|l| l.contains("symlink to /var/srv")),
             "the /var strategy note must be present, got: {lines:?}"
         );
         for path in [
@@ -448,7 +448,7 @@ mod tests {
             "got: {lines:?}"
         );
         assert!(
-            !lines.iter().any(|l| l.contains("symlink to var/srv")),
+            !lines.iter().any(|l| l.contains("symlink to /var/srv")),
             "an /opt finding must not get the /srv note, got: {lines:?}"
         );
     }

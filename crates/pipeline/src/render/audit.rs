@@ -1395,7 +1395,7 @@ fn render_software_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) 
         lines.push(String::new());
         lines.push(format!(
             "{} included file(s) under `/srv` have no `COPY` line in the Containerfile. \
-             On bootc images `/srv` is a symlink to `var/srv`, so this content is \
+             On bootc images `/srv` is a symlink to `/var/srv`, so this content is \
              machine-local data that belongs to the `/var` lifecycle, not image content: \
              a `COPY` would land in `/var/srv` once, on first boot, and no later image \
              update would change it. Carry it with your `/var` strategy, restoring it into \
@@ -1816,7 +1816,7 @@ mod tests {
         let md = render_audit(&snap);
         assert!(md.contains("### Unmanaged Files under /srv"), "{md}");
         assert!(md.contains("1 included file(s) under `/srv`"), "{md}");
-        assert!(md.contains("symlink to `var/srv`"), "{md}");
+        assert!(md.contains("symlink to `/var/srv`"), "{md}");
         assert!(md.contains("- `/srv/www/index.html`"), "{md}");
         assert!(!md.contains("excluded.html"), "{md}");
         assert!(!md.contains("/opt/app/server"), "{md}");

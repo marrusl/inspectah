@@ -266,7 +266,7 @@ comment block in place of the `COPY`, naming each path:
 
 ```dockerfile
 #
-# Not copied: /srv is a symlink to var/srv on bootc images, so content
+# Not copied: /srv is a symlink to /var/srv on bootc images, so content
 # there is machine-local data that belongs to the /var lifecycle, not
 # image content. A COPY would land in /var/srv once, on first boot, and
 # no later image update would change it. Carry it with your /var
@@ -286,7 +286,7 @@ The audit report carries the same note under **Unmanaged Files under
 ```markdown
 ### Unmanaged Files under /srv
 
-1 included file(s) under `/srv` have no `COPY` line in the Containerfile. On bootc images `/srv` is a symlink to `var/srv`, so this content is machine-local data that belongs to the `/var` lifecycle, not image content: a `COPY` would land in `/var/srv` once, on first boot, and no later image update would change it. Carry it with your `/var` strategy, restoring it into `/var/srv` after deployment or giving it its own mount. The files are in the export under `unmanaged/srv/`.
+1 included file(s) under `/srv` have no `COPY` line in the Containerfile. On bootc images `/srv` is a symlink to `/var/srv`, so this content is machine-local data that belongs to the `/var` lifecycle, not image content: a `COPY` would land in `/var/srv` once, on first boot, and no later image update would change it. Carry it with your `/var` strategy, restoring it into `/var/srv` after deployment or giving it its own mount. The files are in the export under `unmanaged/srv/`.
 
 - `/srv/www/index.html`
 ```
