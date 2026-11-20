@@ -201,11 +201,19 @@ of the two questions that ask it. Never resolve an id by walking
   verdict again: it names a left-out file only when including that file
   alone makes the verdict `Served`, so the FIXME never points at a file
   that is already included, one an earlier file would still shadow, or
-  one the stager would withhold. The package's own dropped files go
-  through the same check, first: re-including an owned `epel.repo` does
-  not help while an included `a.repo` dnf reads earlier defines
-  `[epel]` disabled, and while an owned file stays dropped no other file
-  can restore the proof. Adding the candidate to the staged set by hand
+  one the stager would withhold. Candidates are tried in a fixed order:
+  the package's own dropped repo files and keys, then other left-out
+  repo files defining a serving id (dnf read order), then keys the image
+  lacks that any captured section defining a serving id names (path
+  order). Owned files go first but through the same check: re-including
+  an owned `epel.repo` does not help while an included `a.repo` dnf reads
+  earlier defines `[epel]` disabled, and while an owned file stays
+  dropped no other file can restore the proof. Keys are candidates even
+  when the package does not own them: an included `bootstrap.repo` whose
+  key was excluded is restored by that key alone. The FIXME words a key
+  differently from a repo file (`CaptureKind`): refine has no row for a
+  key, and re-including a repo whose `gpgkey=` names it is what carries
+  it again. Adding the candidate to the staged set by hand
   is not enough: a config entry at `a.repo/stray` makes the stager
   withhold both it and an included `a.repo`.
 

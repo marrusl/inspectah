@@ -532,11 +532,20 @@ fn demotion_fixme(pkg: &PackageEntry, loss: &super::repo_enabling::ServingLoss) 
     let tail =
         format!("{name} installs from that repo definition, which this export does not carry");
     match &loss.file {
-        Some(file) => format!(
-            "# FIXME: include {} under Configuration Files, or re-include repo {id}, or \
-             upload the RPM; {tail}",
-            super::language_packages::sanitize_for_comment(file)
-        ),
+        Some(file) => {
+            let path = super::language_packages::sanitize_for_comment(&file.path);
+            // A repo file is a Configuration Files row; a key has no row of
+            // its own, and refine carries it with a repo that names it.
+            let include = match file.kind {
+                super::repo_enabling::CaptureKind::RepoFile => {
+                    format!("include {path} under Configuration Files")
+                }
+                super::repo_enabling::CaptureKind::Key => {
+                    format!("include key {path} by re-including a repo whose gpgkey names it")
+                }
+            };
+            format!("# FIXME: {include}, or re-include repo {id}, or upload the RPM; {tail}")
+        }
         // Nothing captured defines the section, so there is no file to
         // name; the advice that would name one is dropped, not invented.
         None => format!("# FIXME: re-include repo {id}, or upload the RPM; {tail}"),
@@ -4032,6 +4041,7 @@ RUN dnf install -y \
 
     #[test]
     fn losing_the_serving_repo_demotes_the_package() {
+        const GPG_KEY_DIR: &str = "/etc/pki/rpm-gpg/";
         const ACTIVE_INSTALL: &str = "    vendor-release \\";
         const FIXME_TAIL: &str = "vendor-release installs from that repo definition, \
                                   which this export does not carry";
@@ -4052,7 +4062,8 @@ RUN dnf install -y \
         // names for it. A file is named only when re-including it would
         // serve the package again: bootstrap.repo carried with enabled=0,
         // or carried without its key, is already included, so naming it
-        // would send the operator in a circle.
+        // would send the operator in a circle. The key [bootstrap] names
+        // is not the package's own, and is named all the same.
         let cases = [
             DemotionCase {
                 label: "bootstrap.repo excluded",
@@ -4086,7 +4097,7 @@ RUN dnf install -y \
                     }
                 },
                 id: "bootstrap",
-                file: None,
+                file: Some("/etc/pki/rpm-gpg/RPM-GPG-KEY-BOOTSTRAP"),
             },
             DemotionCase {
                 label: "the vendor.repo the package owns is excluded",
@@ -4174,8 +4185,35 @@ RUN dnf install -y \
         {
             let mut snap = two_repository_snapshot();
             mutate(&mut snap);
+
+            // Following the advice must serve the package: including the
+            // named file alone restores the active install.
+            if let Some(file) = file {
+                let mut followed = snap.clone();
+                let rpm = followed.rpm.as_mut().expect("fixture has an rpm section");
+                for entry in rpm
+                    .repo_files
+                    .iter_mut()
+                    .chain(rpm.gpg_keys.iter_mut())
+                    .filter(|f| f.path == file)
+                {
+                    entry.disposition = FindingKind::included();
+                }
+                let restored = render_containerfile(&followed, None, None);
+                assert!(
+                    restored.contains(ACTIVE_INSTALL) && !restored.contains("# FIXME:"),
+                    "{label}: including {file} must serve the package again:\n{restored}"
+                );
+            }
+
             let output = render_containerfile(&snap, None, None);
+            // A key has no Configuration Files row to include it from:
+            // refine carries a key with a repo whose gpgkey names it.
             let expected = match file {
+                Some(key) if key.starts_with(GPG_KEY_DIR) => format!(
+                    "# FIXME: include key {key} by re-including a repo whose gpgkey names \
+                     it, or re-include repo {id}, or upload the RPM; {FIXME_TAIL}"
+                ),
                 Some(file) => format!(
                     "# FIXME: include {file} under Configuration Files, or re-include repo \
                      {id}, or upload the RPM; {FIXME_TAIL}"

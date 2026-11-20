@@ -49,7 +49,26 @@ pub(crate) struct ServingLoss {
     /// it, makes [`repo_enabling_export`] answer
     /// [`RepoEnablingExport::Served`]. `None` when no single file would:
     /// the advice that names a file is dropped rather than invented.
-    pub file: Option<String>,
+    pub file: Option<RestoringFile>,
+}
+
+/// Which capture a [`RestoringFile`] is. The two come back in different
+/// places, so the advice that names one has to know which it names.
+#[derive(Clone, Copy)]
+pub(crate) enum CaptureKind {
+    /// A `.repo` file (`rpm.repo_files`).
+    RepoFile,
+    /// A GPG key (`rpm.gpg_keys`). Refine has no row of its own for a key:
+    /// re-including a repo whose `gpgkey=` names it carries it again.
+    Key,
+}
+
+/// A captured file whose inclusion alone restores a lost proof.
+pub(crate) struct RestoringFile {
+    /// Whether it is a repo file or a key.
+    pub kind: CaptureKind,
+    /// Its path on the source host.
+    pub path: String,
 }
 
 /// The export-time status of one package's repo-enabling proof.
@@ -101,15 +120,24 @@ pub(crate) fn repo_enabling_export(
 /// What to name for `pkg`, a package whose proof this export lost
 /// ([`RepoEnablingExport::Lost`]): the first file whose inclusion alone
 /// would serve it again ([`restores`]), with the serving id it restores;
-/// the first serving id and no file otherwise. The package's own dropped
-/// repo files and keys are tried first, then every other captured repo
-/// file the export leaves out that defines a serving id, in dnf's read
-/// order ([`left_out_defining`]). An owned file is named only when
-/// including it really restores the proof: a disabled copy of the
-/// section in a file dnf reads earlier still wins after it is back, and
-/// while an owned file stays dropped no other file can restore it. `None`
-/// only for a package that is not repo-enabling or a snapshot with no RPM
-/// section, neither of which can lose a proof.
+/// the first serving id and no file otherwise. The candidates, in order:
+///
+/// 1. the package's own dropped repo files and keys, in the order its
+///    file ownership lists them ([`dropped_owned_files`]);
+/// 2. every other captured repo file the export leaves out that defines a
+///    serving id, per serving id in `repo_enabling_from` order, each in
+///    dnf's read order ([`left_out_defining`]);
+/// 3. every captured key the image lacks that a captured section defining
+///    a serving id names, in path order ([`left_out_named_keys`]): an
+///    included repo file whose definition names a dropped key loses the
+///    proof as surely as a dropped file does.
+///
+/// An owned file is named only when including it really restores the
+/// proof: a disabled copy of the section in a file dnf reads earlier
+/// still wins after it is back, and while an owned file stays dropped no
+/// other file can restore it. `None` only for a package that is not
+/// repo-enabling or a snapshot with no RPM section, neither of which can
+/// lose a proof.
 ///
 /// Separate from the verdict because answering it re-stages the export
 /// once per candidate file, which only the advice needs.
@@ -120,14 +148,22 @@ pub(crate) fn serving_loss(snap: &InspectionSnapshot, pkg: &PackageEntry) -> Opt
     let others = pkg
         .repo_enabling_from
         .iter()
-        .flat_map(|id| left_out_defining(rpm, id));
+        .flat_map(|id| left_out_defining(rpm, id))
+        .map(|f| (CaptureKind::RepoFile, f));
+    let keys = left_out_named_keys(rpm, &pkg.repo_enabling_from)
+        .into_iter()
+        .map(|k| (CaptureKind::Key, k));
     Some(
         owned
             .chain(others)
-            .find_map(|f| {
+            .chain(keys)
+            .find_map(|(kind, f)| {
                 restores(snap, pkg, f).map(|id| ServingLoss {
                     id,
-                    file: Some(f.path.clone()),
+                    file: Some(RestoringFile {
+                        kind,
+                        path: f.path.clone(),
+                    }),
                 })
             })
             .unwrap_or_else(|| ServingLoss {
@@ -163,6 +199,33 @@ fn left_out_defining<'a>(rpm: &'a RpmSection, id: &RepoId) -> Vec<&'a RepoFile> 
         (dnf_read_order(&a.path), &a.content).cmp(&(dnf_read_order(&b.path), &b.content))
     });
     left_out
+}
+
+/// The captured keys the image lacks ([`RepoFile::is_in_image`]) that a
+/// section defining one of `ids`, in any captured repo file, names with
+/// `gpgkey=`: the candidates [`serving_loss`] tries last. Sorted by path,
+/// then content, so the answer does not depend on the host's file order.
+///
+/// Every captured definition counts, not only the one dnf uses now:
+/// [`restores`] decides whether including the key is enough.
+///
+/// [`RepoFile::is_in_image`]: inspectah_core::types::rpm::RepoFile::is_in_image
+fn left_out_named_keys<'a>(rpm: &'a RpmSection, ids: &[RepoId]) -> Vec<&'a RepoFile> {
+    let named: Vec<String> = rpm
+        .repo_files
+        .iter()
+        .flat_map(|f| parse_repo_sections(&f.content))
+        .filter(|s| ids.contains(&s.id))
+        .flat_map(|s| s.gpg_key_paths)
+        .collect();
+    let mut keys: Vec<&RepoFile> = rpm
+        .gpg_keys
+        .iter()
+        .filter(|k| !k.is_in_image())
+        .filter(|k| named.iter().any(|path| k.is_key_named_by(path)))
+        .collect();
+    keys.sort_by(|a, b| (&a.path, &a.content).cmp(&(&b.path, &b.content)));
+    keys
 }
 
 /// The serving id that including `file` alone would make `pkg` installable
@@ -229,11 +292,12 @@ pub(crate) fn keys_included(rpm: &RpmSection, repos: &InstallRepos, paths: &[Str
 }
 
 /// The captured repo files and keys the package provides that this export
-/// has dropped: the files [`serving_loss`] tries first.
+/// has dropped, each with which it is: the files [`serving_loss`] tries
+/// first.
 fn dropped_owned_files<'a>(
     rpm: &'a RpmSection,
     pkg: &'a PackageEntry,
-) -> impl Iterator<Item = &'a RepoFile> {
+) -> impl Iterator<Item = (CaptureKind, &'a RepoFile)> {
     rpm.file_ownership
         .iter()
         .filter(move |entry| entry.package_name == pkg.name)
@@ -241,8 +305,9 @@ fn dropped_owned_files<'a>(
         .flat_map(move |path| {
             rpm.repo_files
                 .iter()
-                .chain(rpm.gpg_keys.iter())
-                .filter(move |f| f.path == *path && !f.is_in_image())
+                .map(|f| (CaptureKind::RepoFile, f))
+                .chain(rpm.gpg_keys.iter().map(|k| (CaptureKind::Key, k)))
+                .filter(move |(_, f)| f.path == *path && !f.is_in_image())
         })
 }
 
