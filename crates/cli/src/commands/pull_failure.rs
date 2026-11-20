@@ -118,27 +118,39 @@ pub fn sanitize_stderr(s: &str) -> String {
     }));
 
     // Userinfo in URLs: `https://user:pass@host` -> `https://[REDACTED]@host`.
-    spans.extend(value_spans(s, "://", |tail| (0, userinfo_len(tail))));
+    // Read up to a path, so a password holding a bare `?` or `#` goes whole.
+    spans.extend(value_spans(s, "://", |tail| {
+        (0, userinfo_len(tail, PASSWORD_AUTHORITY_ENDS))
+    }));
 
     // Query strings: `https://host/blob?token=x` -> `https://host/blob?[REDACTED]`.
     // Go's HTTP errors keep a URL's query, which can carry a download
     // token or a signed URL's credentials, and there is no list of
-    // parameter names that covers them all, so the whole query goes. After
-    // its userinfo, the URL ends at whitespace or at a quote, backslash or
-    // angle bracket that encloses it. The userinfo is the one the scrub
-    // above removes, so a quote or space inside a password does not end
-    // the URL before its query.
-    spans.extend(value_spans(s, "://", |tail| {
-        let rest_start = userinfo_len(tail);
-        let rest = &tail[rest_start..];
-        let rest_len = rest
-            .find(|c: char| c.is_whitespace() || URL_ENCLOSERS.contains(&c))
-            .unwrap_or(rest.len());
-        match rest[..rest_len].find('?') {
-            Some(q) => (rest_start + q + 1, rest_start + rest_len),
-            None => (0, 0),
-        }
-    }));
+    // parameter names that covers them all, so the whole query goes. The
+    // URL ends at whitespace or at a quote, backslash or angle bracket that
+    // encloses it. The query is looked for from three starts, and every
+    // span found is kept:
+    // - the start of the URL;
+    // - past the userinfo the scrub above removes, so a quote or space
+    //   inside a password does not end the URL before its query;
+    // - past the userinfo of the authority as a URL parser reads it,
+    //   ending at `/`, `?` or `#`, so an `@` inside the query does not
+    //   move the start past the query's `?`.
+    // Each start finds a query the others miss, and keeping all of them
+    // means adding one never loses what another found.
+    for authority_ends in [None, Some(PASSWORD_AUTHORITY_ENDS), Some(AUTHORITY_ENDS)] {
+        spans.extend(value_spans(s, "://", |tail| {
+            let rest_start = authority_ends.map_or(0, |ends| userinfo_len(tail, ends));
+            let rest = &tail[rest_start..];
+            let rest_len = rest
+                .find(|c: char| c.is_whitespace() || URL_ENCLOSERS.contains(&c))
+                .unwrap_or(rest.len());
+            match rest[..rest_len].find('?') {
+                Some(q) => (rest_start + q + 1, rest_start + rest_len),
+                None => (0, 0),
+            }
+        }));
+    }
 
     // Token fields in a token response body, which containers/image quotes
     // when it cannot decode one: `"token":"x"` and `"access_token": "x"`,
@@ -158,15 +170,26 @@ pub fn sanitize_stderr(s: &str) -> String {
     replace_spans(s, spans)
 }
 
+/// What ends a URL's authority as a URL parser reads it: the path, query
+/// or fragment, or the end of the line.
+const AUTHORITY_ENDS: &[char] = &['/', '?', '#', '\n', '\r'];
+
+/// What ends a URL's authority when reading it for a password: only the
+/// path or the end of the line. A password written with a bare `?` or `#`
+/// is still a password, and stopping there would ship the part before it.
+/// The cost is that an `@` in a query with no path before it takes the
+/// text up to it.
+const PASSWORD_AUTHORITY_ENDS: &[char] = &['/', '\n', '\r'];
+
 /// Length of the userinfo at the start of `tail`, the text after a URL's
 /// `://`: everything before the last `@` of the authority, or 0 when the
-/// authority has none. The authority runs to the first `/` or line break.
-/// A space or tab does not end it: a password written with one is still a
+/// authority has none. The authority runs to the first of `ends`. A space
+/// or tab does not end it: a password written with one is still a
 /// password, and stopping there shipped all of `https://u:two words@host`.
-/// The cost is that an `@` later on the same line, with no `/` before it,
+/// The cost is that an `@` later on the same line, with no end before it,
 /// takes the text up to it.
-fn userinfo_len(tail: &str) -> usize {
-    let authority_len = tail.find(['/', '\n', '\r']).unwrap_or(tail.len());
+fn userinfo_len(tail: &str, ends: &[char]) -> usize {
+    let authority_len = tail.find(ends).unwrap_or(tail.len());
     tail[..authority_len].rfind('@').unwrap_or(0)
 }
 
@@ -1005,8 +1028,9 @@ pub(crate) mod tests {
 
     /// Query strings and token response bodies that a failed pull prints,
     /// the first four with each credential twice, then token values
-    /// holding JSON escapes, credentials nested inside another form, and
-    /// URL userinfo with a space or tab in it:
+    /// holding JSON escapes, credentials nested inside another form, URL
+    /// userinfo with a space, tab, quote or `?` in it, and queries holding
+    /// an `@`:
     /// the scrubber, the Unknown pull excerpt and a container step's
     /// excerpt all drop every copy.
     pub(crate) const QUERY_AND_BODY_CREDENTIALS: &[(&str, &str, &[&str])] = &[
@@ -1097,6 +1121,21 @@ pub(crate) mod tests {
             "Get https://u:two zwords@h/x?sig=query-secret-4",
             &["u:two", "zwords", "query-secret-4"],
         ),
+        (
+            "query holding an @, with no path before it",
+            "Get https://h?account=u@example.com&token=query-secret-5",
+            &["query-secret-5"],
+        ),
+        (
+            "query holding an @, after userinfo with a single quote",
+            "Get https://u:pa'ss@h?account=u@example.com&token=query-secret-6",
+            &["pa'ss", "query-secret-6"],
+        ),
+        (
+            "URL password with a question mark",
+            "Get https://u:pa?zss@registry.example/x: denied",
+            &["u:pa", "zss"],
+        ),
     ];
 
     #[test]
@@ -1168,6 +1207,27 @@ pub(crate) mod tests {
                 "https://[REDACTED]@h/x?[REDACTED]",
                 "{input:?}"
             );
+        }
+        // An `@` in a query does not hide the query, with no path before
+        // it or after a quote in the userinfo, and a bare `?` in a
+        // password does not end the userinfo, though the query search then
+        // takes the host as well.
+        for (input, want) in [
+            (
+                "https://h?account=u@example.com&token=query-secret",
+                "https://[REDACTED]",
+            ),
+            (
+                "https://u:pa'ss@h?account=u@example.com&token=query-secret",
+                "https://[REDACTED]",
+            ),
+            ("https://u:pa?ss@h/x", "https://[REDACTED]"),
+            (
+                "https://h/x?account=u@example.com&token=query-secret",
+                "https://h/x?[REDACTED]",
+            ),
+        ] {
+            assert_eq!(sanitize_stderr(input), want, "{input:?}");
         }
         // The word "token" in prose is not a JSON field.
         assert_eq!(
