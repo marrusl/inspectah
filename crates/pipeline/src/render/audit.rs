@@ -157,7 +157,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
             lines.push("### Hosts".into());
             lines.push(String::new());
             for hostname in &meta.hostnames {
-                lines.push(format!("- {}", hostname));
+                lines.push(format!("- {}", md_code(hostname)));
             }
         }
 
@@ -1705,9 +1705,9 @@ mod tests {
                 .contains("**Aggregate baseline:** Provisional (multiple target images detected)")
         );
         assert!(report.contains("### Hosts"));
-        assert!(report.contains("- host1"));
-        assert!(report.contains("- host2"));
-        assert!(report.contains("- host3"));
+        assert!(report.contains("- `host1`"));
+        assert!(report.contains("- `host2`"));
+        assert!(report.contains("- `host3`"));
         assert!(report.contains("### Section Coverage"));
         assert!(report.contains("| config | 3 |"));
         assert!(report.contains("| rpm | 3 |"));
