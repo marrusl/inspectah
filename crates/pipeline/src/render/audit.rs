@@ -505,8 +505,8 @@ fn render_packages_section(
                     .collect::<Vec<_>>()
                     .join(" and ");
                 lines.push(format!(
-                        "**Note:** `{}` appears in both {} — DNF handles this correctly, no action needed.",
-                        pkg_name, group_list
+                        "**Note:** {} appears in both {} — DNF handles this correctly, no action needed.",
+                        md_code(&pkg_name), group_list
                     ));
             }
             lines.push(String::new());
@@ -578,7 +578,7 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
                 if !f.disposition.is_included() || f.kind != ConfigFileKind::RpmOwnedModified {
                     continue;
                 }
-                lines.push(format!("**`{}`**", f.path));
+                lines.push(format!("**{}**", md_code(&f.path)));
                 lines.push(String::new());
                 if let Some(ref diff) = f.diff_against_rpm
                     && !diff.is_empty()
@@ -617,7 +617,7 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
     {
         lines.push("#### Kernel Command Line".into());
         lines.push(String::new());
-        lines.push(format!("`{}`", kb.cmdline));
+        lines.push(md_code(&kb.cmdline));
         lines.push(String::new());
     }
     render_sysctl_section(snap, lines);
@@ -966,8 +966,8 @@ fn render_fcontext_rules(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
 
     for row in &rows {
         lines.push(format!(
-            "**`{}`** ({})",
-            selinux::summary_label(&row.rule),
+            "**{}** ({})",
+            md_code(&selinux::summary_label(&row.rule)),
             selinux::summary_disposition(row)
         ));
         lines.push(String::new());
@@ -1176,8 +1176,11 @@ fn render_network_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
         lines.push(String::new());
         for rule in &network.firewall_direct_rules {
             lines.push(format!(
-                "- `{}` {} chain={} table={}",
-                rule.args, rule.ipv, rule.chain, rule.table
+                "- {} {} chain={} table={}",
+                md_code(&rule.args),
+                rule.ipv,
+                rule.chain,
+                rule.table
             ));
         }
         lines.push(String::new());
@@ -1190,7 +1193,7 @@ fn render_network_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
         ));
         lines.push(String::new());
         for route in &network.static_routes {
-            lines.push(format!("- `{}`", route.path));
+            lines.push(format!("- {}", md_code(&route.path)));
         }
         lines.push(String::new());
     }
@@ -1202,7 +1205,7 @@ fn render_network_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
         ));
         lines.push(String::new());
         for entry in &network.hosts_additions {
-            lines.push(format!("- `{}`", entry));
+            lines.push(format!("- {}", md_code(entry)));
         }
         lines.push(String::new());
     }
@@ -1211,7 +1214,11 @@ fn render_network_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
         lines.push(format!("#### Proxy Settings ({})", network.proxy.len()));
         lines.push(String::new());
         for proxy in &network.proxy {
-            lines.push(format!("- `{}`: `{}`", proxy.source, proxy.line));
+            lines.push(format!(
+                "- {}: {}",
+                md_code(&proxy.source),
+                md_code(&proxy.line)
+            ));
         }
         lines.push(String::new());
     }
@@ -1268,8 +1275,10 @@ fn render_storage_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
                 lines.push(String::new());
                 for cr in &storage.credential_refs {
                     lines.push(format!(
-                        "- `{}` references `{}` (source: {})",
-                        cr.mount_point, cr.credential_path, cr.source
+                        "- {} references {} (source: {})",
+                        md_code(&cr.mount_point),
+                        md_code(&cr.credential_path),
+                        cr.source
                     ));
                 }
                 lines.push(String::new());
@@ -1330,7 +1339,10 @@ fn var_dir_outcome_rows(snap: &InspectionSnapshot) -> Vec<String> {
                     format!("unresolved: {}", reason.reason_text())
                 }
             };
-            Some(format!("| `{}` | {verdict} | {outcome} |", o.path))
+            Some(format!(
+                "| {} | {verdict} | {outcome} |",
+                md_code_cell(&o.path)
+            ))
         })
         .collect()
 }
@@ -1392,7 +1404,7 @@ fn render_software_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) 
             var_srv.len()
         ));
         lines.push(String::new());
-        lines.extend(var_srv.iter().map(|p| format!("- `{p}`")));
+        lines.extend(var_srv.iter().map(|p| format!("- {}", md_code(p))));
         lines.push(String::new());
     }
 }

@@ -42,19 +42,20 @@ already interpolated by the collector (repo file names, key paths, unit
 names), so the renderer cannot escape only the host part. The inspector
 name `README.md` prints in bold before each message is an `md_code` span
 too: the scan sets it from code, but an imported snapshot can hold any
-text there. The audit's Unowned Config Files list prints each path with
-`md_code`. `crates/cli/tests/warning_markdown_test.rs` parses the reports;
-`audit_host_paths_render_literally` is a table with one row per audit
-list, so a site moved to `md_code` gets a row there.
+text there. Every audit site that used to wrap a host value in
+hand-written backticks now calls the helper, `md_code_cell` in the
+`/var` Directories table. `crates/cli/tests/warning_markdown_test.rs`
+parses the reports; `audit_host_paths_render_literally` is a table with
+one row per audit site, so a site moved to the helper gets a row there.
 
-These audit sites in `crates/pipeline/src/render/audit.rs` still print
-host text raw inside hand-written backticks (pre-existing, not yet moved
-to the helper): Modified RPM-Owned Files (each file's bold path), the kernel
-command line, the duplicate-group note's package name, the SELinux summary
-label, firewall direct rules (`args`), static routes, `/etc/hosts`
-additions, proxy entries (source and line), storage credential references
-(mount point and path), the unit-file outcome table's path, and the
-`/var`/`/srv` path list.
+Still raw, never backticked: most audit table cells (package, service,
+user, connection, fstab, LVM and version-change rows, and the `/var`
+table's verdict and outcome text), the module-stream list, the
+duplicate-group note's group names, firewall rule `ipv`/`chain`/`table`,
+a credential reference's `source`, and the SELinux disposition text,
+which quotes the rule's own operands. A cell value moved to the helper
+takes `md_code_cell`, never `md_code`: GFM splits cells on an unescaped
+`|` before it sees a code span.
 
 ## The HTML report is not Markdown
 

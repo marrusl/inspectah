@@ -9,6 +9,16 @@ use comrak::{Arena, parse_document};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::kernelboot::KernelBootSection;
+use inspectah_core::types::network::{
+    FirewallDirectRule, NetworkSection, ProxyEntry, StaticRouteFile,
+};
+use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+use inspectah_core::types::rpm::{InstalledGroup, RpmSection};
+use inspectah_core::types::selinux::{
+    FcontextFileType, FcontextRule, SelinuxContext, SelinuxSection,
+};
+use inspectah_core::types::storage::{CredentialRef, StorageSection, VarDirectory};
 use inspectah_core::types::warnings::Warning;
 use inspectah_pipeline::render::audit::render_audit;
 use inspectah_pipeline::render::md_literal::literal_text;
@@ -142,31 +152,243 @@ fn a_hostile_inspector_name_renders_literally_in_the_readme() {
     assert_eq!(code_spans(&md, 2, "Warnings"), expected, "{md}");
 }
 
-/// Each audit list that prints a host path does so as one code span, so a
-/// backtick, a pipe or a line break in the path cannot end it. One row per
-/// site: the snapshot that fills it, its heading level and title, and the
-/// code spans each item holds.
+/// The blocks under the heading of `level` whose text is `title`, up to
+/// the next heading at that level or above, as entries of code spans: one
+/// per list item, paragraph or table body row. Fails on any HTML, link,
+/// image or emphasis node in the section, and on a list item a line break
+/// split into two paragraphs.
+fn section_code(md: &str, level: u8, title: &str) -> Vec<Vec<String>> {
+    let arena = Arena::new();
+    let mut options = comrak::Options::default();
+    options.extension.table = true;
+    let root = parse_document(&arena, md, &options);
+    let heading = root
+        .children()
+        .find(|n| {
+            matches!(&n.data.borrow().value, NodeValue::Heading(h) if h.level == level)
+                && text_of(n) == title
+        })
+        .unwrap_or_else(|| panic!("a `{title}` heading:\n{md}"));
+    let spans = |node: Node<'_>| -> Vec<String> {
+        node.descendants()
+            .filter_map(|n| match &n.data.borrow().value {
+                NodeValue::HtmlBlock(_)
+                | NodeValue::HtmlInline(_)
+                | NodeValue::Link(_)
+                | NodeValue::Image(_)
+                | NodeValue::Emph => panic!("markup in `{title}`:\n{md}"),
+                NodeValue::Code(c) => Some(c.literal.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut entries = Vec::new();
+    let mut block = heading.next_sibling();
+    while let Some(node) = block {
+        match &node.data.borrow().value {
+            NodeValue::Heading(h) if h.level <= level => break,
+            NodeValue::List(_) => {
+                for item in node.children() {
+                    assert_eq!(item.children().count(), 1, "one paragraph per item:\n{md}");
+                    entries.push(spans(item));
+                }
+            }
+            NodeValue::Table(_) => entries.extend(node.children().skip(1).map(spans)),
+            _ => entries.push(spans(node)),
+        }
+        block = node.next_sibling();
+    }
+    entries
+}
+
+/// Each audit site that prints host text does so as code spans, so a
+/// backtick, a pipe, a link or a line break in the value cannot end one,
+/// split a table cell or become markup. One row per site: the snapshot
+/// that fills it with [`HOSTILE_PATH`], its heading level and title, and
+/// the code spans of each entry that holds the value (an entry the value
+/// broke out of holds no such span, and fails the comparison).
 #[test]
 fn audit_host_paths_render_literally() {
-    let unowned = InspectionSnapshot {
+    let host = || HOSTILE_PATH.to_string();
+    let config = |kind| InspectionSnapshot {
         config: Some(ConfigSection {
             files: vec![ConfigFileEntry {
-                path: HOSTILE_PATH.into(),
-                kind: ConfigFileKind::Unowned,
+                path: host(),
+                kind,
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
         }),
         ..Default::default()
     };
-    let sites = [(
-        unowned,
-        4,
-        "Unowned Config Files (1)",
-        vec![vec![literal_text(HOSTILE_PATH)]],
-    )];
+    let network = |n: NetworkSection| InspectionSnapshot {
+        network: Some(n),
+        ..Default::default()
+    };
+    let storage = |s: StorageSection| InspectionSnapshot {
+        storage: Some(s),
+        ..Default::default()
+    };
+    let group = |name: &str| InstalledGroup {
+        name: name.into(),
+        members: vec![host()],
+        ..Default::default()
+    };
+    let lit = literal_text(HOSTILE_PATH);
+    let sites = [
+        (
+            config(ConfigFileKind::Unowned),
+            4,
+            "Unowned Config Files (1)",
+            vec![vec![lit.clone()]],
+        ),
+        (
+            config(ConfigFileKind::RpmOwnedModified),
+            4,
+            "Modified RPM-Owned Files (1)",
+            vec![vec![lit.clone()]],
+        ),
+        (
+            InspectionSnapshot {
+                rpm: Some(RpmSection {
+                    installed_groups: Some(vec![group("a"), group("b")]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            2,
+            "Packages",
+            vec![vec![lit.clone()]],
+        ),
+        (
+            InspectionSnapshot {
+                kernel_boot: Some(KernelBootSection {
+                    cmdline: host(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            4,
+            "Kernel Command Line",
+            vec![vec![lit.clone()]],
+        ),
+        (
+            InspectionSnapshot {
+                // Excluded, so the disposition after the label is fixed
+                // text and the label is the entry's only host text.
+                selinux: Some(SelinuxSection {
+                    fcontext_rules: vec![FcontextRule::Label {
+                        spec: host(),
+                        file_type: FcontextFileType::All,
+                        context: SelinuxContext {
+                            user: "system_u".into(),
+                            role: "object_r".into(),
+                            type_: "etc_t".into(),
+                            level: None,
+                        },
+                        disposition: FindingKind::excluded(),
+                        aggregate: None,
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            4,
+            "File Context Rules",
+            vec![vec![literal_text(&format!("{HOSTILE_PATH} -> etc_t"))]],
+        ),
+        (
+            network(NetworkSection {
+                firewall_direct_rules: vec![FirewallDirectRule {
+                    args: host(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            4,
+            "Firewall Direct Rules (1)",
+            vec![vec![lit.clone()]],
+        ),
+        (
+            network(NetworkSection {
+                static_routes: vec![StaticRouteFile {
+                    path: host(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            4,
+            "Static Routes (1)",
+            vec![vec![lit.clone()]],
+        ),
+        (
+            network(NetworkSection {
+                hosts_additions: vec![host()],
+                ..Default::default()
+            }),
+            4,
+            "/etc/hosts Additions (1)",
+            vec![vec![lit.clone()]],
+        ),
+        (
+            network(NetworkSection {
+                proxy: vec![ProxyEntry {
+                    source: host(),
+                    line: host(),
+                }],
+                ..Default::default()
+            }),
+            4,
+            "Proxy Settings (1)",
+            vec![vec![lit.clone(), lit.clone()]],
+        ),
+        (
+            storage(StorageSection {
+                credential_refs: vec![CredentialRef {
+                    mount_point: host(),
+                    credential_path: host(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            4,
+            "Credential References (1)",
+            vec![vec![lit.clone(), lit.clone()]],
+        ),
+        (
+            storage(StorageSection {
+                var_directories: vec![VarDirectory {
+                    path: host(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            4,
+            "/var Directories (1)",
+            vec![vec![lit.clone()]],
+        ),
+        (
+            InspectionSnapshot {
+                unmanaged_files: Some(UnmanagedFileSection {
+                    items: vec![UnmanagedFile {
+                        path: format!("/srv/{HOSTILE_PATH}"),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            3,
+            "Unmanaged Files under /srv",
+            vec![vec![literal_text(&format!("/srv/{HOSTILE_PATH}"))]],
+        ),
+    ];
     for (snap, level, title, expected) in sites {
         let md = render_audit(&snap);
-        assert_eq!(code_spans(&md, level, title), expected, "{title}:\n{md}");
+        let held: Vec<Vec<String>> = section_code(&md, level, title)
+            .into_iter()
+            .filter(|entry| entry.iter().any(|span| span.contains("a`b|c")))
+            .collect();
+        assert_eq!(held, expected, "{title}:\n{md}");
     }
 }
