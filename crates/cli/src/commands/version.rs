@@ -23,4 +23,11 @@ mod tests {
         assert_ne!(commit, "unknown", "build.rs must set commit hash");
         assert_ne!(date, "unknown", "build.rs must set build date");
     }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn dev_builds_carry_fixed_version_metadata() {
+        assert_eq!(env!("INSPECTAH_COMMIT"), "dev");
+        assert_eq!(env!("INSPECTAH_DATE"), "dev");
+    }
 }
