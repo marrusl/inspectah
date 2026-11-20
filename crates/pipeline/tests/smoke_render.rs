@@ -1315,6 +1315,41 @@ fn selinux_port_label_operands_are_validated_before_rendering() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
+/// A rejected label beside a valid one, in either order and with no
+/// fcontext rule: the valid label renders its command after exactly one
+/// install, the rejected one renders its FIXME and no command. A
+/// precondition that looked only at the first label would install nothing
+/// for `[rejected, valid]`.
+#[test]
+fn selinux_mixed_valid_and_rejected_port_labels_render_each_on_its_own_path() {
+    const VALID: &str = "RUN semanage port -a -t ssh_port_t -p tcp 2222";
+    const REJECTED_FIXME: &str = "# FIXME: port label is not one semanage port takes, skipped: \
+                                  \"http_port_t\" \"bogus\" \"8080\"";
+    let valid = || sel::port_label("ssh_port_t", "tcp", "2222");
+    let rejected = || sel::port_label("http_port_t", "bogus", "8080");
+    for (what, labels) in [
+        ("[rejected, valid]", vec![rejected(), valid()]),
+        ("[valid, rejected]", vec![valid(), rejected()]),
+    ] {
+        let snap = sel::snapshot(Vec::new(), FcontextSource::PolicyStore, labels);
+        let out = containerfile::render_containerfile(&snap, None, None);
+        assert!(
+            out.lines().any(|l| l == VALID),
+            "{what}: valid command:\n{out}"
+        );
+        assert!(
+            out.lines().any(|l| l == REJECTED_FIXME),
+            "{what}: rejected label's FIXME:\n{out}"
+        );
+        assert!(
+            !out.lines()
+                .any(|l| !l.starts_with('#') && l.contains("http_port_t")),
+            "{what}: no command for the rejected label:\n{out}"
+        );
+        assert_precondition_present(&snap, VALID);
+    }
+}
+
 #[test]
 fn selinux_install_precondition_absent_without_rules_or_port_labels() {
     // The fixture `containerfile.rs`'s section-ordering test uses: a block
