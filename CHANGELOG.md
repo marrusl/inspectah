@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Debug builds report `commit dev, built dev`**: `inspectah --version` and `inspectah version` from a debug build, such as plain `cargo build`, no longer show the git commit and build date, so the CLI is not recompiled after every commit. Release builds and packaged binaries still show the real commit and date.
+
 ## [0.9.0-beta.6] - 2026-11-20
 
 ### Added
