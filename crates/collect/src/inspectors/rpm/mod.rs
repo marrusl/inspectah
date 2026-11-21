@@ -911,7 +911,18 @@ impl Relation {
 }
 
 /// One package's dependencies, parsed from `RPM_DEPS_FORMAT` output.
-type PackageDeps = (String, Vec<(Relation, DepExpr)>);
+#[derive(Debug, PartialEq)]
+struct PackageDeps {
+    /// The package name the `@@` sentinel gave.
+    name: String,
+    /// Every dependency line `DepExpr::parse` read.
+    deps: Vec<(Relation, DepExpr)>,
+    /// A Requires or Recommends line `DepExpr::parse` could not read,
+    /// such as one nested deeper than its bound, which rpm accepts. What
+    /// installing the package may install is then unknown, so
+    /// `classify_deps_rpm` takes it to possibly install anything.
+    unread: bool,
+}
 
 /// Build a dependency graph from three `rpm` queries and the file
 /// ownership the inspector already collected.
@@ -980,16 +991,34 @@ fn classify_deps_rpm(
     // one pass over the index.
     let wanted: HashSet<&str> = per_pkg_deps
         .iter()
-        .flat_map(|(_, deps)| deps.iter().flat_map(|(_, dep)| dep.caps()))
+        .flat_map(|pkg| pkg.deps.iter().flat_map(|(_, dep)| dep.caps()))
         .collect();
     let index = ProviderIndex::build(exec, &wanted, file_ownership)?;
     let is_added = |id: &str| added_ids.contains(id);
 
-    for (pkg_name, deps) in &per_pkg_deps {
+    for PackageDeps {
+        name: pkg_name,
+        deps,
+        unread,
+    } in &per_pkg_deps
+    {
         let Some(ids) = name_to_ids.get(pkg_name.as_str()) else {
             continue;
         };
         for package_id in ids {
+            // A requirement the parser could not read may name any
+            // installed package, so installing this one may install every
+            // other added one. Only `depends_on` says so: nothing about
+            // it held on the host or is certain, so the roots and the
+            // certain closures stay as the readable lines make them.
+            if *unread && let Some(set) = depends_on.get_mut(package_id.as_str()) {
+                set.extend(
+                    added_ids
+                        .iter()
+                        .filter(|id| name_from_id(id) != *pkg_name)
+                        .cloned(),
+                );
+            }
             for (relation, dep) in deps {
                 match relation {
                     Relation::Requires | Relation::Recommends => {
@@ -1078,16 +1107,22 @@ fn classify_deps_rpm(
 
 /// Parse batched `RPM_DEPS_FORMAT` output into per-package dependency
 /// lists. `rpmlib(...)` requirements name rpm features, not packages, and
-/// are skipped; so is a rich expression `DepExpr::parse` cannot read.
+/// are skipped. A Requires or Recommends `DepExpr::parse` cannot read
+/// marks its package `unread`; a Supplements it cannot read is dropped,
+/// as one that expands too far is.
 fn parse_sentinel_deps(stdout: &str) -> Vec<PackageDeps> {
     let mut results: Vec<PackageDeps> = Vec::new();
 
     for line in stdout.lines() {
         if let Some(name) = line.trim().strip_prefix("@@") {
-            results.push((name.to_string(), Vec::new()));
+            results.push(PackageDeps {
+                name: name.to_string(),
+                deps: Vec::new(),
+                unread: false,
+            });
             continue;
         }
-        let Some((_, deps)) = results.last_mut() else {
+        let Some(PackageDeps { deps, unread, .. }) = results.last_mut() else {
             continue;
         };
         let Some((tag, dep)) = line.split_once('\t') else {
@@ -1100,10 +1135,13 @@ fn parse_sentinel_deps(stdout: &str) -> Vec<PackageDeps> {
         if dep.is_empty() || dep.starts_with("rpmlib(") {
             continue;
         }
-        if let Some(expr) = DepExpr::parse(dep)
-            && !deps.contains(&(relation, expr.clone()))
-        {
-            deps.push((relation, expr));
+        match DepExpr::parse(dep) {
+            Some(expr) => {
+                if !deps.contains(&(relation, expr.clone())) {
+                    deps.push((relation, expr));
+                }
+            }
+            None => *unread |= relation != Relation::Supplements,
         }
     }
 
@@ -4247,10 +4285,61 @@ untagged line
 ",
         );
         assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0].0, "dnf");
-        let relations: Vec<Relation> = parsed[0].1.iter().map(|(r, _)| *r).collect();
+        assert_eq!(parsed[0].name, "dnf");
+        let relations: Vec<Relation> = parsed[0].deps.iter().map(|(r, _)| *r).collect();
         assert_eq!(relations, vec![Relation::Requires, Relation::Recommends]);
-        assert_eq!(parsed[1], ("gpg-pubkey".to_string(), Vec::new()));
+        assert!(!parsed[0].unread);
+        assert_eq!(
+            parsed[1],
+            PackageDeps {
+                name: "gpg-pubkey".to_string(),
+                deps: Vec::new(),
+                unread: false,
+            }
+        );
+    }
+
+    /// A rich dependency nested past the parser's bound, which rpm itself
+    /// accepts, marks its package unread when it is a Requires or a
+    /// Recommends; an unreadable Supplements is dropped alone.
+    #[test]
+    fn parse_sentinel_deps_marks_a_requirement_it_cannot_read() {
+        let nested = format!("{}helper{}", "(bash and ".repeat(17), ")".repeat(17));
+        let parsed = parse_sentinel_deps(&format!(
+            "@@app\nR\tbash\nR\t{nested}\n@@tool\nW\t{nested}\n@@addon\nS\t{nested}\n"
+        ));
+        let unread: Vec<(&str, bool)> = parsed
+            .iter()
+            .map(|pkg| (pkg.name.as_str(), pkg.unread))
+            .collect();
+        assert_eq!(unread, [("app", true), ("tool", true), ("addon", false)]);
+        assert_eq!(parsed[0].deps.len(), 1, "the readable line is kept");
+    }
+
+    /// `app` requires `helper` through 17 nested groups. The collector
+    /// cannot read it, so installing `app` may install every other added
+    /// package, `helper` and the unrelated `other` alike, and nothing about
+    /// it is certain or held on the host: `helper` and `other` stay roots.
+    #[test]
+    fn classify_deps_rpm_takes_an_unread_requirement_to_need_anything() {
+        let nested = format!("{}helper{}", "(bash and ".repeat(17), ")".repeat(17));
+        let exec = dep_graph_executor(
+            "app helper other",
+            &format!("@@app\nR\t{nested}\n@@helper\n@@other\n"),
+            "bash.x86_64\t0\t\tbash\n\
+             app.noarch\t0\t\tapp\n\
+             helper.noarch\t0\t\thelper\n\
+             other.noarch\t0\t\tother\n",
+            "",
+        );
+        let added = ids(&["app.noarch", "helper.noarch", "other.noarch"]);
+        let graph = classify_deps_rpm(&exec, &added, None).expect("graph");
+        assert_eq!(
+            graph.depends_on["app.noarch"],
+            ids(&["helper.noarch", "other.noarch"])
+        );
+        assert!(graph.held["app.noarch"].is_empty());
+        assert!(graph.requires["app.noarch"].is_empty());
     }
 
     #[test]

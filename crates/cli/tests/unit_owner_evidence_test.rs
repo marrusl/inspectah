@@ -16,7 +16,8 @@
 //! - A package that may need one only a disabled repo serves installs in
 //!   the transaction that enables that repo, which names no provider dnf
 //!   may skip: competing providers, the dnf fallback's, and one the image
-//!   cannot install.
+//!   cannot install. A requirement the collector cannot read reaches
+//!   every disabled repo.
 //! - An owner is carried when the collector could not tell leaves from
 //!   dependencies and fell back to the dependency graph, and that fallback
 //!   keeps the roots the host had: a dependency cycle nothing installs,
@@ -526,6 +527,51 @@ fn a_provider_the_image_may_skip_is_never_named() {
                 surfaces.containerfile
             );
         }
+    }
+}
+
+/// `app` requires `helper` through 17 nested `and` groups, valid to rpm
+/// but past the 16 the collector reads, and `helper` comes only from the
+/// host's disabled `partner` repo. `helper.service` was disabled against a
+/// preset that enables it. The collector cannot say what `app` needs, so
+/// it takes `app` to possibly need anything: both paths install `app` in
+/// the transaction that enables `partner`, keep `helper` off the
+/// not-carried list, and keep its recorded `disable`, guarded.
+#[test]
+fn a_requirement_too_deep_to_read_keeps_every_disabled_repo_in_reach() {
+    let nested = format!("{}helper{}", "(bash and ".repeat(17), ")".repeat(17));
+    let host = base_host()
+        .package_from("helper", "partner")
+        .requires("app", &[&nested])
+        .file("/etc/yum.repos.d/partner.repo", PARTNER_REPO)
+        .unit("helper.service", "disabled")
+        .vendor_unit("helper.service", WANTED_UNIT, Some("helper"))
+        .preset("enable helper.service")
+        .preset("disable *");
+    let run = exports(host);
+
+    for (label, surfaces) in &run.paths {
+        let install = partner_install(&surfaces.containerfile).unwrap_or_else(|| {
+            panic!(
+                "{label}: a transaction enables partner:\n{}",
+                surfaces.containerfile
+            )
+        });
+        assert!(
+            install.iter().any(|n| n == "app"),
+            "{label}: app installs with partner enabled: {install:?}\n{}",
+            surfaces.containerfile
+        );
+        assert!(
+            !surfaces.not_carried_block_names().contains(&"helper"),
+            "{label}: helper may be installed:\n{}",
+            surfaces.containerfile
+        );
+        assert!(
+            guards(&surfaces.containerfile, "disable", "helper.service"),
+            "{label}: the recorded disable is kept, guarded:\n{}",
+            surfaces.containerfile
+        );
     }
 }
 
