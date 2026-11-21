@@ -45,7 +45,7 @@ jobs:
       # persist-credentials: false, because .copr/Makefile runs npm ci and
       # the UI build in this checkout, and a token left in .git/config would
       # be readable by any npm lifecycle script.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
@@ -87,7 +87,7 @@ jobs:
           make -f .copr/Makefile srpm outdir="$PWD"
 
       - name: Upload SRPM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: srpm
           path: "*.src.rpm"
@@ -109,7 +109,7 @@ jobs:
     container: ${{ matrix.target.container }}
     steps:
       - name: Download SRPM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: srpm
 
@@ -134,7 +134,7 @@ jobs:
       # It is also how attach-packages receives them on a release.
       # The name is per-leg because upload-artifact rejects duplicate names.
       - name: Upload RPM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rpm-${{ matrix.target.name }}
           # The SRPM was downloaded into this directory, so exclude it: this
@@ -165,14 +165,14 @@ jobs:
     steps:
       # srpm and rpm-<target>, as uploaded above.
       - name: Receive the packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: '*rpm*'
           path: packages
           merge-multiple: true
 
       - name: Upload packages to release
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const fs = require('fs');
@@ -253,7 +253,7 @@ jobs:
       # persist-credentials: false leaves no credential in .git/config for the
       # brew steps below to find.
       - name: Checkout tap repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ env.TAP_REPO }}
           ref: ${{ env.TAP_BRANCH }}
@@ -421,7 +421,7 @@ jobs:
       # previous attempt's file instead of failing on the name.
       - name: Hand the formula to the push job
         if: steps.commit.outputs.changed == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: homebrew-formula
           path: homebrew-tap/${{ env.FORMULA }}
@@ -456,7 +456,7 @@ jobs:
       FORMULA: Formula/inspectah.rb
     steps:
       - name: Checkout tap repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ env.TAP_REPO }}
           ref: ${{ env.TAP_BRANCH }}
@@ -464,7 +464,7 @@ jobs:
           persist-credentials: false
 
       - name: Receive the tested formula
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: homebrew-formula
           path: tested-formula

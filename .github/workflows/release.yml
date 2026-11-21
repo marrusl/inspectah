@@ -34,7 +34,7 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       commit: ${{ steps.check.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Same comparison package-release.yml makes, run before anything is
       # built, so a tag on the wrong commit fails in seconds.
@@ -83,7 +83,7 @@ jobs:
       ASSETS: inspectah-darwin-arm64 inspectah-linux-amd64 inspectah-linux-arm64-bin
       DRAFT_NOTES: "Draft created by the release workflow. Replace this text with the release notes when publishing."
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: inspectah-*
           path: dist
