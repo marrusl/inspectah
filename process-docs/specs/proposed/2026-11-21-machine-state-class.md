@@ -426,7 +426,114 @@ Op contract:
 
 ### Refine presentation
 
-*Left for the refine owner, from the UX consult of 2026-11-21 and the contract above. The API settles two things that consult asked for: a credential row is `never` (its warn-and-confirm flow applies only to `warn` identity rows, today the iSCSI IQN and Salt `minion_id`), and every row carries `override` and a `notice` with an `owed` or `automatic` kind.*
+From the UX consult of 2026-11-21, reconciled with the contract above. The consult was written before the Rust half settled two things: every credential row is `never` (no bytes exist to ship), and every row carries `override` and a `notice`. So the consult's warn-and-confirm flow applies only to the two `warn` rows, the iSCSI IQN and Salt `minion_id`, which are identity rows, and its dialog is reworded for identity below. Code read for this section at `e84e6f17`: `MainContent.tsx` (Configuration branch, `handleNotCarriedInclude`), `NotCarriedGroup.tsx`, `ExportDialog.tsx`, `api/exportWarnings.ts`, `GlobalSearch.tsx`, `Sidebar.tsx`, `ServiceSection.tsx` (`configPaths`), and `crates/web/src/web_types.rs` (`not_carried_notice`).
+
+**The UI never derives a member's treatment from its path, member or reason.** The control comes from `override`, the notice line from `notice`, the metadata line from `content_captured`, `mode` and `size`. A member whose level changes on the server changes in the UI with no client release.
+
+#### Placement
+
+A collapsed **Machine state** block at the foot of the Configuration section, after the decision list, built like `NotCarriedGroup`: an `ExpandableSection` in a `<section id="machine-state-group">`, a help line, then the rows. It renders nothing when `machine_state` is empty.
+
+- **Toggle text**, which carries the important facts while collapsed: `Machine state (9) · 2 host credentials · 3 provisioning steps`. The credential part counts rows with `reason: host_credential` and is left out at zero; the step part is `machine_state_steps.length` (API addition 1) and is left out at zero; `· 1 included by you` is added when any row has `include: true`.
+- **Help line:** "Files that belong to this host, not to the image. inspectah leaves them out; provisioning or first boot recreates them."
+- **Three sub-lists in risk order**, each an `h3` and a one-line explanation, an empty one not rendered:
+  - **Host credentials**: "Keys and certificates bound to this host. The scan did not read them."
+  - **Host identity**: "Values that name this host."
+  - **Generated**: "Written by a tool from settings the image already carries."
+- **Rows never move.** An override changes a row's control and label in place; it stays in its sub-list and in the block, so the block is also the record of what the operator overrode.
+- **The block survives the section's empty states.** Today the Configuration branch returns early for "All configuration files excluded" and for "No items match your search", which would hide the block. Both empty states render above the block instead of replacing the section. "All configuration files excluded" keeps its meaning (operator decisions over `config_files`), and class rows never count toward it.
+- **Collapsed by default** in beta.7, as the consult recommends; the expanded state is kept while the section stays mounted, so an op's refetch does not collapse it.
+
+#### Rows
+
+Every row: the path in `code` (`overflow-wrap: anywhere`), the reason label, the notice line, and the action cell. A row with `content_captured: false` adds a muted metadata line: `mode 0600 · 82 bytes · contents not captured`, with `mode unknown` or `size unknown` where the field is null (a failed stat). Rows do not expand in beta.7.
+
+**Reason labels**, PatternFly `Label isCompact`, no "Advisory:" prefix (that belongs to advisory rows and the advisory vocabulary item): **Host credential** (`color="orange"`, `KeyIcon`; not `LockIcon`, which `GroupRow` uses for "locked"), **Host identity** (`grey`), **Generated** (`grey`). Text and sub-list carry the distinction; colour only reinforces it. No new tokens: classes go in an `inspectah-machine-state__*` namespace mirroring `inspectah-not-carried__*`.
+
+**The notice line**, in the `.inspectah-unit-note` style; rows with `content_captured: false` add the `--withheld` left border, which already means "the export does not write this file". Text by `notice.kind`:
+
+| Notice | Line |
+|---|---|
+| `owed` | `At provisioning: <command>`, `command` verbatim as plain text. Not in `code`: some steps are prose ("re-sign the SSH host certificates"), not commands. |
+| `automatic`, `first_boot` | `Recreated at first boot` |
+| `automatic`, `provisioning` | `Set at provisioning by the installer, cloud-init or DHCP` |
+| `automatic`, `carried_setting` | `Rewritten from a setting the image carries` |
+| `none` | `Not needed in the image` |
+
+Every row shows its notice, even when several share a step: a row reached by search or reveal has to explain itself alone. An unknown `kind` or `by` from a newer server shows `See the audit report`, never an empty line.
+
+**States by override level:**
+
+| Row | Action cell | Keyboard and focus | Screen reader |
+|---|---|---|---|
+| `plain`, `include: false` | secondary sm button **Include** | Tab reaches it; Enter or Space sends `SetInclude` with the row's `item_id` and `include: true` | "Include /etc/hostname, button", `aria-describedby` the reason label and notice line |
+| `warn`, `include: false` | secondary sm button **Include…** | Enter or Space opens the confirm dialog; nothing is sent until it is confirmed | "Include /etc/iscsi/initiatorname.iscsi…, button", described by label and notice |
+| `plain` or `warn`, `include: true` | green compact Label **Included by you**, then secondary sm button **Exclude**, which sends `include: false` with no dialog | focus stays on the same button while its name changes | button name becomes "Exclude …"; one polite announcement, "/etc/hostname included in the image" or "... left out of the image" |
+| `never` | plain text **Not carried**, not a control | not in the Tab order | read as a statement with the row; the notice line says what replaces the file |
+
+**A `never` row shows no disabled button or checkbox.** A disabled control reads as broken and cannot take focus to explain itself. `never` is decided by `override` alone, which covers every credential, the never identity members (machine-id, Insights state, `lvm/devices`), and a carriable member whose read failed (§ 4.3), with no branch per case.
+
+**An included row's notice line** is replaced by its consequence, since an overridden row owes no step (§ 7): `plain` rows read `In the image, copied from this host`; `warn` rows read `In the image: every machine built from it shares this identity`.
+
+**Requests** go through the pattern the not-carried include uses, with `item_id` passed back verbatim, guarded per `process-docs/skills/web-ui-direct-request-guard.md`: one `usePendingGuard` owned by `MainContent` (which stays mounted for the session), keyed `machine-state:<path>` for include and exclude alike, failures held in `useItemFailures` and shown on the row in a live region. While a row's request is in flight its button is disabled. Undo, redo and **Reset to defaults** need nothing new: they refetch the view, and reset puts every class row back to `include: false`. The Configuration bulk **Include all / Exclude all** never reaches class rows (§ 8 op contract), so its wording does not change.
+
+#### The `warn` confirm dialog
+
+PatternFly `Modal variant="small"`, the `StatsBar` reset-confirm pattern; `isDanger` on the primary button is new usage of an existing prop. Today only identity rows are `warn`, so the wording is for identity:
+
+- Title: **Include this host's identity in the image?**
+- Body: "Every machine built from this image will share this identity." Then the row's alternative, from its notice: `owed` reads "Leave it out and run this at provisioning instead: <command>."; `automatic` reads "Leave it out and it is <notice line, lower-cased>." (for the IQN, "recreated at first boot").
+- Footer: primary **Include in image** with `isDanger`; **Cancel** as a link.
+- Initial focus on **Cancel**. Escape or Cancel closes and returns focus to the row's **Include…** button. Confirm closes, sends the op, and returns focus to the same row's button, by then **Exclude**; if the op fails, focus still returns there and the failure shows on the row.
+- No "don't ask again". The dialog per row is the point.
+
+The dialog's wording branches on `reason`, so a future `warn` row of another reason gets its own wording rather than the identity text: a `host_credential` row would use the credential wording in the alternative below.
+
+#### Search and reveal
+
+- **Section search** (`SectionSearch` in Configuration) matches a class row on its path, its reason label text and its notice line text. While a query is active the block expands, shows only matching rows, and hides sub-lists with none; clearing the query leaves it expanded. The result count is decision-list matches plus block matches, and "No items match your search" appears only when both are zero.
+- **GlobalSearch** gets one entry per class row: section `configs`, title the path, item id `machine-state:<path>`. Paths are unique within `machine_state` (the collector's `seen` set covers both lists) and disjoint from `config_files`, so the id cannot collide with a `configs:` id.
+- **Reveal** of a `machine-state:<path>` id opens Configuration, expands the block, scrolls the row into view, and focuses the row's button; a `never` row has no button, so the `<li>` takes `tabIndex={-1}` and is focused, and a screen reader reads its path, label, notice and "Not carried". The row is found by its exact test id, `machine-state-row-<path>`, compared as a string, never through a CSS selector (`web-disposition-contract.md`). Focusing the block toggle instead, as the consult suggested for `never` rows, would not say which row was meant.
+- **Links from other sections.** `ServiceSection` links a unit's `required_config` path to its Configuration row only when the path is in `configPaths`, built from `config_files`. Class paths join that set and their link reveals `machine-state:<path>`, so a unit that reads `/etc/iscsi/initiatorname.iscsi` points at the row that explains why the file is out.
+- **Keyboard row navigation** (the decision list's arrow and shortcut handling) does not enter the block in beta.7. The block is reached by Tab and by reveal.
+
+#### Export dialog
+
+- **Info alert**, `isInline isExpandable`, after the not-carried notice and built the same way, present when `machine_state` is non-empty. Title: `9 machine-state files left out · 3 provisioning steps`, counting rows with `include: false` and `machine_state_steps.length`, the step part left out at zero. Body: one item per entry of `machine_state_steps`, in its order, the command as plain text with its paths in `code` under it; then "The other files are recreated without any step." Action link **Review machine state**, which closes the dialog and reveals the block (the `handleReviewNotCarried` pattern, with its own `revealMachineState` flag in `App`).
+- **Warning alert**, present when any `warn` row has `include: true`: `1 host identity file is included in the image`, then the paths. Not an acknowledgement checkbox; the row's dialog already confirmed it.
+- **"N configs excluded"** stays the server's `config` stats bucket. Class rows left `config_files`, so it no longer counts them and needs no client change.
+- **After download**, the warnings list drops every entry equal, by `kind` and `text`, to one in `machine_state_notices` (API addition 2), as it does for `not_carried_notice`. `withoutShownNotice` takes a list of shown notices instead of one.
+
+#### Required API additions
+
+The rows alone cannot give the UI two things, so the view gains two fields beside `not_carried_notice`. Both are built by the functions the export uses, over the same projected snapshot, so the dialog and the export cannot disagree:
+
+1. **`machine_state_steps: Vec<ProvisioningStepDto>`**, `{ step, command, paths }`, from `render::machine_state::provisioning_steps` (§ 7): owed steps of rows not overridden, deduplicated, in declaration order. The UI could rebuild the deduplication from the rows, but not the order the README and Containerfile use, and the server, not a component, owns the rule for which rows owe a step.
+2. **`machine_state_notices: Vec<ExportWarning>`**, the exact class entries the next export's `x-export-warnings` will carry: the left-out notice and one `Host identity included in the image: <path>` per `warn` override, after the same `sanitize_bounded`. Without it the post-download list repeats what the dialog showed, or has to match it by text pattern, which `refine-export-warnings-header.md` forbids.
+
+Two contract clarifications, no new field: rows arrive sorted by path (the UI groups by `reason` and keeps server order within a sub-list); and on a fleet aggregate, where `SetInclude` on a class row is refused (§ 6.1), any `machine_state` row the aggregate view carries has `override: "never"` and no `item_id`, so the same component shows no control and the UI needs no single-host or fleet branch.
+
+#### If credentials become overridable
+
+If credentials are made overridable instead of `never`, the UI change is small: those rows arrive as `warn` with `content_captured: false` and an `item_id`, and the dialog takes a credential variant, branched on `reason`: title **Include a host credential in the image?**, body "Every machine built from this image will share this credential. Anyone who can pull the image can read it. The scan did not capture it, so you supply the file before building." then the notice's alternative, primary **Include key in image**; an included credential row reads `In the image: you supply this file`, and the export dialog's warning alert names it. The view's row fields already carry the override level, the choice and the missing content. What the API would need beyond them: one row field, the export-relative path the operator must place the file at (for example `config/etc/krb5.keytab`), since the UI must not work out the export layout itself; a `failure` entry in `x-export-warnings` while that file is missing; and, outside the view, a snapshot type that can hold an include on a withheld row (`WithheldConfigEntry` has no `include` by design) plus an export that stages an operator-supplied file without emitting a `COPY` with no source (§ 6.2's first rejected alternative).
+
+#### beta.7 and later
+
+**In beta.7:** the block, its three sub-lists and fixed rows; per-row controls from `override`, with `never` rows stating their outcome; the identity confirm dialog with focus on Cancel and focus return; reason label and notice on every row, and the metadata line on rows without content; section search, GlobalSearch, reveal and `required_config` links into the block; the export dialog's info and warning alerts and the two API additions.
+
+**Later:** content preview for captured rows; a stats-bar count for the class, designed with the stats-bucket backlog item rather than added to `excluded`; arrow-key row navigation inside the block; per-host values in the fleet view (§ 10); folding the reason labels into the advisory vocabulary item's single label set; and expanding the block by default when a credential row or an owed step exists, if a walkthrough shows operators miss it collapsed.
+
+#### UI tests
+
+Vitest, from view fixtures that carry the server's real row JSON (`process-docs/skills/e2e-fixtures-are-hand-maintained.md`: `machine_state` and the two additions join every single-host view fixture):
+
+1. One row per level: `plain` shows **Include**, `warn` shows **Include…**, `never` has no button or checkbox and no tab stop.
+2. `warn`: the dialog opens with focus on Cancel; Escape sends nothing and returns focus; confirm sends `SetInclude` with the row's `item_id` verbatim and focus lands on **Exclude**.
+3. A row with `content_captured: false` and null `mode` shows `mode unknown` and "contents not captured".
+4. "All configuration files excluded" and a search with only block matches both leave the block rendered.
+5. GlobalSearch reveal of a `never` row expands the block and focuses its `<li>`.
+6. The export dialog's step list follows `machine_state_steps` order, and the post-download list omits entries equal to `machine_state_notices`.
+7. A row in `PendingGuards.test.tsx`: a second include while one is in flight sends nothing.
 
 ## 9. Snapshot and API changes
 
@@ -436,6 +543,7 @@ Op contract:
 - `Executor::file_metadata` and `Executor::read_head`.
 - `SCHEMA_VERSION` and `MIN_SCHEMA` both raised by one from their values when this lands (28 at `391354ca`). A snapshot from before cannot be re-rendered correctly: its silent exclusions are gone and its carried keytab is an ordinary entry.
 - Refine: `RefineError::NotCarriable` (422); `ViewResponse::machine_state: Vec<MachineStateRowDto>`; class rows leave `config_files`; a new `notice` in `x-export-warnings`.
+- Refine view additions the UI needs, `machine_state_steps` and `machine_state_notices`: § 8, Refine presentation, Required API additions.
 
 CHANGELOG, under `## [Unreleased]`:
 
