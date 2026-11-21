@@ -1,0 +1,166 @@
+name: Release
+
+# Pushing a version tag builds the three release binaries from the tag and
+# attaches them to a DRAFT release for that tag. Publishing the draft is the
+# one manual step, and it is what fires package-release.yml (RPMs and the
+# Homebrew tap).
+#
+# Draft, not published, because a release this workflow creates with
+# GITHUB_TOKEN would not trigger any other workflow: GitHub suppresses events
+# raised by GITHUB_TOKEN, so `release: published` would never reach
+# package-release.yml and the RPMs and the tap update would silently not
+# happen. The release notes are also written after the tag, so they are not
+# in the tree this run checks out.
+on:
+  push:
+    tags: ['v*']
+  # A rehearsal: builds and verifies all three binaries from the chosen ref
+  # and touches nothing outside the runner. The publish job is guarded off.
+  workflow_dispatch:
+
+permissions: {}
+
+# Two runs for the same tag must not race to create the same release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      commit: ${{ steps.check.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same comparison package-release.yml makes, run before anything is
+      # built, so a tag on the wrong commit fails in seconds.
+      - name: Check versions agree
+        id: check
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          CARGO_VERSION=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' Cargo.toml | head -1)
+          SPEC_VERSION=$(sed -n 's/^Version:[[:space:]]*//p' packaging/inspectah.spec)
+          # The spec uses the RPM tilde form (0.9.0~beta.7) for the same version.
+          if [ "$SPEC_VERSION" != "$(echo "$CARGO_VERSION" | sed 's/-/~/')" ]; then
+            echo "::error::packaging/inspectah.spec=${SPEC_VERSION} does not match Cargo.toml=${CARGO_VERSION}" >&2
+            exit 1
+          fi
+          if [ "$REF_TYPE" = "tag" ] && [ "${TAG#v}" != "$CARGO_VERSION" ]; then
+            echo "::error::tag ${TAG} does not match Cargo.toml=${CARGO_VERSION}" >&2
+            exit 1
+          fi
+          echo "version=${CARGO_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-binary.yml
+
+  publish:
+    needs: [preflight, build]
+    # The manual-run guard: only a tag push reaches the release. A
+    # workflow_dispatch, even one started on a tag ref, stops after build.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+      COMMIT: ${{ needs.preflight.outputs.commit }}
+      # Must match the asset names in build-binary.yml.
+      ASSETS: inspectah-darwin-arm64 inspectah-linux-amd64 inspectah-linux-arm64-bin
+      DRAFT_NOTES: "Draft created by the release workflow. Replace this text with the release notes when publishing."
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: inspectah-*
+          path: dist
+          merge-multiple: true
+
+      # Each build leg checked its own binary. This checks the three agree:
+      # same version, and all stamped with the tag's commit. The build date
+      # is left out of the comparison because legs can straddle midnight UTC.
+      - name: Verify the three binaries agree
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          for f in $ASSETS; do
+            if [ ! -s "$f" ]; then
+              echo "::error::${f} is missing or empty" >&2
+              exit 1
+            fi
+            # The CLI's long version string, from crates/cli/src/main.rs, is
+            # "<version> (commit <hash>, built <date>)". The binaries are not
+            # all runnable here, so read the stamp from the bytes.
+            stamps=$(LC_ALL=C grep -aoE '\(commit [0-9a-f]+, built ' "$f" | sort -u)
+            if [ "$(printf '%s\n' "$stamps" | grep -c .)" -ne 1 ]; then
+              echo "::error::${f} does not carry exactly one commit stamp: ${stamps}" >&2
+              exit 1
+            fi
+            stamp_commit=$(printf '%s' "$stamps" | sed -n 's/^(commit \([0-9a-f]*\),.*/\1/p')
+            case "$COMMIT" in
+              "$stamp_commit"*) ;;
+              *)
+                echo "::error::${f} is stamped ${stamp_commit}, not the tag commit ${COMMIT}" >&2
+                exit 1
+                ;;
+            esac
+            if ! LC_ALL=C grep -qaF "${VERSION} (commit ${stamp_commit}, built " "$f"; then
+              echo "::error::${f} is not version ${VERSION}" >&2
+              exit 1
+            fi
+            echo "${f}: ${VERSION} (commit ${stamp_commit})"
+          done
+          sha256sum $ASSETS | tee SHA256SUMS
+
+      # Creates the draft, or refreshes the assets on a draft left by an
+      # earlier attempt. Refuses a published release: replacing assets users
+      # may already have downloaded is a decision for a person, not a re-run.
+      - name: Attach to the draft release
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          if state=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>err.txt); then
+            if [ "$state" != "true" ]; then
+              echo "::error::release ${TAG} is already published; not replacing its assets" >&2
+              exit 1
+            fi
+            gh release upload "$TAG" $ASSETS --clobber
+            echo "Refreshed the assets on the existing draft ${TAG}."
+          elif grep -q 'release not found' err.txt; then
+            gh release create "$TAG" $ASSETS \
+              --draft \
+              --verify-tag \
+              --title "$TAG" \
+              --notes "$DRAFT_NOTES"
+            echo "Created draft release ${TAG}."
+          else
+            cat err.txt >&2
+            exit 1
+          fi
+
+          {
+            echo "### Draft release ${TAG} is ready"
+            echo
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+            echo
+            echo "Publish it with the release notes. Publishing fires package-release.yml, which adds the RPMs and updates the Homebrew tap:"
+            echo
+            echo '```'
+            echo "gh release edit ${TAG} --draft=false --notes-file process-docs/release-notes/release-notes-${VERSION}.md"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

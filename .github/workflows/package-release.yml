@@ -205,12 +205,31 @@ jobs:
               });
             }
 
-  # Release runs only. This job pushes a branch and opens a pull request on the
-  # tap repo, and a manual test run must not do either. Its tag references are
-  # left on the release payload deliberately: the job never runs without one.
+  # Release runs only. This job pushes to the tap's main branch, and a manual
+  # test run must not. Its tag references are left on the release payload
+  # deliberately: the job never runs without one.
+  #
+  # There is no pull request and no review on the tap: the formula lands by
+  # direct push (Mark, 2026-08-16), so the gate is here instead. The new
+  # formula is installed and tested with brew before anything is pushed, which
+  # is why this runs on macOS: the formula only installs on arm64 macOS.
+  #
+  # HOMEBREW_TAP_TOKEN is visible to exactly one step, the push. The checkout
+  # and the brew steps, which download and run the release binary, never see
+  # it.
   update-homebrew:
     if: github.event_name == 'release'
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      TAP_REPO: marrusl/homebrew-inspectah
+      TAP_BRANCH: main
+      FORMULA: Formula/inspectah.rb
+      # brew needs a user/repo name to register the local test tap under.
+      TEST_TAP: marrusl/inspectah
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
     steps:
       # The formula is a BINARY formula: its `install` is
       # `bin.install "inspectah-darwin-arm64" => "inspectah"`, so `url` must
@@ -226,12 +245,11 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           REPO: ${{ github.repository }}
           ASSET_NAME: inspectah-darwin-arm64
-          # The asset is uploaded during release creation, by a different
-          # process than this workflow, so it can still be in flight when
-          # `release: published` fires. Measured on v0.9.0-beta.4: the asset
-          # finished uploading at 18:56:02Z and the release published_at was
-          # 18:56:02Z, the same second. That is a tie, not a margin, so wait
-          # for the asset rather than assuming it.
+          # release.yml attaches the asset to the draft before anyone can
+          # publish it, so it is normally there already. The wait stays for a
+          # release published some other way: on v0.9.0-beta.4, cut by hand,
+          # the asset finished uploading in the same second the release was
+          # published, a tie rather than a margin.
           ASSET_WAIT_ATTEMPTS: "30"
           ASSET_WAIT_SECONDS: "10"
           # sha256 of zero bytes. If curl ever writes an empty file and we
@@ -257,7 +275,8 @@ jobs:
             exit 1
           fi
 
-          SHA=$(sha256sum asset.bin | cut -d' ' -f1)
+          # shasum, not sha256sum: this job runs on macOS.
+          SHA=$(shasum -a 256 asset.bin | cut -d' ' -f1)
 
           if [ "${#SHA}" -ne 64 ]; then
             echo "::error::computed sha256 is not 64 characters: '${SHA}'" >&2
@@ -273,12 +292,16 @@ jobs:
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # The tap is public, so the checkout needs no tap token, and
+      # persist-credentials: false leaves no credential in .git/config for the
+      # brew steps below to find.
       - name: Checkout tap repo
         uses: actions/checkout@v4
         with:
-          repository: marrusl/homebrew-inspectah
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          repository: ${{ env.TAP_REPO }}
+          ref: ${{ env.TAP_BRANCH }}
           path: homebrew-tap
+          persist-credentials: false
 
       - name: Update formula
         env:
@@ -293,18 +316,21 @@ jobs:
           # left the old version beside the new url and failed the formula's
           # own test block, which asserts version.to_s appears in
           # `inspectah version` output. `install` is deliberately untouched.
-          sed -i \
+          # -i.orig and then rm, because BSD sed on macOS and GNU sed disagree
+          # on a bare -i.
+          sed -i.orig \
             -e "s|^  version \".*\"|  version \"${VERSION}\"|" \
             -e "s|^  url \".*\"|  url \"${ASSET_URL}\"|" \
             -e "s|^  sha256 \".*\"|  sha256 \"${SHA256}\"|" \
-            Formula/inspectah.rb
+            "$FORMULA"
+          rm -f "${FORMULA}.orig"
 
           # Confirm each substitution actually landed. If the formula is ever
           # restructured so a pattern stops matching, sed exits 0 having
           # changed nothing and the job would otherwise report success while
           # delivering a stale formula.
           for expected in "version \"${VERSION}\"" "url \"${ASSET_URL}\"" "sha256 \"${SHA256}\""; do
-            if ! grep -qF "$expected" Formula/inspectah.rb; then
+            if ! grep -qF "$expected" "$FORMULA"; then
               echo "::error::substitution did not land: ${expected}" >&2
               echo "The formula may have been restructured. Not updating the tap." >&2
               exit 1
@@ -313,35 +339,54 @@ jobs:
 
           echo "Updated formula to ${VERSION} (sha256: ${SHA256})"
 
-      - name: Open PR against tap repo
+      - name: Commit the formula locally
+        id: commit
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
         working-directory: homebrew-tap
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          BRANCH="update-${TAG}"
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$BRANCH":"refs/remotes/origin/$BRANCH" || true
-          git checkout -B "$BRANCH"
-          git add Formula/inspectah.rb
+          git add "$FORMULA"
           if git diff --cached --quiet; then
-            # Previously `exit 0`. The substitutions are verified above, so
-            # reaching here means the formula already matched this release:
-            # a re-run, or a tap someone updated by hand. That is not an
-            # error, but it must not look like a delivered update either.
-            echo "::notice::Formula already at ${TAG}; nothing to push."
+            # The substitutions are verified above, so reaching here means the
+            # formula already matched this release: a re-run, or a tap someone
+            # updated by hand. Not an error, but it must not look like a
+            # delivered update either.
+            echo "::notice::Formula already at ${TAG}; nothing to test or push."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git commit -m "Update inspectah to ${TAG}"
-          git push -u origin "HEAD:${BRANCH}" --force-with-lease
-          PR_BODY="Automated formula update from [inspectah ${TAG}](https://github.com/${{ github.repository }}/releases/tag/${TAG})."
-          if gh pr view "$BRANCH" >/dev/null 2>&1; then
-            gh pr edit "$BRANCH" \
-              --title "Update inspectah to ${TAG}" \
-              --body "$PR_BODY"
-          else
-            gh pr create \
-              --title "Update inspectah to ${TAG}" \
-              --body "$PR_BODY"
-          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      # Taps the local checkout, so brew installs exactly the commit that will
+      # be pushed: it downloads the release asset, checks the sha256, installs,
+      # and runs the formula's own test block.
+      - name: Install and test the new formula
+        if: steps.commit.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          brew tap "$TEST_TAP" "${GITHUB_WORKSPACE}/homebrew-tap"
+          brew install "${TEST_TAP}/inspectah"
+          brew test "${TEST_TAP}/inspectah"
+          inspectah version
+
+      # One ref update to the tap's main, so a refused push leaves nothing
+      # behind on the tap: no branch, no pull request. If the token cannot
+      # write to main, or main moved since the checkout, git's error is in
+      # this step's log and the job fails.
+      - name: Push the formula to the tap
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        working-directory: homebrew-tap
+        run: |
+          set -euo pipefail
+          # The header actions/checkout would have set, built only here. The
+          # base64 form is not a registered secret, so mask it too.
+          AUTH=$(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 | tr -d '\n')
+          echo "::add-mask::${AUTH}"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" \
+            push origin "HEAD:${TAP_BRANCH}"

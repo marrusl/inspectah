@@ -1,7 +1,12 @@
 name: Build binary
 
+# One build recipe for both uses: a smoke build on pushes to main, and the
+# release build, which release.yml calls on a version tag. The asset names
+# below are the published release asset names, and the Homebrew formula's
+# `install` names inspectah-darwin-arm64, so renaming one breaks the tap.
 on:
   workflow_dispatch:
+  workflow_call:
   push:
     branches: [main]
     paths:
@@ -13,17 +18,27 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
+      # Every leg reports: one failing target must not hide whether the
+      # others build.
+      fail-fast: false
       matrix:
         include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            asset: inspectah-linux-amd64
+          # The -bin suffix tells it apart from the macOS ARM64 binary.
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
-            name: linux-arm64
+            asset: inspectah-linux-arm64-bin
           - target: aarch64-apple-darwin
             os: macos-latest
-            name: macos-arm64
+            asset: inspectah-darwin-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -40,9 +55,11 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # Same Node line as rust-ci.yml. The frontend is built into the binary
+      # by crates/web/build.rs, so this is the Node that builds the shipped UI.
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '26'
           cache: 'npm'
           cache-dependency-path: crates/web/ui/package-lock.json
 
@@ -50,12 +67,66 @@ jobs:
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      # INSPECTAH_SKIP_UI must never be set here: a binary built with it
+      # ships without the web UI.
       - name: Build release binary
         run: cargo build -p inspectah-cli --release --target ${{ matrix.target }}
+
+      # Every leg runs on its own architecture, so each binary can report its
+      # own version. Checks what shipped, not what was intended: the version,
+      # the commit stamp, static linking on Linux, and the embedded UI.
+      - name: Verify binary
+        shell: bash
+        env:
+          BIN: target/${{ matrix.target }}/release/inspectah
+          UI_ASSETS: crates/web/ui/dist/assets
+        run: |
+          set -euo pipefail
+
+          VERSION=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' Cargo.toml | head -1)
+          # crates/cli/build.rs stamps the same command's output.
+          COMMIT=$(git rev-parse --short HEAD)
+          OUT=$("$BIN" version)
+          echo "$OUT"
+          case "$OUT" in
+            "inspectah ${VERSION} (commit ${COMMIT}, built "*) ;;
+            *)
+              echo "::error::expected 'inspectah ${VERSION} (commit ${COMMIT}, ...', got '${OUT}'" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            # Rust musl targets link static-pie, which file(1) reports as
+            # "static-pie linked" rather than "statically linked".
+            FILE_OUT=$(file -b "$BIN")
+            echo "$FILE_OUT"
+            if ! printf '%s' "$FILE_OUT" | grep -Eq 'statically linked|static-pie linked'; then
+              echo "::error::${BIN} is not statically linked" >&2
+              exit 1
+            fi
+          fi
+
+          # The frontend is embedded by path, so its content-hashed asset
+          # names appear verbatim in the binary.
+          for name in index.html $(ls "$UI_ASSETS" | grep -E '^index-'); do
+            if ! LC_ALL=C grep -qaF -- "$name" "$BIN"; then
+              echo "::error::${BIN} does not embed ${name}; the web UI is missing" >&2
+              exit 1
+            fi
+            echo "embedded: ${name}"
+          done
+
+      - name: Stage under the release asset name
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/inspectah" "dist/${{ matrix.asset }}"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: inspectah-${{ matrix.name }}
-          path: target/${{ matrix.target }}/release/inspectah
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
           retention-days: 30
