@@ -773,7 +773,13 @@ fn classify_deps_dnf(
 /// already contains transitive closure (DNF `--recursive`) or only
 /// direct dependencies (rpm `-qR`).
 struct DepGraphResult {
+    /// What installing each package may install (`RpmDepGraph::depends_on`).
     depends_on: HashMap<String, HashSet<String>>,
+    /// The edges that held on the source host (`RpmDepGraph::held`): what
+    /// tells the host's installation roots from their dependencies. The
+    /// dnf graph is resolved on the host, so it is the same as
+    /// `depends_on` there.
+    held: HashMap<String, HashSet<String>>,
     /// The part of `depends_on` a real requirement establishes
     /// (`RpmDepGraph::requires`). Empty for the dnf graph, whose resolved
     /// requires cannot tell one provider from several.
@@ -786,15 +792,26 @@ struct DepGraphResult {
 
 /// The direct dependency graph `classify_deps_rpm` builds.
 struct RpmDepGraph {
-    /// `a -> {b, ...}`: installing `a` may install each `b`. A capability
-    /// several installed packages provide credits every one of them.
+    /// `a -> {b, ...}`: installing `a` may install each `b`, whatever the
+    /// export leaves out (`DepExpr::possible`). A capability several
+    /// installed packages provide credits every one of them, every operand
+    /// of an `or` counts and so does every branch of a conditional.
     depends_on: HashMap<String, HashSet<String>>,
+    /// The edges that held on the source host (`DepExpr::pulled`): each
+    /// conditional evaluated against what was installed there and each
+    /// `or` by its first operand present. Only the leaf fallback reads it
+    /// (`graph_based_split`), to tell the host's installation roots from
+    /// their dependencies: an edge that only the broader `depends_on`
+    /// draws would make a root look like a dependency.
+    held: HashMap<String, HashSet<String>>,
     /// The edges of `depends_on` that installing `a` certainly installs:
-    /// `b` is the only installed provider of something `a` requires or
-    /// recommends (`DepExpr::required`), or `b` supplements something `a`
-    /// provides. A capability a base-image package or `a` itself also
-    /// provides needs no added package, and one several added packages
-    /// provide is a choice dnf makes, not a requirement on any of them.
+    /// `b` is the only installed provider of something `a` requires
+    /// (`DepExpr::required`). A capability a base-image package or `a`
+    /// itself also provides needs no added package, and one several added
+    /// packages provide is a choice dnf makes, not a requirement on any of
+    /// them. A weak dependency, Recommends or Supplements, is never
+    /// certain: dnf skips one it cannot install, so it and every path
+    /// through it stay in `depends_on` only.
     requires: HashMap<String, HashSet<String>>,
     /// Supplements no single edge can express (`JointSupplement`).
     joint: Vec<JointSupplement>,
@@ -867,7 +884,9 @@ const RPM_PROVIDES_INDEX_FORMAT: &str =
 ///
 /// All three pull a package in on a default dnf install: rhel-bootc 9 and
 /// 10 run dnf with `install_weak_deps` in effect, so Recommends and
-/// Supplements are installed alongside hard requirements.
+/// Supplements are installed alongside hard requirements. Only Requires is
+/// certain, though: dnf skips a weak dependency it cannot install, where a
+/// hard requirement it cannot install fails the transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Relation {
     /// `Requires`: the package needs a provider of the capability.
@@ -920,6 +939,7 @@ fn classify_deps_rpm(
     if added_ids.is_empty() {
         return Some(RpmDepGraph {
             depends_on: HashMap::new(),
+            held: HashMap::new(),
             requires: HashMap::new(),
             joint,
         });
@@ -932,6 +952,7 @@ fn classify_deps_rpm(
     for package_id in added_ids {
         depends_on.insert(package_id.clone(), HashSet::new());
     }
+    let mut held = depends_on.clone();
     let mut requires = depends_on.clone();
 
     // Build name→canonical-id map for sentinel header → package_id lookup.
@@ -975,23 +996,24 @@ fn classify_deps_rpm(
                         let pulls = |prov_id: &str| {
                             added_ids.contains(prov_id) && name_from_id(prov_id) != *pkg_name
                         };
-                        for prov_id in dep.pulled(&index) {
-                            if pulls(prov_id)
-                                && let Some(set) = depends_on.get_mut(package_id.as_str())
-                            {
-                                set.insert(prov_id.to_string());
+                        let add = |graph: &mut HashMap<String, HashSet<String>>,
+                                   ids: HashSet<&str>| {
+                            if let Some(set) = graph.get_mut(package_id.as_str()) {
+                                set.extend(
+                                    ids.into_iter().filter(|id| pulls(id)).map(str::to_string),
+                                );
                             }
-                        }
-                        // A base-image package, or this package itself,
-                        // is there whenever this package is installed.
-                        let assured =
-                            |id: &str| !added_ids.contains(id) || name_from_id(id) == *pkg_name;
-                        for prov_id in dep.required(&index, &assured) {
-                            if pulls(prov_id)
-                                && let Some(set) = requires.get_mut(package_id.as_str())
-                            {
-                                set.insert(prov_id.to_string());
-                            }
+                        };
+                        add(&mut held, dep.pulled(&index));
+                        add(&mut depends_on, dep.possible(&index));
+                        // A Recommends is never certain: dnf skips a weak
+                        // dependency it cannot install.
+                        if *relation == Relation::Requires {
+                            // A base-image package, or this package itself,
+                            // is there whenever this package is installed.
+                            let assured =
+                                |id: &str| !added_ids.contains(id) || name_from_id(id) == *pkg_name;
+                            add(&mut requires, dep.required(&index, &assured));
                         }
                     }
                     Relation::Supplements => {
@@ -1022,10 +1044,12 @@ fn classify_deps_rpm(
                             };
                             if let [group] = groups.as_slice() {
                                 // Any member of the group triggers it, so
-                                // each one installing certainly pulls the
-                                // package in.
+                                // each one installing may pull the package
+                                // in. Never certainly: a Supplements is a
+                                // weak dependency, which dnf skips when it
+                                // cannot install the package.
                                 for prov_id in group {
-                                    for graph in [&mut depends_on, &mut requires] {
+                                    for graph in [&mut depends_on, &mut held] {
                                         if let Some(set) = graph.get_mut(prov_id) {
                                             set.insert((*package_id).clone());
                                         }
@@ -1046,6 +1070,7 @@ fn classify_deps_rpm(
 
     Some(RpmDepGraph {
         depends_on,
+        held,
         requires,
         joint,
     })
@@ -1288,12 +1313,14 @@ fn classify_leaf_auto(
     let graph = if let Some(rpm_graph) = classify_deps_rpm(exec, &added_ids, file_ownership) {
         DepGraphResult {
             depends_on: rpm_graph.depends_on,
+            held: rpm_graph.held,
             requires: rpm_graph.requires,
             joint: rpm_graph.joint,
             transitive: false,
         }
     } else if let Some(dnf_deps) = classify_deps_dnf(exec, &added_ids) {
         DepGraphResult {
+            held: dnf_deps.clone(),
             depends_on: dnf_deps,
             requires: HashMap::new(),
             joint: Vec::new(),
@@ -1309,7 +1336,7 @@ fn classify_leaf_auto(
         let leaf_set: HashSet<&String> = ui.intersection(&added_ids).collect();
         if leaf_set.is_empty() && !added_ids.is_empty() {
             // Fallback to graph-based when userinstalled has no overlap with added
-            graph_based_split(&added_ids, depends_on, &graph.joint)
+            graph_based_split(&added_ids, &graph.held, &graph.joint)
         } else {
             let mut l = Vec::new();
             let mut a = Vec::new();
@@ -1323,7 +1350,7 @@ fn classify_leaf_auto(
             (l, a)
         }
     } else {
-        graph_based_split(&added_ids, depends_on, &graph.joint)
+        graph_based_split(&added_ids, &graph.held, &graph.joint)
     };
 
     leaf.sort();
@@ -1342,30 +1369,34 @@ fn classify_leaf_auto(
     // Two closures per root. `dep_closures` follows only the edges a real
     // requirement establishes (`DepGraphResult::requires`), so a package
     // in it is installed whatever the export leaves out: only that can
-    // put back the unit command of a package the operator excluded.
-    // `dep_alternatives` holds the rest of what the root may install, a
-    // provider dnf may pick among several and what that brings, so a
-    // package in neither is never installed by it.
+    // put back the unit command of a package the operator excluded. A
+    // joint Supplements is weak and never fires there. `dep_alternatives`
+    // holds the rest of what the root may install, a provider dnf may pick
+    // among several, a branch the image may take, a weak dependency, and
+    // what each of those brings, so a package in neither is never
+    // installed by it.
     let classified: HashSet<&str> = leaf.iter().chain(&auto).map(|s| s.as_str()).collect();
-    let closure =
-        |root: &str, graph_edges: &HashMap<String, HashSet<String>>| -> BTreeSet<String> {
-            // DNF --recursive already gave the transitive closure; rpm gives
-            // only direct deps, so walk the graph.
-            let reachable: HashSet<String> = if graph.transitive {
-                graph_edges.get(root).cloned().unwrap_or_default()
-            } else {
-                leaf_closure(root, graph_edges, &graph.joint)
-            };
-            reachable
-                .into_iter()
-                .filter(|d| d != root && classified.contains(d.as_str()))
-                .collect()
+    let closure = |root: &str,
+                   graph_edges: &HashMap<String, HashSet<String>>,
+                   joint: &[JointSupplement]|
+     -> BTreeSet<String> {
+        // DNF --recursive already gave the transitive closure; rpm gives
+        // only direct deps, so walk the graph.
+        let reachable: HashSet<String> = if graph.transitive {
+            graph_edges.get(root).cloned().unwrap_or_default()
+        } else {
+            leaf_closure(root, graph_edges, joint)
         };
+        reachable
+            .into_iter()
+            .filter(|d| d != root && classified.contains(d.as_str()))
+            .collect()
+    };
     let mut dep_closures: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut dep_alternatives: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for id in &classified {
-        let may_install = closure(id, depends_on);
-        let installs = closure(id, &graph.requires);
+        let may_install = closure(id, depends_on, &graph.joint);
+        let installs = closure(id, &graph.requires, &[]);
         dep_alternatives.insert(
             id.to_string(),
             may_install.difference(&installs).cloned().collect(),
@@ -1436,22 +1467,57 @@ fn leaf_closure(
 /// Graph-based fallback: package identities depended on by other added packages are
 /// auto; package identities not depended on by anything are leaf. A package a
 /// joint Supplements pulls in counts as depended on.
+///
+/// `held` is the graph of what held on the source host
+/// (`RpmDepGraph::held`), never the broader one of what the image may
+/// install: an edge drawn only because a branch could apply in the image
+/// would turn a root into a dependency of what it requires.
+///
+/// A dependency cycle no leaf reaches, such as two packages that require
+/// each other with nothing requiring either, was installed by someone, but
+/// which member is not known. Each member of such a cycle that nothing
+/// outside the cycle reaches becomes a leaf, so the export carries what
+/// the host had rather than dropping both.
 fn graph_based_split(
     added_ids: &HashSet<String>,
-    depends_on: &HashMap<String, HashSet<String>>,
+    held: &HashMap<String, HashSet<String>>,
     joint: &[JointSupplement],
 ) -> (Vec<String>, Vec<String>) {
     let mut depended_on: HashSet<String> = HashSet::new();
-    let edge_targets = depends_on.values().flatten();
+    let edge_targets = held.values().flatten();
     for dep in edge_targets.chain(joint.iter().map(|rule| &rule.package)) {
         if added_ids.contains(dep) {
             depended_on.insert(dep.clone());
         }
     }
+    let mut reached: HashSet<String> = HashSet::new();
+    for root in added_ids.iter().filter(|id| !depended_on.contains(*id)) {
+        reached.extend(leaf_closure(root, held, joint));
+    }
+    let unrooted: Vec<&String> = added_ids
+        .iter()
+        .filter(|id| depended_on.contains(*id) && !reached.contains(*id))
+        .collect();
+    let reaches: HashMap<&str, HashSet<String>> = unrooted
+        .iter()
+        .map(|id| (id.as_str(), leaf_closure(id, held, joint)))
+        .collect();
+    // A member of an unrooted cycle that every unrooted package reaching
+    // it is reached by in turn: nothing outside its cycle installs it.
+    let cycle_roots: HashSet<&str> = unrooted
+        .iter()
+        .map(|id| id.as_str())
+        .filter(|id| {
+            reaches
+                .iter()
+                .filter(|(other, from)| *other != id && from.contains(*id))
+                .all(|(other, _)| reaches[id].contains(*other))
+        })
+        .collect();
     let mut leaf = Vec::new();
     let mut auto = Vec::new();
     for package_id in added_ids {
-        if depended_on.contains(package_id) {
+        if depended_on.contains(package_id) && !cycle_roots.contains(package_id.as_str()) {
             auto.push(package_id.clone());
         } else {
             leaf.push(package_id.clone());
@@ -3747,6 +3813,17 @@ R\tlibnghttp2.so.14()(64bit)
             closure(&result, "httpd.aarch64"),
             vec!["libnghttp2.aarch64", "mailcap.noarch", "mod_http2.aarch64"]
         );
+        // dnf skips a Recommends it cannot install, so mod_http2, and
+        // what it brings, are possible only: never in the closure a plain
+        // unit command rests on.
+        assert_eq!(
+            result.dep_closures.as_ref().expect("closures")["httpd.aarch64"],
+            vec!["mailcap.noarch"]
+        );
+        assert_eq!(
+            result.dep_alternatives.as_ref().expect("alternatives")["httpd.aarch64"],
+            vec!["libnghttp2.aarch64", "mod_http2.aarch64"]
+        );
     }
 
     #[test]
@@ -3776,9 +3853,8 @@ S\tfoo-hardware
             "langpacks-en.noarch",
             "tuned-profiles-foo.noarch",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, Some(&[]))
-            .expect("graph should be available")
-            .depends_on;
+        let graph = classify_deps_rpm(&exec, &added, Some(&[])).expect("graph should be available");
+        let deps = &graph.depends_on;
         assert_eq!(
             deps["langpacks-en.noarch"],
             ids(&["glibc-langpack-en.aarch64"])
@@ -3788,6 +3864,86 @@ S\tfoo-hardware
             deps.values()
                 .all(|d| !d.contains("tuned-profiles-foo.noarch"))
         );
+        assert_eq!(
+            graph.held["langpacks-en.noarch"],
+            deps["langpacks-en.noarch"]
+        );
+        // A Supplements is weak, so it never makes a package certain.
+        assert!(graph.requires.values().all(HashSet::is_empty));
+    }
+
+    #[test]
+    fn the_graph_fallback_infers_roots_from_what_held_on_the_host() {
+        // No leaf data. app requires `(alternate if (missing-cap if
+        // switch))`, and nothing provides missing-cap, so with switch
+        // installed the condition fails and app needs no alternate on
+        // this host; alternate requires app. In the image, with switch
+        // left out, app may need alternate, which is what `depends_on`
+        // records, but that edge never held here: alternate and switch
+        // are the roots, and app their dependency.
+        let exec = dep_graph_executor(
+            "alternate app switch",
+            "\
+@@alternate
+R\tapp
+@@app
+R\t(alternate if (missing-cap if switch))
+@@switch
+",
+            "alternate.noarch\t0\t\talternate\n\
+             app.noarch\t0\t\tapp\n\
+             switch.noarch\t0\t\tswitch\n",
+            "",
+        );
+        let added: Vec<PackageEntry> = ["alternate", "app", "switch"]
+            .iter()
+            .map(|n| make_test_entry(n, "noarch"))
+            .collect();
+        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
+        assert_eq!(
+            result.leaf_packages,
+            Some(vec!["alternate.noarch".into(), "switch.noarch".into()])
+        );
+        assert_eq!(
+            result.dep_closures.as_ref().expect("closures")["alternate.noarch"],
+            vec!["app.noarch"]
+        );
+        assert_eq!(
+            result.dep_alternatives.as_ref().expect("alternatives")["app.noarch"],
+            vec!["alternate.noarch"]
+        );
+    }
+
+    #[test]
+    fn the_graph_fallback_keeps_a_cycle_nothing_installs() {
+        // No leaf data. alpha and beta require each other and nothing
+        // requires either, so one of them was installed by someone; which
+        // is not known, so both are roots. gamma, which beta requires, is
+        // their dependency, and delta, which nothing reaches, is a root
+        // as before.
+        let exec = dep_graph_executor(
+            "alpha beta delta gamma",
+            "@@alpha\nR\tbeta\n@@beta\nR\talpha\nR\tgamma\n@@delta\n@@gamma\n",
+            "alpha.noarch\t0\t\talpha\n\
+             beta.noarch\t0\t\tbeta\n\
+             delta.noarch\t0\t\tdelta\n\
+             gamma.noarch\t0\t\tgamma\n",
+            "",
+        );
+        let added: Vec<PackageEntry> = ["alpha", "beta", "delta", "gamma"]
+            .iter()
+            .map(|n| make_test_entry(n, "noarch"))
+            .collect();
+        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
+        assert_eq!(
+            result.leaf_packages,
+            Some(vec![
+                "alpha.noarch".into(),
+                "beta.noarch".into(),
+                "delta.noarch".into()
+            ])
+        );
+        assert_eq!(result.auto_packages, Some(vec!["gamma.noarch".into()]));
     }
 
     #[test]
@@ -3952,12 +4108,20 @@ R\t(emacs or vim-minimal or nano)
             "nano.aarch64",
             "vim-minimal.aarch64",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, Some(&[]))
-            .expect("graph should be available")
-            .depends_on;
+        let graph = classify_deps_rpm(&exec, &added, Some(&[])).expect("graph should be available");
         assert_eq!(
-            deps["cockpit-ws.aarch64"],
+            graph.held["cockpit-ws.aarch64"],
             ids(&["cockpit-ws-selinux.aarch64", "vim-minimal.aarch64"])
+        );
+        // What the image may install counts every operand and branch.
+        assert_eq!(
+            graph.depends_on["cockpit-ws.aarch64"],
+            ids(&[
+                "cockpit-ws-selinux.aarch64",
+                "grubby.aarch64",
+                "nano.aarch64",
+                "vim-minimal.aarch64"
+            ])
         );
     }
 
@@ -3995,11 +4159,15 @@ R\tengine
             "foo.noarch",
             "plugin.noarch",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, Some(&[]))
-            .expect("graph should be available")
-            .depends_on;
-        assert_eq!(deps["app.noarch"], ids(&["fallback.noarch"]));
-        assert_eq!(deps["plugin.noarch"], ids(&["engine.noarch"]));
+        let graph = classify_deps_rpm(&exec, &added, Some(&[])).expect("graph should be available");
+        assert_eq!(graph.held["app.noarch"], ids(&["fallback.noarch"]));
+        assert_eq!(graph.held["plugin.noarch"], ids(&["engine.noarch"]));
+        // What the image may install: both branches, and the floor's foo.
+        assert_eq!(
+            graph.depends_on["app.noarch"],
+            ids(&["fallback.noarch", "foo.noarch", "plugin.noarch"])
+        );
+        assert_eq!(graph.depends_on["plugin.noarch"], ids(&["engine.noarch"]));
     }
 
     #[test]
@@ -4053,12 +4221,14 @@ R\t(foo >= 2 if foo)
             "plugin.noarch",
             "plugin2.noarch",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, Some(&[]))
-            .expect("graph should be available")
-            .depends_on;
+        let graph = classify_deps_rpm(&exec, &added, Some(&[])).expect("graph should be available");
         assert_eq!(
-            deps["app.noarch"],
+            graph.held["app.noarch"],
             ids(&["plugin.noarch", "plugin2.noarch"])
+        );
+        assert_eq!(
+            graph.depends_on["app.noarch"],
+            ids(&["foo.noarch", "plugin.noarch", "plugin2.noarch"])
         );
     }
 

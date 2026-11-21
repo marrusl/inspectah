@@ -337,23 +337,44 @@ impl DepExpr {
         out
     }
 
-    /// The installed packages this expression pulls in. Conditions are
-    /// evaluated, never credited: in `(a if b)` only a provider of `a` is
-    /// pulled in, and only when `b` is installed. A package the condition
-    /// holds only through is not pulled in by it either, so the version
-    /// floor `(foo >= 2 if foo)` pulls in nothing when foo is the only
-    /// provider: it constrains a `foo` that is already there. When another
-    /// package also makes the condition hold, as a base-image provider of
-    /// `feature` does in `(plugin if feature)`, the branch is pulled in
-    /// whether or not it provides the condition too. An `or` takes its
-    /// first satisfied operand: a requirement needs only one, and on an
-    /// installed host the first one present satisfies it. A condition that
-    /// holds a condition is the exception: it can flip once the export
-    /// leaves a package out (`(missing if switch)` holds without `switch`),
-    /// so both of its branches are pulled in.
+    /// The installed packages this expression pulled in on the source
+    /// host, as it stands there. Conditions are evaluated, never credited:
+    /// in `(a if b)` only a provider of `a` is pulled in, and only when `b`
+    /// is installed. A package the condition holds only through is not
+    /// pulled in by it either, so the version floor `(foo >= 2 if foo)`
+    /// pulls in nothing when foo is the only provider: it constrains a
+    /// `foo` that is already there. When another package also makes the
+    /// condition hold, as a base-image provider of `feature` does in
+    /// `(plugin if feature)`, the branch is pulled in whether or not it
+    /// provides the condition too. An `or` takes its first satisfied
+    /// operand: a requirement needs only one, and on an installed host the
+    /// first one present satisfies it.
+    ///
+    /// This is what tells the host's installation roots from their
+    /// dependencies, so it reads only what held on the host. What the
+    /// image may install is [`possible`](Self::possible).
     pub(super) fn pulled<'p>(&self, index: &'p dyn Providers) -> HashSet<&'p str> {
         let mut out = HashSet::new();
         self.root.collect_pulled(index, &mut out);
+        out
+    }
+
+    /// Every installed package this expression may pull in once the export
+    /// leaves some packages out: a superset of [`pulled`](Self::pulled)
+    /// and of [`required`](Self::required).
+    ///
+    /// It only has to be right in one direction. A package outside it is
+    /// called absent from the image, and its unit command is omitted; one
+    /// it names needlessly is at worst guarded by its unit file. So nothing
+    /// is evaluated: every operand of an `or` counts, since dnf may pick any
+    /// that is available, and both branches of every `if` and `unless`
+    /// count, since which applies depends on what the image ends up with,
+    /// not on what the host had. `(plugin if switch else helper)` needs
+    /// `helper` once `switch` is left out. Conditions are still never
+    /// credited: dnf does not install a package to make one hold.
+    pub(super) fn possible<'p>(&self, index: &'p dyn Providers) -> HashSet<&'p str> {
+        let mut out = HashSet::new();
+        self.root.collect_possible(index, &mut out);
         out
     }
 
@@ -497,23 +518,6 @@ impl Node {
                     x.collect_pulled(index, out);
                 }
             }
-            // A condition that is not monotone can flip once the export
-            // leaves a package out, so either branch may apply.
-            Self::If {
-                then,
-                cond,
-                otherwise,
-            }
-            | Self::Unless {
-                then,
-                cond,
-                otherwise,
-            } if !cond.monotone() => {
-                then.collect_pulled(index, out);
-                if let Some(o) = otherwise {
-                    o.collect_pulled(index, out);
-                }
-            }
             Self::If {
                 then,
                 cond,
@@ -548,6 +552,28 @@ impl Node {
                     then.collect_pulled(index, out);
                 } else if let Some(o) = otherwise {
                     o.collect_pulled(index, out);
+                }
+            }
+        }
+    }
+
+    /// This node's part of [`DepExpr::possible`]: every operand and every
+    /// branch, conditions left out.
+    fn collect_possible<'p>(&self, index: &'p dyn Providers, out: &mut HashSet<&'p str>) {
+        match self {
+            Self::Match(m) => out.extend(m.matching(index)),
+            Self::And(xs) | Self::Or(xs) => {
+                xs.iter().for_each(|x| x.collect_possible(index, out));
+            }
+            Self::If {
+                then, otherwise, ..
+            }
+            | Self::Unless {
+                then, otherwise, ..
+            } => {
+                then.collect_possible(index, out);
+                if let Some(o) = otherwise {
+                    o.collect_possible(index, out);
                 }
             }
         }
@@ -1036,27 +1062,61 @@ mod tests {
     }
 
     #[test]
-    fn a_condition_that_can_flip_pulls_in_both_branches() {
-        // `(missing if switch)` fails while `switch` is installed, as on
-        // this host, and holds once it is left out, so whether `alternate`
-        // or `spare` is needed depends on what the export carries. Both
-        // may be installed.
+    fn possible_counts_every_operand_and_every_branch() {
+        // On this host `switch`, `local-a` and `helper` are installed, and
+        // `(missing if switch)` fails while `switch` is. Each expression is
+        // (input, pulled on the host, possible in the image). Which `or`
+        // operand dnf picks, and which branch applies, depends on what the
+        // image ends up with: `(plugin if switch else helper)` needs
+        // `helper` once `switch` is left out.
         let index = TestIndex(&[
             ("switch", "switch"),
             ("alternate", "alternate"),
             ("spare", "spare"),
+            ("local-a", "local-a"),
+            ("helper", "helper"),
+            ("plugin", "plugin"),
+            ("foo", "foo = 2.1-3"),
         ]);
-        let cases: &[(&str, &[&str])] = &[
-            ("(alternate if (missing if switch))", &["alternate"]),
+        let cases: &[(&str, &[&str], &[&str])] = &[
+            ("(local-a or helper)", &["local-a"], &["local-a", "helper"]),
+            (
+                "(plugin if switch else helper)",
+                &["plugin"],
+                &["plugin", "helper"],
+            ),
+            (
+                "(plugin unless switch else helper)",
+                &["helper"],
+                &["plugin", "helper"],
+            ),
+            ("(plugin if missing)", &[], &["plugin"]),
+            ("(alternate if (missing if switch))", &[], &["alternate"]),
             (
                 "(alternate if (missing if switch) else spare)",
+                &["spare"],
                 &["alternate", "spare"],
             ),
-            ("(alternate unless (missing if switch))", &["alternate"]),
+            (
+                "(alternate unless (missing if switch))",
+                &["alternate"],
+                &["alternate"],
+            ),
+            ("(foo >= 2 if foo)", &[], &["foo"]),
+            (
+                "((local-a and plugin) or missing)",
+                &["local-a", "plugin"],
+                &["local-a", "plugin"],
+            ),
         ];
-        for (input, expected) in cases {
+        for (input, pulled, possible) in cases {
             let expr = DepExpr::parse(input).expect("parses");
-            assert_eq!(expr.pulled(&index), set(expected), "input: {input}");
+            assert_eq!(expr.pulled(&index), set(pulled), "pulled: {input}");
+            assert_eq!(expr.possible(&index), set(possible), "possible: {input}");
+            assert!(
+                expr.pulled(&index).is_subset(&expr.possible(&index)),
+                "{input}"
+            );
         }
     }
 
@@ -1125,7 +1185,7 @@ mod tests {
             );
             assert!(
                 expr.required(&index, &assured)
-                    .is_subset(&expr.pulled(&index)),
+                    .is_subset(&expr.possible(&index)),
                 "input: {input}"
             );
         }

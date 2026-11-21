@@ -16,7 +16,12 @@
 //! - Every provider an installed package may need from a disabled repo
 //!   installs from it: competing providers, and the dnf fallback's.
 //! - An owner is carried when the collector could not tell leaves from
-//!   dependencies and fell back to the dependency graph.
+//!   dependencies and fell back to the dependency graph, and that fallback
+//!   keeps the roots the host had: a dependency cycle nothing installs,
+//!   and a package only a branch the image may take would require.
+//! - What the image may install counts every `or` operand and both
+//!   branches of a conditional, and a recommended package is never
+//!   certain: each keeps its unit command, guarded.
 //! - A unit whose package dnf may or may not install keeps its command,
 //!   run only if the unit file is in the image: an excluded or included
 //!   one of several providers, a dependency a conditional requirement
@@ -626,6 +631,129 @@ fn a_nested_condition_never_makes_an_excluded_package_certain() {
     );
 }
 
+// ── What the image may install, beyond what the host had ────────────
+
+/// `app` requires `(local-a or helper)`, and the host has both. `local-a`
+/// came from a local RPM path, and the export carries no RPM for it, so the
+/// image cannot install it: dnf satisfies `app` with `helper`, the only
+/// alternative a repo serves. `helper.service` was disabled against a
+/// preset that enables it. Both paths keep `helper` out of the not-carried
+/// list and its recorded `disable`, guarded: which operand dnf picks is not
+/// known, so the command is never plain either.
+#[test]
+fn an_or_operand_the_host_did_not_need_keeps_its_disable() {
+    let host = base_host()
+        .package_from("local-a", "@commandline")
+        .package("helper")
+        .requires("app", &["(local-a or helper)"])
+        .unit("helper.service", "disabled")
+        .vendor_unit("helper.service", WANTED_UNIT, Some("helper"))
+        .preset("enable helper.service")
+        .preset("disable *");
+    let run = exports(host);
+
+    for (label, surfaces) in &run.paths {
+        assert!(
+            guards(&surfaces.containerfile, "disable", "helper.service"),
+            "{label}: the recorded disable is kept, guarded:\n{}",
+            surfaces.containerfile
+        );
+        assert!(
+            !surfaces.not_carried_block_names().contains(&"helper"),
+            "{label}: helper may be installed:\n{}",
+            surfaces.containerfile
+        );
+    }
+}
+
+/// `app` requires `(plugin if switch else helper)`. On the host `switch`
+/// is installed, so `app` pulled in `plugin`. `switch` came from a local
+/// RPM path the export carries nothing for, so the image cannot install
+/// it, and there the `else` applies: dnf installs `helper`.
+/// `helper.service` was disabled against a preset that enables it. Both
+/// paths keep the `disable`, guarded, and do not list `helper` as not
+/// carried; nor does refine once the operator excludes `switch` too.
+#[test]
+fn the_branch_the_image_takes_keeps_its_disable() {
+    let host = base_host()
+        .package_from("switch", "@commandline")
+        .package("plugin")
+        .package("helper")
+        .requires("app", &["(plugin if switch else helper)"])
+        .userinstalled(&["bash", "app", "switch"])
+        .unit("helper.service", "disabled")
+        .vendor_unit("helper.service", WANTED_UNIT, Some("helper"))
+        .preset("enable helper.service")
+        .preset("disable *");
+    let run = exports(host);
+
+    for (label, surfaces) in &run.paths {
+        assert!(
+            guards(&surfaces.containerfile, "disable", "helper.service"),
+            "{label}: the recorded disable is kept, guarded:\n{}",
+            surfaces.containerfile
+        );
+        assert!(
+            !surfaces.not_carried_block_names().contains(&"helper"),
+            "{label}: helper may be installed:\n{}",
+            surfaces.containerfile
+        );
+    }
+
+    let mut session = RefineSession::new(run.snapshot.clone());
+    set_package(&mut session, "switch", "x86_64", false);
+    let surfaces = surfaces_of(&session);
+    assert!(
+        guards(&surfaces.containerfile, "disable", "helper.service"),
+        "switch excluded:\n{}",
+        surfaces.containerfile
+    );
+    assert!(
+        !projected_not_carried(&session).contains(&"helper".to_string()),
+        "{:?}",
+        projected_not_carried(&session)
+    );
+}
+
+/// `app` recommends `helper`, and `helper.service` was disabled against a
+/// preset that enables it. The operator excludes `helper`. dnf installs a
+/// recommended package when it can and skips it when it cannot, for one a
+/// repo no longer serves in the image or one an option leaves out, so
+/// `helper` may be absent: a plain `systemctl disable` of a missing unit
+/// fails the build on systemd 252. Both the scan's closure and the export
+/// treat it as possible only, so the command is guarded.
+#[test]
+fn a_recommended_package_is_never_certain() {
+    let host = base_host()
+        .package("helper")
+        .recommends("app", &["helper"])
+        .unit("helper.service", "disabled")
+        .vendor_unit("helper.service", WANTED_UNIT, Some("helper"))
+        .preset("enable helper.service")
+        .preset("disable *");
+    let snapshot = collected(host);
+    let rpm = snapshot.rpm.as_ref().expect("the rpm section");
+    assert!(
+        rpm.dep_closures.as_ref().expect("closures")["app.x86_64"].is_empty(),
+        "{:?}",
+        rpm.dep_closures
+    );
+
+    let mut session = RefineSession::new(snapshot);
+    set_package(&mut session, "helper", "x86_64", false);
+    let surfaces = surfaces_of(&session);
+    assert!(
+        !acts(&surfaces.containerfile, "disable", "helper.service"),
+        "not plain:\n{}",
+        surfaces.containerfile
+    );
+    assert!(
+        guards(&surfaces.containerfile, "disable", "helper.service"),
+        "guarded:\n{}",
+        surfaces.containerfile
+    );
+}
+
 // ── An auto package the operator includes ───────────────────────────
 
 /// The unit command `helper.service` was recorded with, and the preset
@@ -737,9 +865,9 @@ fn including_an_auto_package_by_hand_installs_its_disabled_repo_dependency() {
 // ── No leaf data from dnf ────────────────────────────────────────────
 
 /// dnf cannot say what the operator installed, and the two added packages
-/// need each other, so the dependency graph makes both auto, no leaf, and
-/// an empty tree: too little to leave any auto package out. `beta` owns an
-/// enabled unit, which that does not change: both paths install it and
+/// need each other with nothing needing either, so one of them was
+/// installed by someone and which is not known: the dependency graph keeps
+/// both as leaves. `beta` owns an enabled unit: both paths install it and
 /// enable its unit, and list nothing.
 #[test]
 fn the_graph_fallback_still_carries_a_unit_owner() {
@@ -757,11 +885,10 @@ fn the_graph_fallback_still_carries_a_unit_owner() {
     let run = exports(host);
 
     let rpm = run.snapshot.rpm.as_ref().expect("the rpm section");
-    assert_eq!(rpm.leaf_packages.as_deref(), Some(&[][..]), "no leaf");
     assert_eq!(
-        rpm.leaf_dep_tree,
-        serde_json::json!({}),
-        "the tree is empty while auto packages are not: the fallback"
+        rpm.leaf_packages.as_deref(),
+        Some(&["alpha.x86_64".to_owned(), "beta.x86_64".to_owned()][..]),
+        "the unrooted cycle is kept"
     );
 
     for (label, surfaces) in &run.paths {
@@ -778,6 +905,50 @@ fn the_graph_fallback_still_carries_a_unit_owner() {
         assert!(
             surfaces.not_carried_block().is_empty(),
             "{label}:\n{}",
+            surfaces.containerfile
+        );
+    }
+}
+
+/// No leaf data. `app` requires `(alternate if (missing-cap if switch))`,
+/// and nothing provides `missing-cap`, so on this host, with `switch`
+/// installed, `app` needs no `alternate`; `alternate` requires `app`.
+/// `alternate.service` was disabled against a preset that enables it. In
+/// the image `app` may need `alternate`, but that edge never held on the
+/// host, so it does not make `alternate` a dependency: `alternate` and
+/// `switch` are the roots, both paths install `alternate` and keep its
+/// `disable`, plain.
+#[test]
+fn a_branch_only_the_image_may_take_keeps_the_hosts_roots() {
+    let host = UnitHost::new()
+        .base_package("bash")
+        .base_package("glibc")
+        .package("app")
+        .package("alternate")
+        .package("switch")
+        .userinstalled_unavailable()
+        .requires("app", &["(alternate if (missing-cap if switch))"])
+        .requires("alternate", &["app"])
+        .unit("alternate.service", "disabled")
+        .vendor_unit("alternate.service", WANTED_UNIT, Some("alternate"))
+        .preset("enable alternate.service")
+        .preset("disable *");
+    let run = exports(host);
+
+    let rpm = run.snapshot.rpm.as_ref().expect("the rpm section");
+    assert_eq!(
+        rpm.leaf_packages.as_deref(),
+        Some(&["alternate.x86_64".to_owned(), "switch.x86_64".to_owned()][..])
+    );
+    for (label, surfaces) in &run.paths {
+        assert!(
+            surfaces.install_names().iter().any(|n| n == "alternate"),
+            "{label}:\n{}",
+            surfaces.containerfile
+        );
+        assert!(
+            acts(&surfaces.containerfile, "disable", "alternate.service"),
+            "{label}: the recorded disable is kept:\n{}",
             surfaces.containerfile
         );
     }

@@ -154,6 +154,8 @@ struct Classification {
     userinstalled: Option<Vec<String>>,
     /// The capabilities each package requires, as `rpm -q` lists them.
     requires: BTreeMap<String, Vec<String>>,
+    /// The capabilities each package recommends, as `rpm -q` lists them.
+    recommends: BTreeMap<String, Vec<String>>,
     /// The capabilities each package provides besides its own name.
     provides: BTreeMap<String, Vec<String>>,
     /// rpm's dependency query fails, so the scan falls back to
@@ -257,6 +259,17 @@ impl UnitHost {
             .get_or_insert_default()
             .requires
             .insert(name.into(), needs.iter().map(|n| (*n).to_owned()).collect());
+        self
+    }
+
+    /// `name` recommends the capabilities `wants`, as `rpm -q` lists its
+    /// weak dependencies. dnf installs a provider when it can and skips
+    /// one it cannot. Turns on leaf classification.
+    pub fn recommends(mut self, name: &str, wants: &[&str]) -> Self {
+        self.classification
+            .get_or_insert_default()
+            .recommends
+            .insert(name.into(), wants.iter().map(|n| (*n).to_owned()).collect());
         self
     }
 
@@ -483,12 +496,26 @@ impl UnitHost {
                     ..Default::default()
                 },
             };
-            let deps: String = classification
+            let named: BTreeSet<&String> = classification
                 .requires
-                .iter()
-                .map(|(name, needs)| {
-                    let lines: String = needs.iter().map(|cap| format!("R\t{cap}\n")).collect();
-                    format!("@@{name}\n{lines}")
+                .keys()
+                .chain(classification.recommends.keys())
+                .collect();
+            let deps: String = named
+                .into_iter()
+                .map(|name| {
+                    let tagged = |tag: &str, map: &BTreeMap<String, Vec<String>>| -> String {
+                        map.get(name)
+                            .into_iter()
+                            .flatten()
+                            .map(|cap| format!("{tag}\t{cap}\n"))
+                            .collect()
+                    };
+                    format!(
+                        "@@{name}\n{}{}",
+                        tagged("R", &classification.requires),
+                        tagged("W", &classification.recommends)
+                    )
                 })
                 .collect();
             let provides: String = std::iter::once("bash")
@@ -899,8 +926,9 @@ pub fn acts(containerfile: &str, verb: &str, unit: &str) -> bool {
 }
 
 /// Every guarded `systemctl` command in `containerfile`, as
-/// `(verb, unit, file)`: each `if [ -e <file> ]; then systemctl <verb> --
-/// <unit>; fi` of a `RUN if` instruction, the operands unquoted.
+/// `(verb, unit, files)`: each `if [ -e <file> ] [&& [ -e <file> ]...];
+/// then systemctl <verb> -- <unit>; fi` of a `RUN if` instruction, the
+/// operands unquoted and the files it tests joined by a space.
 pub fn guarded_commands(containerfile: &str) -> Vec<(String, String, String)> {
     let unquote = |w: &str| {
         w.strip_prefix('\'')
@@ -910,21 +938,31 @@ pub fn guarded_commands(containerfile: &str) -> Vec<(String, String, String)> {
     };
     systemctl_instructions(containerfile)
         .iter()
-        .filter_map(|i| i.trim().strip_prefix("RUN if "))
+        .filter_map(|i| i.trim().strip_prefix("RUN "))
+        .filter(|body| body.starts_with("if "))
         .flat_map(|body| {
-            format!("if {body}")
-                .split(" && ")
+            let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            body.split("; fi")
+                .map(|segment| segment.trim().trim_start_matches("&&").trim().to_owned())
+                .filter(|segment| !segment.is_empty())
                 .map(|segment| {
-                    let segment = segment.split_whitespace().collect::<Vec<_>>().join(" ");
-                    let (file, command) = segment
-                        .strip_prefix("if [ -e ")
-                        .and_then(|s| s.split_once(" ]; then systemctl "))
+                    let (tests, command) = segment
+                        .strip_prefix("if ")
+                        .and_then(|s| s.split_once("; then systemctl "))
                         .unwrap_or_else(|| panic!("not a guarded command: {segment:?}"));
+                    let files: Vec<String> = tests
+                        .split(" && ")
+                        .map(|test| {
+                            test.strip_prefix("[ -e ")
+                                .and_then(|t| t.strip_suffix(" ]"))
+                                .map(unquote)
+                                .unwrap_or_else(|| panic!("not a file test: {test:?}"))
+                        })
+                        .collect();
                     let (verb, unit) = command
-                        .strip_suffix("; fi")
-                        .and_then(|c| c.split_once(" -- "))
+                        .split_once(" -- ")
                         .unwrap_or_else(|| panic!("not a guarded command: {segment:?}"));
-                    (verb.to_owned(), unquote(unit), unquote(file))
+                    (verb.to_owned(), unquote(unit), files.join(" "))
                 })
                 .collect::<Vec<_>>()
         })
