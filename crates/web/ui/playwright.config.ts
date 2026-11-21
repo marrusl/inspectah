@@ -4,18 +4,17 @@ export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  // One retry, not two. At two, a spec can fail twice and pass on the third
-  // attempt and the job still reports green, which hides the known
-  // order-dependent test rather than surfacing it. CI runs workers: 1, so
-  // ordering differs from local runs and order-dependence is more likely to
-  // bite there. One retry still absorbs genuine browser flake; a test that
-  // fails deterministically fails both attempts.
+  // CI retries a failed test once, only to record a trace of it
+  // (trace: "on-first-retry"). failOnFlakyTests then fails the run when the
+  // retry passes, so a test that fails and recovers is reported as a failure
+  // rather than hidden in a green job.
   retries: process.env.CI ? 1 : 0,
+  failOnFlakyTests: !!process.env.CI,
   workers: process.env.CI ? 1 : undefined,
-  // The HTML report alongside the github one so a retry is visible at all:
-  // "github" annotates failures but does not surface flake counts, so a test
-  // that passed only on its retry looks identical to one that passed first
-  // time. The workflow uploads playwright-report/ as an artifact on failure.
+  // The HTML report alongside the github one: it holds the traces and
+  // screenshots of a failed or flaky test. The workflow uploads
+  // playwright-report/ as an artifact when the step fails, which a flaky
+  // test now makes it do.
   reporter: process.env.CI
     ? [["github"], ["html", { open: "never" }]]
     : "list",

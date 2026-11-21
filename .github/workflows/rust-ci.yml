@@ -165,17 +165,19 @@ jobs:
           exit 1
       # Blocking. Every spec but smoke-integration answers from the mock
       # API in e2e/helpers/mock-api.ts; smoke-integration talks to the
-      # refine server started above.
+      # refine server started above. A test that fails and then passes on
+      # its retry fails the step too (failOnFlakyTests in
+      # playwright.config.ts); the retry exists only to record a trace.
       - name: Playwright e2e tests
         id: playwright
         if: ${{ !cancelled() && steps.e2e_server.outcome == 'success' }}
         working-directory: crates/web/ui
         run: npm run test:e2e
 
-      # Without this the HTML reporter writes a report nobody can read. The
-      # github reporter annotates failures but shows no flake counts, so a
-      # test that passed only on its retry is indistinguishable from one that
-      # passed outright. Failure-only, to avoid an artifact on every green run.
+      # Without this the HTML reporter writes a report nobody can read. It
+      # holds the traces and screenshots of failed and flaky tests, and a
+      # flaky test fails the step, so its report is uploaded as well.
+      # Failure-only, to avoid an artifact on every green run.
       # Conditioned on Playwright having actually run and failed. It was
       # previously `failure()`, which fired whenever anything earlier in the
       # job had failed: on the first revived run it uploaded nothing, warned,

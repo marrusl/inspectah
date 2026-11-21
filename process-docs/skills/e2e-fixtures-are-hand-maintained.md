@@ -90,8 +90,11 @@ than a 100%-passed one, not as the same green.
 ## Running the Suite the Way CI Does
 
 CI runs the mocked specs and `smoke-integration.spec.ts` in one step,
-with `CI` set (one worker, one retry) and a refine server on 8642 over
-`testdata/e2e-fixture.tar.gz`. To reproduce it, from the worktree root:
+with `CI` set and a refine server on 8642 over
+`testdata/e2e-fixture.tar.gz`. `CI` means one worker and one retry, and
+`failOnFlakyTests`: the retry only records a trace, and a test that
+passes on it still fails the run, so a summary line reading `1 flaky`
+is a red run, not a green one. To reproduce it, from the worktree root:
 
 ```bash
 cargo build -p inspectah-cli
