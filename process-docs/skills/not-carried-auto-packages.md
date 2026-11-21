@@ -9,20 +9,15 @@ carried**.
 ## The class
 
 An entry of `packages_added` is in the class when it is in
-`auto_packages` and no root the export installs pulls it in, as
-`unit_plan::pulled_in_by_included` answers. The roots are the leaves,
-whose closures are `leaf_dep_tree`, and the carried unit owners (below),
-whose closures are `auto_dep_tree`. A root counts only when
+`auto_packages` and no default root the export installs pulls it in, as
+`unit_plan::pulled_in_by_default_roots` answers. The default roots are
+the leaves and the carried unit owners (below). A root counts only when
 `installs_on_its_own_route` holds for it: an included root the export
 renders only as a manual step (no repo serves it and no RPM is carried,
 or a repo-enabling package demoted for a dropped repo with no upload) is
 never installed, so its dependencies are not pulled in. A demoted
 package that was uploaded installs from the upload, so it still counts.
 Identity is `name.arch`.
-
-The same answer drives the disabled-repo install: a pulled-in package
-from a repo the host disabled is named in the transaction that enables
-that repo, so a carried owner's dependency served only there installs.
 
 It is never in the class, and keeps its existing handling, when it is:
 
@@ -34,6 +29,37 @@ It is never in the class, and keeps its existing handling, when it is:
 - routed `PackageRoute::Repoless` by `render::repoless::route_for`.
 
 A package routed `DisabledRepo` is not exempt: it can be in the class.
+
+## Defaults and presence count different roots
+
+The class settles the defaults, so it counts the leaves and carried
+owners only. The scan decides it while every auto package is still
+included: counting every included package would pull in the
+dependencies of the packages it is about to exclude, and the class would
+change when they were.
+
+Everything that asks whether a package is in the image asks
+`unit_plan::pulled_in_by_included`, whose roots are **every** entry the
+export installs: a leaf, a carried owner, and an auto package an
+operator included by hand alike. That is the unit plan, the
+disabled-repo install (a pulled-in package from a repo the host disabled
+is named in the transaction that enables that repo), `/var`
+provisioning, the single-host list (`not_carried_packages` lists a class
+member only when nothing installed pulls it in) and `FleetDrops`. So
+once an operator includes `tool`, which needs `helper`, `helper` leaves
+the list, its recorded `systemctl` commands are emitted, and a `helper`
+only a disabled repo serves installs from it, although the class still
+holds `helper` and its disposition still reads excluded.
+
+A root's closure is `unit_plan::closure_of`: its `dep_closures` entry
+joined with its `leaf_dep_tree` entry. `dep_closures` (schema 29) maps
+every leaf and auto package to everything installing it installs,
+**leaves included**. `leaf_dep_tree` keeps only the auto part of a
+leaf's closure, because refine's `normalize_package_defaults` reads a
+leaf listed in it as a dependency of another leaf; it adds nothing to a
+collected snapshot and is all a hand-built test snapshot may have.
+Pulled-in membership is transitive in the closures already, so a
+pulled-in package's own closure adds nothing.
 
 ## Unit owners are carried by default
 
@@ -80,16 +106,18 @@ the package (`the_fixture_is_baseline_backed_and_has_a_not_carried_list`).
 `excluding_the_leaf_keeps_the_unit_owner_it_pulled_in` pins the
 membership rule; `crates/cli/tests/unit_owner_evidence_test.rs` pins the
 template instance, the disabled-repo dependency, a dependency's recorded
-`disable` and the graph fallback, each from collector output.
+`disable`, the graph fallback, and a hand-included package's dependency
+(its unit command and its disabled-repo install), each from collector
+output.
 
 ## The one decider
 
 `crates/pipeline/src/render/not_carried.rs` decides membership, through
 `classify_auto_carriage`. `apply_scan_package_defaults` excludes the
 `Unneeded` part and `not_carried_packages` lists every excluded
-`Unneeded` or `UnitOwner` package; both reach the class through the
-classifier. No function outside the module decides
-membership, and the module calls `pulled_in_by_included` and never copies
+`Unneeded` or `UnitOwner` package nothing installed pulls in; both reach
+the class through the classifier. No function outside the module decides
+membership, and the module calls `pulled_in_by_default_roots` and never copies
 it. The aggregate guard lives only in `classify_auto_carriage`.
 
 The scan path calls `apply_scan_package_defaults` right after the dnf-cache
@@ -127,10 +155,16 @@ every host (or, for one not on every host, a leaf where it is), so a
 fleet export cannot carry an auto package at all. It does not get the
 single-host default; it gets the notice. `FleetDrops` says which
 packages the merge provably dropped: in neither `baseline_package_names`
-nor `packages_added`, by name, and pulled in by no installed fleet leaf.
-It needs a baseline (else a base-image owner such as `openssh-server`
-would be named) and `leaf_authority_hosts > 0`, not `leaf_packages`,
-which refine clears when it opens an aggregate.
+nor `packages_added`, by name, and pulled in by nothing the fleet export
+installs (`pulled_in_by_included`), a partial package the operator
+includes in refine as much as a universal leaf. It needs a baseline
+(else a base-image owner such as `openssh-server` would be named),
+`leaf_authority_hosts > 0`, not `leaf_packages`, which refine clears
+when it opens an aggregate, and a `dep_closures` entry for every package
+the export installs (`every_installed_package_has_a_closure`). Without
+one, what that package pulls in is unknown, so `FleetDrops::of` is
+`None` and every unit emits. A `leaf_dep_tree` entry does not count: it
+leaves out a dependency the host also user-installed.
 `fleet_not_carried_packages` names the dropped owners of enabled units.
 The merge keeps only names, so a fleet entry's `arch` and `source_repo`
 are empty and the audit table prints `-`.
@@ -138,12 +172,17 @@ are empty and the audit table prints `-`.
 Two pieces of per-host evidence survive the merge for this, and nothing
 else in it changed:
 
-- **`leaf_dep_tree` joins each kept leaf's closures from every
-  authoritative host.** One host's closure cannot prove a package absent:
-  a host whose operator also installed the dependency records it as a
-  leaf, so it is in no closure there, and the merge drops it for not
-  being a leaf everywhere. A single donor host's tree used to name such
-  a package as not carried although installing the leaf installs it.
+- **`dep_closures` maps every package the merge kept, the partial ones
+  included, to its closures from every authoritative host, joined.** A
+  partial package (one some hosts lack) is kept as excluded, and once
+  the operator includes it, it installs what it needs; without its
+  closure a dependency the merge drops would read as absent and lose its
+  `systemctl` command. One host's closure cannot prove a package absent
+  either, and neither can an auto-only one: a host whose operator also
+  installed the dependency records it as a leaf, and the merge drops it
+  for not being a leaf on the hosts where it is a dependency.
+  `dep_closures` keeps it. `leaf_dep_tree` is joined the same way for
+  the universal leaves.
 - **`units.enabled_on_any_host`** lists every unit any host enabled. The
   merged inventory keeps the state most hosts have and breaks a tie by
   hostname order, so with the inventory alone an owner one host enabled
@@ -165,6 +204,9 @@ pre-download notice; the dialog shows the header entry after download.
 `the_fleet_export_notices_the_unit_owners_its_merge_drops` runs the
 `inspectah aggregate` binary and a refine export of its tarball over two
 collector-built hosts.
+`including_a_partial_fleet_leaf_keeps_its_dependencys_unit_command`
+includes a partial leaf in refine, with its dependency auto on both
+hosts and user-installed where the leaf is.
 
 ## Surfaces
 
@@ -206,19 +248,16 @@ than one arch of that name. All reason wording comes from the one constant `NOT_
 
 ## What it does not promise
 
-`leaf_dep_tree` maps each leaf, and `auto_dep_tree` each auto package,
-to the transitive closure of its **auto** dependencies, and they record
-nothing else.
-
-- Only a leaf's or a carried owner's closure counts. An auto package an
-  operator includes by hand is not a root, so its dependencies stay in
-  the class although dnf installs them with it. It cannot be a root:
-  the scan includes every auto package before its defaults run, so
-  counting every included one would pull in the dependencies of packages
-  the defaults are about to exclude, and the class would change when
-  they did.
+- The class counts only leaves' and carried owners' closures, so an auto
+  package that only a hand-included one needs stays in the class, and its
+  disposition stays excluded, although dnf installs it. Every surface
+  that says whether it is in the image counts it as installed (above).
 - An auto package that only another not-carried package needs is in the
   class too, which is correct.
+- A closure is the source host's dependency graph, not the target's: the
+  image's dnf resolves against the target repos. A fleet joins each kept
+  package's closures across hosts, which only widens what counts as
+  installed.
 - The units shown are for display and ordering. Whether a unit is emitted
   is the presence rules' decision, not this list's.
 - Both owners of a unit (a `state_changes` `owning_package` and the vendor
@@ -292,19 +331,18 @@ in `crates/cli/tests/not_carried_parity_test.rs` pins every surface;
 `the_view_carries_the_not_carried_rows_and_notice` in
 `crates/web/tests/api_test.rs` pins the payload and the header match.
 
-**Known limit, for the UI to explain:** an auto package an operator
-includes by hand, one that owns no enabled unit, does not credit its own
-dependencies as pulled in, so they stay in `not_carried_packages`
-although dnf installs them with it. A carried unit owner does credit
-them, from `auto_dep_tree` (schema 29): with `firewalld` carried,
-`python3-firewall` is not listed. Nothing in the payload marks the rows
-the limit leaves; it is text for the UI.
+**Including a package clears its dependencies.** Any package the export
+installs credits what it needs, from `dep_closures` (schema 29): with
+`firewalld` carried, `python3-firewall` is not listed, and once an
+operator includes `tool`, the `helper` it needs leaves the rows too.
 
 **The UI.** `NotCarriedGroup.tsx` renders the rows in the packages view,
 below the package list, in array order, with the owners marked by the
 flag; its Include sends the op above from `MainContent.tsx`. It renders
 nothing for `[]`, since the payload cannot say why the list is empty.
-The group text states the known limit. The Export dialog's pre-download
+Its `not-carried-known-limit` paragraph still states the limit above
+closed (an included package's dependencies staying listed) and has to
+go. The Export dialog's pre-download
 notice and its dedupe are in `refine-export-warnings-header.md`.
 
 ## Rule for new code
@@ -312,8 +350,9 @@ notice and its dedupe are in `refine-export-warnings-header.md`.
 A new consumer that needs "is this package in the image" asks the
 disposition plus `pulled_in_by_included`, never the leaf filter. The leaf
 filter says which packages the operator named, not which ones dnf installs.
-`pulled_in_by_included` takes the whole snapshot, because the carried
-owners it reads come from the units section.
+`pulled_in_by_included` takes the whole snapshot, as
+`pulled_in_by_default_roots` does, whose carried owners come from the
+units section. Only the class may ask `pulled_in_by_default_roots`.
 
 ## Measured-host evidence
 
@@ -366,4 +405,4 @@ Measured at commit `af96710c` (2026-11-09), same hosts, drift and plants
   in, and its kinds.
 - `package-identity-is-name-dot-arch.md`: why the class keys on `name.arch`.
 - `rpm-output-field-parsing.md`: how `leaf_dep_tree` and
-  `auto_dep_tree` are built.
+  `dep_closures` are built.

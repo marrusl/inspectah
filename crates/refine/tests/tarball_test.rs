@@ -327,7 +327,7 @@ fn schema_28_snapshot_is_refused() {
         include_str!("../../../testdata/fixtures/snapshot/schema-28-leaf-closures-only.json");
 
     let mut current: serde_json::Value = serde_json::from_str(schema_28).unwrap();
-    current["rpm"]["auto_dep_tree"] = serde_json::json!({
+    current["rpm"]["dep_closures"] = serde_json::json!({
         "firewalld.noarch": ["python3-firewall.noarch"],
         "python3-firewall.noarch": []
     });
@@ -341,7 +341,7 @@ fn schema_28_snapshot_is_refused() {
             .snapshot()
             .rpm
             .as_ref()
-            .and_then(|rpm| rpm.auto_dep_tree.as_ref())
+            .and_then(|rpm| rpm.dep_closures.as_ref())
             .is_some(),
         "the closures are recorded"
     );

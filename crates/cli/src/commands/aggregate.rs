@@ -693,7 +693,7 @@ mod tests {
         .unwrap();
 
         let mut current = schema_28.clone();
-        current["rpm"]["auto_dep_tree"] = serde_json::json!({
+        current["rpm"]["dep_closures"] = serde_json::json!({
             "firewalld.noarch": ["python3-firewall.noarch"],
             "python3-firewall.noarch": []
         });
@@ -705,7 +705,7 @@ mod tests {
         assert!(
             loaded
                 .rpm
-                .and_then(|rpm| rpm.auto_dep_tree)
+                .and_then(|rpm| rpm.dep_closures)
                 .is_some_and(|tree| tree.contains_key("firewalld.noarch")),
             "the closures are recorded"
         );

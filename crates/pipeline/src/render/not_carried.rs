@@ -2,11 +2,11 @@
 //! needs.
 //!
 //! An added package is in the class when it is in `auto_packages` (not
-//! user-installed on the source host) and nothing the export installs
-//! pulls it in, as [`pulled_in_by_included`] answers from the recorded
-//! dependency closures. An included package the export renders only as a
-//! manual step pulls nothing in, since the image never installs it.
-//! Identity is
+//! user-installed on the source host) and no leaf or carried unit owner
+//! the export installs pulls it in, as `pulled_in_by_default_roots`
+//! answers from the recorded dependency closures. An included package the
+//! export renders only as a manual step pulls nothing in, since the image
+//! never installs it. Identity is
 //! `name.arch` throughout. [`classify_auto_carriage`] is the one decider:
 //! no function outside this module decides membership, and every other
 //! function here reaches the class through it.
@@ -31,7 +31,7 @@
 //! whether or not something pulls it in and whether or not the tree can
 //! support the class: the scan and refine both keep it included, and the
 //! Containerfile installs it although it is not a leaf. Its own recorded
-//! closure (`auto_dep_tree`) then counts as pulled in, as a leaf's does.
+//! closure (`dep_closures`) then counts as pulled in, as a leaf's does.
 //! In the class it is [`AutoCarriage::UnitOwner`]; only
 //! [`AutoCarriage::Unneeded`] packages are excluded by default. Either
 //! kind, once excluded (by the default or by an operator), is listed as
@@ -43,13 +43,15 @@
 //! drops that own a unit enabled on any host, so the fleet export gives
 //! the same notice, block and table as a single host.
 //!
-//! **Limits inherited from the trees.** The closures list auto
-//! dependencies only. An auto package that only another not-carried
-//! package needs is therefore in the class too, which is correct: nothing
-//! included pulls either of them in. A closure counts only for a root the
-//! export installs on its own: a leaf, or a carried unit owner. An auto
-//! package an operator includes by hand is not such a root, so its
-//! dependencies stay in the class although dnf would install them with it.
+//! **Defaults and presence count different roots.** The class, and so
+//! the scan's default exclusion, counts the closures of the installed
+//! leaves and carried unit owners only: the scan decides it while every
+//! auto package is still included. What is listed as not carried counts
+//! every package the export installs ([`pulled_in_by_included`]), an auto
+//! package an operator includes by hand among them, so a dependency dnf
+//! installs with it is not listed. An auto package that only another
+//! not-carried package needs is in the class too, which is correct:
+//! nothing the export installs pulls either of them in.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -61,7 +63,9 @@ use inspectah_core::types::units::{UnitName, UnitState, UnitStateChange};
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::repoless::{InstallRepos, PackageRoute, route_for};
-use super::unit_plan::pulled_in_by_included;
+use super::unit_plan::{
+    every_installed_package_has_a_closure, pulled_in_by_default_roots, pulled_in_by_included,
+};
 use crate::export_warning::{ExportWarning, sanitize_bounded};
 
 /// `source_repo` recorded for a package installed at system install time,
@@ -81,8 +85,8 @@ pub enum AutoCarriage {
     /// that keeps its existing handling (locked, anaconda-sourced, named in
     /// the baseline, uploaded, or routed repo-less).
     NotAuto,
-    /// An auto package a leaf the export installs pulls in
-    /// (`pulled_in_by_included`).
+    /// An auto package a leaf or carried unit owner the export installs
+    /// pulls in (`pulled_in_by_default_roots`).
     PulledIn,
     /// An auto package nothing included pulls in that owns a unit enabled
     /// on the source host. Carried by default: a firewall or cron daemon
@@ -128,7 +132,7 @@ pub fn classify_auto_carriage(snap: &InspectionSnapshot) -> Option<HashMap<Strin
     }
 
     let repos = InstallRepos::of(snap);
-    let pulled_in = pulled_in_by_included(snap, &repos);
+    let pulled_in = pulled_in_by_default_roots(snap, &repos);
     let existing = ExistingHandling::of(rpm, &repos);
     let unit_owners = default_carried_unit_owners(snap);
 
@@ -195,7 +199,7 @@ impl<'a> ExistingHandling<'a> {
 /// package, an [`AutoCarriage::UnitOwner`] included, is left as it is,
 /// and under the fallback nothing changes.
 /// Idempotent: only leaves and carried unit owners contribute to
-/// [`pulled_in_by_included`], and an `Unneeded` package is neither, so
+/// `pulled_in_by_default_roots`, and an `Unneeded` package is neither, so
 /// excluding one cannot change the class.
 pub fn apply_scan_package_defaults(snap: &mut InspectionSnapshot) {
     let Some(classes) = classify_auto_carriage(snap) else {
@@ -254,7 +258,10 @@ impl NotCarriedPackage {
 const VENDOR_UNIT_DIR: &str = "/usr/lib/systemd/system";
 
 /// The single-host list: the excluded [`AutoCarriage::Unneeded`] and
-/// [`AutoCarriage::UnitOwner`] packages, in display order. Refine's view
+/// [`AutoCarriage::UnitOwner`] packages that nothing the export installs
+/// pulls in ([`pulled_in_by_included`]), in display order. An auto
+/// package an operator included by hand brings its dependencies, so they
+/// are not listed although the class still holds them. Refine's view
 /// rows and the unit plan read this list; the export's block, table and
 /// notice read [`export_not_carried_packages`], which adds the fleet case.
 ///
@@ -275,16 +282,19 @@ pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage>
         return Vec::new();
     };
     let units_by_owner = enabled_units_by_owner(snap);
+    let pulled_in = pulled_in_by_included(snap, &InstallRepos::of(snap));
 
     let mut list: Vec<NotCarriedPackage> = rpm
         .packages_added
         .iter()
         .filter(|pkg| {
+            let id = format!("{}.{}", pkg.name, pkg.arch);
             pkg.disposition == FindingKind::excluded()
                 && matches!(
-                    classes.get(&format!("{}.{}", pkg.name, pkg.arch)),
+                    classes.get(&id),
                     Some(AutoCarriage::Unneeded | AutoCarriage::UnitOwner)
                 )
+                && !pulled_in.contains(&id)
         })
         .map(|pkg| NotCarriedPackage {
             name: pkg.name.clone(),
@@ -336,7 +346,7 @@ fn sort_for_display(list: &mut [NotCarriedPackage]) {
 /// Refine includes one by default and shows it in its package list; the
 /// Containerfile installs an included one that no installed leaf pulls in,
 /// and its recorded closure counts as pulled in
-/// ([`pulled_in_by_included`]).
+/// ([`pulled_in_by_included`], `pulled_in_by_default_roots`).
 pub fn default_carried_unit_owners(snap: &InspectionSnapshot) -> HashSet<String> {
     if snap.aggregate_meta.is_some() {
         return HashSet::new();
@@ -366,12 +376,14 @@ pub fn default_carried_unit_owners(snap: &InspectionSnapshot) -> HashSet<String>
 /// The aggregate merge keeps in `packages_added` only packages that are a
 /// leaf on every host (or, for one not on every host, a leaf where it is),
 /// and drops the rest. A package is dropped when it is in neither
-/// `baseline_package_names` nor `packages_added`, by name, and no
-/// installed fleet leaf pulls it in, as the leaves' closures joined across
-/// every host with leaf data say ([`pulled_in_by_included`]). Without a
-/// baseline a base-image package cannot be told from a dropped one, and
-/// with no host of leaf authority the merge drops nothing, so neither
-/// proves anything.
+/// `baseline_package_names` nor `packages_added`, by name, and nothing the
+/// fleet export installs pulls it in, as the kept packages' closures
+/// joined across every host with leaf data say ([`pulled_in_by_included`]):
+/// a partial package the operator includes counts as a universal leaf
+/// does. Without a baseline a base-image package cannot be told from a
+/// dropped one, with no host of leaf authority the merge drops nothing,
+/// and with a package the export installs that has no recorded closure
+/// what it pulls in is unknown, so none of them proves anything.
 pub(crate) struct FleetDrops<'a> {
     kept: HashSet<&'a str>,
     pulled_in: HashSet<String>,
@@ -391,12 +403,16 @@ impl<'a> FleetDrops<'a> {
             .baseline_package_names
             .as_ref()
             .filter(|_| merge_filtered)?;
+        let repos = InstallRepos::of(snap);
+        if !every_installed_package_has_a_closure(rpm, &repos) {
+            return None;
+        }
         let kept = baseline
             .iter()
             .map(String::as_str)
             .chain(rpm.packages_added.iter().map(|pkg| pkg.name.as_str()))
             .collect();
-        let pulled_in = pulled_in_by_included(snap, &InstallRepos::of(snap))
+        let pulled_in = pulled_in_by_included(snap, &repos)
             .into_iter()
             .filter_map(|id| id.rsplit_once('.').map(|(name, _)| name.to_string()))
             .collect();
@@ -1266,11 +1282,13 @@ mod tests {
         assert_eq!(not_carried_packages(&leaf_default), scan);
     }
 
-    /// A merged fleet: `httpd` is the one leaf kept, and it pulls in
-    /// `apr`. Every other package the hosts had is gone from
-    /// `packages_added`, as the merge leaves it. Enabled units are owned by
-    /// a base-image package (`openssh-server`), a kept leaf (`httpd`), the
-    /// pulled-in `apr`, and two dropped packages (`firewalld`, `cronie`).
+    /// A merged fleet: `httpd` is the one leaf every host has, and it
+    /// pulls in `apr`; `app`, which needs `firewalld`, is kept from the
+    /// hosts that have it and left out. Every other package the hosts had
+    /// is gone from `packages_added`, as the merge leaves it. Enabled units
+    /// are owned by a base-image package (`openssh-server`), a kept leaf
+    /// (`httpd`), the pulled-in `apr`, and two dropped packages
+    /// (`firewalld`, `cronie`).
     fn fleet() -> InspectionSnapshot {
         let enabled = |unit: &str| UnitInventoryEntry {
             unit: unit.to_owned().try_into().expect("valid unit name"),
@@ -1291,9 +1309,18 @@ mod tests {
                 section_host_counts: Default::default(),
             }),
             rpm: Some(RpmSection {
-                packages_added: vec![pkg("httpd", "x86_64", true)],
+                packages_added: vec![pkg("httpd", "x86_64", true), pkg("app", "x86_64", false)],
                 leaf_packages: Some(vec!["httpd.x86_64".into()]),
                 leaf_dep_tree: serde_json::json!({ "httpd.x86_64": ["apr.x86_64"] }),
+                dep_closures: Some(
+                    [
+                        ("httpd.x86_64", vec!["apr.x86_64".to_string()]),
+                        ("app.x86_64", vec!["firewalld.x86_64".to_string()]),
+                    ]
+                    .into_iter()
+                    .map(|(id, deps)| (id.to_string(), deps))
+                    .collect(),
+                ),
                 leaf_authority_hosts: Some(2),
                 leaf_total_hosts: Some(2),
                 baseline_package_names: Some(vec!["openssh-server".into()]),
@@ -1370,6 +1397,67 @@ mod tests {
         let mut single = fleet();
         single.aggregate_meta = None;
         assert!(fleet_not_carried_packages(&single).is_empty());
+    }
+
+    /// `app`, a package only some hosts have, is kept but left out, so
+    /// what it needs is not installed. Included, it installs `firewalld`,
+    /// which then is not named. An installed package with no recorded
+    /// closure could install anything, so the fleet names nothing.
+    #[test]
+    fn a_fleet_counts_every_package_its_export_installs() {
+        let names = |snap: &InspectionSnapshot| -> Vec<String> {
+            export_not_carried_packages(snap)
+                .iter()
+                .map(NotCarriedPackage::display_name)
+                .collect()
+        };
+        let include_app = |snap: &mut InspectionSnapshot| {
+            let rpm = snap.rpm.as_mut().expect("rpm section");
+            let app = rpm
+                .packages_added
+                .iter_mut()
+                .find(|p| p.name == "app")
+                .expect("app is kept");
+            app.disposition = FindingKind::included();
+        };
+
+        let mut included = fleet();
+        include_app(&mut included);
+        assert_eq!(names(&included), ["cronie"]);
+
+        let mut no_closure = fleet();
+        include_app(&mut no_closure);
+        no_closure
+            .rpm
+            .as_mut()
+            .and_then(|rpm| rpm.dep_closures.as_mut())
+            .expect("closures")
+            .remove("app.x86_64");
+        assert!(names(&no_closure).is_empty(), "{:?}", names(&no_closure));
+
+        let mut excluded_without_closure = fleet();
+        excluded_without_closure
+            .rpm
+            .as_mut()
+            .and_then(|rpm| rpm.dep_closures.as_mut())
+            .expect("closures")
+            .remove("app.x86_64");
+        assert_eq!(
+            names(&excluded_without_closure),
+            ["cronie", "firewalld"],
+            "a package the export leaves out needs no closure"
+        );
+
+        let mut leaf_tree_only = fleet();
+        leaf_tree_only
+            .rpm
+            .as_mut()
+            .expect("rpm section")
+            .dep_closures = None;
+        assert!(
+            names(&leaf_tree_only).is_empty(),
+            "the leaf tree leaves out user-installed dependencies"
+        );
     }
 
     /// The not-carried notice: absent with no unit owners, singular for

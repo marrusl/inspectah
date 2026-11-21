@@ -1407,6 +1407,36 @@ pub fn merge_rpm_sections(
         packages_added
     };
 
+    // Closures for every package the merge kept, the partial ones
+    // included: each one's closures on every authoritative host, joined.
+    // A kept package the operator includes installs its dependencies, so
+    // without its closure the fleet would read a dependency it drops as
+    // absent from an image that installs it. The closures keep a
+    // dependency a host also user-installed, which the leaf tree leaves
+    // out.
+    let dep_closures = (!authoritative_indices.is_empty()).then(|| {
+        let kept: HashSet<String> = packages_added
+            .iter()
+            .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
+            .collect();
+        let mut joined: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+        for &i in &authoritative_indices {
+            let host = sections[i].as_ref().and_then(|s| s.dep_closures.as_ref());
+            for (id, deps) in host.into_iter().flatten() {
+                if kept.contains(id) {
+                    joined
+                        .entry(id.clone())
+                        .or_default()
+                        .extend(deps.iter().map(String::as_str));
+                }
+            }
+        }
+        joined
+            .into_iter()
+            .map(|(id, deps)| (id, deps.into_iter().map(str::to_string).collect()))
+            .collect::<BTreeMap<String, Vec<String>>>()
+    });
+
     // Force include=true for leaf intersection survivors.
     // Packages in the intersection are leaves on ALL authoritative hosts —
     // they should be included in the Containerfile regardless of what
@@ -1507,9 +1537,7 @@ pub fn merge_rpm_sections(
             leaf_packages,
             auto_packages,
             leaf_dep_tree,
-            // Leaves only survive the merge, so no auto package is left to
-            // carry a closure for.
-            auto_dep_tree: None,
+            dep_closures,
             module_streams,
             version_locks,
             module_stream_conflicts,

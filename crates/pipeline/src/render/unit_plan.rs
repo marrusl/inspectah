@@ -152,37 +152,36 @@ pub(crate) fn installs_on_its_own_route(
             ))
 }
 
-/// The canonical `name.arch` ids of `packages_added` entries that a root
-/// the export installs pulls in as a dependency, whatever their own
-/// disposition.
+/// The canonical `name.arch` ids of `packages_added` entries that a
+/// package the export installs pulls in as a dependency, whatever their
+/// own disposition.
 ///
 /// A package something installed depends on is in the image: dnf installs
 /// it with the package that needs it. That holds for refine's default
 /// exclusion of a non-leaf package and for an operator's explicit
 /// exclusion alike, so "excluded" never means "absent" for such a package.
 /// This is the one place that answers the question; the service tiers, the
-/// package selection, the disabled-repo install and the not-carried class
-/// all ask it.
+/// package selection, the disabled-repo install, the not-carried list and
+/// a fleet's drops all ask it.
 ///
-/// The roots are the leaves ([`pulled_in_by_installed_leaves`]) and the
-/// auto packages carried because they own an enabled unit
-/// (`not_carried::default_carried_unit_owners`), each only when
-/// [`installs_on_its_own_route`] holds for it: an included root the export
-/// renders as a manual step (no repo serves it and no RPM is carried, or a
-/// repo-enabling package demoted for a dropped repo with no upload) is
-/// never installed by the image, so dnf never resolves its dependencies
-/// either. A carried owner's closure is its `auto_dep_tree` entry.
+/// The roots are every entry [`installs_on_its_own_route`] holds for: a
+/// leaf, an auto package carried because it owns an enabled unit, and an
+/// auto package an operator included by hand alike. An included root the
+/// export renders as a manual step (no repo serves it and no RPM is
+/// carried, or a repo-enabling package demoted for a dropped repo with no
+/// upload) is never installed by the image, so dnf never resolves its
+/// dependencies either. A root's closure is its `dep_closures` entry,
+/// which keeps leaves, joined with its `leaf_dep_tree` entry
+/// (`closure_of`).
 ///
-/// Two limits follow from what the trees record, and both fall back to
-/// treating the package by its disposition alone, which is what the
-/// renderer did before this existed:
+/// The scan's defaults do not ask this: they run while every auto package
+/// is still included, so they ask [`pulled_in_by_default_roots`].
 ///
-/// - With no dependency data (`leaf_packages` unavailable, the trees
-///   empty) the set is empty, so an excluded dependency reads as absent
-///   and its unit is omitted even when dnf installs it.
-/// - The trees list only auto dependencies. A leaf another leaf depends
-///   on, or a dependency of an auto package an operator included on its
-///   own, is not in them.
+/// With no dependency data (`leaf_packages` unavailable, the closures
+/// absent) the set is empty, so an excluded dependency reads as absent and
+/// its unit is omitted even when dnf installs it. A fleet asks
+/// [`every_installed_package_has_a_closure`] before it calls anything
+/// absent on this answer.
 pub fn pulled_in_by_included(
     snap: &InspectionSnapshot,
     repos: &InstallRepos,
@@ -190,23 +189,43 @@ pub fn pulled_in_by_included(
     let Some(rpm) = snap.rpm.as_ref() else {
         return std::collections::HashSet::new();
     };
-    let mut pulled_in = pulled_in_by_installed_leaves(rpm, repos);
-    let Some(closures) = rpm.auto_dep_tree.as_ref() else {
-        return pulled_in;
+    rpm.packages_added
+        .iter()
+        .filter(|pkg| installs_on_its_own_route(rpm, repos, pkg))
+        .flat_map(|pkg| closure_of(rpm, &format!("{}.{}", pkg.name, pkg.arch)))
+        .collect()
+}
+
+/// The part of [`pulled_in_by_included`] the scan's defaults may count:
+/// what the installed leaves pull in ([`pulled_in_by_installed_leaves`])
+/// and what the installed auto packages carried because they own an
+/// enabled unit (`not_carried::default_carried_unit_owners`) pull in.
+///
+/// The not-carried class is settled on this. It cannot count every
+/// included package: the scan decides the class while every auto package
+/// is still included, so counting them would pull in the dependencies of
+/// the packages it is about to exclude.
+pub(crate) fn pulled_in_by_default_roots(
+    snap: &InspectionSnapshot,
+    repos: &InstallRepos,
+) -> std::collections::HashSet<String> {
+    let Some(rpm) = snap.rpm.as_ref() else {
+        return std::collections::HashSet::new();
     };
+    let mut pulled_in = pulled_in_by_installed_leaves(rpm, repos);
     let owners = default_carried_unit_owners(snap);
     for pkg in &rpm.packages_added {
         let id = format!("{}.{}", pkg.name, pkg.arch);
         if owners.contains(&id) && installs_on_its_own_route(rpm, repos, pkg) {
-            pulled_in.extend(closures.get(&id).into_iter().flatten().cloned());
+            pulled_in.extend(closure_of(rpm, &id));
         }
     }
     pulled_in
 }
 
-/// The part of [`pulled_in_by_included`] the leaves pull in, from
-/// `leaf_dep_tree`, which maps each leaf to the transitive closure of its
-/// auto (non-leaf) dependencies.
+/// The part of [`pulled_in_by_included`] the installed leaves pull in. A
+/// leaf is a key of `leaf_dep_tree`, which an aggregate keeps after refine
+/// clears its `leaf_packages`.
 ///
 /// The Containerfile names a carried unit owner on its install line only
 /// when this does not hold for it: an installed leaf already brings it.
@@ -217,19 +236,54 @@ pub(crate) fn pulled_in_by_installed_leaves(
     let Some(tree) = rpm.leaf_dep_tree.as_object() else {
         return std::collections::HashSet::new();
     };
-    let installed: std::collections::HashSet<String> = rpm
-        .packages_added
+    rpm.packages_added
         .iter()
         .filter(|pkg| installs_on_its_own_route(rpm, repos, pkg))
         .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
-        .collect();
-    tree.iter()
-        .filter(|(leaf, _)| installed.contains(leaf.as_str()))
-        .filter_map(|(_, deps)| deps.as_array())
-        .flatten()
-        .filter_map(|dep| dep.as_str())
-        .map(str::to_string)
+        .filter(|id| tree.contains_key(id))
+        .flat_map(|id| closure_of(rpm, &id))
         .collect()
+}
+
+/// Everything installing the added package `id` installs, as recorded:
+/// its `dep_closures` entry joined with its `leaf_dep_tree` entry. The
+/// leaf tree adds nothing to a collected snapshot's closures, but is all
+/// an older or hand-built one may have.
+fn closure_of(rpm: &RpmSection, id: &str) -> Vec<String> {
+    let closures = rpm
+        .dep_closures
+        .as_ref()
+        .and_then(|closures| closures.get(id))
+        .into_iter()
+        .flatten()
+        .cloned();
+    let leaf_tree = rpm
+        .leaf_dep_tree
+        .get(id)
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string);
+    closures.chain(leaf_tree).collect()
+}
+
+/// Whether every added package the export installs has a recorded
+/// `dep_closures` entry, so [`pulled_in_by_included`] is the whole of
+/// what the export installs and a package outside it can be called
+/// absent. A `leaf_dep_tree` entry does not count: it leaves out a
+/// dependency the host also user-installed.
+pub(crate) fn every_installed_package_has_a_closure(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+) -> bool {
+    let Some(closures) = rpm.dep_closures.as_ref() else {
+        return false;
+    };
+    rpm.packages_added
+        .iter()
+        .filter(|pkg| installs_on_its_own_route(rpm, repos, pkg))
+        .all(|pkg| closures.contains_key(&format!("{}.{}", pkg.name, pkg.arch)))
 }
 
 /// Compute the set of package *names* (not `name.arch`) that the target

@@ -297,16 +297,21 @@ pub struct RpmSection {
     /// this must serialize as an empty object.
     #[serde(default)]
     pub leaf_dep_tree: serde_json::Value,
-    /// Maps every authoritative auto `name.arch` identity to the auto
-    /// identities installing it installs: the same closure `leaf_dep_tree`
-    /// records for a leaf, the package itself left out. An auto package an
-    /// export installs on its own, such as one carried because it owns an
-    /// enabled unit, brings these with it.
+    /// Maps every authoritative leaf and auto `name.arch` identity to the
+    /// added identities installing it installs, leaves and auto packages
+    /// alike, the package itself left out. Whatever the export installs
+    /// brings these with it: a leaf, an auto package carried because it
+    /// owns an enabled unit, or one an operator included.
     ///
-    /// `None` whenever `auto_packages` is `None`, and for an aggregate,
-    /// whose `packages_added` holds leaves only.
+    /// `leaf_dep_tree` is the auto part of a leaf's entry. Unlike it, this
+    /// keeps a dependency the operator also installed, which is what lets
+    /// an absence claim rest on it.
+    ///
+    /// `None` whenever `auto_packages` is `None`. For an aggregate it maps
+    /// each package the merge kept to its closures on every host with leaf
+    /// data, joined, and is `None` when no host had leaf data.
     #[serde(default)]
-    pub auto_dep_tree: Option<BTreeMap<String, Vec<String>>>,
+    pub dep_closures: Option<BTreeMap<String, Vec<String>>>,
     #[serde(default)]
     pub module_streams: Vec<EnabledModuleStream>,
     #[serde(default)]

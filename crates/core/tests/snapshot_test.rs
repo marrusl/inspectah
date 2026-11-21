@@ -169,8 +169,8 @@ fn schema_27_snapshot_is_refused() {
 const SCHEMA_28_SNAPSHOT: &str =
     include_str!("../../../testdata/fixtures/snapshot/schema-28-leaf-closures-only.json");
 
-/// Schema 28 is the last version collected without each auto package's
-/// dependency closure. Its payload parses, with `auto_dep_tree` absent, and
+/// Schema 28 is the last version collected without every added
+/// package's dependency closure. Its payload parses, with `dep_closures` absent, and
 /// an export then reads the dependencies of an auto package it carries
 /// (`python3-firewall` under the enabled-unit owner `firewalld` here) as
 /// not installed, with nothing in the payload to say they are. Only a
@@ -179,7 +179,7 @@ const SCHEMA_28_SNAPSHOT: &str =
 #[test]
 fn schema_28_snapshot_is_refused() {
     let mut current: serde_json::Value = serde_json::from_str(SCHEMA_28_SNAPSHOT).unwrap();
-    current["rpm"]["auto_dep_tree"] = serde_json::json!({
+    current["rpm"]["dep_closures"] = serde_json::json!({
         "firewalld.noarch": ["python3-firewall.noarch"],
         "python3-firewall.noarch": []
     });
@@ -189,7 +189,7 @@ fn schema_28_snapshot_is_refused() {
     let closures = loaded
         .rpm
         .expect("the rpm section")
-        .auto_dep_tree
+        .dep_closures
         .expect("the closures are recorded");
     assert_eq!(closures["firewalld.noarch"], ["python3-firewall.noarch"]);
 
@@ -715,13 +715,13 @@ const PACKAGE_ENTRY_KEYS: &[&str] = &[
 
 /// The serialized keys of a fully populated `RpmSection`.
 const RPM_SECTION_KEYS: &[&str] = &[
-    "auto_dep_tree",
     "auto_packages",
     "base_image",
     "base_image_only",
     "baseline_module_streams",
     "baseline_package_names",
     "baseline_suppressed",
+    "dep_closures",
     "dnf_history_removed",
     "duplicate_packages",
     "file_ownership",

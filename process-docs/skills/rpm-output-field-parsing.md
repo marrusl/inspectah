@@ -111,8 +111,9 @@ capability inside a rich dependency keeps its comparison; see below.
 
 ## What the dependency tree counts as pulled in
 
-`leaf_dep_tree` and `auto_dep_tree` (each auto package's closure, built
-from the same graph by the same walk) feed `pulled_in_by_included`,
+`dep_closures` (every leaf's and auto package's closure over the
+classified packages, leaves included) and `leaf_dep_tree` (the auto part
+of each leaf's, built from the same walk) feed `pulled_in_by_included`,
 which decides which excluded packages are still in the image. It has to count everything dnf
 installs alongside a leaf, not only hard requirements, or packages dnf
 does install read as not carried. An edge `a -> b` in the graph means

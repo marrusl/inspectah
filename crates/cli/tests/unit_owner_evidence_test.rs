@@ -10,10 +10,14 @@
 //! - A carried owner's dependency from a disabled repo is installed from
 //!   that repo, and a carried owner's dependency keeps its recorded
 //!   `systemctl disable`.
+//! - An auto package the operator includes brings its dependencies: their
+//!   unit commands survive, and one a disabled repo serves installs from it.
 //! - An owner is carried when the collector could not tell leaves from
 //!   dependencies and fell back to the dependency graph.
 //! - A fleet names an owner one host enabled whatever the hostname order,
-//!   and does not name one a kept leaf pulls in on some host.
+//!   and does not name one a kept leaf pulls in on some host. A package
+//!   only some hosts have, once included, keeps its dependency's unit
+//!   command, whether that dependency is auto or user-installed there.
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -365,6 +369,111 @@ fn a_carried_owners_dependency_keeps_its_disable() {
     }
 }
 
+// ── An auto package the operator includes ───────────────────────────
+
+/// The unit command `helper.service` was recorded with, and the preset
+/// that makes it one: disabled against a preset that enables it, or
+/// enabled against one that disables it.
+const HELPER_STATES: [(&str, &str, &str); 2] = [
+    ("disabled", "enable helper.service", "disable"),
+    ("enabled", "disable helper.service", "enable"),
+];
+
+/// `tool` is an auto package that owns no unit and that nothing needs,
+/// so refine leaves it out, and its dependency `helper` with it, and
+/// omits `helper.service`'s recorded command. The operator includes
+/// `tool`: dnf installs `helper` with it, so the export keeps the command
+/// and no longer lists `helper` as not carried.
+#[test]
+fn including_an_auto_package_by_hand_carries_its_dependencies() {
+    for (state, preset, verb) in HELPER_STATES {
+        let ctx = format!("helper.service {state}");
+        let host = base_host()
+            .package("tool")
+            .package("helper")
+            .requires("tool", &["helper"])
+            .unit("helper.service", state)
+            .vendor_unit("helper.service", WANTED_UNIT, Some("helper"))
+            .preset(preset)
+            .preset("disable *");
+        let mut session = RefineSession::new(collected(host));
+        set_package(&mut session, "helper", "x86_64", false);
+        let before = surfaces_of(&session);
+        assert!(
+            !acts(&before.containerfile, verb, "helper.service"),
+            "{ctx}: helper is not installed:\n{}",
+            before.containerfile
+        );
+        assert!(
+            before.not_carried_block_names().contains(&"helper"),
+            "{ctx}:\n{}",
+            before.containerfile
+        );
+
+        set_package(&mut session, "tool", "x86_64", true);
+        let after = surfaces_of(&session);
+        assert!(
+            after.install_names().iter().any(|n| n == "tool"),
+            "{ctx}:\n{}",
+            after.containerfile
+        );
+        assert!(
+            acts(&after.containerfile, verb, "helper.service"),
+            "{ctx}: the recorded {verb} survives:\n{}",
+            after.containerfile
+        );
+        assert!(
+            !after.not_carried_block_names().contains(&"helper"),
+            "{ctx}:\n{}",
+            after.containerfile
+        );
+        assert!(
+            !projected_not_carried(&session).contains(&"helper".to_string()),
+            "{ctx}: {:?}",
+            projected_not_carried(&session)
+        );
+    }
+}
+
+/// `tool` needs `helper`, which only the host's disabled `partner` repo
+/// serves. Once the operator includes `tool`, the export installs
+/// `helper` from that repo, in the transaction that enables it; without
+/// it, the image build cannot resolve `tool`.
+#[test]
+fn including_an_auto_package_by_hand_installs_its_disabled_repo_dependency() {
+    let host = base_host()
+        .package("tool")
+        .package_from("helper", "partner")
+        .requires("tool", &["helper"])
+        .file("/etc/yum.repos.d/partner.repo", PARTNER_REPO)
+        .preset("disable *");
+    let mut session = RefineSession::new(collected(host));
+    set_package(&mut session, "tool", "x86_64", true);
+    let surfaces = surfaces_of(&session);
+    let install = surfaces
+        .containerfile
+        .split("\n\n")
+        .find(|block| block.contains("--enablerepo=partner"))
+        .unwrap_or_else(|| panic!("a transaction enables partner:\n{}", surfaces.containerfile));
+    assert!(
+        install
+            .lines()
+            .any(|l| l.trim().trim_end_matches('\\').trim() == "helper"),
+        "helper installs from partner:\n{}",
+        surfaces.containerfile
+    );
+    assert!(
+        surfaces.install_names().iter().any(|n| n == "tool"),
+        "{}",
+        surfaces.containerfile
+    );
+    assert!(
+        !surfaces.not_carried_block_names().contains(&"helper"),
+        "{}",
+        surfaces.containerfile
+    );
+}
+
 // ── No leaf data from dnf ────────────────────────────────────────────
 
 /// dnf cannot say what the operator installed, and the two added packages
@@ -428,6 +537,12 @@ struct Fleet {
 /// Each host scanned, packed under its name, merged by `inspectah
 /// aggregate`, and the aggregate opened in refine and exported.
 fn fleet(hosts: Vec<(&str, UnitHost)>) -> Fleet {
+    fleet_with(hosts, |_| {})
+}
+
+/// [`fleet`], with `edit` applied to the refine session of the aggregate
+/// before it is exported. The `inspectah aggregate` export is unchanged.
+fn fleet_with(hosts: Vec<(&str, UnitHost)>, edit: impl FnOnce(&mut RefineSession)) -> Fleet {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut tarballs: Vec<PathBuf> = Vec::new();
     for (hostname, host) in hosts {
@@ -458,8 +573,9 @@ fn fleet(hosts: Vec<(&str, UnitHost)>) -> Fleet {
     assert!(output.status.success(), "{stderr}");
 
     let aggregate_root = unpack(&aggregate, &dir.path().join("aggregate"));
-    let session =
+    let mut session =
         inspectah_refine::tarball::from_tarball(&aggregate).expect("refine opens the aggregate");
+    edit(&mut session);
     let refine_warnings = export_warnings(&session)
         .iter()
         .map(|w| w.text().to_owned())
@@ -596,4 +712,81 @@ fn the_fleet_hosts_notice_their_owner_once_excluded() {
     let mut session = RefineSession::new(snapshot);
     set_package(&mut session, "daemon", "x86_64", false);
     assert_eq!(projected_not_carried(&session), ["daemon"]);
+}
+
+/// A fleet host with the leaf `anchor` and the package `helper`, which
+/// owns `helper.service`, recorded in `state` against `preset`. With
+/// `app`, the host also has the leaf `app`, which needs `helper`.
+/// `helper` is a leaf when `helper_leaf`, else auto.
+fn helper_host(app: bool, helper_leaf: bool, state: &str, preset: &str) -> UnitHost {
+    let mut userinstalled = vec!["bash", "anchor"];
+    let mut host = UnitHost::new()
+        .base_package("bash")
+        .base_package("glibc")
+        .package("anchor")
+        .package("helper")
+        .unit("helper.service", state)
+        .vendor_unit("helper.service", WANTED_UNIT, Some("helper"))
+        .preset(preset)
+        .preset("disable *");
+    if app {
+        host = host.package("app").requires("app", &["helper"]);
+        userinstalled.push("app");
+    }
+    if helper_leaf {
+        userinstalled.push("helper");
+    }
+    host.userinstalled(&userinstalled)
+}
+
+/// Only `host-a` has the leaf `app`, which needs `helper`; `helper` is on
+/// both hosts. The merge keeps `app` as a package not every host has, left
+/// out by default, and drops `helper`, which is no leaf everywhere. Left
+/// out, `app` installs nothing, so `helper.service`'s recorded command is
+/// omitted. Once the operator includes `app` in refine, dnf installs
+/// `helper` with it, so the command survives and `helper` is not listed.
+///
+/// Both ways `helper` can be dropped: auto on both hosts, and
+/// user-installed on `host-a`, where `app` needs it, but auto on `host-b`.
+#[test]
+fn including_a_partial_fleet_leaf_keeps_its_dependencys_unit_command() {
+    for helper_leaf_on_a in [false, true] {
+        for (state, preset, verb) in HELPER_STATES {
+            let ctx = format!("helper a leaf on host-a: {helper_leaf_on_a}; {state}");
+            let fleet = fleet_with(
+                vec![
+                    ("host-a", helper_host(true, helper_leaf_on_a, state, preset)),
+                    ("host-b", helper_host(false, false, state, preset)),
+                ],
+                |session| set_package(session, "app", "x86_64", true),
+            );
+            let (_, unchanged) = &fleet.paths[0];
+            assert!(
+                !acts(&unchanged.containerfile, verb, "helper.service"),
+                "{ctx}: left out, app installs no helper:\n{}",
+                unchanged.containerfile
+            );
+            let (label, included) = &fleet.paths[1];
+            assert!(
+                included.install_names().iter().any(|n| n == "app"),
+                "{ctx}, {label}:\n{}",
+                included.containerfile
+            );
+            assert!(
+                acts(&included.containerfile, verb, "helper.service"),
+                "{ctx}, {label}: the recorded {verb} survives:\n{}",
+                included.containerfile
+            );
+            assert!(
+                !included.not_carried_block_names().contains(&"helper"),
+                "{ctx}, {label}:\n{}",
+                included.containerfile
+            );
+            assert!(
+                !fleet.refine_warnings.iter().any(|w| w.contains("helper")),
+                "{ctx}, {label}: {:?}",
+                fleet.refine_warnings
+            );
+        }
+    }
 }

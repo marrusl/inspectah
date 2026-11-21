@@ -272,8 +272,8 @@ A package that owns a unit enabled on the source host, such as
 `firewalld`, is carried by default, and so are the packages it needs,
 such as `python3-firewall`. If you exclude it, it is listed here with
 those packages, and including it again takes them all out of the group.
-Including any other package does not clear its own dependencies from the
-group: they stay listed, although dnf installs them with the package.
+Including any other package takes the packages it needs out of the group
+too, since dnf installs them with it.
 
 The group is not shown when nothing is listed, and also when the scan
 has no leaf data to decide what is needed.

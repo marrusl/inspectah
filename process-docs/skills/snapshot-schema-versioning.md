@@ -77,8 +77,9 @@ Six bumps, two different arguments, all landing on "reject":
   each first loads the same section moved under `units` at the current
   version, so the test proves the version gate refuses it and not a
   broken payload.
-- 28 -> 29 added `rpm.auto_dep_tree`, each auto package's dependency
-  closure, and, for an aggregate, `units.enabled_on_any_host`. A
+- 28 -> 29 added `rpm.dep_closures`, each leaf's and auto package's
+  dependency closure, leaves included, and, for an aggregate,
+  `units.enabled_on_any_host`. A
   schema-28 payload parses, both fields defaulting to absent, and a
   carried auto package's dependencies then read as not installed: listed
   as not carried, left out of the disabled-repo install that needs them,

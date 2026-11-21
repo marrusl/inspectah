@@ -112,9 +112,10 @@ impl InspectionSnapshot {
     /// host had is absent from it with nothing to say so. Only a re-scan
     /// can collect them.
     ///
-    /// Schema 29 records the dependency closure of every auto package
-    /// (`rpm.auto_dep_tree`), and for an aggregate the units enabled on any
-    /// host (`units.enabled_on_any_host`). A schema-28 payload deserializes
+    /// Schema 29 records the dependency closure of every leaf and auto
+    /// package (`rpm.dep_closures`), and for an aggregate the units
+    /// enabled on any host (`units.enabled_on_any_host`). A schema-28
+    /// payload deserializes
     /// with neither, and a carried auto package's dependencies then read as
     /// not installed: listed as not carried, left out of the disabled-repo
     /// install that needs them, and their recorded `systemctl` commands

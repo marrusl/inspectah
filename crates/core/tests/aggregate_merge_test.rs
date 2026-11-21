@@ -2593,6 +2593,78 @@ fn test_aggregate_leaf_intersection_filters_packages_added() {
     assert_eq!(merged.leaf_total_hosts, Some(2));
 }
 
+/// Every package the merge keeps gets its closures from every host with
+/// leaf data, joined: `git`, a leaf on both, and `app`, which only
+/// `host-a` has and the merge keeps left out. `app`'s closure keeps
+/// `helper`, user-installed on `host-a`, which the merge drops for being a
+/// dependency on `host-b`. A dropped package gets no entry.
+#[test]
+fn test_aggregate_dep_closures_cover_every_kept_package() {
+    let pkg = |name: &str| PackageEntry {
+        name: name.into(),
+        arch: "x86_64".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    let closures =
+        |entries: &[(&str, &[&str])]| -> std::collections::BTreeMap<String, Vec<String>> {
+            entries
+                .iter()
+                .map(|(id, deps)| (id.to_string(), deps.iter().map(|d| d.to_string()).collect()))
+                .collect()
+        };
+    let host_a = Some(RpmSection {
+        packages_added: vec![pkg("git"), pkg("app"), pkg("helper"), pkg("perl-libs")],
+        leaf_packages: Some(vec![
+            "app.x86_64".into(),
+            "git.x86_64".into(),
+            "helper.x86_64".into(),
+        ]),
+        auto_packages: Some(vec!["perl-libs.x86_64".into()]),
+        leaf_dep_tree: serde_json::json!({
+            "app.x86_64": [],
+            "git.x86_64": ["perl-libs.x86_64"],
+            "helper.x86_64": [],
+        }),
+        dep_closures: Some(closures(&[
+            ("app.x86_64", &["helper.x86_64"]),
+            ("git.x86_64", &["perl-libs.x86_64"]),
+            ("helper.x86_64", &[]),
+            ("perl-libs.x86_64", &[]),
+        ])),
+        ..Default::default()
+    });
+    let host_b = Some(RpmSection {
+        packages_added: vec![pkg("git"), pkg("helper"), pkg("perl-libs")],
+        leaf_packages: Some(vec!["git.x86_64".into()]),
+        auto_packages: Some(vec!["helper.x86_64".into(), "perl-libs.x86_64".into()]),
+        leaf_dep_tree: serde_json::json!({"git.x86_64": ["helper.x86_64", "perl-libs.x86_64"]}),
+        dep_closures: Some(closures(&[
+            ("git.x86_64", &["helper.x86_64", "perl-libs.x86_64"]),
+            ("helper.x86_64", &[]),
+            ("perl-libs.x86_64", &[]),
+        ])),
+        ..Default::default()
+    });
+
+    let hostnames = vec!["host-a".into(), "host-b".into()];
+    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+
+    let kept: Vec<&str> = merged
+        .packages_added
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
+    assert_eq!(kept, ["app", "git"]);
+    assert_eq!(
+        merged.dep_closures,
+        Some(closures(&[
+            ("app.x86_64", &["helper.x86_64"]),
+            ("git.x86_64", &["helper.x86_64", "perl-libs.x86_64"]),
+        ]))
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Leaf intersection edge cases
 // ---------------------------------------------------------------------------
