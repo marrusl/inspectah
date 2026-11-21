@@ -5,11 +5,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-21 |
-| Status | Proposed. Design pass for decision 4 of the beta.7 release list (Mark Russell, 2026-11-21). Choices marked **for the spec review** are the author's and need the review to confirm them. |
-| Scope | A named class of configuration files that belong to one machine: how the snapshot carries it, the read gate every collector reads the host through, where the config inspector records it, snapshot validation at load and at every snapshot write, the member list, override semantics in refine and both export paths, the beta.7 fleet merge, provisioning notices, the refine API contract, how refine presents the class (§ 8, Refine presentation), and the redaction pattern's `ENCRYPTED PRIVATE KEY` gap (§ 5.3). |
+| Status | Proposed. Design pass for decision 4 of the beta.7 release list (Mark Russell, 2026-11-21). Credentials are never overridable (Mark Russell, 2026-11-21). Choices marked **for the spec review** are the author's and need the review to confirm them. |
+| Scope | A named class of configuration files that belong to one machine: how the snapshot carries it, the read gate every collector reads the host through and what each consumer of a read error does with a refusal, where the config inspector records it, the unmanaged walk's withheld list, snapshot validation at load and at every snapshot write, the member list, override semantics in refine and both export paths, the beta.7 fleet merge, provisioning notices, the refine API contract, how refine presents the class (§ 8, Refine presentation), and the redaction pattern's `ENCRYPTED PRIVATE KEY` gap (§ 5.3). |
 | Backlog items | `inspectah-config-walk-copies-registration-and-tool-generated-state-into-the-image`, `inspectah-keytabs-ship-as-ordinary-config` (inspectah-team `workflow/backlog/inspectah/open/`) |
 | Inputs | A security consult on the class list, and a UX consult on the refine presentation, both 2026-11-21. Real-host measurements in § 13, taken for this spec. |
-| Verified | Code citations read at `391354ca` and rechecked at `76bcab50` and `5b041d8a` (2026-11-21; no change under `crates/` between them). Line numbers are a convenience; the symbol name is the identifier. |
+| Verified | Code citations read at `391354ca` and rechecked at `76bcab50`, `5b041d8a` and `673fe05b` (2026-11-21; no change under `crates/` between them). Line numbers are a convenience; the symbol name is the identifier. |
 
 **No code, documentation, or CHANGELOG entry was written to produce this file.**
 
@@ -27,13 +27,13 @@ Decision 4 (Mark Russell, 2026-11-21): a named machine-state class. Files that i
 ## 2. Design summary
 
 - **Two kinds of member.** A *carriable* member (host identity or generated file whose content is safe to hold) is an ordinary `ConfigFileEntry` with a new disposition, `FindingKind::MachineState { member, include }`, excluded by default and overridable. A *withheld* member (every host credential, and the identity files that a copy always breaks) is a `WithheldConfigEntry` in a new `ConfigSection::withheld` list. That type has no `content` and no `include` field, so a credential with content, or an included credential, cannot be written down.
-- **One read gate.** Inspectors reach the host only through a `ScreenedExecutor`, which `InspectionContext` holds by type. Its `read_file` screens a file before opening it (by its path, the path it resolves to, and its inode against every path-matched member), then sniffs a two-byte keytab header, then checks what it read for a whole-file private key. A withheld answer is an error that names the member, so no collector, present or added later, can hold a member's bytes. The config inspector's `ConfigCollector::admit`, the only way a file enters the Configuration section, turns that error into a withheld row; every other collector stores nothing for the file.
+- **One read gate.** Inspectors reach the host only through a `ScreenedExecutor`, which `InspectionContext` holds by type. Its `read_file` screens a file before opening it (by its path, the path it resolves to, and its inode against every path-matched member), then sniffs a two-byte keytab header, then checks what it read for a whole-file private key. A withheld answer is an error that names the member, so no collector that reads through the gate can hold a member's bytes. The gate offers no prefix read, and a lint refuses the direct routes around it (`std::fs` opens, `Command`, a fresh `RealExecutor`); what the lint cannot see is listed in § 4.5. The config inspector's `ConfigCollector::admit`, the only way a file enters the Configuration section, turns that error into a withheld row; every other consumer of a read error is listed in § 4.5 with what it does, and none stores a row for the file. The unmanaged walk screens each regular file the same way and records a withheld one in `unmanaged_files.withheld` before anything renders, so no Containerfile names a payload the export does not carry.
 - **One export boundary.** `machine_state::validate` checks the whole snapshot, every row and every variant whatever its include, against two rules: no string anywhere is a credential, and no file row in any section sits at a class path. It runs in `InspectionSnapshot::load`, in `InspectionSnapshot::to_validated_json`, which is the only way a snapshot is written (both render paths, `--inspect-only`, `aggregate --json-only`), and on refine resume. Refine refuses an `EditVariant` whose content is a credential. The stager keeps a guard of its own, across every offer kind, for renders that write no snapshot.
 - **Members as data.** A rule table in `inspectah-core` maps path patterns to members; each member answers its reason, override level and provisioning notice. The identity and credential entries leave the silent lists; pure noise stays silent.
 - **Override.** Carriable members are overridable at `warn` or `plain`; an override ships the captured file through the existing config tree on both export paths. Withheld members are `never`: the refine API refuses the op with 422, because there are no bytes to ship.
 - **Notices.** Owed provisioning steps (`realm join`, `subscription-manager register`, ...) go to the audit report and a short Containerfile comment on both export paths, the README and stderr on the scan path, and `x-export-warnings` on the refine path, each deduplicated by step and none depending on any other section's output.
 - **Fleet.** Before any section merges, the beta.7 aggregate computes the union of class paths over every host, and the generic merge drops every observation, in any section, whose destination is in it. Each class path becomes one withheld row with a host count, so no host's identity or credential reaches an aggregate, no other section offers the path, and the aggregate refine refuses the override by the same rule as a withheld row.
-- **Contract.** `FindingKind` gains a variant, `ConfigSection` gains a list, `SysctlFileBody` gains a variant, the schema version goes up, and the refine view gains a `machine_state` row list. Breaking; re-scan.
+- **Contract.** `FindingKind` gains a variant, `ConfigSection` and `UnmanagedFileSection` each gain a withheld list, `SysctlFileBody` gains a variant, the schema version goes up, and the refine view gains a `machine_state` row list. Breaking; re-scan.
 
 ## 3. The type
 
@@ -253,20 +253,29 @@ impl ConfigCollector<'_> {
 3. **Other failure.** A carriable member is withheld (§ 4.3); anything else gets today's `ContentNotCaptured` advisory.
 4. **Push.** `classify_path` gives a carriable rule: a `ConfigFileEntry` with `FindingKind::MachineState { member, include: false }`. No rule: the entry exactly as today.
 
-Every branch (rpm -Va, unowned walk, orphan, the ostree path, and the ghost-file change's branch) takes `&mut ConfigCollector`. Each branch keeps its own skips (DHCP, dev artifacts, rpm ownership, the silent lists in the unowned walk); the class is recorded by the one function every surviving path calls. A new branch has no other way to add a file, and no way to read one except through the gate.
+Every branch (rpm -Va, unowned walk, orphan, the ostree path, and the ghost-file change's branch) takes `&mut ConfigCollector`. Each branch keeps its own skips (DHCP, dev artifacts, rpm ownership, the silent lists in the unowned walk); the class is recorded by the one function every surviving path calls. A new branch has no other way to add a file, and reads only through the gate unless it takes a route § 4.5 names.
 
 The modernization pass (`config/mod.rs:299-315`) goes through the collector too: it skips any path in `withheld`, and `with_modernization` returns the existing disposition unchanged when it is `MachineState`. No member path matches a modernization pattern today; the rule keeps it that way.
 
 ### 4.2 Executor additions
 
-`Executor` (`crates/core/src/traits/executor.rs`) gains:
+`Executor` (`crates/core/src/traits/executor.rs`) gains one method, and a new subtrait holds the prefix read, so that only the gate can make one:
 
 ```rust
-/// stat, following symlinks: permission bits, size, device, inode and
-/// link count of the file the path resolves to, without opening it.
-fn file_metadata(&self, path: &Path) -> io::Result<FileMetadata>;
-/// At most `n` bytes from the start of the file.
-fn read_head(&self, path: &Path, n: usize) -> io::Result<Vec<u8>>;
+pub trait Executor {
+    // ...existing methods...
+    /// stat, following symlinks: permission bits, size, device, inode and
+    /// link count of the file the path resolves to, without opening it.
+    fn file_metadata(&self, path: &Path) -> io::Result<FileMetadata>;
+}
+
+/// A host executor the read gate can wrap. `RealExecutor` and
+/// `MockExecutor` implement it; `ScreenedExecutor` does not, so no
+/// inspector holds a value it can call `read_head` on.
+pub trait HostRead: Executor {
+    /// At most `n` bytes from the start of the file.
+    fn read_head(&self, path: &Path, n: usize) -> io::Result<Vec<u8>>;
+}
 
 pub struct FileMetadata { pub mode: u32, pub size: u64, pub dev: u64, pub ino: u64, pub nlink: u64 }
 ```
@@ -286,7 +295,8 @@ Path rules match a normalized path. The lexical pass `Destination::new` performs
 1. a `config.files` entry's path classifies to a withheld rule, whatever its disposition or content;
 2. a `config.files` entry's path classifies to a carriable rule and its disposition is not `MachineState` with that member, or its disposition is `MachineState` and its path does not classify to that member;
 3. **any string in the snapshot is a credential.** `validate` serializes the snapshot to a `serde_json::Value` and passes every string in it, at any depth and in any section, to `credential_content` (§ 4.5): a keytab header or a whole-file private key refuses. The one subtree skipped is `subscription` (§ 4.6). Because the walk is over the serialized value, a field or section added later is checked with no list to update;
-4. **a class path sits in a file row.** The class paths are the normalized paths of `config.withheld` and of every `MachineState` entry. A file row is any object in that same `Value` holding a string `path` beside a string `content` or `raw_content`, which at `5b041d8a` is every row a section stores a host file's text in: config entries, unit drop-ins, repo files, GPG keys, firewall zones, quadlet units and compose files, at every variant selection. A withheld class path, or a path that classifies to a withheld rule, is the `path` of no file row in any section. A carriable class path is the `path` of exactly one file row, its own `MachineState` entry. No path is present in both `config.files` and `config.withheld`, and none appears in `config.withheld` twice. An ordinary path appearing several times within `config.files` is valid and not checked: a fleet aggregate keeps one entry per content variant at the same path.
+4. **a class path sits in a file row.** The class paths are the normalized paths of `config.withheld`, of `unmanaged_files.withheld` and of every `MachineState` entry. A file row is any object in that same `Value` holding a string `path` beside a string `content` or `raw_content`, which at `5b041d8a` is every row a section stores a host file's text in: config entries, unit drop-ins, repo files, GPG keys, firewall zones, quadlet units and compose files, at every variant selection. A withheld class path, or a path that classifies to a withheld rule, is the `path` of no file row in any section. A carriable class path is the `path` of exactly one file row, its own `MachineState` entry. No path is present in both `config.files` and `config.withheld`, and none appears in `config.withheld` twice. An ordinary path appearing several times within `config.files` is valid and not checked: a fleet aggregate keeps one entry per content variant at the same path.
+5. **a withheld unmanaged path is also offered.** A path in `unmanaged_files.withheld` (§ 4.5, Unmanaged files) is the path of no `unmanaged_files.items` entry, and appears in `unmanaged_files.withheld` once. Unmanaged items hold no content, so rule 4 does not reach them; this rule does.
 
 **Who calls it.** Three callers, and no snapshot is read from outside or written another way:
 
@@ -296,7 +306,7 @@ Path rules match a normalized path. The lexical pass `Destination::new` performs
 | `InspectionSnapshot::to_validated_json(&self) -> Result<String, SnapshotError>`, which validates and then serializes | the only snapshot writer. `render::render_all` calls it first, before anything is written, and writes the string as its `inspection-snapshot.json`: the scan tarball, the aggregate tarball and `--from-snapshot` all render through it. `render_refine_export` calls it first in the same way. `run_scan`'s `--inspect-only` and `inspectah aggregate --json-only` call it in place of `serde_json::to_string_pretty`. |
 | `RefineSession::resume_from`, after restoring the timeline | the autosaved session. Restore skips per-op validation (`session.rs`, "Direct restore"), so a session file can carry an op the op check (§ 8) would refuse. Resume validates the projected snapshot and refuses the session file with `RefineError::SnapshotLoad` naming the path, as it refuses a stale tarball hash. |
 
-Since both render paths validate before writing anything, the writers that work outside `staged_writes` (the aggregate variant writer `write_aggregate_variants`, the Compose writer in `render_refine_export`, the quadlet tree) only ever see a snapshot that passed, and need no guard of their own. The read gate means a collector never produces a violation, so validation refuses only an edited, externally produced or wrongly projected snapshot; at a writer a failure is a defect, reported as an error naming the path and section, and no tarball is written. The refusal is never a silent repair.
+Since both render paths validate before writing anything, the writers that work outside `staged_writes` (the aggregate variant writer `write_aggregate_variants`, the Compose writer in `render_refine_export`, the quadlet tree) only ever see a snapshot that passed, and need no guard of their own. Every consumer of a read error is listed in § 4.5 with what it does on a refusal, and none stores a file row for a refused file, so a collector-produced snapshot passes (collect cases 1 to 12, 23, 29 and 30 assert it), and validation refuses an edited, externally produced or wrongly projected snapshot. A later consumer that maps a refusal to empty content would produce a snapshot that fails here, loudly, at the scan's own write: rule 4 stays strict rather than accepting an empty row. At a writer a failure is a defect, reported as an error naming the path and section, and no tarball is written. The refusal is never a silent repair.
 
 **At staging.** `staged_writes` (`crates/pipeline/src/render/configtree.rs`) already withholds every offer whose `Destination` is the machine-id, on every offer kind, before any other decision. That check becomes the general one: an offer of any kind (config file, drop-in, repo file, GPG key, firewall zone, generated unit) whose `Destination` classifies to a withheld rule, equals a `config.withheld` path, or whose content `credential_content` refuses, is withheld with `WithheldWhy::MachineState { member }` (replacing `WithheldWhy::MachineId`, in `unmanaged_withheld` too), and the Containerfile names it in the existing "not copied" FIXME line. The guard serves renders that write no snapshot, such as refine's Containerfile preview. It costs one table lookup, one set lookup and the two content sniffs per offer.
 
@@ -306,23 +316,27 @@ Since both render paths validate before writing anything, the writers that work 
 
 ```rust
 pub struct ScreenedExecutor<'a> {
-    inner: &'a dyn Executor,
+    inner: &'a dyn HostRead,
     screen: MachineStateScreen,
 }
+
+/// The keytab header the gate reads; the only prefix read anything makes.
+const KEYTAB_HEADER_LEN: usize = 2;
 
 impl<'a> ScreenedExecutor<'a> {
     /// Builds the screen: stats every host path the withheld members'
     /// Exact, Glob and Prefix rules match, listing only those rules' own
     /// directories, and keeps each one's (dev, ino) with its member. Reads
     /// no file content.
-    pub fn new(inner: &'a dyn Executor) -> Self;
+    pub fn new(inner: &'a dyn HostRead) -> Self;
     /// Logical path, resolved path, then inode. Opens nothing.
     pub fn screen(&self, path: &str) -> Screened;
     /// The unscreened executor, for one of the reasons the enum names.
     pub fn bypass(&self, why: ScreenBypass) -> &dyn Executor;
 }
 
-impl Executor for ScreenedExecutor<'_> { /* read_file and read_head screened; the rest delegate */ }
+// Executor only, not HostRead: an inspector cannot ask the gate for a prefix.
+impl Executor for ScreenedExecutor<'_> { /* read_file screened; the rest delegate */ }
 
 pub enum Screened { Withheld(MachineStateMember), Carriable(CarriableMember), Ordinary }
 
@@ -344,37 +358,93 @@ pub fn credential_content(content: &[u8]) -> Option<MachineStateMember>;
 **`read_file(path)`**, for every path:
 
 1. **Screen** (`screen`): the logical path's rule, then the resolved path's (`resolve_final_target`, which follows file and ancestor-directory symlinks), then the file's `(dev, ino)` from `file_metadata` against the screen's set. Resolution and inode add withheld answers only, and a withheld answer from any step wins. A withheld answer returns the refusal. **The file is not opened.**
-2. **Header sniff:** `inner.read_head(path, 2)`. `05 01` or `05 02` returns a `KerberosKeytab` refusal. This runs before the full read and whatever the bytes decode to: a valid keytab can be valid UTF-8 as a whole. A failed head read falls through, and the full read reports its own error.
+2. **Header sniff:** `inner.read_head(path, KEYTAB_HEADER_LEN)`. `05 01` or `05 02` returns a `KerberosKeytab` refusal. This runs before the full read and whatever the bytes decode to: a valid keytab can be valid UTF-8 as a whole. A failed head read falls through, and the full read reports its own error.
 3. **Read and check:** `inner.read_file(path)`, then `credential_content` on the result. A whole-file private key (§ 5.3) or a keytab header drops the string and returns the refusal.
 
-`read_head` runs step 1 only. `file_metadata`, `read_dir`, `read_dir_strict`, `read_link`, `resolve_final_target`, `file_exists`, `host_root` and the `run` family delegate, since none returns a file's content. A refusal is an `io::Error` of kind `Other` carrying the member; `refusal` recovers it.
+`read_head` is not on `Executor`, and the gate does not implement `HostRead`, so the gate's own two-byte header read is the only prefix read in the scan: no collector can fetch an ordinary-path key file through a prefix read that skips steps 2 and 3. `file_metadata`, `read_dir`, `read_dir_strict`, `read_link`, `resolve_final_target`, `file_exists`, `host_root` and the `run` family delegate, since none returns a file's content. A refusal is an `io::Error` of kind `Other` carrying the member; `refusal` recovers it.
 
 The gate screens every read, not only reads under `/etc`. The rules match only `/etc` paths, so elsewhere step 1 refuses only an alias or hard link of a member; steps 2 and 3 refuse a keytab or whole-file private key wherever it is read, so no collector stores one in any section, which is what lets validation rule 3 hold every string to the same test. So `/etc/myapp/id -> /etc/machine-id` is refused as `machine_id`, a file under a symlinked directory that resolves into `/etc/pki/tls/private/` as `private_key_file`, and a hard link elsewhere to `/etc/pki/tls/private/server.key` as well, in whichever order collectors meet the two names. A carriable member is not refused: its content is safe to hold, `classify_path` recognizes it by its own path, and validation keys it to that path (§ 4.4 rule 2). A failed resolution or stat leaves its step silent, and the header sniff still runs. `BasenameSuffix` rules are not enumerated for the inode set, since that would take a second walk of `/etc`; a real keytab linked under another name is caught by its header.
 
-**Collectors.** A refusal reaches a collector as a read error, so a collector that knows nothing of the class stores nothing from the file and handles it as it handles a permission error: it can degrade, it cannot carry. The ones that hold raw content say why the file is missing:
+**Collectors.** A refusal reaches a collector as a read error. A collector that skips a file it cannot read stores nothing from it. A collector that turns a read error into empty content would store a row with the file's path and an empty `content`, which validation rule 4 refuses at a class path, so the scan's own write would fail. Every production consumer of a `read_file` error at `673fe05b` is therefore listed here, by what it does on a refusal; none stores a row for the refused file. "Degraded reason" means the text `machine-state file left out: <path>` in the inspector's degraded reasons, returned as `InspectorError::Degraded` with the partial section, as the inspectors that already degrade do.
+
+Consumers that hold a file's raw content:
 
 | Collector | On a refusal |
 |---|---|
-| Config inspector, every branch (`ConfigCollector::admit`) | a withheld row with reason and notice (§ 4.1) |
-| Unit drop-ins (`collect_drop_ins`), repo files and GPG keys (`rpm/repos.rs`), firewall zones (`network.rs`), quadlet units and Compose files in every search root, `/etc` included (`containers.rs`) | no row for the file, and `machine-state file left out: <path>` in its degraded reasons. Each already skips a file it cannot read; the refusal adds the reason. |
-| `/etc/hosts` (`collect_hosts_additions`) | no `hosts_additions`, and the same degraded reason |
+| Config inspector, every branch (`ConfigCollector::admit`), the ostree branch's two reads in `run_ostree_config` included: tier 1 skipped the file on a read error, tier 2 (`config/mod.rs:825`) stored `unwrap_or_default()` content | a withheld row with reason and notice (§ 4.1); `admit` replaces both reads |
+| Unit drop-ins (`collect_drop_ins`), repo files and GPG keys (`rpm/repos.rs`), firewall zones (`network.rs`), quadlet units and Compose files in every search root, `/etc` included (`containers.rs`) | no row for the file, and the degraded reason. Each already skips a file it cannot read; the refusal adds the reason. |
+| `.env` files (`collect_env_files`, `nonrpm.rs:1666`). Today it reads with `unwrap_or_default()` and pushes a `ConfigFileEntry` into `non_rpm_software.env_files` whatever the read returned, so `--scan-path /etc/myapp` with `.env` linked to a private key would store an empty-content row at a withheld path. | no `env_files` row and no redaction hint for the file, and the degraded reason. The non-RPM inspector, which reports only warnings today, gains a degraded-reasons list for it. Other read errors keep today's behaviour, an empty-content row at an ordinary path, which validation accepts. Collect case 29. |
+| `/etc/hosts` (`collect_hosts_additions`) | no `hosts_additions`, and the degraded reason |
 | sysctl (`read_sysctl_entry`) | today a read error fails the whole section. A refusal becomes a new `SysctlFileBody::Withheld { member }`: not read, still shadows by name, as `OutsideLink` does, so the section stays complete and that file's assignments are unknown, as for an outside link |
 
-**How a later collector is covered.** No one has to remember. An inspector gets the host only from `InspectionContext`, whose field is the gate by type. A direct read is caught at commit: `crates/collect/clippy.toml` lists `std::fs::read`, `std::fs::read_to_string` and `std::fs::File::open` under `disallowed-methods`, `executor/real.rs` allows them with its reason, and the test fixture helpers that read checked-in files allow them in `#[cfg(test)]`; the workspace runs clippy with `-D clippy::all`, so a collector that opens a file itself fails the gate. At `5b041d8a` no production collector calls `std::fs` to read.
+Consumers that keep a value derived from the file, or a row about something else:
+
+| Consumer | Today on a read error | On a refusal |
+|---|---|---|
+| at jobs (`scan_at_jobs`, `scheduled.rs:1227`) | `unwrap_or_default()`, then an `AtJob` with an empty command | no `at_jobs` row for the file, and the degraded reason. An `AtJob` holds no `content`, so validation would accept the empty job, but a job whose command is unknown is not a finding. Collect case 30. |
+| systemd timers (`scan_systemd_timers`, `scan_instance_timers`), the timer file | skipped silently | skipped, and the degraded reason. Collect case 30. |
+| the same, the timer's service file (`scheduled.rs:834`, `:914`) | `unwrap_or_default()`: the timer row keeps an empty `exec_start` | the timer row stays, since the timer itself was read, with an empty `exec_start`, and the degraded reason names the service file. `SystemdTimer` holds the timer's path and no `content`. Collect case 30. |
+| `/etc/locale.conf` (`kernelboot.rs:108`), `/etc/resolv.conf` provenance (`network.rs:469`), `/etc/selinux/config` policy type (`selinux.rs:151`), SELinux `file_contexts.local` and `.subs` (`selinux.rs:309`), npm `package.json` (`nonrpm.rs:1369`), git `config` remote URL (`nonrpm.rs:1737`), `pyvenv.cfg` (`nonrpm.rs:712`) | `.ok()` or a default: no locale, empty provenance, policy `targeted`, no rules from that file, no package row, an empty remote URL on the repository's row, `system_site_packages: false` | unchanged. Each stores a value parsed from the file or nothing, never the file's text in a row with its path, and a refusal leaves the value as incomplete as a permission error does today. |
+| `/etc/hostname` for the subscription section's provenance (`subscription.rs:67`) | `.ok()` | not reached: `Hostname` is carriable, and the gate does not refuse a carriable member |
+| the empty-unit check in the unowned walk (`walk.rs:293`, `is_ok_and`) | false, so the file is left to the config walk | the same; the walk's `admit` then records the withheld row |
+
+Every other `read_file` caller under `crates/collect/src` either skips the file (`if let Ok`, `Err(_) => continue`) or propagates the error to its section, as it does a permission error.
+
+**How a later collector is covered.** By routing and a lint, which together cover the routes named here; they do not make every other route impossible. An inspector gets the host only from `InspectionContext`, whose field is the gate by type, and the gate offers no prefix read. The direct routes around it fail the commit gate: `crates/collect/clippy.toml` lists, under `disallowed-methods`:
+
+- `std::fs::read`, `std::fs::read_to_string`, `std::fs::File::open`, `std::fs::OpenOptions::open` and `std::fs::copy`, the `std` calls that open a file for reading or copy one;
+- `std::process::Command::new`, so a command runs only through `Executor::run`;
+- `inspectah_collect::executor::real::RealExecutor::new`, so no collector builds an unscreened executor of its own.
+
+`executor/real.rs` allows the file and command calls with its reason. No production code in `crates/collect` builds a `RealExecutor`: `run_scan`, in `crates/cli`, which that `clippy.toml` does not govern, builds the only one and wraps it at once. The constructor's allow is in `tests/executor_boundary_test.rs` and `#[cfg(test)]` code, as is the allow for the fixture helpers that read checked-in files. `disallowed_methods` is in clippy's style group, so the workspace's `-D clippy::all` fails the gate on any listed call. At `673fe05b` no production collector calls `std::fs` to read or `Command` directly, so the list costs no existing code. If clippy does not resolve the crate's own `RealExecutor::new` path, the constructor moves to `crates/cli`, where no collector can name it.
+
+What neither covers, stated plainly: a file-opening route not on the list (a new dependency that opens files, a `libc` call), a command run through `Executor::run` that prints a file (next item), and a new consumer that maps a refusal to empty content (validation refuses its snapshot at the scan's write, § 4.4). Each is a reviewed change, not one the compiler refuses.
 
 **What bypasses the gate**, all named:
 
 - `ScreenBypass::SubscriptionSection`, used by the subscription inspector alone. Its section is outside validation (§ 4.6). A new bypass is a new variant, reviewed as such.
-- `Executor::run`. Commands are not file reads, and at `5b041d8a` no collector runs one that prints an `/etc` file's content: `cat` reads `/proc/mounts`, `grep` prints paths (`-l`) or lines matching a fixed directive (`WorkingDirectory=`), and `strings` runs on binaries outside `/etc`. Collect case 24 holds that.
-- The scan's payload copies, which use `std::fs` in `crates/cli`, outside any collector: `bundle_unmanaged_files` copies included unmanaged files from `/opt`, `/srv` and `/usr/local`, and calls `screen` on each first, skipping a withheld answer, so a hard link into a member's inode is not bundled; `write_cached_rpms` copies package files from the dnf cache, outside the class.
+- `Executor::run`. Commands are not file reads, and at `673fe05b` no collector runs one that prints an `/etc` file's content: `cat` reads `/proc/mounts`, `grep` prints paths (`-l`) or lines matching a fixed directive (`WorkingDirectory=`), `strings` runs on binaries outside `/etc`, and `sha256sum` in the unmanaged walk prints a hash. Collect case 24 is a regression check on today's command names, not proof against every command that could read a file.
+- The scan's payload copies, which use `std::fs` in `crates/cli`, outside any collector: `bundle_unmanaged_files` copies included unmanaged files from `/opt`, `/srv` and `/usr/local` (Unmanaged files, below); `write_cached_rpms` copies package files from the dnf cache, outside the class.
+
+**Unmanaged files.** The unmanaged walk records which files are included, and the Containerfile is rendered from that record before the bundler copies anything (`run_scan`: `render_all`, then `bundle_unmanaged_files`). So the decision to withhold a file is made in the walk and stored in the snapshot, never at copy time: a bundler that skipped a file the snapshot still lists as included would leave a `COPY` with no source, or, when the file shares a directory `COPY` with others, drop it silently while the snapshot says included.
+
+```rust
+/// An unmanaged file the read gate withheld: an alias or hard link of a
+/// withheld member's file. No disposition, so it cannot be included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WithheldUnmanagedEntry {
+    pub path: String,
+    pub member: MachineStateMember,
+    pub mode: Option<u32>,
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregate: Option<AggregatePrevalence>,
+}
+
+pub struct UnmanagedFileSection {
+    // ...existing fields...
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub withheld: Vec<WithheldUnmanagedEntry>,
+}
+```
+
+- **In the walk.** `scan_unmanaged_files` and `walk_for_unmanaged` take the `ScreenedExecutor`. For each entry the walk would record as a regular file, it calls `screen` before the stat, the type check and the `sha256sum`. `Screened::Withheld(member)` pushes a `WithheldUnmanagedEntry` with mode and size from `file_metadata`, and no `items` entry; the walk continues. `total_size` and `total_count` count `items` only. Symlinks are recorded as today: the bundler recreates them as links, so they carry a target string and no payload. The unmanaged roots are `/opt`, `/srv` and `/usr/local`, so the screen's withheld answers there come from the resolved-path and inode steps.
+- **Rendering.** `unmanaged_file_lines`, `bundle_unmanaged_files` and the refine export's `included_unmanaged` all read `items`. A withheld path is in none of them, so neither export emits a `COPY` for it, and the scan tarball carries no payload the refine export could extract.
+- **The bundler's own check.** `bundle_unmanaged_files` takes the scan's `ScreenedExecutor` and still calls `screen` on each included regular file. A withheld answer there means the file changed after the walk, against the stable-filesystem assumption (§ 4.6), and fails the scan with an error naming the path; no tarball is written. It never skips the file.
+- **Refine.** `SetInclude(UnmanagedFile { path })` on a withheld path returns 422 `not carried:` (`RefineError::NotCarriable`). Each withheld row appears in the view's `machine_state` list (§ 8) with `override: "never"` and no `item_id`, and its owed step (`DeliverPrivateKey` for a key) reaches every provisioning surface (§ 7). The audit report's "Machine state" table lists it (§ 6.3).
+- **Validation.** Rule 5 (§ 4.4) refuses a path in both `items` and `withheld`.
 
 ### 4.6 What the design guarantees
 
 - No section holds a withheld member's content or a whole-file credential, whichever collector reached it and by whatever name. A member matched by path, alias or inode is not opened. A keytab matched by its header is opened for two bytes. A whole-file private key is read in full by the gate and dropped before any collector sees it.
 - No snapshot is loaded, written or exported that holds a credential in any string outside the subscription section, or a file row at a class path in any section, at any include or variant selection (§ 4.4).
 - No export stages a withheld path from any offer kind (§ 4.4).
+- No Containerfile, on either export path, names an unmanaged payload the export does not carry: a withheld unmanaged file is recorded in the snapshot before rendering and is in no `items` entry (§ 4.5, Unmanaged files).
 
 Not guaranteed:
+
+- Reads by a route § 4.5 does not name. The gate and the lint cover the routes existing collectors use and the direct `std` routes around them; a new dependency, a `libc` call or a file-printing command is caught by review, not by the compiler.
+- A source filesystem that changes during the scan. The design assumes it is stable while inspection runs; the bundler's check turns one change it can see into a failed scan, not a broken export.
 
 - `--preserve subscription --ack-sensitive` stores the RHSM entitlement and consumer certificates and keys, base64, in the snapshot's subscription section, and `write_config_tree` stages them under `subscription/` (`stage_subscription_files`). That is an acknowledged sensitive feature with its own warnings, and it stays as it is. The `rhsm_consumer` and `rhsm_entitlement` rows describe the configuration entries, not that section.
 - A secret inside an ordinary file (a password in `sssd.conf`, a key block inside an application config, a key block among the host lines of `/etc/hosts`) is redaction's (§ 5.3). `hosts_additions` is outside the network redaction pass today; that belongs to `inspectah-secrets-safety-net-spec`.
@@ -432,7 +502,7 @@ Rules in table order. "Level" is the override level; `never` means withheld (no 
 
 The SSH public keys (`*.pub`) share `SshHostKey`: they are not secret, but they are useless without the private half, and `sshd-keygen` regenerates both together. The certificate rule precedes the key rule so `*-cert.pub` is not swallowed by it.
 
-**For the spec review: override levels.** The security consult recommended "extra warning" for keytabs, SSH host keys, whole-file private keys and config-management keys. In this design they are `never`, because a credential holds no content in the snapshot (the consult's own constraint) and so an override has nothing to ship (§ 6.2). The consult's `never` list (machine-id, Insights state, RHSM consumer and entitlement, `lvm/devices`) is kept, and those members are withheld too, since content that can never be shipped need not be read. `warn` therefore applies only to carriable identity members: the iSCSI IQN, and the Salt `minion_id` (an identity file next to the agent keys, not a key).
+**Override levels.** Credentials are never overridable (Mark Russell, 2026-11-21): every `HostCredential` member is `never`, on a single host and on a fleet aggregate. A credential holds no content in the snapshot, so an override would have nothing to ship (§ 6.2). The security consult had recommended "extra warning" for keytabs, SSH host keys, whole-file private keys and config-management keys; that was considered and not taken. The consult's `never` list (machine-id, Insights state, RHSM consumer and entitlement, `lvm/devices`) is kept, and those members are withheld too, since content that can never be shipped need not be read. `warn` therefore applies only to carriable identity members: the iSCSI IQN, and the Salt `minion_id` (an identity file next to the agent keys, not a key).
 
 ### 5.3 Whole-file private key
 
@@ -469,7 +539,7 @@ The ostree path's `volatile_names` (`hostname`, `machine-id`) stays as it is: th
 
 ### 6.2 Withheld members (`never`)
 
-The override is not offered. `SetInclude(Config { path })` for a withheld path returns 422 with `error` starting `not carried:` and naming the reason (new `RefineError::NotCarriable`, mapped in `crates/web/src/error.rs` beside the two `*NotToggleable` arms). The row has no `item_id` in the view (§ 8), so a correct client never posts it.
+The override is not offered, and for credentials that is decided, not provisional (Mark Russell, 2026-11-21). `SetInclude(Config { path })` for a withheld path returns 422 with `error` starting `not carried:` and naming the reason (new `RefineError::NotCarriable`, mapped in `crates/web/src/error.rs` beside the two `*NotToggleable` arms). The row has no `item_id` in the view (§ 8), so a correct client never posts it.
 
 **Why not offer an include that writes something.** Two alternatives were considered and rejected:
 
@@ -480,13 +550,13 @@ Deploy-time delivery (a secret mount, a provisioning step) is the supported way 
 
 ### 6.3 Default render
 
-Neither export path stages a class row by default. Both list every row, carriable and withheld, in the audit report's Configuration section under a "Machine state" table: path, reason, notice, and for withheld rows `mode`, `size` and "contents not captured".
+Neither export path stages a class row by default. Both list every row, carriable and withheld, and every `unmanaged_files.withheld` row, in the audit report's Configuration section under a "Machine state" table: path, reason, notice, and for withheld rows `mode`, `size` and "contents not captured".
 
 ### 6.4 Fleet aggregate (beta.7)
 
 The class has to win over every section, not only Configuration: a path that is a class row on one host can be an ordinary row on another host in a section that merges on its own (a unit drop-in that is a symlink to a private key on host A and a plain `[Service]` file on host B). So the class paths are settled once, before any section merges.
 
-**The class-path union.** `merge_snapshots` (`crates/core/src/aggregate/mod.rs`) first builds `ClassPaths::from_hosts(&hosts)`: the normalized paths of every host's `config.withheld` rows and `MachineState` entries. It is built from rows, not from the rule table, so a path withheld on one host by alias or inode (`/etc/systemd/system/app.service.d/key.conf`) is in it.
+**The class-path union.** `merge_snapshots` (`crates/core/src/aggregate/mod.rs`) first builds `ClassPaths::from_hosts(&hosts)`: the normalized paths of every host's `config.withheld` rows, `unmanaged_files.withheld` rows and `MachineState` entries. It is built from rows, not from the rule table, so a path withheld on one host by alias or inode (`/etc/systemd/system/app.service.d/key.conf`) is in it.
 
 ```rust
 /// Normalized paths that are a class row on at least one host.
@@ -517,13 +587,15 @@ pub fn merge_items<T: AggregateMergeable + Serialize>(
 3. **Deterministic representative.** The member is the first member that is not `Carriable(_)` among the class observations in hostname order, else the first `Carriable(_)` one; `kind`, `package`, `mode` and `size` come from the first host in hostname order whose observation has that member.
 4. **Prevalence.** `aggregate` holds the hosts that have the path in their Configuration section, class or ordinary, as `AggregatePrevalence` does for other rows.
 
+**Unmanaged withheld rows.** Unmanaged items merge through `merge_items`, so an item at a class path is dropped there. The hosts' `unmanaged_files.withheld` rows merge by path into the aggregate's `unmanaged_files.withheld`, one row per path: member, mode and size by item 3's rule, and `aggregate` holding the hosts that have the path as an unmanaged item or a withheld row. Unmanaged roots are outside `/etc`, so no path is both a configuration and an unmanaged class path.
+
 **Staging across offer kinds.** A merged aggregate has no row at a class path outside `config.withheld`, and validation refuses one that does (§ 4.4 rule 4). The stager also withholds any offer, of any kind, at a `config.withheld` path (§ 4.4, At staging), so a snapshot built in process with such a row stages nothing for it either.
 
 Mixed capture success (host A read its IQN, host B could not) needs no rule of its own: both observations are class rows, and the result is one withheld row with both hosts. The view row is `override: "never"` with no `item_id`, `SetInclude` returns 422 `not carried:`, both exports stage nothing for the path, and the provisioning notice comes from the member as on a single host. The two-host drop-in case above ends the same way: one withheld row with both hosts, no `units.drop_ins` row at the path, so `SetInclude(DropIn { path }, true)` is refused with `UnknownTarget`. Phase 2 (§ 10) may give `Generated` members an ordinary merge and show per-host values; beta.7 does neither.
 
 ## 7. Provisioning notices
 
-Built once, from the snapshot, by `render::machine_state::provisioning_steps(snap) -> Vec<(ProvisioningStep, Vec<&str>)>`: owed steps of class rows not overridden, deduplicated by step, each with its paths, in `ProvisioningStep` declaration order. Automatic and `None` notices are not steps. An overridden carriable row owes nothing.
+Built once, from the snapshot, by `render::machine_state::provisioning_steps(snap) -> Vec<(ProvisioningStep, Vec<&str>)>`: owed steps of class rows not overridden and of `unmanaged_files.withheld` rows, deduplicated by step, each with its paths, in `ProvisioningStep` declaration order. Automatic and `None` notices are not steps. An overridden carriable row owes nothing.
 
 Every surface is written whenever a step exists, on its own, whatever else the export holds: a host whose only finding is `/etc/krb5.keytab` stages no config tree and emits no config `COPY`, and still gets every surface below.
 
@@ -539,7 +611,7 @@ Config stats are computed in `crates/refine` over ordinary rows only: class rows
 
 ## 8. Refine API contract
 
-`ViewResponse` gains one list. Class rows appear only here, never in `config_files`, so no row is shown twice and the existing `config_files` stats buckets keep their meaning.
+`ViewResponse` gains one list. It holds one row per class row (every `MachineState` entry and `config.withheld` row) and per `unmanaged_files.withheld` row. Class rows appear only here, never in `config_files`, and withheld unmanaged rows never in the unmanaged list, so no row is shown twice and the existing stats buckets keep their meaning.
 
 ```rust
 #[derive(Serialize)]
@@ -584,14 +656,14 @@ Example rows:
 Op contract:
 
 - `SetInclude` on a `warn` or `plain` row's `item_id`: 200, one timeline entry; the refetched row has `include` flipped. 422 `nothing to change` when it already holds the value, as for other config rows.
-- `SetInclude` on a withheld path: 422, `error` starting `not carried:`. Nothing recorded.
+- `SetInclude` on a withheld path, `Config { path }` or `UnmanagedFile { path }`: 422, `error` starting `not carried:`. Nothing recorded.
 - `EditVariant` (config, drop-in or quadlet) whose `content` `credential_content` refuses: 422, `error` starting `not carried:` and saying the content is a private key or keytab to deliver at deploy time. `validate_target` checks it before the op is recorded, so the timeline, the autosave and every later projection never hold it; the export boundary (§ 4.4) refuses a projection that holds one anyway, such as one restored from an edited session file. No other op carries file content. The UI sends no `EditVariant` at `5b041d8a`, so this refusal has no UI surface and Refine presentation below does not change for it.
 - `SetInclude(Section(Config), ..)` (refine UI fix-up, Phase 2 of that spec) never changes a class row: section bulk ops skip `MachineState` entries the way they skip `shadowed_by` entries.
 - The TypeScript `Disposition` union gains `{kind: "machine_state", member, include}`; `isIncluded` mirrors `is_included()`, and `isToggleable` returns false for it, since class rows are decided through their own list.
 
 ### Refine presentation
 
-From the UX consult of 2026-11-21, reconciled with the contract above. The consult was written before the Rust half settled two things: every credential row is `never` (no bytes exist to ship), and every row carries `override` and a `notice`. So the consult's warn-and-confirm flow applies only to the two `warn` rows, the iSCSI IQN and Salt `minion_id`, which are identity rows, and its dialog is reworded for identity below. Code read for this section at `e84e6f17`: `MainContent.tsx` (Configuration branch, `handleNotCarriedInclude`), `NotCarriedGroup.tsx`, `ExportDialog.tsx`, `api/exportWarnings.ts`, `GlobalSearch.tsx`, `Sidebar.tsx`, `ServiceSection.tsx` (`configPaths`), and `crates/web/src/web_types.rs` (`not_carried_notice`).
+From the UX consult of 2026-11-21, reconciled with the contract above. The consult was written before two things were settled: every credential row is `never`, since no bytes exist to ship and credentials are never overridable (Mark Russell, 2026-11-21), and every row carries `override` and a `notice`. So the consult's warn-and-confirm flow applies only to the two `warn` rows, the iSCSI IQN and Salt `minion_id`, which are identity rows, and its dialog is reworded for identity below. Code read for this section at `e84e6f17`: `MainContent.tsx` (Configuration branch, `handleNotCarriedInclude`), `NotCarriedGroup.tsx`, `ExportDialog.tsx`, `api/exportWarnings.ts`, `GlobalSearch.tsx`, `Sidebar.tsx`, `ServiceSection.tsx` (`configPaths`), and `crates/web/src/web_types.rs` (`not_carried_notice`).
 
 **The UI never derives a member's treatment from its path, member or reason.** The control comes from `override`, the notice line from `notice`, the metadata line from `content_captured`, `mode` and `size`. A member whose level changes on the server changes in the UI with no client release.
 
@@ -644,7 +716,7 @@ Every row shows its notice, even when several share a step: a row reached by sea
 
 #### The `warn` confirm dialog
 
-PatternFly `Modal variant="small"`, the `StatsBar` reset-confirm pattern; `isDanger` on the primary button is new usage of an existing prop. Today only identity rows are `warn`, so the wording is for identity:
+PatternFly `Modal variant="small"`, the `StatsBar` reset-confirm pattern; `isDanger` on the primary button is new usage of an existing prop. Only identity rows are `warn`, since credentials are never overridable (Mark Russell, 2026-11-21), so the wording is for identity:
 
 - Title: **Include this host's identity in the image?**
 - Body: "Every machine built from this image will share this identity." Then the row's alternative, from its notice: `owed` reads "Leave it out and run this at provisioning instead: <command>."; `automatic` reads "Leave it out and it is <notice line, lower-cased>." (for the IQN, "recreated at first boot").
@@ -652,12 +724,12 @@ PatternFly `Modal variant="small"`, the `StatsBar` reset-confirm pattern; `isDan
 - Initial focus on **Cancel**. Escape or Cancel closes and returns focus to the row's **Include…** button. Confirm closes, sends the op, and returns focus to the same row's button, by then **Exclude**; if the op fails, focus still returns there and the failure shows on the row.
 - No "don't ask again". The dialog per row is the point.
 
-The dialog's wording branches on `reason`, so a future `warn` row of another reason gets its own wording rather than the identity text: a `host_credential` row would use the credential wording in the alternative below.
+The dialog's wording branches on `reason`, so a future `warn` row of the `generated` reason gets its own wording rather than the identity text. A `host_credential` row never reaches the dialog.
 
 #### Search and reveal
 
 - **Section search** (`SectionSearch` in Configuration) matches a class row on its path, its reason label text and its notice line text. While a query is active the block expands, shows only matching rows, and hides sub-lists with none; clearing the query leaves it expanded. The result count is decision-list matches plus block matches, and "No items match your search" appears only when both are zero.
-- **GlobalSearch** gets one entry per class row: section `configs`, title the path, item id `machine-state:<path>`. Paths are unique within `machine_state` (the collector's `seen` set covers both lists) and disjoint from `config_files`, so the id cannot collide with a `configs:` id.
+- **GlobalSearch** gets one entry per class row: section `configs`, title the path, item id `machine-state:<path>`. Paths are unique within `machine_state` (the collector's `seen` set covers both configuration lists, validation rule 5 keeps `unmanaged_files.withheld` paths unique, and unmanaged roots are outside `/etc`) and disjoint from `config_files`, so the id cannot collide with a `configs:` id.
 - **Reveal** of a `machine-state:<path>` id opens Configuration, expands the block, scrolls the row into view, and focuses the row's button; a `never` row has no button, so the `<li>` takes `tabIndex={-1}` and is focused, and a screen reader reads its path, label, notice and "Not carried". The row is found by its exact test id, `machine-state-row-<path>`, compared as a string, never through a CSS selector (`web-disposition-contract.md`). Focusing the block toggle instead, as the consult suggested for `never` rows, would not say which row was meant.
 - **Links from other sections.** `ServiceSection` links a unit's `required_config` path to its Configuration row only when the path is in `configPaths`, built from `config_files`. Class paths join that set and their link reveals `machine-state:<path>`, so a unit that reads `/etc/iscsi/initiatorname.iscsi` points at the row that explains why the file is out.
 - **Keyboard row navigation** (the decision list's arrow and shortcut handling) does not enter the block in beta.7. The block is reached by Tab and by reveal.
@@ -678,9 +750,7 @@ The rows alone cannot give the UI two things, so the view gains two fields besid
 
 Two contract clarifications, no new field: rows arrive sorted by path (the UI groups by `reason` and keeps server order within a sub-list); and on a fleet aggregate, where every class path is merged into one withheld row (§ 6.4), every `machine_state` row has `override: "never"` and no `item_id` and paths stay unique, so the same component shows no control and the UI needs no single-host or fleet branch.
 
-#### If credentials become overridable
-
-If credentials are made overridable instead of `never`, the UI change is small: those rows arrive as `warn` with `content_captured: false` and an `item_id`, and the dialog takes a credential variant, branched on `reason`: title **Include a host credential in the image?**, body "Every machine built from this image will share this credential. Anyone who can pull the image can read it. The scan did not capture it, so you supply the file before building." then the notice's alternative, primary **Include key in image**; an included credential row reads `In the image: you supply this file`, and the export dialog's warning alert names it. The view's row fields already carry the override level, the choice and the missing content. What the API would need beyond them: one row field, the export-relative path the operator must place the file at (for example `config/etc/krb5.keytab`), since the UI must not work out the export layout itself; a `failure` entry in `x-export-warnings` while that file is missing; and, outside the view, a snapshot type that can hold an include on a withheld row (`WithheldConfigEntry` has no `include` by design) plus an export that stages an operator-supplied file without emitting a `COPY` with no source (§ 6.2's first rejected alternative).
+**Considered:** a credential variant of the dialog, where the operator supplies the file before building; not taken, since credentials are never overridable (Mark Russell, 2026-11-21).
 
 #### beta.7 and later
 
@@ -704,14 +774,15 @@ Vitest, from view fixtures that carry the server's real row JSON (`process-docs/
 
 - `FindingKind::MachineState { member: CarriableMember, include: bool }` (new variant).
 - `ConfigSection::withheld: Vec<WithheldConfigEntry>` (new field, `#[serde(default)]`, skipped when empty).
-- New core types: `MachineStateReason`, `CarriableMember`, `MachineStateMember`, `OverrideLevel`, `ProvisioningNotice`, `ProvisioningStep`, `RecreatedBy`, `WithheldConfigEntry` (with `aggregate` for fleet rows), the rule table, `classify_path`, `normal_path`, `validate`, `MachineStateScreen`, `ScreenedExecutor`, `Screened`, `ScreenBypass`, `refusal`, `credential_content` and `ClassPaths`.
+- New core types: `MachineStateReason`, `CarriableMember`, `MachineStateMember`, `OverrideLevel`, `ProvisioningNotice`, `ProvisioningStep`, `RecreatedBy`, `WithheldConfigEntry` and `WithheldUnmanagedEntry` (each with `aggregate` for fleet rows), the rule table, `classify_path`, `normal_path`, `validate`, `MachineStateScreen`, `ScreenedExecutor`, `Screened`, `ScreenBypass`, `refusal`, `credential_content` and `ClassPaths`.
 - `SysctlFileBody::Withheld { member }` (new variant): a sysctl file the gate refused, not read, still shadowing by name (§ 4.5).
 - `SnapshotError::MachineState`: `load`, `to_validated_json` and refine resume refuse a snapshot that fails § 4.4's validation. `InspectionSnapshot::to_validated_json` is new and is the only snapshot writer.
-- `Executor::file_metadata` (returning `FileMetadata`) and `Executor::read_head`. `InspectionContext::executor` becomes `&ScreenedExecutor`, and `pipeline::collect::collect` takes one. `crates/collect/clippy.toml` disallows direct `std::fs` reads.
+- `Executor::file_metadata` (returning `FileMetadata`), and a new `HostRead: Executor` trait holding `read_head`, implemented by `RealExecutor` and `MockExecutor` and not by the gate. `InspectionContext::executor` becomes `&ScreenedExecutor`, and `pipeline::collect::collect` takes one. `crates/collect/clippy.toml` disallows the `std` file opens and copy, `Command::new` and `RealExecutor::new` (§ 4.5).
+- Collectors (§ 4.5): `collect_env_files` and `scan_at_jobs` skip a refused file; timers record a refused timer or service file; the non-RPM inspector gains degraded reasons. `UnmanagedFileSection::withheld: Vec<WithheldUnmanagedEntry>` (new field, `#[serde(default)]`, skipped when empty), filled by the unmanaged walk through the gate.
 - Aggregate: `AggregateMergeable::destination` (required), `merge_items` and every `merge_*_sections` take `&ClassPaths`, and `merge_config_sections` merges class paths into withheld rows (§ 6.4).
-- Render: `WithheldWhy::MachineState { member }` replaces `WithheldWhy::MachineId`, and the stager withholds any offer at a `config.withheld` path; the audit report and Containerfile gain a provisioning section (§ 7); `bundle_unmanaged_files` screens each path. Redaction: the PEM private-key pattern matches any label ending in `PRIVATE KEY` (§ 5.3).
+- Render: `WithheldWhy::MachineState { member }` replaces `WithheldWhy::MachineId`, and the stager withholds any offer at a `config.withheld` path; the audit report and Containerfile gain a provisioning section (§ 7); `bundle_unmanaged_files` screens each path and fails the scan on a withheld answer. Redaction: the PEM private-key pattern matches any label ending in `PRIVATE KEY` (§ 5.3).
 - `SCHEMA_VERSION` and `MIN_SCHEMA` both raised by one from their values when this lands (28 at `391354ca`). A snapshot from before cannot be re-rendered correctly: its silent exclusions are gone and its carried keytab is an ordinary entry.
-- Refine: `RefineError::NotCarriable` (422) for `SetInclude` on a withheld path and for an `EditVariant` holding a credential; `ViewResponse::machine_state: Vec<MachineStateRowDto>`; class rows leave `config_files`; a new `notice` in `x-export-warnings`.
+- Refine: `RefineError::NotCarriable` (422) for `SetInclude` on a withheld configuration or unmanaged path and for an `EditVariant` holding a credential; `ViewResponse::machine_state: Vec<MachineStateRowDto>`; class rows leave `config_files`; a new `notice` in `x-export-warnings`.
 - Refine view additions the UI needs, `machine_state_steps` and `machine_state_notices`: § 8, Refine presentation, Required API additions.
 
 CHANGELOG, under `## [Unreleased]`:
@@ -766,8 +837,8 @@ Built from collector-produced data: each collect case drives `ConfigInspector::i
 **The read gate (`crates/collect/tests/config_test.rs`, `crates/collect/tests/screen_test.rs`):**
 
 23. **Three more collectors.** Full scans through `collect`, each with a fixture key carrying a marker run, through both exports. `/etc/sysctl.d/90-local.conf`, a symlink to case 9's `ENCRYPTED PRIVATE KEY` file at `/etc/pki/tls/private/server.key`: its `kernel_boot.sysctl.files` entry has body `withheld` with `member: private_key_file`, the sysctl section is present and not failed, and the config walk records a withheld row. `/etc/myapp/compose.yaml`, a symlink to the same file: no `compose_files` row, a degraded reason naming it, a withheld config row. `/etc/hosts`, a symlink to the same file, with `rpm -Va` reporting it changed: no `hosts_additions`, a degraded reason, a withheld config row with `kind: rpm_owned_modified`. For each, the mock read log shows no `read_file` or `read_head` of either name; the serialized snapshot, every file `render_all` writes and every file in the refine export tarball contain the marker in no encoding (raw, base64, hex). Then the same three paths as regular-file copies of the key: each refused by the whole-file check (the read log shows the read), with the same snapshot and export assertions.
-24. **Commands print no `/etc` file.** A full mock scan's run log holds no `cat`, `head`, `tail`, `base64`, `xxd`, `od`, `dd` or `strings` call with an argument under `/etc`.
-25. **The gate itself**, over `MockExecutor`: `refusal` recovers the member from each refusal kind; `read_head` on a withheld path is refused without a read; `/opt/app/creds.pem`, a whole-file key outside `/etc`, is refused by content; `/opt/app/k`, a hard link to `/etc/pki/tls/private/server.key`, is refused by inode and not opened; a carriable member's path reads normally. `bypass(ScreenBypass::SubscriptionSection)` reads `/etc/pki/entitlement/` and the subscription section equals today's. In the scan crate, `bundle_unmanaged_files` skips `/opt/app/k`.
+24. **Commands print no `/etc` file**, a regression check on today's command names (§ 4.5). A full mock scan's run log holds no `cat`, `head`, `tail`, `base64`, `xxd`, `od`, `dd` or `strings` call with an argument under `/etc`.
+25. **The gate itself**, over `MockExecutor`: `refusal` recovers the member from each refusal kind; a withheld path's read log shows no read, and a keytab-header refusal's shows one `read_head` of exactly `KEYTAB_HEADER_LEN` bytes; `/opt/app/creds.pem`, a whole-file key outside `/etc`, is refused by content; `/opt/app/k`, a hard link to `/etc/pki/tls/private/server.key`, is refused by inode and not opened; a carriable member's path reads normally. `bypass(ScreenBypass::SubscriptionSection)` reads `/etc/pki/entitlement/` and the subscription section equals today's. A compile-fail doctest shows `read_head` cannot be called on a `ScreenedExecutor`. The unmanaged export of `/opt/app/k` is case 31.
 
 **Export boundary and fleet (`crates/refine`, `crates/web`, `crates/core`, `crates/pipeline`):**
 
@@ -775,15 +846,23 @@ Built from collector-produced data: each collect case drives `ConfigInspector::i
 27. **Edit, then select a variant, from certificate-only inputs.** Two collector-produced hosts whose unowned `/etc/myapp/server.pem` hold different certificates and no key (case 9's negative), aggregated: two variants at the path. `EditVariant(Config { path }, content = case 9's encrypted key)` returns `Err(NotCarriable)` and `POST /api/op` 422 with `error` starting `not carried:`; `/api/ops` and the autosave file are unchanged and hold no key bytes. A session file edited to carry that op makes `resume_from` refuse with `RefineError::SnapshotLoad` naming the path. A projection holding the edit, built in process, in each of three states (the edited variant selected and included; selected and excluded; an alternative after `SelectVariant` back to an original host's content): `render_refine_export` and `render_all` refuse with `SnapshotError::MachineState`, and nothing is written, `aggregate/variants/` included.
 28. **Two-host drop-in.** Host A, a full scan: unowned `/etc/systemd/system/app.service.d/key.conf`, a symlink to `/etc/pki/tls/private/server.key`. Host B, a full scan: the same path is a regular drop-in holding `[Service]` and `Environment=ROLE=worker`. `app.service` at its preset state on both. Through `inspectah aggregate`: one `config.withheld` row for the path with both hosts in `aggregate`; no `config.files` entry and no `units.drop_ins` row at it, selected or alternative; `ROLE=worker` nowhere in the aggregate snapshot. `SetInclude(DropIn { path }, true)` is refused with `UnknownTarget` and nothing is recorded. Neither export writes a file for the path, and neither Containerfile names it in a `COPY`.
 
+**Read-error consumers and unmanaged withholding (`crates/collect/tests/config_test.rs`, `crates/collect/tests/screen_test.rs`, `crates/cli`, `copy_source_exists_test.rs`):**
+
+29. **`.env` under an explicit scan root.** A complete scan through `collect` with the non-RPM roots of `inspectah scan --scan-path /etc/myapp`: an unowned `/etc/myapp/.env`, a symlink to `/etc/pki/tls/private/server.key`, which holds case 9's `ENCRYPTED PRIVATE KEY` file with a marker run. Assert: exactly one `config.withheld` row for `/etc/myapp/.env`, `member: private_key_file`; no `non_rpm_software.env_files` row and no redaction hint for the path; the non-RPM inspector's degraded reasons name it; the read log shows no read of either name. `machine_state::validate` accepts the snapshot, `to_validated_json` succeeds (the `--inspect-only` write), and `render_all` and the refine export succeed; the marker appears in no encoding in the snapshot or either export. Rule 4 is unchanged: the same snapshot edited to add an empty-content `env_files` row at the path is refused at load.
+30. **The other rewritten consumers.** One complete scan: `/var/spool/at/a00001`, a hard link to the key above, gives no `at_jobs` row and a degraded reason; `/etc/systemd/system/backup.timer`, a symlink to the key, gives no `systemd_timers` row and a degraded reason; `/etc/systemd/system/sync.timer`, readable, with `sync.service` a symlink to the key, keeps its timer row with an empty `exec_start` and a degraded reason naming the service file. Validation accepts the snapshot, and the marker is absent from it and from both exports.
+31. **Unmanaged withholding through both exports.** Collect half, through `MockExecutor`: `/opt/app/k`, a hard link to `/etc/pki/tls/private/server.key`, and `/opt/app/app.conf`, an ordinary file, so both fall under one directory `COPY` group; `--include-unmanaged`. The snapshot has one `unmanaged_files.withheld` row for `/opt/app/k`, `member: private_key_file`, no `items` entry for it, and `app.conf` as an included item; validation accepts it. Render half, in the scan crate: `render_all` on that snapshot, then `bundle_unmanaged_files` with each remaining item's payload a real file, as the existing bundler test provides it; then the refine export from the resulting tarball. On both: the Containerfile names `/opt/app/k` in no `COPY` and in no other source reference, every `COPY` source exists in the staged tree (`copy_source_exists_test.rs` gains the case for both paths), and no key bytes are in either tree. The refine view's `machine_state` row for `/opt/app/k` has `override: "never"` and no `item_id`, `SetInclude(UnmanagedFile { path }, true)` returns 422 `not carried:`, and the audit report and `x-export-warnings` carry `DeliverPrivateKey`. Last, the bundler, screening through the case's `MockExecutor`-backed gate and given an `items` entry at `/opt/app/k` (a snapshot built in process), fails with an error naming the path and writes no tarball.
+
 ## 12. Strongest case against
 
-The class is wider than "files that name one machine", and the `never` level for credentials narrows the decision's "the operator can override". Some sites do bake shared SSH host keys behind a VIP, or a shared service keytab, into an image on purpose, and this design gives them no path from refine; they must deliver the file at deploy time. That is deliberate, but an operator who expects the override will see a row they cannot change.
+The class is wider than "files that name one machine", and the `never` level for credentials narrows the decision's "the operator can override". Some sites do bake shared SSH host keys behind a VIP, or a shared service keytab, into an image on purpose, and this design gives them no path from refine; they must deliver the file at deploy time. That is decided (Mark Russell, 2026-11-21: credentials are never overridable), but an operator who expects the override will see a row they cannot change.
 
 Second, name-matched rules (`*.keytab`, `/etc/pki/tls/private/`) and the whole-file key sniff will catch files an administrator placed on purpose. The visible withheld row is what makes that acceptable; the silent form would not be.
 
 Third, the protection has costs of its own. `load` and every snapshot write refuse a snapshot edited into a forbidden form rather than repairing it, so a user of another tool, or of a refine session file edited by hand, stops at an error. The gate adds a path resolution, a stat and a two-byte read to every file read in the scan, not only to configuration candidates, and validation serializes the snapshot to a JSON value once per write. Changing `InspectionContext::executor` to the gate's type touches every test that builds a context (about 200 sites, each a mechanical two-line change), and `merge_items` gains a parameter at its 44 call sites. The alias, inode, gate and class-path union are more machinery than the ordinary named-path case needs; they exist because each list the earlier drafts kept, of names, of collectors or of sections, had a route it did not name.
 
-What would change this: evidence that operators bake shared host credentials into images at scale (then add a `CredentialMember` override that emits a deploy-time secret mount stanza, not a `COPY`); a real binary keytab carried byte for byte by today's code (raises urgency, not design); `ipa-client-install` succeeding cleanly over a carried `/etc/ipa/default.conf` (drops its owed notice to `none`).
+Fourth, the read gate covers the routes it names, not every route. A collector that opens a file through a new dependency or a `libc` call, or runs a command that prints one, is caught by review, and the lint list has to grow with each such route (§ 4.5).
+
+What would change this: evidence that operators bake shared host credentials into images at scale, which would be a reason to revisit the credential decision, and then to look at a deploy-time secret mount stanza rather than a `COPY`; a real binary keytab carried byte for byte by today's code (raises urgency, not design); `ipa-client-install` succeeding cleanly over a carried `/etc/ipa/default.conf` (drops its owed notice to `none`).
 
 ## 13. Provenance
 
@@ -792,6 +871,8 @@ What would change this: evidence that operators bake shared host credentials int
 Read at `76bcab50`: `executor/real.rs` (`read_file` reads the whole file before the UTF-8 check fails; `resolve_final_target` is `canonicalize`), `config/walk.rs` (`walk_recursive_inner` follows directory symlinks that stay inside `/etc`), `config/mod.rs` (`detect_orphaned_configs` skips paths already captured and needs the removed package's name in the basename), `units/mod.rs` (`collect_drop_ins` reads each `.conf` itself), `subscription.rs` and `configtree.rs` (`stage_subscription_files`; `Destination`; `staged_writes` withholding the machine-id on every offer), `aggregate/merge.rs` (`merge_items`, `merge_with_variants`, `merge_config_sections`), `core/snapshot.rs` (`load`), `refine/src/session.rs` (`render_refine_export`'s file set, no README), `refine/src/types.rs` (`SectionStats::from_dispositions`), `containerfile.rs` (`section`, config `COPY` per staged root), `redaction/patterns.rs` (the PEM pattern).
 
 Read at `5b041d8a`: `core/traits/executor.rs` and `core/traits/inspector.rs` (`InspectionContext` holds `&dyn Executor`), `pipeline/src/collect.rs` (`collect` builds the only production contexts), `executor/real.rs` (`host_root` is `/`, so collectors' paths are host paths), every `read_file` caller under `crates/collect/src` (no production `std::fs` read; `run` callers: `cat` on `/proc/mounts` only, `grep` printing paths or `WorkingDirectory=` lines, `strings` on binaries), `kernelboot.rs` (`read_sysctl_entry` reads targets under `/etc` and fails the section on a read error), `containers.rs` (`find_compose_files` keeps `raw_content`), `network.rs` (`collect_hosts_additions` keeps raw lines; no redaction pass names `hosts_additions`), `subscription.rs` (reads `/etc/pki/entitlement/` and `/etc/pki/consumer/cert.pem`, stores base64 with `path` and `content`), `cli/src/commands/scan.rs` (`bundle_unmanaged_files` copies with `std::fs`; `--inspect-only` serializes directly), `cli/src/commands/aggregate.rs` (`--json-only` serializes directly), `pipeline/src/render/mod.rs` (`render_all` serializes at step 7), `refine/src/session.rs` (`validate_target` ignores `EditVariant` content; `resume_from` restores the timeline without per-op validation; `render_refine_export` serializes the projection as-is and writes Compose files and `write_aggregate_variants` outside `staged_writes`), `refine/src/autosave.rs` (saves ops, not the snapshot), `aggregate/mod.rs` and `aggregate/merge.rs` (`merge_snapshots`; drop-ins, quadlets, Compose files, repo files and firewall zones each merge through their own `merge_items` call; 22 `AggregateMergeable` impls), `configtree.rs` (`offers`, `StagedFileKind`), and the web UI (no client sends `EditVariant`).
+
+Read at `673fe05b`: every production `read_file` caller under `crates/collect/src` by what it does with an error (§ 4.5's two tables: `unwrap_or_default()` in `collect_env_files`, `run_ostree_config` tier 2, `scan_at_jobs` and the two timer service reads; `.ok()` or a default in the derived-value readers; every other caller skips or propagates), `nonrpm.rs` (`collect_env_files` pushes its row whatever the read returned; `walk_for_unmanaged` admits by metadata, hashes with `sha256sum`, and walks `/opt`, `/srv` and `/usr/local` only; the inspector reports warnings and no degraded reasons), `scheduled.rs` (`AtJob` and `SystemdTimer` hold no `content`), `cli/src/commands/scan.rs` (`run_scan` calls `render_all` before `bundle_unmanaged_files`; the only production `RealExecutor::new`), `pipeline/src/render/unmanaged.rs` (`unmanaged_file_lines` filters by inclusion and `unmanaged_withheld` only), `refine/src/session.rs` (`included_unmanaged` from `items`), `refine/src/types.rs` (`ItemId::UnmanagedFile`), and `crates/collect/src` for `std::fs`, `OpenOptions` and `Command::new` outside `executor/real.rs` (test code only).
 
 **Real hosts**, measured for this spec on 2026-11-21, read-only (`rpm -qf`, `rpm -q --qf '[%{FILENAMES} %{FILEFLAGS:fflags}\n]'`, `stat`, `file`, `systemctl cat`, `rpm -q --scripts`), on the test VMs `rhel9` (RHEL 9.8) and `rhel10` (RHEL 10.2), both aarch64 and carrying an earlier drift-tool run, which is where the keytabs come from. Flags: `c` config, `n` noreplace, `g` ghost.
 
