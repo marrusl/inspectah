@@ -185,6 +185,13 @@ impl Inspector for ConfigInspector {
             &mut section,
             &mut degraded_reasons,
         );
+        authselect_edit_advisories(
+            exec,
+            rpm_state,
+            &mut section,
+            &mut degraded_reasons,
+            &mut warnings,
+        );
 
         // 2) Unowned files: in /etc but not RPM-owned
         progress.emit(ProgressEvent::StepStarted {
@@ -448,6 +455,85 @@ fn collect_ghost_configs(
     }
 }
 
+/// Why a file `authselect check` names is an advisory and not copied.
+const AUTHSELECT_EDITED_RATIONALE: &str = "authselect check reports this file was changed outside \
+     authselect. The image runs authselect select, which writes it again from the profile, so the \
+     change is not carried. To keep it, put it in a custom profile (authselect create-profile), or \
+     for nsswitch, in /etc/authselect/user-nsswitch.conf.";
+
+/// The scan warning when `authselect check` reports a changed
+/// configuration without naming a file.
+const AUTHSELECT_EDITED_WARNING: &str = "authselect check reports the authentication configuration \
+     was changed outside authselect, without naming the files. The image runs authselect select, \
+     which writes those files again from the profile, so the change is not carried.";
+
+/// When the selected authselect profile is collected, run `authselect
+/// check` and make each file it reports changed outside authselect an
+/// advisory: the export renders the profile as an `authselect select`
+/// line, which writes those files again, so a hand edit to one is lost
+/// and must be named. An entry already collected at that path (the
+/// `rpm -Va` branch reports `/etc/nsswitch.conf`, for one) becomes the
+/// advisory, so the export does not copy a file over what `authselect
+/// select` writes. A report that names no file is a scan warning.
+fn authselect_edit_advisories(
+    exec: &dyn Executor,
+    rpm_state: &RpmState,
+    section: &mut ConfigSection,
+    degraded_reasons: &mut Vec<String>,
+    warnings: &mut Vec<Warning>,
+) {
+    use inspectah_core::types::config::AUTHSELECT_CONF_PATH;
+
+    if !section.files.iter().any(|f| f.path == AUTHSELECT_CONF_PATH) {
+        return;
+    }
+    let result = exec.run("authselect", &["check"]);
+    let ghost::AuthselectCheck::Edited { paths } =
+        ghost::parse_authselect_check(result.exit_code, &result.stdout, &result.stderr)
+    else {
+        return;
+    };
+    if paths.is_empty() {
+        warnings.push(Warning {
+            inspector: "config".into(),
+            message: AUTHSELECT_EDITED_WARNING.into(),
+            ..Default::default()
+        });
+        return;
+    }
+    let advisory =
+        || FindingKind::advisory(AdvisoryType::Modernization, AUTHSELECT_EDITED_RATIONALE);
+    for path in paths {
+        if path == AUTHSELECT_CONF_PATH || !path.starts_with("/etc/") {
+            continue;
+        }
+        if let Some(existing) = section.files.iter_mut().find(|f| f.path == path) {
+            existing.disposition = with_modernization(&existing.disposition, advisory());
+            continue;
+        }
+        if !exec.file_exists(Path::new(&path)) {
+            continue;
+        }
+        let (content, captured) = capture_config(exec, &path, degraded_reasons);
+        let kind = if rpm_state.is_rpm_owned(Path::new(&path)) {
+            ConfigFileKind::RpmOwnedModified
+        } else {
+            ConfigFileKind::Unowned
+        };
+        section.files.push(ConfigFileEntry {
+            category: classify_config_path(&path),
+            package: rpm_state
+                .package_for_path(Path::new(&path))
+                .map(|p| p.name.clone()),
+            path,
+            kind,
+            content,
+            disposition: with_modernization(&captured, advisory()),
+            ..Default::default()
+        });
+    }
+}
+
 /// `file_contexts.local`/`file_contexts.subs` under the SELinux policy
 /// store are derived policy-store state collected as typed `FcontextRule`s
 /// (see `inspectors::selinux::collect_fcontext_rules`), not config. The
@@ -520,7 +606,8 @@ const PAM_D_PREFIX: &str = "/etc/pam.d/";
 /// only flag is `L` is an RPM-owned symlink whose target changed. When that
 /// target resolves under `/etc/authselect/` it is not a local PAM
 /// customization: the customization is the authselect profile, which the
-/// unowned walk collects from `/etc/authselect/` on its own. Classifying
+/// `%ghost` branch collects from `/etc/authselect/authselect.conf` and the
+/// export carries as an `authselect select` line. Classifying
 /// the link as a modified config would carry the same content twice, under
 /// a path the target system regenerates.
 ///

@@ -17,6 +17,7 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderError;
+use inspectah_core::types::config::AUTHSELECT_CONF_PATH;
 use inspectah_core::types::units::{UNIT_TYPE_SUFFIXES, UnitName};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -401,11 +402,13 @@ impl PathError {
 ///   `drop-ins/` on the drop-in's own decision;
 /// - every quadlet unit path: the containers section stages those under
 ///   `quadlet/`;
-/// - every NetworkManager connection that uses DHCP (`method=auto`).
+/// - every NetworkManager connection that uses DHCP (`method=auto`);
+/// - authselect's [`AUTHSELECT_CONF_PATH`]: the Containerfile carries the
+///   selection as an `authselect select` line ([`super::authselect`]).
 ///
 /// A path that is not a [`Destination`] matches nothing.
 fn owned_elsewhere(snap: &InspectionSnapshot) -> HashSet<Destination> {
-    let mut paths: Vec<&str> = Vec::new();
+    let mut paths: Vec<&str> = vec![AUTHSELECT_CONF_PATH];
     if let Some(units) = &snap.units {
         paths.extend(units.drop_ins.iter().map(|d| d.path.as_str()));
     }

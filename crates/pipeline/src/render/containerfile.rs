@@ -1673,6 +1673,9 @@ fn config_section_lines(
     // Crypto policy
     lines.extend(crypto_policy_lines(snap));
 
+    // authselect profile: after the COPY, so a custom profile is in place
+    lines.extend(super::authselect::authselect_lines(snap));
+
     lines
 }
 

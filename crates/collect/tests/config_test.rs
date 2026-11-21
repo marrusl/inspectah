@@ -782,8 +782,9 @@ fn pam_audit_and_tuned_are_config_entries() {
 
 /// § 3.6's authselect rule. `rpm -Va` reports `....L....` on the five
 /// `/etc/pam.d/` files authselect owns: RPM-owned symlinks whose target
-/// changed. The customization lives in `/etc/authselect/`, which the walker
-/// collects on its own, so the symlink must produce no entry of its own.
+/// changed. The customization is the authselect profile, which the
+/// `%ghost` branch collects and the export carries as an `authselect
+/// select` line, so the symlink must produce no entry of its own.
 ///
 /// The custom file in the same fixture is the sibling control: it differs
 /// unaided, so an empty section cannot pass this test.

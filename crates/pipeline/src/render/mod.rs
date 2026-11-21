@@ -13,6 +13,7 @@
 
 pub mod advisory;
 pub mod audit;
+pub mod authselect;
 pub mod comment;
 pub mod configtree;
 pub mod containerfile;

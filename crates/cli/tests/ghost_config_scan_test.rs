@@ -143,3 +143,111 @@ fn an_excluded_sssd_conf_gets_no_chmod() {
     assert!(!tree.path().join("config/etc/sssd/sssd.conf").exists());
     assert!(!containerfile(tree.path()).contains("chmod 0600 /etc/sssd"));
 }
+
+/// The profile and features authselect recorded.
+const AUTHSELECT_CONF: &str = "sssd\nwith-faillock\nwith-mkhomedir\n";
+
+/// The line both exports render [`AUTHSELECT_CONF`] as.
+const SELECT_LINE: &str = "RUN authselect select sssd with-faillock with-mkhomedir --force\n";
+
+/// What `authselect check` prints for a hand-edited `system-auth`.
+const CHECK_EDITED: &str = "[error] [/etc/authselect/system-auth] has unexpected content!\n\
+     Current configuration is not valid. It was probably modified outside authselect.\n";
+
+/// [`sssd_host`] with authselect's `%ghost` files (flag `g`, measured on
+/// RHEL 9.8 and 10.2) and `authselect check` exiting `check_exit` with
+/// `check_stderr`.
+fn authselect_host(check_exit: i32, check_stderr: &str) -> SysctlHost {
+    sssd_host()
+        .ghost("authselect-libs", "g", "/etc/authselect/authselect.conf")
+        .file("/etc/authselect/authselect.conf", AUTHSELECT_CONF)
+        .ghost("authselect-libs", "g", "/etc/authselect/nsswitch.conf")
+        .file(
+            "/etc/authselect/nsswitch.conf",
+            "passwd: sss files systemd\ngroup: sss files systemd\n",
+        )
+        .ghost("authselect-libs", "g", "/etc/authselect/system-auth")
+        .file(
+            "/etc/authselect/system-auth",
+            "auth required pam_env.so\nauth sufficient pam_unix.so\n# local edit\n",
+        )
+        .command("authselect check", check_exit, "", check_stderr)
+}
+
+/// authselect's selection is rendered as `authselect select` on both
+/// export paths and never copied; the generated `nsswitch.conf` is not
+/// collected; a generated file `authselect check` reports as hand-edited
+/// is an advisory that neither export copies.
+#[test]
+fn authselect_files_render_as_authselect_select_on_both_export_paths() {
+    let snap = scan(authselect_host(1, CHECK_EDITED));
+
+    let conf = entry(&snap, "/etc/authselect/authselect.conf").expect("the selection is collected");
+    assert!(conf.disposition.is_included());
+    assert_eq!(conf.package.as_deref(), Some("authselect-libs"));
+    assert!(
+        entry(&snap, "/etc/authselect/nsswitch.conf").is_none(),
+        "authselect select writes nsswitch.conf again; it is not collected"
+    );
+    let edited = entry(&snap, "/etc/authselect/system-auth")
+        .expect("the hand-edited generated file is named");
+    assert!(edited.disposition.is_advisory(), "{:?}", edited.disposition);
+    assert!(!edited.disposition.is_included());
+    assert!(edited.content.contains("# local edit"));
+
+    for (path, tree) in both_exports(&snap) {
+        for staged in ["authselect.conf", "nsswitch.conf", "system-auth"] {
+            assert!(
+                !tree
+                    .path()
+                    .join("config/etc/authselect")
+                    .join(staged)
+                    .exists(),
+                "{path}: {staged} is not copied"
+            );
+        }
+        let cf = containerfile(tree.path());
+        let copy = cf
+            .find("COPY config/etc/ /etc/")
+            .unwrap_or_else(|| panic!("{path}: the config tree is copied:\n{cf}"));
+        let select = cf
+            .find(SELECT_LINE)
+            .unwrap_or_else(|| panic!("{path}: the profile is selected:\n{cf}"));
+        assert!(copy < select, "{path}: select runs after the COPY");
+        assert_eq!(
+            cf.matches("authselect select").count(),
+            2,
+            "{path}: one line and its comment"
+        );
+    }
+}
+
+/// A clean `authselect check` adds nothing; excluding the selection in
+/// refine removes the line.
+#[test]
+fn a_clean_authselect_check_adds_no_advisory_and_exclusion_drops_the_line() {
+    use inspectah_refine::types::{ItemId, RefinementOp};
+
+    let snap = scan(authselect_host(0, ""));
+    assert!(entry(&snap, "/etc/authselect/system-auth").is_none());
+    assert!(
+        !snap
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("authselect")),
+        "{:?}",
+        snap.warnings
+    );
+
+    let mut refine = session(&snap);
+    refine
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: "/etc/authselect/authselect.conf".into(),
+            },
+            include: false,
+        })
+        .expect("the exclude applies");
+    let tree = export_session(&refine);
+    assert!(!containerfile(tree.path()).contains("authselect select"));
+}

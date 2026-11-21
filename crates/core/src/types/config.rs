@@ -2,6 +2,12 @@ use super::aggregate::{AggregatePrevalence, VariantSelection};
 use super::{AdvisoryType, FindingKind};
 use serde::{Deserialize, Serialize};
 
+/// authselect's record of the selected profile and its features: the
+/// profile id on the first line, one feature per line after it. The
+/// export carries a config entry at this path as an `authselect select`
+/// line, never as a copied file.
+pub const AUTHSELECT_CONF_PATH: &str = "/etc/authselect/authselect.conf";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigFileKind {

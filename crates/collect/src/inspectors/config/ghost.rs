@@ -96,10 +96,89 @@ const GHOST_SKIP_EXACT: &[&str] = &[
 /// `/etc/crypto-policies/config`, which the crypto policy line renders.
 const GHOST_SKIP_PREFIX: &[&str] = &["/etc/crypto-policies/state/"];
 
-/// Whether the ghost branch leaves `path` alone on [`GHOST_SKIP_EXACT`]
-/// or [`GHOST_SKIP_PREFIX`].
+/// The files `authselect select` writes from the selected profile. Each
+/// is a `%ghost` file of `authselect-libs`. The export carries the
+/// selection itself
+/// ([`AUTHSELECT_CONF_PATH`](inspectah_core::types::config::AUTHSELECT_CONF_PATH)) as an `authselect select`
+/// line, which writes these again in the image, so copying them would
+/// only give authselect files it then reports as changed. An edit made to
+/// one outside authselect is reported by `authselect check` and becomes
+/// an advisory (`authselect_edit_advisories` in `mod.rs`).
+///
+/// `user-nsswitch.conf` is not here: it is the admin's input to the
+/// generated `nsswitch.conf`, and is collected like any config file.
+const AUTHSELECT_GENERATED: &[&str] = &[
+    "/etc/authselect/nsswitch.conf",
+    "/etc/authselect/system-auth",
+    "/etc/authselect/password-auth",
+    "/etc/authselect/fingerprint-auth",
+    "/etc/authselect/smartcard-auth",
+    "/etc/authselect/postlogin",
+    "/etc/authselect/dconf-db",
+    "/etc/authselect/dconf-locks",
+];
+
+/// Whether the ghost branch leaves `path` alone on [`GHOST_SKIP_EXACT`],
+/// [`GHOST_SKIP_PREFIX`] or [`AUTHSELECT_GENERATED`].
 pub(crate) fn is_ghost_skip(path: &str) -> bool {
-    GHOST_SKIP_EXACT.contains(&path) || GHOST_SKIP_PREFIX.iter().any(|p| path.starts_with(p))
+    GHOST_SKIP_EXACT.contains(&path)
+        || GHOST_SKIP_PREFIX.iter().any(|p| path.starts_with(p))
+        || AUTHSELECT_GENERATED.contains(&path)
+}
+
+// ---------------------------------------------------------------------------
+// authselect check
+// ---------------------------------------------------------------------------
+
+/// What `authselect check` prints when the files it generated were
+/// changed outside it: "Current configuration is not valid. It was
+/// probably modified outside authselect."
+const AUTHSELECT_NOT_VALID: &str = "not valid";
+
+/// What `authselect check` found, from its output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AuthselectCheck {
+    /// The configuration is as authselect wrote it, or authselect could
+    /// not say (not installed, no configuration).
+    Clean,
+    /// Changed outside authselect; the files it named, which may be none.
+    Edited { paths: Vec<String> },
+}
+
+/// Read `authselect check`'s exit code and output. authselect names each
+/// file it finds changed in brackets (`[/etc/authselect/system-auth] has
+/// unexpected content!`), on stdout or stderr depending on the version,
+/// so both are read and every bracketed absolute path is taken.
+pub(crate) fn parse_authselect_check(
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+) -> AuthselectCheck {
+    if exit_code == 0 {
+        return AuthselectCheck::Clean;
+    }
+    let mut paths: Vec<String> = Vec::new();
+    for text in [stdout, stderr] {
+        let mut rest = text;
+        while let Some(open) = rest.find("[/") {
+            let after = &rest[open + 1..];
+            let Some(close) = after.find(']') else {
+                break;
+            };
+            let path = &after[..close];
+            if !path.contains('\n') && !paths.iter().any(|p| p == path) {
+                paths.push(path.to_string());
+            }
+            rest = &after[close + 1..];
+        }
+    }
+    let said_not_valid =
+        stdout.contains(AUTHSELECT_NOT_VALID) || stderr.contains(AUTHSELECT_NOT_VALID);
+    if paths.is_empty() && !said_not_valid {
+        AuthselectCheck::Clean
+    } else {
+        AuthselectCheck::Edited { paths }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +253,7 @@ pub(crate) fn is_machine_state_member(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::config::AUTHSELECT_CONF_PATH;
 
     /// Lines as `rpm -qa --queryformat` prints them with
     /// [`RPM_FILE_FLAGS_FORMAT`]: an empty flags field leaves two spaces.
@@ -245,7 +325,47 @@ bogus cXq /etc/not/flags
     }
 
     #[test]
+    fn authselect_check_output() {
+        assert_eq!(
+            parse_authselect_check(0, "Current configuration is valid.\n", ""),
+            AuthselectCheck::Clean
+        );
+        assert_eq!(
+            parse_authselect_check(127, "", "authselect: command not found\n"),
+            AuthselectCheck::Clean,
+            "no authselect is nothing to report"
+        );
+        assert_eq!(
+            parse_authselect_check(
+                1,
+                "",
+                "[error] [/etc/authselect/system-auth] has unexpected content!\n\
+                 [error] [/etc/nsswitch.conf] has unexpected content!\n\
+                 [error] [/etc/authselect/system-auth] has unexpected content!\n\
+                 Current configuration is not valid. It was probably modified outside authselect.\n",
+            ),
+            AuthselectCheck::Edited {
+                paths: vec![
+                    "/etc/authselect/system-auth".into(),
+                    "/etc/nsswitch.conf".into()
+                ]
+            }
+        );
+        assert_eq!(
+            parse_authselect_check(
+                1,
+                "Current configuration is not valid. It was probably modified outside authselect.\n",
+                ""
+            ),
+            AuthselectCheck::Edited { paths: vec![] }
+        );
+    }
+
+    #[test]
     fn ghost_skips() {
+        assert!(is_ghost_skip("/etc/authselect/nsswitch.conf"));
+        assert!(!is_ghost_skip(AUTHSELECT_CONF_PATH));
+        assert!(!is_ghost_skip("/etc/authselect/user-nsswitch.conf"));
         assert!(is_ghost_skip("/etc/locale.conf"));
         assert!(is_ghost_skip("/etc/crypto-policies/state/current"));
         assert!(!is_ghost_skip("/etc/crypto-policies/config"));
