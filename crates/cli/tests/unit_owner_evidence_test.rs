@@ -663,6 +663,15 @@ fn an_or_operand_the_host_did_not_need_keeps_its_disable() {
             "{label}: helper may be installed:\n{}",
             surfaces.containerfile
         );
+        assert!(
+            surfaces
+                .audit
+                .lines()
+                .any(|l| l.starts_with("**Guarded commands:**")
+                    && l.ends_with("`helper.service` (disable).")),
+            "{label}: the audit report names the guarded command:\n{}",
+            surfaces.audit
+        );
     }
 }
 

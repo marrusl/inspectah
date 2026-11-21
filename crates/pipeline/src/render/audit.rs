@@ -985,6 +985,35 @@ fn render_fcontext_rules(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
     }
 }
 
+/// The audit report's note on the unit commands the Containerfile runs
+/// only if their unit files are in the image, followed by the list.
+const GUARDED_COMMANDS_NOTE: &str = "**Guarded commands:** dnf may or may not install the \
+     packages these units come from, so the Containerfile runs each command only if the unit \
+     files it tests are in the image:";
+
+/// Each command the unit plan guards ([`super::unit_plan::PlannedUnit::guard`]),
+/// as the unit's name in code and its verb: the default target's
+/// `set-default`, then the plan's order.
+fn guarded_unit_commands(snap: &InspectionSnapshot) -> Vec<String> {
+    let plan = super::unit_plan::plan_units(snap, &super::configtree::staged_writes(snap));
+    let target = plan
+        .default_target
+        .iter()
+        .filter(|target| !target.guard().is_empty())
+        .map(|target| {
+            format!(
+                "{} (set-default)",
+                md_code(target.name().as_unit_name().as_str())
+            )
+        });
+    let units = plan
+        .planned
+        .iter()
+        .filter(|unit| !unit.guard().is_empty())
+        .map(|unit| format!("{} ({})", md_code(unit.name().as_str()), unit.action()));
+    target.chain(units).collect()
+}
+
 /// Render Services sections (services, scheduled_tasks).
 fn render_services_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
     // Unit State Changes
@@ -1020,6 +1049,11 @@ fn render_services_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) 
             ));
         }
         lines.push(String::new());
+        let guarded = guarded_unit_commands(snap);
+        if !guarded.is_empty() {
+            lines.push(format!("{GUARDED_COMMANDS_NOTE} {}.", guarded.join(", ")));
+            lines.push(String::new());
+        }
     }
 
     // Scheduled Tasks
