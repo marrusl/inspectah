@@ -251,3 +251,43 @@ fn a_clean_authselect_check_adds_no_advisory_and_exclusion_drops_the_line() {
     let tree = export_session(&refine);
     assert!(!containerfile(tree.path()).contains("authselect select"));
 }
+
+/// An admin's `/etc/default/grub`, edited as driftify edits it.
+const DEFAULT_GRUB: &str = "GRUB_TIMEOUT=5\n\
+     GRUB_CMDLINE_LINUX=\"rd.lvm.lv=rhel/root rhgb quiet transparent_hugepage=never audit=1\"\n";
+
+/// `/etc/default/grub` is a `%ghost` `%config` file of grub2-tools
+/// (`cng`, measured on Fedora 44, RHEL 9.8 and 10.2). The scan collects
+/// it with its content as an advisory that names kargs.d, and neither
+/// export copies it.
+#[test]
+fn a_ghost_default_grub_is_an_advisory_and_never_copied() {
+    let snap = scan(
+        sssd_host()
+            .ghost("grub2-tools", "cng", "/etc/default/grub")
+            .file("/etc/default/grub", DEFAULT_GRUB),
+    );
+
+    let grub = entry(&snap, "/etc/default/grub").expect("the ghost grub defaults are collected");
+    assert!(
+        grub.content.contains("audit=1"),
+        "the content stays visible"
+    );
+    match &grub.disposition {
+        inspectah_core::types::FindingKind::Advisory { rationale, .. } => {
+            assert!(rationale.contains("kargs.d"), "{rationale}");
+        }
+        other => panic!("expected an advisory, got {other:?}"),
+    }
+
+    for (path, tree) in both_exports(&snap) {
+        assert!(
+            !tree.path().join("config/etc/default/grub").exists(),
+            "{path}: /etc/default/grub is never copied"
+        );
+        assert!(
+            tree.path().join("config/etc/sssd/sssd.conf").exists(),
+            "{path}"
+        );
+    }
+}

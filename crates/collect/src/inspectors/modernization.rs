@@ -41,6 +41,9 @@ pub enum DetectionRule {
         path: &'static str,
         default_marker: &'static str,
     },
+    /// The file exists: its mechanism does not apply to an image-mode
+    /// host at all, whatever it holds.
+    FileExists(&'static str),
 }
 
 /// Maps an init script path to its expected systemd unit path.
@@ -81,7 +84,24 @@ pub const MODERNIZATION_PATTERNS: &[ModernizationPattern] = &[
         rationale: "anacrontab has custom entries \u{2014} consider systemd timers instead",
         min_os_major: None,
     },
+    // `/etc/default/grub` is a `%ghost` file of grub2-tools on Fedora and
+    // RHEL, so the ghost branch collects an admin's edit to it. Copied
+    // into the image it changes nothing: bootc does not run
+    // grub2-mkconfig, and kernel arguments come from kargs.d. The
+    // advisory keeps the content visible and the file out of the export.
+    ModernizationPattern {
+        name: "grub_defaults",
+        detection: DetectionRule::FileExists(DEFAULT_GRUB_PATH),
+        replacement: "bootc kargs.d",
+        rationale: "/etc/default/grub is not copied: an image-mode host does not regenerate its \
+             boot loader configuration from it. Put kernel arguments from GRUB_CMDLINE_LINUX that \
+             the image needs in a /usr/lib/bootc/kargs.d/*.toml file.",
+        min_os_major: None,
+    },
 ];
+
+/// The GRUB defaults file `grub2-mkconfig` reads on a package-mode host.
+const DEFAULT_GRUB_PATH: &str = "/etc/default/grub";
 
 /// Extract the OS major version from a [`SourceSystem`]'s `version_id`.
 ///
@@ -145,6 +165,14 @@ pub fn check_modernization_patterns(
                     }
                 }
             }
+            DetectionRule::FileExists(path) => {
+                if exec.file_exists(Path::new(path)) {
+                    advisories.push((
+                        path.to_string(),
+                        FindingKind::advisory(AdvisoryType::Modernization, pattern.rationale),
+                    ));
+                }
+            }
             DetectionRule::FileHasCustomEntries {
                 path,
                 default_marker: _,
@@ -190,6 +218,19 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
     use inspectah_core::types::os::OsRelease;
+
+    // -- GRUB defaults ---------------------------------------------------------
+
+    #[test]
+    fn default_grub_is_an_advisory_whenever_it_exists() {
+        let exec =
+            MockExecutor::new().with_file(DEFAULT_GRUB_PATH, "GRUB_CMDLINE_LINUX=\"audit=1\"\n");
+        let found = check_modernization_patterns(&exec, 9);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, DEFAULT_GRUB_PATH);
+        assert!(found[0].1.is_advisory());
+        assert!(check_modernization_patterns(&MockExecutor::new(), 9).is_empty());
+    }
 
     // -- SysVinit tests --------------------------------------------------------
 
