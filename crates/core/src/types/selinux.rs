@@ -160,6 +160,32 @@ pub fn is_boolean_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
+/// Whether libsemanage accepts `name` as a policy module's name: a letter,
+/// then letters, digits, `_` and `-`, with a `.` allowed only before one
+/// of those, so never first, last or doubled.
+///
+/// This is `semanage_module_validate_name` in
+/// `libsemanage/src/modules.c` (SELinux 3.6), whose comment gives it as
+/// `^[a-zA-Z](\.?[a-zA-Z0-9_-])*$`; libsemanage checks every name it
+/// installs, disables or extracts against it, so a store entry that fails
+/// it is no module `semodule` can act on. A name that passes holds no
+/// whitespace, shell syntax, glob or option word, which is what lets it
+/// stand unquoted in a command suggestion.
+pub fn is_module_name(name: &str) -> bool {
+    let valid = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-');
+    let mut bytes = name.bytes();
+    if !bytes.next().is_some_and(|b| b.is_ascii_alphabetic()) {
+        return false;
+    }
+    while let Some(b) = bytes.next() {
+        if valid(b) || (b == b'.' && bytes.next().is_some_and(valid)) {
+            continue;
+        }
+        return false;
+    }
+    true
+}
+
 /// A boolean the hosts of a fleet set persistently to different values.
 ///
 /// Only a fleet aggregate has these. The merge moves a boolean here, out
@@ -349,6 +375,38 @@ mod tests {
         ];
         for (name, expected) in cases {
             assert_eq!(is_boolean_name(name), *expected, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn module_names_follow_libsemanage_module_name_grammar() {
+        let cases: &[(&str, bool)] = &[
+            ("myapp", true),
+            ("permissive_rhcd_t", true),
+            ("extra_varrun", true),
+            ("a", true),
+            ("my-app", true),
+            ("a.b", true),
+            ("a._", true),
+            ("a.-b", true),
+            ("A9", true),
+            ("", false),
+            ("9lives", false),
+            ("_leading", false),
+            ("-d", false),
+            (".hidden", false),
+            ("trailing.", false),
+            ("double..dot", false),
+            ("apache;id", false),
+            ("y$(id)", false),
+            ("x`id`", false),
+            ("has space", false),
+            ("nl\nRUN id", false),
+            ("glob*", false),
+            ("caf\u{e9}", false),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(is_module_name(name), *expected, "{name:?}");
         }
     }
 }

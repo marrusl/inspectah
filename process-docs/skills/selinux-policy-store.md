@@ -1,6 +1,6 @@
 ---
 name: selinux-policy-store
-description: Where an SELinux host keeps its local modules, disabled modules and persistent booleans, how semanage.conf's store-root is lexed, why warnings never name the store's path, and why the collector reads the policy store rather than /etc/selinux/<type> or semanage boolean -l.
+description: Where an SELinux host keeps its local modules, disabled modules and persistent booleans, how semanage.conf's store-root is lexed, why warnings never name the store's path, which module names may reach a command suggestion, and why the collector reads the policy store rather than /etc/selinux/<type> or semanage boolean -l.
 ---
 
 # The SELinux policy store
@@ -84,6 +84,22 @@ broadly, and an aggregate does not record which hosts disabled it.
 
 Every module directory is read with `read_dir_strict`: `read_dir` drops
 entries it fails to read, and a partial listing looks complete.
+
+Module names are directory entries, or arrive in an imported snapshot,
+so they can hold anything. The collector keeps every name as inventory;
+the Containerfile renderer puts one in a command suggestion, written
+(`# RUN semodule -d <name>`) or implied (the `semodule -c -E <name>`
+instructions), only when `is_module_name()` in
+`crates/core/src/types/selinux.rs` accepts it. That is libsemanage's
+`semanage_module_validate_name` (`libsemanage/src/modules.c`, SELinux
+3.6): `^[a-zA-Z](\.?[a-zA-Z0-9_-])*$`, ASCII only. libsemanage checks
+every module it installs, disables or extracts against it, so a name
+that fails is nothing `semodule` can act on. Such a name goes in a
+`FIXME` of its own, written as a Rust string literal (`{:?}`), so it
+reads as one value and a newline in it is `\n`; `comment::join_lines`
+also escapes terminators in every comment line. A suggestion is a
+comment, but an operator who uncomments `# RUN semodule -d apache;id`
+runs `id`.
 
 A name at two local priorities is listed once. The snapshot holds names,
 not module content, so the Containerfile cannot carry a module: it names

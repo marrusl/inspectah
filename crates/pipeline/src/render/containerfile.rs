@@ -23,7 +23,7 @@ use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 use inspectah_core::types::repo::parse_repo_sections;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
-use inspectah_core::types::selinux::{ModuleOrigin, is_boolean_name};
+use inspectah_core::types::selinux::{ModuleOrigin, is_boolean_name, is_module_name};
 use inspectah_core::types::units::UnitAction;
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
@@ -2089,6 +2089,17 @@ fn port_label_renders(pl: &inspectah_core::types::selinux::SelinuxPortLabel) -> 
         && super::selinux::bare_token_fault(&pl.label_type).is_none()
 }
 
+/// `names` as Rust string literals, comma-separated: each reads as one
+/// value, and a line terminator or control in it is written as an escape,
+/// so it cannot end the comment it is in.
+fn quoted_list(names: &[&str]) -> String {
+    names
+        .iter()
+        .map(|n| format!("{n:?}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let sel = match &snap.selinux {
         Some(s) => s,
@@ -2099,14 +2110,37 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // outer header if there's actual content to show.
     let mut body = Vec::new();
 
+    // A module name comes from a directory entry in the host's store, or
+    // from an imported snapshot, and can hold anything. Only a name
+    // libsemanage accepts goes into a command suggestion, written or
+    // implied (`semodule -c -E <name>`): an operator uncommenting one, or
+    // running it on the host, would otherwise run what the name holds. Any
+    // other name is quoted in a FIXME of its own, which stays one comment
+    // line whatever it contains.
+    let (custom, custom_refused): (Vec<&str>, Vec<&str>) = sel
+        .custom_modules
+        .iter()
+        .map(String::as_str)
+        .partition(|name| is_module_name(name));
+
     // The snapshot names the modules but does not hold them, so the export
     // cannot carry them: name each and say how to get it from the host.
-    if !sel.custom_modules.is_empty() {
+    if !custom.is_empty() {
         body.push(format!(
             "# FIXME: {} custom SELinux policy module(s) not carried: {}",
-            sel.custom_modules.len(),
-            sel.custom_modules.join(", ")
+            custom.len(),
+            custom.join(", ")
         ));
+    }
+    if !custom_refused.is_empty() {
+        body.push(format!(
+            "# FIXME: {} custom SELinux policy module(s) whose name libsemanage does not \
+             accept, not carried, no command suggested: {}",
+            custom_refused.len(),
+            quoted_list(&custom_refused)
+        ));
+    }
+    if !custom.is_empty() {
         body.push(
             "# On the host, `semodule -c -E <name>` writes <name>.cil. Put each file in".into(),
         );
@@ -2121,20 +2155,30 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // for everything it covers, and a fleet aggregate does not record
     // which hosts disabled it. A custom one is not in the image at all
     // until it is carried, so it has to be installed first.
-    if !sel.disabled_modules.is_empty() {
-        let names: Vec<&str> = sel
-            .disabled_modules
-            .iter()
-            .map(|m| m.name.as_str())
-            .collect();
+    let (disabled, disabled_refused): (Vec<_>, Vec<_>) = sel
+        .disabled_modules
+        .iter()
+        .partition(|m| is_module_name(&m.name));
+    if !disabled.is_empty() {
+        let names: Vec<&str> = disabled.iter().map(|m| m.name.as_str()).collect();
         body.push(format!(
             "# FIXME: {} SELinux policy module(s) disabled on the host with `semodule -d`, \
              not carried: {}",
             names.len(),
             names.join(", ")
         ));
-        let local: Vec<&str> = sel
-            .disabled_modules
+    }
+    if !disabled_refused.is_empty() {
+        let names: Vec<&str> = disabled_refused.iter().map(|m| m.name.as_str()).collect();
+        body.push(format!(
+            "# FIXME: {} SELinux policy module(s) disabled on the host whose name libsemanage \
+             does not accept, no command suggested: {}",
+            names.len(),
+            quoted_list(&names)
+        ));
+    }
+    if !disabled.is_empty() {
+        let local: Vec<&str> = disabled
             .iter()
             .filter(|m| m.origin == ModuleOrigin::Local)
             .map(|m| m.name.as_str())
@@ -2146,7 +2190,7 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 local.join(", ")
             ));
         }
-        let flags: Vec<String> = names.iter().map(|n| format!("-d {n}")).collect();
+        let flags: Vec<String> = disabled.iter().map(|m| format!("-d {}", m.name)).collect();
         body.push(format!("# RUN semodule {}", flags.join(" ")));
     }
 

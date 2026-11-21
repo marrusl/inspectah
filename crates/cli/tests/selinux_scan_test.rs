@@ -411,3 +411,58 @@ fn a_configured_store_root_reaches_no_export() {
         assert_in_no_export(&snap, SENTINEL);
     }
 }
+
+/// A module name libsemanage does not accept is named in a FIXME, quoted
+/// so it reads as one value, and is in no command suggestion: the store's
+/// entries are directory names and can hold shell syntax, which an
+/// operator uncommenting `# RUN semodule -d ...` or running
+/// `semodule -c -E <name>` on the host would run. The valid names keep
+/// their suggestions.
+#[test]
+fn a_module_name_libsemanage_refuses_gets_no_command_suggestion() {
+    let mut host = selinux_host();
+    for (priority, module) in [("400", "x;id"), ("400", "y$(id)")] {
+        host = host.file(&format!("{STORE}/modules/{priority}/{module}/cil"), "");
+    }
+    for module in ["apache;id", "y$(id)", "nl\nRUN id"] {
+        host = host.file(&format!("{STORE}/modules/disabled/{module}"), "");
+    }
+    let snap = reload(&scan_selinux(host));
+    let scan_block = selinux_block(render_export(&snap).path());
+    let refine_block = selinux_block(export_session(&session(&snap)).path());
+
+    for expected in [
+        "# FIXME: 2 custom SELinux policy module(s) not carried: myapp, permissive_rhcd_t",
+        "# FIXME: 1 custom SELinux policy module(s) whose name libsemanage does not accept, \
+         not carried, no command suggested: \"x;id\"",
+        "# RUN semodule -i /tmp/selinux/*.cil && rm -rf /tmp/selinux/",
+        "# FIXME: 2 SELinux policy module(s) disabled on the host with `semodule -d`, \
+         not carried: apache, oldapp",
+        "# FIXME: 3 SELinux policy module(s) disabled on the host whose name libsemanage \
+         does not accept, no command suggested: \"apache;id\", \"nl\\nRUN id\", \"y$(id)\"",
+        "# Custom, so install it first (`semodule -c -E <name>` on the host writes \
+         <name>.cil): oldapp",
+        "# RUN semodule -d apache -d oldapp",
+    ] {
+        assert!(
+            scan_block.iter().any(|l| l == expected),
+            "missing {expected:?}: {scan_block:#?}"
+        );
+    }
+    for line in &scan_block {
+        if line.contains("semodule") {
+            for name in ["x;id", "y$(id)", "apache;id", "RUN id"] {
+                assert!(!line.contains(name), "{name:?} is in {line:?}");
+            }
+        }
+    }
+    assert_eq!(
+        commands(&scan_block),
+        [
+            "RUN setsebool -P httpd_can_network_connect on",
+            "RUN setsebool -P virt_use_nfs off",
+        ],
+        "a module name escaped its comment: {scan_block:#?}"
+    );
+    assert_eq!(refine_block, scan_block);
+}
