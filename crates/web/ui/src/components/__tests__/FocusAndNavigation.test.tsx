@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "../../App";
 
@@ -661,6 +661,105 @@ describe("Number key sidebar focus (Bugs 1 & 2)", () => {
     expect(mainContent).toBeTruthy();
     // Focus should be in main content area or on main content itself
     // (rAF may or may not fire in jsdom, but the ref flag should NOT be set)
+  });
+});
+
+describe("A newer focus request beats the section's opening focus", () => {
+  /** Animation frame callbacks held back until `releaseFrames` runs them. */
+  let heldFrames: FrameRequestCallback[] = [];
+
+  /**
+   * Queue animation frames instead of running them, so a keystroke can land
+   * between a section change and the frame that focuses its content, as it
+   * can in a browser when keys arrive faster than frames.
+   */
+  function holdFrames() {
+    heldFrames = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      heldFrames.push(cb);
+      return heldFrames.length;
+    });
+  }
+
+  /** Run every held frame, and any frame those schedule, in order. */
+  async function releaseFrames() {
+    await act(async () => {
+      while (heldFrames.length > 0) heldFrames.shift()!(performance.now());
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** The sidebar link for a section, by its accessible name. */
+  async function sectionLink(label: string) {
+    const nav = await screen.findByRole("navigation", { name: "Sections" });
+    return within(nav).findByRole("link", { name: new RegExp(`^${label}`) });
+  }
+
+  /** Select a section from the keyboard: focus its link, press Enter. */
+  async function activateFromKeyboard(label: string) {
+    const link = await sectionLink(label);
+    link.focus();
+    expect(link).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+  }
+
+  /** Render the app and let its first section's opening focus land. */
+  async function renderSettled() {
+    render(<App />);
+    await screen.findByText("httpd.x86_64");
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+  }
+
+  it("keeps global search focused when Ctrl+K comes before the frame", async () => {
+    await renderSettled();
+    holdFrames();
+
+    await activateFromKeyboard("Network");
+    expect(await screen.findByRole("heading", { level: 2, name: "Network" })).toBeInTheDocument();
+    await userEvent.keyboard("{Control>}k{/Control}");
+    const input = screen.getByLabelText("Search all sections");
+    expect(input).toHaveFocus();
+    await userEvent.keyboard("ng");
+
+    await releaseFrames();
+    await userEvent.keyboard("inx");
+
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue("nginx");
+  });
+
+  it("keeps section search focused when / comes before the frame", async () => {
+    await renderSettled();
+    holdFrames();
+
+    await activateFromKeyboard("Services");
+    expect(await screen.findByRole("heading", { level: 2, name: "Systemd units" })).toBeInTheDocument();
+    await userEvent.keyboard("/");
+    const input = screen.getByLabelText("Filter section items");
+    expect(input).toHaveFocus();
+    await userEvent.keyboard("ht");
+
+    await releaseFrames();
+    await userEvent.keyboard("tpd");
+
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue("httpd");
+  });
+
+  it("still moves focus into main content when nothing newer asked for it", async () => {
+    await renderSettled();
+    holdFrames();
+
+    await activateFromKeyboard("Network");
+    expect(await screen.findByRole("heading", { level: 2, name: "Network" })).toBeInTheDocument();
+    await releaseFrames();
+
+    const main = document.querySelector(".inspectah-layout__main");
+    expect(main).toBeTruthy();
+    expect(main!.contains(document.activeElement)).toBe(true);
   });
 });
 

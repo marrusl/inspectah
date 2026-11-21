@@ -48,7 +48,7 @@ export interface UseKeyboardOptions {
 }
 
 /** Returns true if the event target is a text input where single-key shortcuts should be suppressed. */
-function isTextInput(target: EventTarget | null): boolean {
+export function isTextInput(target: EventTarget | null): boolean {
   if (!target || !(target instanceof HTMLElement)) return false;
   const tag = target.tagName.toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select") return true;

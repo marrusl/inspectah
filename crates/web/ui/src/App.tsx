@@ -21,6 +21,7 @@ import type { MutationKind } from "./hooks/useMutation";
 import { usePendingGuard } from "./hooks/usePendingGuard";
 import { useRpmUpload } from "./hooks/useRpmUpload";
 import { useGroups } from "./hooks/useGroups";
+import { isTextInput } from "./hooks/useKeyboard";
 import { Sidebar } from "./components/Sidebar";
 import { MainContent } from "./components/MainContent";
 import { changedUsers } from "./components/userHistory";
@@ -120,8 +121,19 @@ function SingleHostApp({
   const keyboardNavRef = useRef<boolean>(false);
 
   useEffect(() => {
+    // Keys and clicks can arrive before this frame runs. If one has moved
+    // focus into a text field since (Ctrl+K, "/", a click in a search box),
+    // that request is newer than this one and keeps focus, so what the
+    // operator types next lands where they asked.
+    const focusedWhenScheduled = document.activeElement;
     requestAnimationFrame(() => {
       if (pendingFocusItemRef.current) return;
+
+      const focused = document.activeElement;
+      if (focused !== focusedWhenScheduled && isTextInput(focused)) {
+        keyboardNavRef.current = false;
+        return;
+      }
 
       // When navigation came from a keyboard number key press,
       // focus the sidebar nav control instead of main content.

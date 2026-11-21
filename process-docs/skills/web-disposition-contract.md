@@ -234,8 +234,12 @@ The default target's pending-guard key is `["default_target"]`.
 - State set in an `onFocus` handler needs `act(() => el.focus())`.
   `blur()` on a disabled, focused checkbox does not move focus in jsdom,
   so a test of focus during a pending op starts from a focused row.
-- Opening a section moves focus to its first `role="row"` a frame later;
-  a test that presses `/` right after opening waits two animation frames.
+- Opening a section moves focus to its first `role="row"` a frame later,
+  unless a text field took focus in between (Ctrl+K, `/`, a click in a
+  search box): the newer request keeps focus. A test that starts after
+  navigation waits two animation frames once the heading appears; a test
+  of the race itself queues `requestAnimationFrame` callbacks and releases
+  them by hand, as `FocusAndNavigation.test.tsx` does.
 - A child that must change state its parent owns cannot call the setter
   during render (React warns). Set a request state in render and hand it
   over in a `useLayoutEffect` that resets it; the parent's update then
