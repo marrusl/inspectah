@@ -205,23 +205,35 @@ jobs:
               });
             }
 
-  # Release runs only. This job pushes to the tap's main branch, and a manual
-  # test run must not. Its tag references are left on the release payload
-  # deliberately: the job never runs without one.
+  # Release runs only. These two jobs push to the tap's main branch, and a
+  # manual test run must not. Their tag references are left on the release
+  # payload deliberately: they never run without one.
   #
   # There is no pull request and no review on the tap: the formula lands by
   # direct push (Mark, 2026-08-16), so the gate is here instead. The new
   # formula is installed and tested with brew before anything is pushed, which
-  # is why this runs on macOS: the formula only installs on arm64 macOS.
+  # is why the test job runs on macOS: the formula only installs on arm64
+  # macOS.
   #
-  # HOMEBREW_TAP_TOKEN is visible to exactly one step, the push. The checkout
-  # and the brew steps, which download and run the release binary, never see
-  # it.
-  update-homebrew:
+  # Testing and pushing are separate jobs on separate fresh runners because
+  # the test runs code from the release: the binary, and the formula itself,
+  # which is Ruby. Code that runs on a runner can leave something behind for a
+  # later step on that runner, a git pre-push hook for one, so keeping the
+  # token out of the test steps' environment is not enough while the push
+  # shares their runner. HOMEBREW_TAP_TOKEN exists only in homebrew-push,
+  # which receives data and nothing else, rebuilds the commit from its own
+  # clean checkout, and runs nothing that came from the release.
+  homebrew-test:
     if: github.event_name == 'release'
     runs-on: macos-latest
     permissions:
       contents: read
+    # The data homebrew-push receives, besides the formula artifact. Every one
+    # is set by a step that runs before anything from the release does.
+    outputs:
+      changed: ${{ steps.commit.outputs.changed }}
+      base: ${{ steps.order.outputs.base }}
+      sha256: ${{ steps.asset.outputs.sha256 }}
     env:
       TAP_REPO: marrusl/homebrew-inspectah
       TAP_BRANCH: main
@@ -231,6 +243,49 @@ jobs:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_ANALYTICS: "1"
     steps:
+      # The tap is public, so the checkout needs no tap token, and
+      # persist-credentials: false leaves no credential in .git/config for the
+      # brew steps below to find.
+      - name: Checkout tap repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TAP_REPO }}
+          ref: ${{ env.TAP_BRANCH }}
+          path: homebrew-tap
+          persist-credentials: false
+
+      # A re-run of an older release's packaging run, made after a newer
+      # release already reached the tap, would otherwise rewrite the formula
+      # back to the older version and push it as an ordinary fast-forward.
+      # Gem::Version orders prereleases below their release and compares
+      # numeric parts as numbers (0.9.0-beta.9 < 0.9.0-beta.10 < 0.9.0),
+      # which `sort -V` does not. An equal version carries on: the commit
+      # step below turns an identical formula into a no-op.
+      # homebrew-push repeats this check; keep the two in step.
+      - name: Skip a release older than the tap
+        id: order
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        working-directory: homebrew-tap
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          # The tap commit the formula is rewritten against. homebrew-push
+          # refuses to push unless the tap's main is still here.
+          echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          CURRENT=$(sed -n 's/^  version "\(.*\)"$/\1/p' "$FORMULA")
+          if [ "$(printf '%s' "$CURRENT" | grep -c '^')" -ne 1 ]; then
+            echo "::error::could not read exactly one version from the tap's ${FORMULA}: '${CURRENT}'" >&2
+            exit 1
+          fi
+          ORDER=$(ruby -e 'puts Gem::Version.new(ARGV[0]) <=> Gem::Version.new(ARGV[1])' "$VERSION" "$CURRENT")
+          if [ "$ORDER" = "-1" ]; then
+            echo "::notice::The tap is at ${CURRENT}, newer than ${VERSION}; this release is superseded. Nothing to test or push."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
       # The formula is a BINARY formula: its `install` is
       # `bin.install "inspectah-darwin-arm64" => "inspectah"`, so `url` must
       # point at the release asset of that name. This step previously
@@ -241,6 +296,7 @@ jobs:
       # a PR is all it ever checked.
       - name: Resolve the darwin binary asset
         id: asset
+        if: steps.order.outputs.proceed == 'true'
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           REPO: ${{ github.repository }}
@@ -292,45 +348,8 @@ jobs:
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      # The tap is public, so the checkout needs no tap token, and
-      # persist-credentials: false leaves no credential in .git/config for the
-      # brew steps below to find.
-      - name: Checkout tap repo
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.TAP_REPO }}
-          ref: ${{ env.TAP_BRANCH }}
-          path: homebrew-tap
-          persist-credentials: false
-
-      # A re-run of an older release's packaging run, made after a newer
-      # release already reached the tap, would otherwise rewrite the formula
-      # back to the older version and push it as an ordinary fast-forward.
-      # Gem::Version orders prereleases below their release and compares
-      # numeric parts as numbers (0.9.0-beta.9 < 0.9.0-beta.10 < 0.9.0),
-      # which `sort -V` does not. An equal version carries on: the commit
-      # step below turns an identical formula into a no-op.
-      - name: Skip a release older than the tap
-        id: order
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        working-directory: homebrew-tap
-        run: |
-          set -euo pipefail
-          VERSION="${RELEASE_TAG#v}"
-          CURRENT=$(sed -n 's/^  version "\(.*\)"$/\1/p' "$FORMULA")
-          if [ "$(printf '%s' "$CURRENT" | grep -c '^')" -ne 1 ]; then
-            echo "::error::could not read exactly one version from the tap's ${FORMULA}: '${CURRENT}'" >&2
-            exit 1
-          fi
-          ORDER=$(ruby -e 'puts Gem::Version.new(ARGV[0]) <=> Gem::Version.new(ARGV[1])' "$VERSION" "$CURRENT")
-          if [ "$ORDER" = "-1" ]; then
-            echo "::notice::The tap is at ${CURRENT}, newer than ${VERSION}; this release is superseded. Nothing to test or push."
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "proceed=true" >> "$GITHUB_OUTPUT"
-
+      # homebrew-push repeats this rewrite and compares the result with the
+      # file this job tested; keep the two in step.
       - name: Update formula
         if: steps.order.outputs.proceed == 'true'
         env:
@@ -391,7 +410,19 @@ jobs:
           git commit -m "Update inspectah to ${TAG}"
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      # Taps the local checkout, so brew installs exactly the commit that will
+      # Uploaded before brew runs anything, so the file homebrew-push receives
+      # is the one written above. overwrite: a re-run of this job replaces the
+      # previous attempt's file instead of failing on the name.
+      - name: Hand the formula to the push job
+        if: steps.commit.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-formula
+          path: homebrew-tap/${{ env.FORMULA }}
+          if-no-files-found: error
+          overwrite: true
+
+      # Taps the local checkout, so brew installs exactly the formula that will
       # be pushed: it downloads the release asset, checks the sha256, installs,
       # and runs the formula's own test block.
       - name: Install and test the new formula
@@ -403,12 +434,115 @@ jobs:
           brew test "${TEST_TAP}/inspectah"
           inspectah version
 
+  # Receives three values and one file, and treats all of them as data: it
+  # never runs the formula, the binary or anything else from the release or
+  # from homebrew-test's runner, and receives no .git, hooks or runner state.
+  # It needs no macOS for that, so it runs on Linux.
+  homebrew-push:
+    needs: homebrew-test
+    if: github.event_name == 'release' && needs.homebrew-test.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAP_REPO: marrusl/homebrew-inspectah
+      TAP_BRANCH: main
+      FORMULA: Formula/inspectah.rb
+    steps:
+      - name: Checkout tap repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TAP_REPO }}
+          ref: ${{ env.TAP_BRANCH }}
+          path: homebrew-tap
+          persist-credentials: false
+
+      - name: Receive the tested formula
+        uses: actions/download-artifact@v4
+        with:
+          name: homebrew-formula
+          path: tested-formula
+
+      # Rebuilds the tested commit rather than receiving it, and checks every
+      # input on the way: the tap has not moved, the release is not older than
+      # the tap, and the received file is exactly what the known rewrite of
+      # the base produces. A received value that fails any check fails the
+      # job before the token exists.
+      - name: Rebuild the tested commit
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+          ASSET_NAME: inspectah-darwin-arm64
+          BASE: ${{ needs.homebrew-test.outputs.base }}
+          SHA256: ${{ needs.homebrew-test.outputs.sha256 }}
+        working-directory: homebrew-tap
+        run: |
+          set -euo pipefail
+          TESTED="${GITHUB_WORKSPACE}/tested-formula/inspectah.rb"
+
+          # Version and url come from the release payload, not from the test
+          # job, so only the digest is taken on trust from there.
+          VERSION="${RELEASE_TAG#v}"
+          ASSET_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${ASSET_NAME}"
+
+          # Fail, not re-evaluate. The tested formula was written against
+          # BASE; on a moved main it is no longer the file that would land,
+          # and a hand bump or a newer release may be what moved it. Re-run
+          # homebrew-test, which re-reads the tap, re-tests and then runs
+          # this job again.
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ "$HEAD_SHA" != "$BASE" ]; then
+            echo "::error::the tap's ${TAP_BRANCH} moved from '${BASE}' to ${HEAD_SHA} after the formula was tested. Nothing was pushed; re-run homebrew-test." >&2
+            exit 1
+          fi
+
+          if ! printf '%s' "$SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::received sha256 is not 64 lowercase hex characters: '${SHA256}'" >&2
+            exit 1
+          fi
+
+          # The same check as homebrew-test's, so this job alone guarantees
+          # the tap never moves to an older release.
+          CURRENT=$(sed -n 's/^  version "\(.*\)"$/\1/p' "$FORMULA")
+          if [ "$(printf '%s' "$CURRENT" | grep -c '^')" -ne 1 ]; then
+            echo "::error::could not read exactly one version from the tap's ${FORMULA}: '${CURRENT}'" >&2
+            exit 1
+          fi
+          ORDER=$(ruby -e 'puts Gem::Version.new(ARGV[0]) <=> Gem::Version.new(ARGV[1])' "$VERSION" "$CURRENT")
+          if [ "$ORDER" = "-1" ]; then
+            echo "::error::the tap is at ${CURRENT}, newer than ${VERSION}; refusing to push an older release." >&2
+            exit 1
+          fi
+
+          # The same rewrite as homebrew-test's "Update formula" step.
+          sed -i.orig \
+            -e "s|^  version \".*\"|  version \"${VERSION}\"|" \
+            -e "s|^  url \".*\"|  url \"${ASSET_URL}\"|" \
+            -e "s|^  sha256 \".*\"|  sha256 \"${SHA256}\"|" \
+            "$FORMULA"
+          rm -f "${FORMULA}.orig"
+
+          if ! cmp -s "$FORMULA" "$TESTED"; then
+            echo "::error::the received formula is not the rewrite of ${BASE} for ${RELEASE_TAG}. Nothing was pushed." >&2
+            diff -u "$TESTED" "$FORMULA" >&2 || true
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FORMULA"
+          if git diff --cached --quiet; then
+            echo "::error::homebrew-test reported a change, but the rewrite of ${BASE} changes nothing. Nothing was pushed." >&2
+            exit 1
+          fi
+          git commit -m "Update inspectah to ${RELEASE_TAG}"
+          git show --stat HEAD
+
       # One ref update to the tap's main, so a refused push leaves nothing
       # behind on the tap: no branch, no pull request. If the token cannot
-      # write to main, or main moved since the checkout, git's error is in
+      # write to main, or main moved after the check above, git's error is in
       # this step's log and the job fails.
       - name: Push the formula to the tap
-        if: steps.commit.outputs.changed == 'true'
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         working-directory: homebrew-tap
