@@ -1610,6 +1610,16 @@ VARIANT_ID="workstation"
             ))
         }
 
+        fn file_kind(
+            &self,
+            _path: &std::path::Path,
+        ) -> Result<inspectah_core::traits::executor::FileKind, std::io::Error> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            ))
+        }
+
         fn host_root(&self) -> &std::path::Path {
             std::path::Path::new("/")
         }

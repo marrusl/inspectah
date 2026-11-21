@@ -1,4 +1,4 @@
-use inspectah_core::traits::executor::{ExecResult, Executor};
+use inspectah_core::traits::executor::{ExecResult, Executor, FileKind};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -405,6 +405,19 @@ impl Executor for RealExecutor {
         Ok(target.to_string_lossy().into_owned())
     }
 
+    fn file_kind(&self, path: &Path) -> io::Result<FileKind> {
+        let file_type = std::fs::symlink_metadata(path)?.file_type();
+        Ok(if file_type.is_symlink() {
+            FileKind::Symlink
+        } else if file_type.is_dir() {
+            FileKind::Directory
+        } else if file_type.is_file() {
+            FileKind::Regular
+        } else {
+            FileKind::Special
+        })
+    }
+
     fn host_root(&self) -> &Path {
         Path::new("/")
     }
@@ -512,5 +525,36 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `file_kind` reads each kind with `lstat` and opens nothing: a
+    /// socket and a device are `Special`, and a link is a `Symlink`
+    /// whatever it points at.
+    #[test]
+    fn test_real_executor_file_kind() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("file");
+        std::fs::write(&file, "content").expect("write file");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&file, &link).expect("make link");
+        let socket = dir.path().join("socket");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind socket");
+
+        let exec = RealExecutor::new();
+        for (path, kind) in [
+            (file.as_path(), FileKind::Regular),
+            (dir.path(), FileKind::Directory),
+            (link.as_path(), FileKind::Symlink),
+            (socket.as_path(), FileKind::Special),
+            (Path::new("/dev/null"), FileKind::Special),
+        ] {
+            assert_eq!(exec.file_kind(path).unwrap(), kind, "{}", path.display());
+        }
+        assert_eq!(
+            exec.file_kind(&dir.path().join("missing"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
 }

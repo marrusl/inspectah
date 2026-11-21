@@ -1,4 +1,4 @@
-use inspectah_core::traits::executor::{ExecResult, Executor};
+use inspectah_core::traits::executor::{ExecResult, Executor, FileKind};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -13,6 +13,9 @@ pub struct MockExecutor {
     files: HashMap<String, String>,
     dirs: HashMap<String, Vec<String>>,
     links: HashMap<String, String>,
+    /// Paths that are a FIFO, socket or device ([`FileKind::Special`]).
+    /// Reading one panics: a collector must never open such a path.
+    specials: HashSet<String>,
     /// Link paths whose chain ends at a path that does not exist, so
     /// `resolve_final_target` fails on them as `canonicalize` does.
     dangling_links: HashSet<String>,
@@ -52,6 +55,7 @@ impl MockExecutor {
             files: HashMap::new(),
             dirs: HashMap::new(),
             links: HashMap::new(),
+            specials: HashSet::new(),
             dangling_links: HashSet::new(),
             timeout_commands: HashMap::new(),
             dir_errors: HashMap::new(),
@@ -102,6 +106,15 @@ impl MockExecutor {
 
     pub fn with_link(mut self, path: &str, target: &str) -> Self {
         self.links.insert(path.to_string(), target.to_string());
+        self
+    }
+
+    /// Register a FIFO, socket or device at `path`. `file_kind` reports
+    /// it as [`FileKind::Special`], `file_exists` as present, and
+    /// `read_file` on it panics, so a test proves a collector never opens
+    /// one: opening a FIFO with no writer blocks on a real host.
+    pub fn with_special_file(mut self, path: &str) -> Self {
+        self.specials.insert(path.to_string());
         self
     }
 
@@ -235,6 +248,10 @@ impl Executor for MockExecutor {
 
     fn read_file(&self, path: &Path) -> io::Result<String> {
         let key = path.to_str().unwrap_or("");
+        assert!(
+            !self.specials.contains(key),
+            "read_file opened the special file {key}, which can block on a real host"
+        );
         // Explicit error injection takes priority over registered files.
         if let Some(&error_kind) = self.file_errors.get(key) {
             return Err(io::Error::new(error_kind, path.display().to_string()));
@@ -249,7 +266,7 @@ impl Executor for MockExecutor {
     /// both on a real host.
     fn file_exists(&self, path: &Path) -> bool {
         let key = path.to_str().unwrap_or("");
-        self.files.contains_key(key) || self.dirs.contains_key(key)
+        self.files.contains_key(key) || self.dirs.contains_key(key) || self.specials.contains(key)
     }
 
     fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {
@@ -291,6 +308,28 @@ impl Executor for MockExecutor {
             io::ErrorKind::NotFound
         };
         Err(io::Error::new(kind, path.display().to_string()))
+    }
+
+    /// As `lstat`: every component but the last is resolved through
+    /// registered links, then the last is classified. A link wins over a
+    /// file registered at the same path, as the link is what is there.
+    fn file_kind(&self, path: &Path) -> io::Result<FileKind> {
+        let physical = self.resolve(path, false)?;
+        let key = physical.to_str().unwrap_or("");
+        if self.links.contains_key(key) {
+            Ok(FileKind::Symlink)
+        } else if self.specials.contains(key) {
+            Ok(FileKind::Special)
+        } else if self.dirs.contains_key(key) || self.dir_errors.contains_key(key) {
+            Ok(FileKind::Directory)
+        } else if self.files.contains_key(key) || self.file_errors.contains_key(key) {
+            Ok(FileKind::Regular)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                path.display().to_string(),
+            ))
+        }
     }
 
     fn host_root(&self) -> &Path {
@@ -353,6 +392,7 @@ impl MockExecutor {
     /// link, or an injected read error on one.
     fn is_registered(&self, path: &str) -> bool {
         self.files.contains_key(path)
+            || self.specials.contains(path)
             || self.file_errors.contains_key(path)
             || self.dirs.contains_key(path)
             || self.dir_errors.contains_key(path)

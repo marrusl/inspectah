@@ -14,6 +14,19 @@ impl ExecResult {
     }
 }
 
+/// What a path is, read without following a final symlink and without
+/// opening it ([`Executor::file_kind`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileKind {
+    /// A regular file: the only kind whose content a collector reads.
+    Regular,
+    Directory,
+    Symlink,
+    /// A FIFO, socket, or block or character device. Opening a FIFO with
+    /// no writer blocks, so a collector never opens one of these.
+    Special,
+}
+
 pub trait Executor: Send + Sync {
     fn run(&self, cmd: &str, args: &[&str]) -> ExecResult;
 
@@ -60,6 +73,12 @@ pub trait Executor: Send + Sync {
     /// [`read_dir`]: Executor::read_dir
     fn read_dir_strict(&self, path: &Path) -> io::Result<Vec<String>>;
     fn read_link(&self, path: &Path) -> io::Result<String>;
+
+    /// What `path` is, from `lstat`: a final symlink is reported as one,
+    /// not followed, and nothing is opened. A collector that is about to
+    /// read a file it did not list itself calls this first and reads only
+    /// a [`FileKind::Regular`].
+    fn file_kind(&self, path: &Path) -> io::Result<FileKind>;
     fn host_root(&self) -> &Path;
 
     /// Resolve the final target of a path by following the entire symlink chain.

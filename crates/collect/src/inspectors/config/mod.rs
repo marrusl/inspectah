@@ -6,7 +6,7 @@ pub mod rpmva;
 pub mod walk;
 
 use classify::classify_config_path;
-use inspectah_core::traits::executor::Executor;
+use inspectah_core::traits::executor::{Executor, FileKind};
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
@@ -386,9 +386,11 @@ const GHOST_QUERY_FAILED: &str =
 /// The kind is `RpmOwnedModified` with no `rpm_va_flags`, since rpm did
 /// not verify it.
 ///
-/// Skipped, in order: a path rpm -Va already reported; a path that does
-/// not exist, is a symlink (its state is the link, not content) or is a
-/// directory (`%ghost %dir`); every skip the unowned walk applies
+/// Skipped, in order: a path rpm -Va already reported; a path that is
+/// not a regular file by `lstat` ([`Executor::file_kind`]): absent, a
+/// symlink (its state is the link, not content), a directory (`%ghost
+/// %dir`), or a FIFO, socket or device, which is never opened because
+/// opening a FIFO with no writer blocks; every skip the unowned walk applies
 /// (`is_excluded_unowned`, dev artifacts, DHCP connections, the SELinux
 /// fcontext store); a machine-state member
 /// (`ghost::is_machine_state_member`); and `ghost::is_ghost_skip`.
@@ -423,10 +425,7 @@ fn collect_ghost_configs(
     for ghost in ghost::parse_ghost_files(&result.stdout) {
         let path = ghost.path.as_str();
         let on_host = Path::new(path);
-        if rpm_va_paths.contains(path)
-            || !exec.file_exists(on_host)
-            || exec.read_link(on_host).is_ok()
-            || exec.read_dir(on_host).is_ok()
+        if rpm_va_paths.contains(path) || !matches!(exec.file_kind(on_host), Ok(FileKind::Regular))
         {
             continue;
         }

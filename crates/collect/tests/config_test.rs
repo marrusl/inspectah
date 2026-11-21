@@ -1311,3 +1311,70 @@ fn a_failed_ghost_query_degrades_the_section() {
         other => panic!("expected a degraded section, got {other:?}"),
     }
 }
+
+/// Only a regular file reaches content capture. The ghost rows name a
+/// FIFO, a socket and a device (all registered with
+/// `with_special_file`, whose `read_file` panics), a directory, a symlink
+/// to a regular file, and one regular file. Opening the FIFO with no
+/// writer would block collection on a real host.
+#[test]
+fn a_ghost_path_that_is_not_a_regular_file_is_never_read() {
+    let rows = "\
+myapp g /etc/myapp/control
+myapp g /etc/myapp/socket
+myapp g /etc/myapp/device
+myapp g /etc/myapp/state.d
+myapp g /etc/myapp/current.conf
+myapp g /etc/myapp/real.conf
+";
+    let exec = with_ghosts(MockExecutor::new(), rows)
+        .with_dir("/etc", vec!["myapp"])
+        .with_dir(
+            "/etc/myapp",
+            vec![
+                "control",
+                "socket",
+                "device",
+                "state.d",
+                "current.conf",
+                "real.conf",
+            ],
+        )
+        .with_special_file("/etc/myapp/control")
+        .with_special_file("/etc/myapp/socket")
+        .with_special_file("/etc/myapp/device")
+        .with_dir("/etc/myapp/state.d", vec![])
+        .with_link("/etc/myapp/current.conf", "real.conf")
+        .with_file("/etc/myapp/real.conf", "mode=fast\n");
+    let rpm_state = RpmState {
+        owned_paths: [
+            "/etc/myapp/control",
+            "/etc/myapp/socket",
+            "/etc/myapp/device",
+            "/etc/myapp/state.d",
+            "/etc/myapp/current.conf",
+            "/etc/myapp/real.conf",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect(),
+        ..Default::default()
+    };
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("the inspector succeeds");
+    let SectionData::Config(section) = &output.section else {
+        panic!("expected a config section");
+    };
+    let paths: Vec<&str> = section.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, vec!["/etc/myapp/real.conf"]);
+    assert_eq!(section.files[0].content, "mode=fast\n");
+}
