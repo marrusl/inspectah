@@ -28,8 +28,9 @@ const CRYPTO_POLICIES: &str = include_str!("../../../testdata/fixtures/config/cr
 // ── Helpers ─────────────────────────────────────────────────────────
 
 /// The `rpm -qa` query the config inspector lists `%ghost` files with:
-/// package, `fflags`, path.
-const GHOST_QUERY: &str = "rpm -qa --queryformat [%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES}\\n]";
+/// package, `fflags`, shell-quoted path.
+const GHOST_QUERY: &str =
+    "rpm -qa --queryformat [%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES:shescape}\\n]";
 
 /// `mock` answering [`GHOST_QUERY`] with `stdout`.
 fn with_ghosts(mock: MockExecutor, stdout: &str) -> MockExecutor {
@@ -1153,19 +1154,19 @@ fn a_zero_length_unit_file_under_etc_systemd_system_is_no_config_entry() {
 /// `fflags` (`cng` is config, noreplace, ghost; measured on RHEL 9.8 and
 /// 10.2 for `sssd.conf` and `/etc/machine-id`), path.
 const GHOST_ROWS: &str = "\
-sssd-common cng /etc/sssd/sssd.conf
-sssd-common  /usr/sbin/sssd
-systemd cng /etc/machine-id
-systemd cng /etc/hostname
-systemd cng /etc/locale.conf
-systemd cng /etc/localtime
-grub2-pc g /etc/grub2.cfg
-myapp g /etc/myapp/state.d
-myapp cng /etc/myapp/absent.conf
-myapp cng /etc/myapp/edited.conf
-openssh-server g /etc/ssh/ssh_host_ed25519_key
-mod_ssl g /etc/pki/tls/private/localhost.key
-glibc g /usr/lib64/gconv/gconv-modules.cache
+sssd-common cng '/etc/sssd/sssd.conf'
+sssd-common  '/usr/sbin/sssd'
+systemd cng '/etc/machine-id'
+systemd cng '/etc/hostname'
+systemd cng '/etc/locale.conf'
+systemd cng '/etc/localtime'
+grub2-pc g '/etc/grub2.cfg'
+myapp g '/etc/myapp/state.d'
+myapp cng '/etc/myapp/absent.conf'
+myapp cng '/etc/myapp/edited.conf'
+openssh-server g '/etc/ssh/ssh_host_ed25519_key'
+mod_ssl g '/etc/pki/tls/private/localhost.key'
+glibc g '/usr/lib64/gconv/gconv-modules.cache'
 ";
 
 /// A host whose ghost files exist as the rows above describe: regular
@@ -1320,12 +1321,12 @@ fn a_failed_ghost_query_degrades_the_section() {
 #[test]
 fn a_ghost_path_that_is_not_a_regular_file_is_never_read() {
     let rows = "\
-myapp g /etc/myapp/control
-myapp g /etc/myapp/socket
-myapp g /etc/myapp/device
-myapp g /etc/myapp/state.d
-myapp g /etc/myapp/current.conf
-myapp g /etc/myapp/real.conf
+myapp g '/etc/myapp/control'
+myapp g '/etc/myapp/socket'
+myapp g '/etc/myapp/device'
+myapp g '/etc/myapp/state.d'
+myapp g '/etc/myapp/current.conf'
+myapp g '/etc/myapp/real.conf'
 ";
     let exec = with_ghosts(MockExecutor::new(), rows)
         .with_dir("/etc", vec!["myapp"])
@@ -1377,4 +1378,78 @@ myapp g /etc/myapp/real.conf
     let paths: Vec<&str> = section.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, vec!["/etc/myapp/real.conf"]);
     assert_eq!(section.files[0].content, "mode=fast\n");
+}
+
+/// A ghost path holding a newline is decoded whole, so the shorter path
+/// before the newline is not read in its place. It is a scan warning and
+/// is never read. `/etc/app` is not a ghost file here, so nothing reads
+/// it either.
+#[test]
+fn a_ghost_path_with_a_newline_is_a_warning_and_its_prefix_is_not_read() {
+    let rows = "myapp g '/etc/app\nsettings.conf'\n";
+    let exec = with_ghosts(MockExecutor::new(), rows)
+        .with_dir("/etc", vec![])
+        .with_file("/etc/app", "not the ghost file\n")
+        .with_file("/etc/app\nsettings.conf", "never read\n");
+    let rpm_state = RpmState {
+        owned_paths: ["/etc/app", "/etc/app\nsettings.conf"]
+            .iter()
+            .map(PathBuf::from)
+            .collect(),
+        ..Default::default()
+    };
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("the inspector succeeds");
+    let SectionData::Config(section) = &output.section else {
+        panic!("expected a config section");
+    };
+    assert!(section.files.is_empty(), "{:?}", section.files);
+    assert!(
+        output.warnings.iter().any(|w| w
+            .message
+            .starts_with(r#""/etc/app\nsettings.conf" is a %ghost file"#)),
+        "{:?}",
+        output.warnings
+    );
+}
+
+/// Query output that is not the record format degrades the section and
+/// collects nothing from it.
+#[test]
+fn unreadable_ghost_query_output_degrades_the_section() {
+    let exec = with_ghosts(MockExecutor::new(), "sssd-common cng /etc/sssd/sssd.conf\n")
+        .with_dir("/etc", vec![])
+        .with_file("/etc/sssd/sssd.conf", "[sssd]\n");
+    let rpm_state = RpmState {
+        owned_paths: [PathBuf::from("/etc/sssd/sssd.conf")].into_iter().collect(),
+        ..Default::default()
+    };
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    match ConfigInspector::new().inspect(&ctx, &NullProgress) {
+        Err(InspectorError::Degraded { reason, partial }) => {
+            assert!(reason.contains("could not be read"), "{reason}");
+            assert!(reason.contains("record 1"), "{reason}");
+            let SectionData::Config(section) = &partial.section else {
+                panic!("expected a config section");
+            };
+            assert!(section.files.is_empty());
+        }
+        other => panic!("expected a degraded section, got {other:?}"),
+    }
 }

@@ -48,8 +48,9 @@ const RPM_QA: &str = "rpm -qa --queryformat %{EPOCH}:%{NAME}-%{VERSION}-%{RELEAS
 /// `@@<package>` line, then one owned path per line.
 const RPM_FILE_OWNERSHIP: &str = "rpm -qa --queryformat @@%{NAME}\\n[%{FILENAMES}\\n]";
 /// The `rpm -qa` query the config inspector lists `%ghost` files with:
-/// package, `fflags`, path, one file per line.
-const RPM_FILE_FLAGS: &str = "rpm -qa --queryformat [%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES}\\n]";
+/// package, `fflags`, shell-quoted path, one file per record.
+const RPM_FILE_FLAGS: &str =
+    "rpm -qa --queryformat [%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES:shescape}\\n]";
 const CMDLINE: &str = "BOOT_IMAGE=/vmlinuz root=/dev/mapper/rhel-root ro quiet\n";
 const LSMOD: &str = "Module                  Size  Used by\nbridge                307200  0\n";
 /// The path a `/dev/null` mask resolves to, and what reading it returns.
@@ -226,9 +227,11 @@ impl SysctlHost {
             .map(|(flags, path)| format!("{flags}  c {path}\n"))
             .collect();
 
-        let mut file_flags = String::from("bash  /usr/bin/bash\n");
+        let mut file_flags = String::from("bash  '/usr/bin/bash'\n");
         for (package, flags, path) in &self.file_flags {
-            file_flags.push_str(&format!("{package} {flags} {path}\n"));
+            // As rpm's `shescape`: single quotes, an embedded quote as `'\''`.
+            let quoted = path.replace('\'', r"'\''");
+            file_flags.push_str(&format!("{package} {flags} '{quoted}'\n"));
         }
 
         let mut mock = MockExecutor::new()

@@ -19,25 +19,35 @@
 use super::walk::match_unowned_glob;
 
 /// `rpm -qa` query format for every packaged file with its flags: the
-/// owning package, rpm's `fflags` rendering of `FILEFLAGS`, then the path.
+/// owning package, rpm's `fflags` rendering of `FILEFLAGS`, then the path
+/// shell-quoted, one record per line.
 ///
 /// `%{=NAME}` repeats the scalar tag on each iteration of the file
 /// arrays, which `[%{NAME} ...]` cannot (rpm refuses arrays of different
-/// sizes in one iterator). The path is last, so a path holding a space
-/// survives: the line is split at its first two spaces only.
-pub(crate) const RPM_FILE_FLAGS_FORMAT: &str = "[%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES}\\n]";
+/// sizes in one iterator). A path can hold any byte but NUL, and rpm's
+/// queryformat cannot print a NUL (`\0` comes out as a literal `0`,
+/// measured on rpm 4.16.1.3 and 4.19.1.1), so no plain delimiter can end
+/// a path. `:shescape` wraps the path in single quotes instead and writes
+/// an embedded quote as `'\''`, leaving every other byte as it is, a
+/// newline included (rpm `lib/formats.c`, `shescapeFormat`). The quoted
+/// string ends at the first quote that does not start `'\''`, and the
+/// record's line break follows it, so a newline or a record-like line
+/// inside a path can neither end a record nor start one.
+pub(crate) const RPM_FILE_FLAGS_FORMAT: &str =
+    "[%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES:shescape}\\n]";
 
-/// The letter rpm's `fflags` formatter prints for `RPMFILE_GHOST`.
+/// The letter rpm's `fflags` formatter prints for `RPMFILE_GHOST`. The
+/// whole alphabet is `dcsmnglra` (rpm `lib/formats.c`, `fflagsFormat`);
+/// the parser accepts any lowercase letter, so a letter a later rpm adds
+/// does not make every record unreadable.
 const GHOST_FLAG: char = 'g';
-
-/// Every letter `fflags` can print: doc, config, specfile, missingok,
-/// noreplace, ghost, license, readme, artifact (rpm `lib/formats.c`,
-/// `fflagsFormat`). A flags field with any other byte is not one, and the
-/// line is not trusted.
-const FFLAGS_LETTERS: &str = "dcsmnglra";
 
 /// The directory the config inspector covers.
 const ETC_PREFIX: &str = "/etc/";
+
+/// What `shescape` writes, after the quote that starts it, for one quote
+/// inside the quoted string.
+const SHESCAPED_QUOTE_TAIL: &str = "\\''";
 
 /// A `%ghost` file under `/etc` and the package that lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,30 +56,93 @@ pub(crate) struct GhostFile {
     pub package: String,
 }
 
-/// The ghost files under `/etc` in the output of an `rpm -qa` run with
-/// [`RPM_FILE_FLAGS_FORMAT`], sorted by path. A path two packages list is
-/// kept once, under the first package in path order.
-///
-/// A line whose flags field holds a byte `fflags` never prints is
-/// skipped rather than guessed at.
-pub(crate) fn parse_ghost_files(stdout: &str) -> Vec<GhostFile> {
-    let mut out: Vec<GhostFile> = stdout
-        .lines()
-        .filter_map(|line| {
-            let (package, rest) = line.split_once(' ')?;
-            let (flags, path) = rest.split_once(' ')?;
-            if package.is_empty() || !flags.chars().all(|c| FFLAGS_LETTERS.contains(c)) {
-                return None;
+/// The ghost files under `/etc` in one run of the query.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct GhostQuery {
+    /// Sorted by path. A path two packages list is kept once, under the
+    /// first package in name order.
+    pub files: Vec<GhostFile>,
+    /// Ghost paths under `/etc` holding a control character (a newline,
+    /// a carriage return, a tab), sorted. No export can stage such a
+    /// path, so these are reported and never read.
+    pub refused: Vec<String>,
+}
+
+/// Why the query output could not be read as records. A record that does
+/// not parse leaves the rest of the output unaligned, so nothing after it
+/// is trusted either.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("record {record}: {what}")]
+pub(crate) struct GhostQueryError {
+    /// 1-based.
+    record: usize,
+    what: &'static str,
+}
+
+/// Read the output of an `rpm -qa` run with [`RPM_FILE_FLAGS_FORMAT`]:
+/// `<package> <flags> '<path>'` and a line break, record after record.
+/// Every record must parse. The package field holds no line break or
+/// quote, and the flags field only lowercase letters (none for a file
+/// with no flag, which leaves two spaces).
+pub(crate) fn parse_ghost_files(stdout: &str) -> Result<GhostQuery, GhostQueryError> {
+    let mut query = GhostQuery::default();
+    let mut rest = stdout;
+    let mut record = 0;
+    while !rest.is_empty() {
+        record += 1;
+        let fail = |what| GhostQueryError { record, what };
+        let (package, after) = rest.split_once(' ').ok_or(fail("no package field"))?;
+        if package.is_empty() || package.contains(['\n', '\'']) {
+            return Err(fail("the package field is not a package name"));
+        }
+        let (flags, after) = after.split_once(' ').ok_or(fail("no flags field"))?;
+        if !flags.bytes().all(|b| b.is_ascii_lowercase()) {
+            return Err(fail("the flags field is not fflags letters"));
+        }
+        let (path, after) =
+            take_shell_quoted(after).ok_or(fail("the path is not a shell-quoted string"))?;
+        rest = after
+            .strip_prefix('\n')
+            .ok_or(fail("the record does not end after its path"))?;
+        if !flags.contains(GHOST_FLAG) || !path.starts_with(ETC_PREFIX) {
+            continue;
+        }
+        if path.chars().any(char::is_control) {
+            query.refused.push(path);
+            continue;
+        }
+        query.files.push(GhostFile {
+            path,
+            package: package.to_string(),
+        });
+    }
+    query
+        .files
+        .sort_by(|a, b| a.path.cmp(&b.path).then(a.package.cmp(&b.package)));
+    query.files.dedup_by(|a, b| a.path == b.path);
+    query.refused.sort();
+    query.refused.dedup();
+    Ok(query)
+}
+
+/// The string `shescape` quoted at the start of `text`, decoded, and what
+/// follows its closing quote; `None` when `text` does not start with a
+/// quote or the quote is never closed.
+fn take_shell_quoted(text: &str) -> Option<(String, &str)> {
+    let mut rest = text.strip_prefix('\'')?;
+    let mut decoded = String::new();
+    loop {
+        let quote = rest.find('\'')?;
+        decoded.push_str(&rest[..quote]);
+        let after_quote = &rest[quote + 1..];
+        match after_quote.strip_prefix(SHESCAPED_QUOTE_TAIL) {
+            Some(after) => {
+                decoded.push('\'');
+                rest = after;
             }
-            (flags.contains(GHOST_FLAG) && path.starts_with(ETC_PREFIX)).then(|| GhostFile {
-                path: path.to_string(),
-                package: package.to_string(),
-            })
-        })
-        .collect();
-    out.sort_by(|a, b| a.path.cmp(&b.path).then(a.package.cmp(&b.package)));
-    out.dedup_by(|a, b| a.path == b.path);
-    out
+            None => return Some((decoded, after_quote)),
+        }
+    }
 }
 
 /// Ghost files the branch leaves alone although no exclusion list names
@@ -255,52 +328,143 @@ mod tests {
     use super::*;
     use inspectah_core::types::config::AUTHSELECT_CONF_PATH;
 
-    /// Lines as `rpm -qa --queryformat` prints them with
-    /// [`RPM_FILE_FLAGS_FORMAT`]: an empty flags field leaves two spaces.
-    const QUERY_OUTPUT: &str = "\
-sssd-common cng /etc/sssd/sssd.conf
-sssd-common  /usr/libexec/sssd/sssd_be
-authselect-libs g /etc/authselect/nsswitch.conf
-authselect-libs g /etc/authselect/authselect.conf
-grub2-tools cng /etc/default/grub
-systemd cng /etc/machine-id
-setup cn /etc/hosts
-glibc g /var/cache/ldconfig/aux-cache
-myapp g /etc/my app/state file
-bogus cXq /etc/not/flags
+    /// Records copied byte for byte from `rpm -q authselect-libs
+    /// sssd-common grub2-tools systemd setup --queryformat` with
+    /// [`RPM_FILE_FLAGS_FORMAT`] on RHEL 9.8 (rpm 4.16.1.3), 2026-11-21,
+    /// a subset of whole records. An empty flags field leaves two spaces.
+    const EL9_RECORDS: &str = "\
+authselect-libs g '/etc/authselect/authselect.conf'
+authselect-libs g '/etc/authselect/nsswitch.conf'
+authselect-libs g '/etc/authselect/user-nsswitch.conf'
+sssd-common  '/etc/sssd'
+sssd-common cng '/etc/sssd/sssd.conf'
+sssd-common  '/usr/sbin/sssd'
+grub2-tools cng '/etc/default/grub'
+systemd cng '/etc/machine-id'
+setup cn '/etc/hosts'
 ";
 
-    #[test]
-    fn parses_ghost_files_under_etc_only() {
-        let got = parse_ghost_files(QUERY_OUTPUT);
-        let paths: Vec<(&str, &str)> = got
+    /// The same query on RHEL 10.2 (rpm 4.19.1.1), 2026-11-21. authselect
+    /// 1.5 lists `/etc/nsswitch.conf` and the `/etc/pam.d/` links as
+    /// ghosts, and no longer `user-nsswitch.conf`.
+    const EL10_RECORDS: &str = "\
+authselect-libs g '/etc/authselect/authselect.conf'
+authselect-libs g '/etc/authselect/nsswitch.conf'
+authselect-libs g '/etc/nsswitch.conf'
+authselect-libs g '/etc/pam.d/system-auth'
+sssd-common  '/etc/sssd'
+sssd-common cng '/etc/sssd/sssd.conf'
+sssd-common  '/usr/sbin/sssd'
+grub2-tools cng '/etc/default/grub'
+systemd cng '/etc/machine-id'
+setup cn '/etc/hosts'
+";
+
+    fn paths(query: &GhostQuery) -> Vec<(&str, &str)> {
+        query
+            .files
             .iter()
             .map(|g| (g.path.as_str(), g.package.as_str()))
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn parses_the_measured_records_of_both_releases() {
+        let el9 = parse_ghost_files(EL9_RECORDS).expect("EL9 records parse");
         assert_eq!(
-            paths,
+            paths(&el9),
+            vec![
+                ("/etc/authselect/authselect.conf", "authselect-libs"),
+                ("/etc/authselect/nsswitch.conf", "authselect-libs"),
+                ("/etc/authselect/user-nsswitch.conf", "authselect-libs"),
+                ("/etc/default/grub", "grub2-tools"),
+                ("/etc/machine-id", "systemd"),
+                ("/etc/sssd/sssd.conf", "sssd-common"),
+            ],
+            "ghost /etc paths only: not a directory without g, a /usr path or a cn file"
+        );
+        assert!(el9.refused.is_empty());
+
+        let el10 = parse_ghost_files(EL10_RECORDS).expect("EL10 records parse");
+        assert_eq!(
+            paths(&el10),
             vec![
                 ("/etc/authselect/authselect.conf", "authselect-libs"),
                 ("/etc/authselect/nsswitch.conf", "authselect-libs"),
                 ("/etc/default/grub", "grub2-tools"),
                 ("/etc/machine-id", "systemd"),
-                ("/etc/my app/state file", "myapp"),
+                ("/etc/nsswitch.conf", "authselect-libs"),
+                ("/etc/pam.d/system-auth", "authselect-libs"),
                 ("/etc/sssd/sssd.conf", "sssd-common"),
-            ],
-            "ghost /etc paths only, a path with spaces intact, a non-fflags field refused"
+            ]
+        );
+    }
+
+    /// Paths with quotes, spaces and line breaks, as `shescape` writes
+    /// them, decode whole. A newline inside the quotes, a carriage return,
+    /// and a continuation spelled like a record are all part of the path,
+    /// so `/etc/app` is read only from its own record. A decoded path
+    /// holding a control character is refused, not read.
+    #[test]
+    fn shell_quoted_paths_decode_whole() {
+        let out = concat!(
+            "myapp g '/etc/my app/state file'\n",
+            r"myapp g '/etc/it'\''s/a '\'''\''quoted'\'' name'",
+            "\n",
+            "myapp g '/etc/app\nsettings.conf'\n",
+            "myapp g '/etc/app\npkg g /etc/other'\n",
+            "myapp g '/etc/crlf.conf\r'\n",
+            "myapp g '/etc/tab\there'\n",
+            "myapp g '/etc/app'\n",
+        );
+        let query = parse_ghost_files(out).expect("every record parses");
+        assert_eq!(
+            paths(&query),
+            vec![
+                ("/etc/app", "myapp"),
+                ("/etc/it's/a ''quoted' name", "myapp"),
+                ("/etc/my app/state file", "myapp"),
+            ]
+        );
+        assert_eq!(
+            query.refused,
+            vec![
+                "/etc/app\npkg g /etc/other".to_string(),
+                "/etc/app\nsettings.conf".to_string(),
+                "/etc/crlf.conf\r".to_string(),
+                "/etc/tab\there".to_string(),
+            ]
         );
     }
 
     #[test]
     fn a_path_two_packages_list_is_kept_once() {
-        let got = parse_ghost_files("b g /etc/x\na g /etc/x\n");
+        let got = parse_ghost_files("b g '/etc/x'\na g '/etc/x'\n").unwrap();
         assert_eq!(
-            got,
+            got.files,
             vec![GhostFile {
                 path: "/etc/x".into(),
                 package: "a".into()
             }]
         );
+    }
+
+    /// Output that is not the format fails as a whole, naming the record,
+    /// rather than being split into guesses.
+    #[test]
+    fn malformed_output_is_refused() {
+        for (out, record) in [
+            ("a g /etc/unquoted\n", 1),
+            ("a g '/etc/x'\nb cXq '/etc/y'\n", 2),
+            ("a g '/etc/never closed\n", 1),
+            ("a g '/etc/x' trailing\n", 1),
+            ("a g '/etc/x'", 1),
+            ("a g '/etc/x'\nlonely\n", 2),
+        ] {
+            let err = parse_ghost_files(out).expect_err(out);
+            assert_eq!(err.record, record, "{out:?}: {err}");
+        }
+        assert_eq!(parse_ghost_files(""), Ok(GhostQuery::default()));
     }
 
     #[test]

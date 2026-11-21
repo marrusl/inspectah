@@ -184,6 +184,7 @@ impl Inspector for ConfigInspector {
             &dhcp_paths,
             &mut section,
             &mut degraded_reasons,
+            &mut warnings,
         );
         authselect_edit_advisories(
             exec,
@@ -377,6 +378,15 @@ impl Inspector for ConfigInspector {
 const GHOST_QUERY_FAILED: &str =
     "rpm file-flags query failed, so edits to %ghost files under /etc were not checked";
 
+/// What the degraded reason says when the query's output is not the
+/// format it asked for; the parse error follows.
+const GHOST_QUERY_UNREADABLE: &str = "rpm file-flags query output could not be read, so edits to \
+     %ghost files under /etc were not checked";
+
+/// The scan warning for a ghost path holding a control character.
+const GHOST_PATH_REFUSED: &str = "is a %ghost file under /etc whose name holds a control \
+     character; it was not read and is not carried";
+
 /// The `%ghost` branch (`ghost.rs`): every ghost file under `/etc` that
 /// exists on the host as a regular file is collected as a modified owned
 /// config, with its content, unless a skip below names it.
@@ -401,6 +411,11 @@ const GHOST_QUERY_FAILED: &str =
 /// in place of the `section.files.push` here, so this branch and every
 /// other one share the class's single admission point.
 ///
+/// A ghost path holding a control character is not read and becomes a
+/// scan warning ([`ghost::GhostQuery::refused`]). Output that is not the
+/// query's record format degrades the section, and nothing in it is
+/// collected.
+///
 /// No `/etc` path is RPM-owned when `owned_paths` is empty, so the query
 /// is not run then.
 fn collect_ghost_configs(
@@ -410,6 +425,7 @@ fn collect_ghost_configs(
     dhcp_paths: &HashSet<String>,
     section: &mut ConfigSection,
     degraded_reasons: &mut Vec<String>,
+    warnings: &mut Vec<Warning>,
 ) {
     if rpm_state.owned_paths().is_empty() {
         return;
@@ -422,7 +438,21 @@ fn collect_ghost_configs(
         degraded_reasons.push(GHOST_QUERY_FAILED.to_string());
         return;
     }
-    for ghost in ghost::parse_ghost_files(&result.stdout) {
+    let query = match ghost::parse_ghost_files(&result.stdout) {
+        Ok(query) => query,
+        Err(error) => {
+            degraded_reasons.push(format!("{GHOST_QUERY_UNREADABLE} ({error})"));
+            return;
+        }
+    };
+    for path in &query.refused {
+        warnings.push(Warning {
+            inspector: "config".into(),
+            message: format!("{path:?} {GHOST_PATH_REFUSED}"),
+            ..Default::default()
+        });
+    }
+    for ghost in query.files {
         let path = ghost.path.as_str();
         let on_host = Path::new(path);
         if rpm_va_paths.contains(path) || !matches!(exec.file_kind(on_host), Ok(FileKind::Regular))

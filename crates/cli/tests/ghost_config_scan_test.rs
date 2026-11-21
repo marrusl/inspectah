@@ -2,7 +2,7 @@
 //!
 //! Every host is built with [`SysctlHost`], whose `ghost` rows answer the
 //! config inspector's file-flags query the way `rpm -qa --queryformat
-//! '[%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES}\n]'` prints them, and run
+//! '[%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES:shescape}\n]'` prints them, and run
 //! through the real inspectors. Each case checks the snapshot, then both
 //! export paths: the scan's own export (`render_all`) and a refine
 //! session's export of the scan tarball.
