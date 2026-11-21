@@ -36,8 +36,9 @@ To bump, in one commit or PR: change `channel` in `rust-toolchain.toml`,
 run `cargo clippy --workspace --all-targets -- -D clippy::all` (the hook
 does this when the file is staged), and fix whatever the new lints
 flag. Never bump the file alone and fix the lints later. Targets are
-per toolchain, so a release build after a bump needs `rustup target add`
-run again inside the clone (see `release-process.md`).
+per toolchain; `build-binary.yml`, which builds the release binaries,
+adds its target on every run, so a bump needs nothing more for releases
+(see `release-process.md`).
 
 **The hook type-checks TypeScript but runs no web test.** It gates
 every commit that changes a path outside `.githooks/docs-only-paths`, a

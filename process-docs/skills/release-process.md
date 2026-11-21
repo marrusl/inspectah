@@ -58,156 +58,112 @@ from the most recent release notes file. Key sections:
   make the previous tag not always "the last released version."
 
 **This is a separate commit from the release commit, written after Mark
-has already tagged.** `gh release create` needs the file at tag time,
-but the version-bump commit that gets tagged does not include it --
-both the beta.1 and beta.2 cuts wrote it as a standalone follow-up
-commit, `docs(release): write v<version> release notes`, landing after
-the release commit (and after any skill-fix commits on top of it).
-Do not fold it into the release commit or block the tag on it.
+has already tagged.** The file is read when Mark publishes the draft
+release (see "GitHub release"), not by the build, so the tagged commit
+does not need it: write it as a standalone follow-up commit,
+`docs(release): write v<version> release notes`, landing after the
+release commit (and after any skill-fix commits on top of it). Do not
+fold it into the release commit or block the tag on it.
 
 ## Build targets
 
-Three binaries, all built from the `inspectah-cli` crate:
+Release binaries are built by CI, never by hand. Pushing a `v*` tag runs
+`.github/workflows/release.yml`, which calls
+`.github/workflows/build-binary.yml` to build three binaries from the
+tag. `build-binary.yml` is the same workflow that smoke-builds every
+push to `main`, so the release recipe is exercised long before a tag.
+Each leg builds natively on a runner of its own architecture:
+
+| Target | Runner | Release asset |
+|---|---|---|
+| `aarch64-apple-darwin` | `macos-latest` | `inspectah-darwin-arm64` |
+| `x86_64-unknown-linux-musl` | `ubuntu-24.04` | `inspectah-linux-amd64` |
+| `aarch64-unknown-linux-musl` | `ubuntu-24.04-arm` | `inspectah-linux-arm64-bin` |
+
+Each leg runs `cargo build -p inspectah-cli --release --target <target>`,
+with `musl-tools` installed on Linux, Rust from `rust-toolchain.toml` and
+Node on the same major line as `rust-ci.yml`. The `-bin` suffix on ARM64
+Linux distinguishes it from the macOS ARM64 binary (both are `aarch64`
+but different platforms).
+
+**The asset names are a published contract.** The Homebrew formula's
+`install` is `bin.install "inspectah-darwin-arm64" => "inspectah"`, and
+the `ASSETS` list in `release.yml` must match the matrix in
+`build-binary.yml`. Rename nothing without changing all three.
+
+**Never set `INSPECTAH_SKIP_UI=1` for these builds.** A release binary
+must embed the built frontend, so `crates/web/build.rs` has to run
+`npm ci` and `npm run build` for real. A binary built with the variable
+set ships without a UI, and the failure is invisible until someone runs
+`refine`. The workflow does not set it, and the verify step below would
+fail if the UI were missing.
+
+**Rehearse before tagging.** `gh workflow run release.yml --ref main`
+builds and verifies all three binaries from `main` and stops there: the
+publish job is guarded off on a manual run (see "The release workflows
+can be run without shipping" under Gotchas). To see the release build go
+green before shipping, push the release commit first, run the rehearsal,
+then push the tag. It is optional: the push-to-main smoke build already
+runs the same recipe on every code change.
+
+## Binary verification
+
+The workflow checks what shipped, not what was intended:
+
+- **Preflight**, before anything is built: the tag, the `Cargo.toml`
+  version and the RPM spec version (tilde form) agree. A tag on the
+  wrong commit fails in seconds.
+- **Each build leg** runs its own binary's `inspectah version` and
+  requires `inspectah <Cargo.toml version> (commit <git rev-parse --short
+  HEAD>, built ...)`. On Linux it requires `file` to report a static
+  binary (`statically linked` or `static-pie linked`; both are static).
+  It requires the binary to contain `index.html` and every content-hashed
+  `index-*` name in the freshly built `crates/web/ui/dist/assets`, which
+  confirms the frontend is inside the artifact.
+- **The publish job** reads the commit stamp from the bytes of all three
+  binaries (the Linux ones cannot run on its runner), requires exactly
+  one stamp per binary, requires it to be the tag commit with the tag's
+  version, and writes the three SHA-256 digests to the run summary.
+
+Every check fails the run with an `::error::` line naming the binary and
+what was wrong. Nothing is staged on a workstation any more, so the old
+trap of a skipped copy leaving the previous release's binary under the
+right name cannot happen.
+
+To spot-check a draft by hand, download its assets and read the stamps
+without running them. Expect one distinct line per binary (its count
+may be above 1), identical across all three:
 
 ```bash
-# macOS ARM64 (native)
-cargo build --release -p inspectah-cli
-
-# Linux x86_64 (static musl via zigbuild)
-cargo zigbuild --target x86_64-unknown-linux-musl --release -p inspectah-cli
-
-# Linux ARM64 (static musl via zigbuild)
-cargo zigbuild --target aarch64-unknown-linux-musl --release -p inspectah-cli
-```
-
-Requires `cargo-zigbuild` (`cargo install cargo-zigbuild` if missing),
-`zig` on `PATH`, and both musl targets added via `rustup target add
-x86_64-unknown-linux-musl aarch64-unknown-linux-musl`. Verify all four
-before starting rather than discovering a gap mid-build.
-
-**Never set `INSPECTAH_SKIP_UI=1` for these builds.** That escape hatch
-is only for hand-run gate commands on a release commit that touches no
-frontend source; the pre-commit hook unsets it. A release binary must embed the built frontend, so
-`crates/web/build.rs` has to run `npm ci` and `npm run build` for real.
-A binary built with the variable set ships without a UI and the failure
-is invisible until someone runs `refine`.
-
-Checking that the variable wasn't set is a weak verification, since it
-only tells you what you intended, not what shipped. Verify the embedded
-UI directly instead: check each built binary for `index.html` and a
-content-hashed asset from the fresh `dist` output. That confirms the
-frontend is actually inside the artifact rather than just that nothing
-told it to skip itself.
-
-**`npm ci` needs network and will hang under the default command
-sandbox.** Run the cargo builds with the sandbox disabled. A build that
-appears to hang with no output is this, not a slow compile -- do not
-wait it out. Note `npm ci` deletes and reinstalls `node_modules`, and
-it runs once per target triple, so a three-target release pays that
-cost three times.
-
-Timings: a cold build (after `cargo clean`) measured 73s / 67s / 69s
-per target, 209s total, on an M-series Mac. The earlier "30-60 seconds
-each" figure was a warm-build number; budget roughly double for cold.
-
-**Open question: does `npm ci` really run fresh per target?** The
-v0.9.0-beta.4 builds, warm tree, measured 150s total: native 32.8s,
-x86_64 musl 83s, aarch64 musl 33.9s. That's not a clean comparison
-against the 209s cold figure above, since the tree was warm, so it
-doesn't refute it. But two of the three targets finishing in about 33
-seconds leaves little room for an `npm ci` that deletes and reinstalls
-`node_modules` on each one. Either `build.rs` caches more across targets
-than this skill assumes, or `npm ci` is cheaper now than when that claim
-was written. Unresolved -- don't treat the "three times" framing above as
-settled, and don't budget a release purely off the 209s figure without
-rechecking.
-
-## Binary naming and staging
-
-Copy binaries from build output to release names in the repo root:
-
-| Build output path | Release name |
-|---|---|
-| `target/release/inspectah` | `inspectah-darwin-arm64` |
-| `target/x86_64-unknown-linux-musl/release/inspectah` | `inspectah-linux-amd64` |
-| `target/aarch64-unknown-linux-musl/release/inspectah` | `inspectah-linux-arm64-bin` |
-
-The `-bin` suffix on ARM64 Linux distinguishes it from the macOS ARM64
-binary (both are `aarch64` but different platforms).
-
-Verify the staged files rather than trusting build exit codes -- the
-release names persist between releases, so a copy that silently didn't
-happen leaves the *previous* release's binaries sitting under the right
-names, ready to be uploaded under the new tag:
-
-```bash
-file inspectah-darwin-arm64 inspectah-linux-amd64 inspectah-linux-arm64-bin
-./inspectah-darwin-arm64 version
-shasum -a 256 inspectah-* | tee /dev/stderr
-```
-
-Both Linux binaries must report `statically linked`. Confirm the version
-string is the version being released, not the previous one.
-
-**Reading the stamp and the embedded UI on the Linux binaries without
-running them.** `strings -a` works on all three and needs no emulation.
-Stamp (expect exactly one line per binary, identical across all three):
-
-```bash
+gh release download v<version> -D /tmp/inspectah-v<version>
+cd /tmp/inspectah-v<version>
 for f in inspectah-darwin-arm64 inspectah-linux-amd64 inspectah-linux-arm64-bin; do
   echo "== $f"
-  strings -a "$f" | grep -oE 'inspectah [0-9][^ ]* \(commit [0-9a-f]+, built [0-9-]+\)' | sort | uniq -c
+  LC_ALL=C grep -aoE '[0-9][^ ]* \(commit [0-9a-f]+, built [0-9-]+\)' "$f" | sort | uniq -c
 done
 ```
 
-Embedded UI: the frontend is embedded by path, so the asset names appear
-verbatim. Take the content-hashed names from `crates/web/ui/dist/` and
-count them in each binary (zero means no UI):
+Always use `grep -o` or `grep -c` on these binaries: they embed long
+unbroken runs of text, and an unanchored `grep` dumps kilobytes per match.
 
-```bash
-for f in inspectah-darwin-arm64 inspectah-linux-amd64 inspectah-linux-arm64-bin; do
-  for n in index.html $(ls crates/web/ui/dist/assets | grep -E '^index-'); do
-    printf '%s %s: ' "$f" "$n"; strings -a "$f" | grep -cF "$n"
-  done
-done
-```
+### The embedded commit hash is the tag commit
 
-Always pipe `strings` through `grep -o` or `grep -c`: the binaries embed
-long unbroken runs of text, and an unanchored `grep` dumps kilobytes per
-match line.
-
-### The embedded commit hash is never the tag commit
-
-`crates/cli/build.rs` stamps the binary with `git rev-parse --short HEAD`
-at compile time, and `inspectah version` prints it:
+`crates/cli/build.rs` stamps release builds with `git rev-parse --short
+HEAD`, and `inspectah version` prints it:
 
 ```
 inspectah 0.9.0-beta.2 (commit c52b02bd, built 2026-08-16)
 ```
 
-Because release notes are written as a *separate commit after* tagging
-(see "Release notes" above), HEAD is always ahead of the tag by the time
-the binaries get built. This is structural, not a mistake, and it has
-happened on every recent release:
+CI checks out the tag, so HEAD is the tag commit and all three binaries
+carry the same stamp. The publish job refuses a binary stamped with
+anything else. The build date is not compared, since legs can straddle
+midnight UTC.
 
-| Release | Tag commit | Binary stamp | Delta |
-|---|---|---|---|
-| v0.9.0-beta.1 | `ed39bbd6` | `d4857478` | 2 docs commits above tag |
-| v0.9.0-beta.2 | `dfc32f4f` | `c52b02bd` | 4 docs commits above tag |
-| v0.9.0-beta.4 | `802fdd11` | `9f918710` | 2 docs commits above tag |
-
-Acceptable only while those intervening commits are docs-only. **Confirm
-that before building** -- if this returns anything, the binaries would
-ship code that is not in the tag:
-
-```bash
-git diff --stat <tag>..HEAD -- crates/ Cargo.toml Cargo.lock
-```
-
-**Also confirm all three binaries carry the same stamp.** Agents commit
-docs concurrently, so HEAD can move *between* targets and give the three
-binaries different hashes. Compare the `version` line across all three,
-not just the native one.
+Releases up to v0.9.0-beta.6 were built by hand from a HEAD above the
+tag, after the release-notes commit, so their stamps name a later commit
+than the tag (v0.9.0-beta.4: tag `802fdd11`, stamp `9f918710`). That is
+expected for those binaries, not a defect to chase.
 
 ## Pre-commit checks
 
@@ -298,67 +254,122 @@ the tagged commit. This is not hypothetical: it happened during the
 beta.3 cut, where a `docs(plans):` commit from another session landed
 *between* the release commit and the release-notes commit.
 
-Tag format is v-prefixed: `git tag v0.8.6-beta.5`.
+Tag format is v-prefixed: `git tag v0.8.6-beta.5`. The tag goes on the
+release commit; the binaries are built from it, so commits above it do
+not ship.
 
-Before tagging, confirm nothing above the release commit touches code,
-since the tag point is the release commit and not HEAD:
-
-```bash
-git diff --stat <release-commit>..HEAD -- crates/ Cargo.toml Cargo.lock
-```
-
-**Do not push.** Mark reviews and pushes commit + tag.
+**Do not push.** Mark reviews and pushes the commits and the tag.
+Pushing the tag is what starts the release: `release.yml` builds from
+it at once. A pushed tag that has to move means a new build and a
+deleted draft.
 
 ## GitHub release
 
-After Mark pushes the tag:
+`release.yml` creates the release as a **draft** named `v<version>` with
+the three binaries attached, and never publishes it. The run summary
+shows the SHA-256 of each asset and the command to publish. Mark
+publishes from a checkout that has the release-notes commit:
 
 ```bash
-gh release create v0.8.6-beta.5 \
-  inspectah-darwin-arm64 \
-  inspectah-linux-amd64 \
-  inspectah-linux-arm64-bin \
-  --title "v0.8.6-beta.5" \
-  --notes-file process-docs/release-notes/release-notes-0.8.6-beta.5.md
+gh release edit v<version> --draft=false \
+  --notes-file process-docs/release-notes/release-notes-<version>.md
 ```
 
-**Do not pass `--prerelease`, even on a beta/alpha/rc tag, until 1.0 ships.**
-A pre-release does not show up on the repo home page, and there is no
-stable release yet to hold that spot, so every beta is currently marked as
-a full release on purpose (Mark, 2026-11-04). Confirmed against
-`gh release list`: `v0.9.0-beta.4`, `beta.3`, `beta.2`, `beta.1`, and
-`v0.8.7-beta.1` are all `isPrerelease: false` -- five releases of
-consistent practice. **Expiry condition: once 1.0 ships, betas go back to
-`--prerelease`**, because a stable release then exists to hold the home
-page and a beta no longer needs to.
+Publishing fires `package-release.yml`, which attaches the SRPM and RPMs
+and updates the Homebrew tap (see "Homebrew formula"). Mark's whole part
+of a release is: tag, push, check the `Release` run went green, publish
+the draft, check the `Package release` run went green.
+
+Why a draft rather than a release the workflow publishes itself:
+
+- **A release the workflow creates cannot trigger other workflows.**
+  GitHub raises no workflow events for actions taken with
+  `GITHUB_TOKEN`, so a release published by `release.yml` would never fire
+  `release: published`. The RPMs and the tap update would silently not
+  happen. Mark publishing with his own credentials is what fires them.
+- **The release notes are written after the tag**, so they are not in
+  the tree the workflow builds.
+- **Mark sees the draft before users can download it.**
+
+What the publish job does when the release already exists:
+
+| Release state | Result |
+|---|---|
+| Does not exist | Created as a draft with the three assets |
+| Draft (an earlier attempt) | The three assets are replaced; safe to re-run |
+| Published | The job fails and touches nothing; replacing assets users may already have downloaded is a decision for a person |
+
+The tag must be on the remote: the job runs `gh release create
+--verify-tag`.
+
+**If the publish job fails after the builds passed**, the binaries are
+still in the run as artifacts for 30 days, under their release names.
+Create the draft by hand from them:
+
+```bash
+gh run download <run-id> -p 'inspectah-*' -D dist
+gh release create v<version> dist/inspectah-*/inspectah-* \
+  --draft --verify-tag --title v<version> --notes "Release notes pending."
+```
+
+Re-running a failed tag run replays the workflow as it was at the tag,
+so a fix to `release.yml` on `main` does not reach that run.
+
+**Do not mark the release pre-release, even on a beta/alpha/rc tag,
+until 1.0 ships.** A pre-release does not show up on the repo home page,
+and there is no stable release yet to hold that spot, so every beta is
+currently marked as a full release on purpose (Mark, 2026-11-04). The
+workflow creates the draft without the pre-release flag and `gh release
+edit` above leaves it off. Confirmed against `gh release list`:
+`v0.9.0-beta.4`, `beta.3`, `beta.2`, `beta.1`, and `v0.8.7-beta.1` are
+all `isPrerelease: false`, five releases of consistent practice.
+**Expiry condition: once 1.0 ships, betas go back to pre-release**
+(`--prerelease` on the `gh release edit`), because a stable release then
+exists to hold the home page and a beta no longer needs to.
 
 ## Homebrew formula
 
-Update `homebrew-inspectah/Formula/inspectah.rb`:
+The tap (`marrusl/homebrew-inspectah`, `Formula/inspectah.rb`) is updated
+by the `update-homebrew` job in `package-release.yml` when the release
+is published. Nothing about it is done by hand. The job runs on
+`macos-latest` and, in order:
 
-- Version string
-- Download URL (points to the new GH release asset)
-- SHA256: `shasum -a 256 inspectah-darwin-arm64`
+1. Downloads `inspectah-darwin-arm64` from the published release
+   (waiting up to 300 s), hashes it, and rejects a digest that is not 64
+   characters or is the hash of an empty file.
+2. Checks out the tap's `main` without credentials and rewrites
+   `version`, `url` and `sha256`, then confirms each substitution landed.
+   `install`, `test` and everything else are untouched.
+3. Commits locally. If the formula already matched the release (a
+   re-run, or a tap someone bumped by hand), it logs a notice and stops
+   green without testing or pushing anything.
+4. Taps the local checkout and runs `brew install` and `brew test` on
+   exactly that commit. The formula's `test` block asserts `version.to_s`
+   appears in `inspectah version` output, so the formula's `version` must
+   be the hyphenated `CARGO_PKG_VERSION` form (`0.9.0-beta.7`), not the RPM
+   tilde form.
+5. Pushes that commit directly to the tap's `main`. There is no branch
+   and no pull request: the tap update needs no review (Mark,
+   2026-08-16), and step 4 is the gate instead.
 
-The formula can be *committed* before the GitHub release exists, but
-**must not be pushed until after it does** -- the `url` points at an
-asset that 404s until `gh release create` runs, and a pushed tap in that
-state is broken for every user who taps it.
+The tap has no rulesets and no branch protection, and auto-merge is off
+(checked 2026-11-21), so nothing on the tap side stands between the
+token and `main`.
 
-The tap lives outside the agent sandbox's write allowlist (unlike
-inspectah/driftify/osfragment-assemble), so `git` operations there fail
-with `Unable to create '.git/index.lock': Operation not permitted`.
-Run them with the sandbox disabled.
+**`HOMEBREW_TAP_TOKEN` is visible to the push step only.** The checkout
+and the brew steps, which download and run the release binary, never
+see it, and the checkout leaves no credential in `.git/config`. The
+token needs Contents write on `marrusl/homebrew-inspectah`; it no longer
+needs pull-request access.
 
-The formula's `test` block asserts `version.to_s` appears in
-`inspectah version` output. That holds as long as the version string in
-the formula exactly matches `CARGO_PKG_VERSION` -- note the formula uses
-the hyphenated form (`0.8.6-beta.5`), not the RPM tilde form.
+**If the push is refused**, the step fails with git's error in the log
+and nothing lands on the tap: the push is a single update to `main`.
+The two likely causes are a token without write access to `main`, and
+`main` having moved since the checkout (a hand bump). Fix the cause and
+re-run the job; if the tap is already at the release, the re-run stops
+at step 3.
 
 ## Gotchas
-
-- **Tag must be on remote before `gh release create`.** The command
-  fails if the tag only exists locally. Mark must push first.
 
 - **RPM spec uses tilde, not hyphen.** `0.8.6~beta.5` sorts correctly
   in RPM; `0.8.6-beta.5` would sort *after* `0.8.6` (wrong).
@@ -370,24 +381,36 @@ the hyphenated form (`0.8.6-beta.5`), not the RPM tilde form.
   skipped like this, roll the unreleased changes into the next version.
   The CHANGELOG keeps the skipped version's section as-is; the release
   notes for the new version mention "also included from beta.N" for
-  visibility.
+  visibility. A pushed tag that is skipped leaves a draft release behind;
+  delete it (`gh release delete v<version>`, which keeps the tag) so it
+  cannot be published by mistake.
 
-- **The Homebrew tap can drift past a skipped release.** The tap formula
-  is bumped by hand after `gh release create`, so a release whose tap bump
-  is forgotten leaves the formula pointing at an older tag. beta.4 was
-  released on GitHub but its tap bump was skipped, and the formula stayed
-  at `0.9.0-beta.3` until the beta.5 bump. Check the formula's current
-  version before editing it, and say in the tap commit body when a
-  release was skipped.
+- **The tap follows publishing, not tagging.** `update-homebrew` runs
+  only when a release is published, so a tag that is never published
+  leaves the tap on the previous release, which is correct. A tap bumped
+  by hand ahead of the job turns the job into a green no-op notice. A
+  release published while the job is broken leaves the tap behind
+  without anyone noticing unless the `Package release` run is checked:
+  that happened at beta.4, when the tap was still bumped by hand and the
+  bump was skipped.
 
 - **Cargo.lock regeneration.** After bumping `Cargo.toml`, run
   `cargo check` to update `Cargo.lock`. Don't forget to stage it.
 
-- **Binary names are in .gitignore.** The staged binaries in the repo
-  root are not tracked by git. They exist only for the `gh release
-  create` upload step.
+- **Release-named binaries in a clone's root are leftovers.**
+  `.gitignore` still covers `/inspectah-*`, and clones used for hand-cut
+  releases up to v0.9.0-beta.6 have old binaries sitting there under the
+  release names. Nothing reads or uploads them; delete them if they
+  confuse.
 
-- **The release workflow can be run without shipping.**
+- **The release workflows can be run without shipping.**
+  `release.yml` takes a `workflow_dispatch` with no inputs and builds and
+  verifies from whichever ref it is started on. Its `publish` job is
+  guarded by a job-level
+  `if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')`,
+  so a manual run, even one started on a tag ref, never creates or
+  changes a release.
+
   `package-release.yml` takes a `workflow_dispatch` with a required `tag`
   input, so an existing tag can be rebuilt on demand:
   `gh workflow run package-release.yml --ref main -f tag=v<version>`. The
@@ -395,16 +418,17 @@ the hyphenated form (`0.8.6-beta.5`), not the RPM tilde form.
   tag. A manual run builds and verifies but touches nothing outside the
   runner: both release-asset upload steps and the whole `update-homebrew`
   job are guarded to `github.event_name == 'release'`, so a test run
-  cannot overwrite a published release's assets or open a tap pull
-  request. The built packages come back as workflow artifacts (`srpm`,
+  cannot overwrite a published release's assets or push to the tap. The built packages come back as workflow artifacts (`srpm`,
   `rpm-fedora`, `rpm-el9`, `rpm-el10`), so a green run leaves something to
   inspect.
 
-  **A green manual run is not a green release run.** The two
-  release-upload paths are guarded off on a manual run, and the RPM
-  upload-to-release step has still never executed successfully in this
-  pipeline's history. A manual green proves the build and packaging
-  steps, not the release path.
+  **A green manual run is not a green release run.** The release-upload
+  paths and the tap job are guarded off on a manual run, so a manual
+  green proves the build and packaging steps, not the release path. The
+  RPM upload-to-release step first succeeded on a real release with
+  v0.9.0-beta.6 (run `44862766376`); the direct-push tap job and the
+  draft-creating `release.yml` publish job first run for real at
+  v0.9.0-beta.7.
 
   **Use it.** Before this trigger existed, the only way to fire the
   pipeline was to publish a release, and a failed release run's re-run
