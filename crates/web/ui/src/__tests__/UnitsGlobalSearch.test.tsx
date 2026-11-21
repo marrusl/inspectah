@@ -113,6 +113,11 @@ async function openSection(name: RegExp, heading: string) {
   const nav = await screen.findByRole("navigation", { name: "Sections" });
   await userEvent.click(await within(nav).findByRole("link", { name }));
   expect(await screen.findByRole("heading", { level: 2, name: heading })).toBeInTheDocument();
+  // Opening a section moves focus into main content on the next frame. Let
+  // that land now: landing after the search box is clicked, it takes the
+  // keystrokes and the query stays empty. Frames run in order, so ours runs
+  // after it.
+  await act(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 }
 
 /** Mounts `App` on the units section with these unit fields. */
