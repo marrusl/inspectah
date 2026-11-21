@@ -334,4 +334,89 @@ describe("superseded portal target", () => {
     expect(scroll.mock.contexts[0]).toBe(target);
     expect(target).toHaveClass("inspectah-highlight");
   });
+
+  it("does not reveal a left target when the section content stayed mounted", async () => {
+    // A second section that renders through the same section content, and
+    // an item ahead of the target so the focus a section change gives its
+    // first row never lands on the target.
+    const view = makeAggregateViewWithVariants();
+    const configSection = view.sections[1];
+    configSection.items = [
+      {
+        ...configItemWithVariants(),
+        item_id: { kind: "Config", key: { path: "/etc/aaa.conf" } },
+        variants: undefined,
+      },
+      ...(configSection.items ?? []),
+    ];
+    view.sections.push({
+      id: "services",
+      display_name: "Services",
+      is_decision_section: true,
+      items: [],
+    });
+    mockFetchAggregateView.mockResolvedValue(view);
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    const user = userEvent.setup();
+
+    render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
+    });
+    const sidebar = screen.getByTestId("aggregate-sidebar");
+    await user.click(within(sidebar).getByText("Config Files"));
+    const sectionEl = screen.getByTestId("aggregate-section");
+    const targetSelector = `[data-item-id='${JSON.stringify(configItemWithVariants().item_id)}']`;
+
+    // Navigate from the banner, but hold the reveal frame so the user can
+    // leave the section before it runs.
+    const frames = holdAnimationFrames();
+    await act(async () => {
+      screen
+        .getByRole("button", { name: /navigate to \/etc\/httpd/i })
+        .click();
+    });
+    expect(frames.pending).toBeGreaterThan(0);
+
+    // Leave for Services and come back. Neither move unmounts the section
+    // content, so nothing tears the queued reveal down.
+    await user.click(within(sidebar).getByText("Services"));
+    expect(screen.getByTestId("aggregate-section")).toBe(sectionEl);
+    await user.click(within(sidebar).getByText("Config Files"));
+    expect(screen.getByTestId("aggregate-section")).toBe(sectionEl);
+    // Let the section change's own first-row focus land before the frames.
+    await waitFor(() => {
+      expect(document.activeElement).toHaveAttribute(
+        "data-item-id",
+        JSON.stringify({ kind: "Config", key: { path: "/etc/aaa.conf" } }),
+      );
+    });
+    const target = document.querySelector(targetSelector);
+    expect(target).not.toBeNull();
+    focus.mockClear();
+    frames.flush();
+
+    // The abandoned target is not scrolled to, highlighted or focused.
+    expect(scroll).not.toHaveBeenCalled();
+    expect(document.querySelector(".inspectah-highlight")).toBeNull();
+    expect(focus.mock.contexts).not.toContain(target);
+
+    // A fresh banner request afterwards still reveals its target.
+    frames.release();
+    await act(async () => {
+      screen
+        .getByRole("button", { name: /navigate to \/etc\/httpd/i })
+        .click();
+    });
+    await waitFor(() => {
+      expect(scroll).toHaveBeenCalledTimes(1);
+    });
+    const revealed = document.querySelector(targetSelector);
+    expect(scroll.mock.contexts[0]).toBe(revealed);
+    expect(revealed).toHaveClass("inspectah-highlight");
+    await waitFor(() => {
+      expect(document.activeElement).toBe(revealed);
+    });
+  });
 });

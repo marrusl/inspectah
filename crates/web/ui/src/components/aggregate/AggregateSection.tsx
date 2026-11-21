@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import type {
   AggregateSection,
   AggregateItem,
@@ -108,6 +108,14 @@ export function AggregateSectionContent({
   const [forceExpandZone, setForceExpandZone] = useState<string | null>(null);
   const [revealCounter, setRevealCounter] = useState(0);
 
+  // The committed target, so a queued reveal can tell whether its own target
+  // is still current when the frame runs. Synced in a layout effect, which
+  // always runs before the next animation frame.
+  const currentTargetRef = useRef(pendingNavTarget);
+  useLayoutEffect(() => {
+    currentTargetRef.current = pendingNavTarget;
+  }, [pendingNavTarget]);
+
   // When a nav target arrives for this section, determine which zone
   // contains it and force that zone open. Also expand the item's
   // variant view if it has variants.
@@ -137,10 +145,19 @@ export function AggregateSectionContent({
   useEffect(() => {
     if (!pendingNavTarget || revealCounter === 0) return;
 
-    const targetKey = itemIdKey(pendingNavTarget.itemId);
+    const target = pendingNavTarget;
+    const targetKey = itemIdKey(target.itemId);
 
     // Cancelled on unmount so the reveal never runs against a torn-down tree.
     const frame = requestAnimationFrame(() => {
+      // The target was cleared or replaced while this frame was queued, with
+      // no unmount or new reveal to cancel it: section content stays mounted
+      // across sections. Reveal nothing and leave the target alone. Drop the
+      // forced zone only if nothing replaced the target; a newer one sets its own.
+      if (currentTargetRef.current !== target) {
+        if (currentTargetRef.current === null) setForceExpandZone(null);
+        return;
+      }
       const selector = `[data-item-id='${targetKey.replace(/'/g, "\\'")}']`;
       const el = document.querySelector(selector) as HTMLElement | null;
       if (el) {
