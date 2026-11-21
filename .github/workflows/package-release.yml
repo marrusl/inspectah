@@ -14,8 +14,11 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write
+# Nothing by default; each job is granted what it needs. The jobs that build
+# run npm, cargo and rpmbuild, so they get read access only, and the write
+# access release assets need lives in attach-packages, which runs nothing
+# it is given.
+permissions: {}
 
 # The release payload is empty on a manual run and the dispatch input is empty
 # on a release, so exactly one of these is ever set. The release is named first
@@ -29,6 +32,8 @@ jobs:
   build-srpm:
     runs-on: ubuntu-latest
     container: fedora:latest
+    permissions:
+      contents: read
     steps:
       # Must run before actions/checkout. Without git on PATH the action
       # falls back to downloading a REST API tarball, which leaves no .git
@@ -37,9 +42,13 @@ jobs:
       - name: Install git for checkout
         run: dnf install -y git make
 
+      # persist-credentials: false, because .copr/Makefile runs npm ci and
+      # the UI build in this checkout, and a token left in .git/config would
+      # be readable by any npm lifecycle script.
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
 
       - name: Verify version consistency
         run: |
@@ -77,45 +86,6 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           make -f .copr/Makefile srpm outdir="$PWD"
 
-      # Release runs only. A manual run has no release payload, so
-      # context.payload.release.id is undefined and this step would throw; and
-      # pointing a test run at an already-published tag would replace assets
-      # users may already have downloaded. A manual run builds and verifies
-      # without touching anything outside the runner.
-      - name: Upload SRPM to release
-        if: github.event_name == 'release'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const assets = await github.paginate(
-              github.rest.repos.listReleaseAssets,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: context.payload.release.id,
-                per_page: 100,
-              }
-            );
-            for (const file of fs.readdirSync('.')) {
-              if (!file.endsWith('.src.rpm')) continue;
-              const existing = assets.find((asset) => asset.name === file);
-              if (existing) {
-                await github.rest.repos.deleteReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  asset_id: existing.id,
-                });
-              }
-              await github.rest.repos.uploadReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: context.payload.release.id,
-                name: file,
-                data: fs.readFileSync(file),
-              });
-            }
-
       - name: Upload SRPM artifact
         uses: actions/upload-artifact@v4
         with:
@@ -125,6 +95,8 @@ jobs:
   build-rpm:
     needs: build-srpm
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       # One leg's failure must not cancel the others: until now a single
       # failing target masked whether the rest build at all.
@@ -159,6 +131,7 @@ jobs:
       # Runs on both triggers, mirroring the SRPM artifact upload. Without it a
       # manual run would build the RPMs and discard them, leaving green as the
       # only evidence; with it the packages can be downloaded and inspected.
+      # It is also how attach-packages receives them on a release.
       # The name is per-leg because upload-artifact rejects duplicate names.
       - name: Upload RPM artifact
         uses: actions/upload-artifact@v4
@@ -170,13 +143,46 @@ jobs:
             *.rpm
             !*.src.rpm
 
-      # Release runs only, for the same reasons as the SRPM upload above.
-      - name: Upload RPM to release
-        if: github.event_name == 'release'
+  # Release runs only. A manual run has no release payload, so
+  # context.payload.release.id is undefined and the script would throw; and
+  # pointing a test run at an already-published tag would replace assets
+  # users may already have downloaded. A manual run builds and verifies
+  # without touching anything outside the runner.
+  #
+  # The only job here with write access. It checks nothing out and runs
+  # nothing it receives: the packages arrive as artifacts and are read as
+  # bytes and uploaded.
+  #
+  # !cancelled() keeps the old per-leg behaviour: an RPM leg that fails does
+  # not stop the SRPM and the legs that built from being attached. The failed
+  # leg still fails the run.
+  attach-packages:
+    needs: [build-srpm, build-rpm]
+    if: github.event_name == 'release' && !cancelled() && needs.build-srpm.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # srpm and rpm-<target>, as uploaded above.
+      - name: Receive the packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*rpm*'
+          path: packages
+          merge-multiple: true
+
+      - name: Upload packages to release
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
+            const path = require('path');
+            const dir = 'packages';
+            const files = fs.readdirSync(dir).filter((file) => file.endsWith('.rpm'));
+            if (!files.some((file) => file.endsWith('.src.rpm'))) {
+              core.setFailed('no SRPM among the received packages');
+              return;
+            }
             const assets = await github.paginate(
               github.rest.repos.listReleaseAssets,
               {
@@ -186,8 +192,7 @@ jobs:
                 per_page: 100,
               }
             );
-            for (const file of fs.readdirSync('.')) {
-              if (!file.endsWith('.rpm') || file.endsWith('.src.rpm')) continue;
+            for (const file of files) {
               const existing = assets.find((asset) => asset.name === file);
               if (existing) {
                 await github.rest.repos.deleteReleaseAsset({
@@ -201,8 +206,9 @@ jobs:
                 repo: context.repo.repo,
                 release_id: context.payload.release.id,
                 name: file,
-                data: fs.readFileSync(file),
+                data: fs.readFileSync(path.join(dir, file)),
               });
+              core.info(`attached ${file}`);
             }
 
   # Release runs only. These two jobs push to the tap's main branch, and a
