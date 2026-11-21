@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { AggregateSectionContent } from "../AggregateSection";
 import type {
@@ -332,5 +332,54 @@ describe("AggregateSectionContent", () => {
 
     expect(screen.getByText("/opt/app/server")).toBeInTheDocument();
     expect(screen.queryByText("/opt/app/lib.jar")).not.toBeInTheDocument();
+  });
+
+  describe("pending reveal frame", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("does not run the reveal after the section unmounts", () => {
+      // Hold animation frames so the reveal is still pending at unmount, the
+      // way a slow test runner leaves it when a test ends straight after a
+      // navigate.
+      const held = new Map<number, FrameRequestCallback>();
+      let nextId = 1;
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+        const id = nextId++;
+        held.set(id, cb);
+        return id;
+      });
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+        held.delete(id);
+      });
+
+      const target = cfgItem("/etc/httpd/conf/httpd.conf");
+      const section: AggregateSection = {
+        id: "config_files",
+        display_name: "Config Files",
+        is_decision_section: true,
+        items: [target],
+      };
+      const onNavTargetConsumed = vi.fn();
+
+      const { unmount } = render(
+        <AggregateSectionContent
+          section={section}
+          filterText=""
+          isDecisionSection={true}
+          onToggle={vi.fn()}
+          ack={defaultAck}
+          pendingNavTarget={{ sectionId: section.id, itemId: target.item_id }}
+          onNavTargetConsumed={onNavTargetConsumed}
+        />,
+      );
+      expect(held.size).toBeGreaterThan(0);
+
+      unmount();
+      for (const cb of held.values()) cb(0);
+
+      expect(onNavTargetConsumed).not.toHaveBeenCalled();
+    });
   });
 });

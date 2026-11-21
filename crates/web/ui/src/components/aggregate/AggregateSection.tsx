@@ -139,7 +139,8 @@ export function AggregateSectionContent({
 
     const targetKey = itemIdKey(pendingNavTarget.itemId);
 
-    requestAnimationFrame(() => {
+    // Cancelled on unmount so the reveal never runs against a torn-down tree.
+    const frame = requestAnimationFrame(() => {
       const selector = `[data-item-id='${targetKey.replace(/'/g, "\\'")}']`;
       const el = document.querySelector(selector) as HTMLElement | null;
       if (el) {
@@ -151,6 +152,7 @@ export function AggregateSectionContent({
       setForceExpandZone(null);
       onNavTargetConsumed?.();
     });
+    return () => cancelAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealCounter]);
 

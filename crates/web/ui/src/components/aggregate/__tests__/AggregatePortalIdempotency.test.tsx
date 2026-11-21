@@ -4,7 +4,7 @@
  * Proves that calling the portal navigation (banner/search → expand variant)
  * twice with the same target keeps the variant view open (doesn't toggle shut).
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AggregateApp } from "../../AggregateApp";
@@ -173,10 +173,18 @@ function makeAggregateViewWithVariants(): AggregateViewResponse {
 // Tests
 // ---------------------------------------------------------------------------
 
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
   mockFetchAggregateView.mockReset();
   localStorage.clear();
+  // jsdom does not implement scrollIntoView, which the portal reveal calls.
+  Element.prototype.scrollIntoView = vi.fn();
+});
+
+afterEach(() => {
+  Element.prototype.scrollIntoView = originalScrollIntoView;
 });
 
 describe("portal idempotency", () => {
@@ -222,5 +230,12 @@ describe("portal idempotency", () => {
 
     // Variant view must still be visible — NOT toggled shut
     expect(screen.getByTestId("variant-view")).toBeInTheDocument();
+
+    // Let the reveal frame run while the tree is still mounted. On a slow
+    // runner it fires before teardown anyway; waiting for it makes that
+    // deterministic.
+    await waitFor(() => {
+      expect(document.querySelector(".inspectah-highlight")).not.toBeNull();
+    });
   });
 });
