@@ -215,8 +215,8 @@ fn an_unreadable_disabled_directory_is_reported() {
     let warning = snap
         .warnings
         .iter()
-        .find(|w| w.message.contains(&disabled))
-        .unwrap_or_else(|| panic!("no warning names {disabled}: {:?}", snap.warnings));
+        .find(|w| w.message.contains("modules/disabled/ in"))
+        .unwrap_or_else(|| panic!("no warning names disabled/: {:?}", snap.warnings));
     assert!(
         warning.message.contains("may include disabled ones"),
         "{}",
@@ -298,6 +298,42 @@ fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files
 }
 
+/// `needle` is in no file either export of `snap` writes and nowhere in
+/// refine's view or sections.
+fn assert_in_no_export(snap: &InspectionSnapshot, needle: &str) {
+    let scan_tree = render_export(snap);
+    let session = session(snap);
+    let refine_tree = export_session(&session);
+    for (route, tree) in [("scan", &scan_tree), ("refine", &refine_tree)] {
+        let files = files_under(tree.path());
+        assert!(
+            files
+                .iter()
+                .any(|f| f.ends_with("inspection-snapshot.json")),
+            "{route}: {files:?}"
+        );
+        for file in files {
+            let bytes = std::fs::read(&file).expect("an export file reads");
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains(needle),
+                "{route}: {} holds {needle:?}",
+                file.display()
+            );
+        }
+    }
+    let view = serde_json::to_string(&inspectah_web::adapter::build_web_view(&session))
+        .expect("the view serializes");
+    assert!(!view.contains(needle), "refine's view holds {needle:?}");
+    let sections = inspectah_web::adapter::build_web_sections(
+        &inspectah_refine::projection::project_reference(&session.snapshot_projected()),
+    );
+    let sections = serde_json::to_string(&sections).expect("the sections serialize");
+    assert!(
+        !sections.contains(needle),
+        "refine's sections hold {needle:?}"
+    );
+}
+
 /// A `booleans.local` line the parser cannot read is reported by its line
 /// number, and its text is in no file either export writes and nowhere in
 /// refine's view or sections: a warning is not redacted, and the line can
@@ -314,36 +350,64 @@ fn an_unreadable_booleans_local_line_reaches_no_export() {
         "{:?}",
         snap.warnings
     );
+    assert_in_no_export(&snap, SENTINEL);
+}
 
-    let scan_tree = render_export(&snap);
-    let session = session(&snap);
-    let refine_tree = export_session(&session);
-    for (route, tree) in [("scan", &scan_tree), ("refine", &refine_tree)] {
-        let files = files_under(tree.path());
-        assert!(
-            files
-                .iter()
-                .any(|f| f.ends_with("inspection-snapshot.json")),
-            "{route}: {files:?}"
+/// A `store-root` that `semanage.conf` sets selects the store the
+/// collector reads, and nothing of its text reaches a diagnostic: the
+/// value runs to the end of its line, a `#` included, so an operator's
+/// note after the path is part of it, and warnings are not redacted.
+/// Each store problem the collector reports is hit: a store that is not
+/// there (the modules and `booleans.local`), and one that is there but
+/// whose priority directory, `disabled/` and a `booleans.local` line do
+/// not read.
+#[test]
+fn a_configured_store_root_reaches_no_export() {
+    const SENTINEL: &str = "inspectah-sentinel-credential-4b8e";
+    let root = format!("/var/lib/selinux # password={SENTINEL}");
+    let conf = format!("store-root = {root}\n");
+    let store = format!("{root}/targeted/active");
+
+    let missing = selinux_host().file("/etc/selinux/semanage.conf", &conf);
+    let unreadable = selinux_host()
+        .file("/etc/selinux/semanage.conf", &conf)
+        .file(&format!("{store}/modules/400/myapp/cil"), "")
+        .file(&format!("{store}/modules/disabled/apache"), "")
+        .file(&format!("{store}/booleans.local"), "virt_use_nfs=maybe\n")
+        .dir_iteration_error(
+            &format!("{store}/modules/400"),
+            std::io::ErrorKind::PermissionDenied,
+        )
+        .dir_error(
+            &format!("{store}/modules/disabled"),
+            std::io::ErrorKind::PermissionDenied,
         );
-        for file in files {
-            let bytes = std::fs::read(&file).expect("an export file reads");
+    // (host, the warnings it must raise, by a fragment of each)
+    let cases: [(&str, SysctlHost, &[&str]); 2] = [
+        (
+            "missing store",
+            missing,
+            &["custom policy modules not read", "setsebool -P not read"],
+        ),
+        (
+            "unreadable store",
+            unreadable,
+            &[
+                "custom policy modules not read",
+                "disabled policy modules not read",
+                "booleans.local lines not read",
+            ],
+        ),
+    ];
+    for (case, host, expected) in cases {
+        let snap = reload(&scan_selinux(host));
+        for fragment in expected {
             assert!(
-                !String::from_utf8_lossy(&bytes).contains(SENTINEL),
-                "{route}: {} holds the line",
-                file.display()
+                snap.warnings.iter().any(|w| w.message.contains(fragment)),
+                "{case}: no {fragment:?} warning: {:?}",
+                snap.warnings
             );
         }
+        assert_in_no_export(&snap, SENTINEL);
     }
-    let view = serde_json::to_string(&inspectah_web::adapter::build_web_view(&session))
-        .expect("the view serializes");
-    assert!(!view.contains(SENTINEL), "refine's view holds the line");
-    let sections = inspectah_web::adapter::build_web_sections(
-        &inspectah_refine::projection::project_reference(&session.snapshot_projected()),
-    );
-    let sections = serde_json::to_string(&sections).expect("the sections serialize");
-    assert!(
-        !sections.contains(SENTINEL),
-        "refine's sections hold the line"
-    );
 }

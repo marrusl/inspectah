@@ -1,6 +1,6 @@
 ---
 name: selinux-policy-store
-description: Where an SELinux host keeps its local modules, disabled modules and persistent booleans, how semanage.conf's store-root is lexed, and why the collector reads the policy store rather than /etc/selinux/<type> or semanage boolean -l.
+description: Where an SELinux host keeps its local modules, disabled modules and persistent booleans, how semanage.conf's store-root is lexed, why warnings never name the store's path, and why the collector reads the policy store rather than /etc/selinux/<type> or semanage boolean -l.
 ---
 
 # The SELinux policy store
@@ -15,10 +15,24 @@ writes out on every commit. The **policy store** that `semodule` and
 | Package-mode RHEL 9 and 10 | `/var/lib/selinux` | libsemanage's default; `semanage.conf` sets no `store-root` |
 | bootc images (`rhel-bootc:10.3`) | `/etc/selinux` | `store-root=/etc/selinux` in `/etc/selinux/semanage.conf` |
 
-The active store is `<store-root>/<type>/active`. `active_store()` in
-`crates/collect/src/inspectors/selinux.rs` reads `store-root` from
+The active store is `<store-root>/<type>/active`. `PolicyStore::active()`
+in `crates/collect/src/inspectors/selinux.rs` reads `store-root` from
 `semanage.conf` and falls back to `/var/lib/selinux`, so read anything
-else in the store through it.
+else in the store through it (`PolicyStore::join()`).
+
+**A diagnostic never names the store's path.** Both parts of it are
+configuration (`store-root`, and `SELINUXTYPE` from `/etc/selinux/config`),
+each value runs to the end of its line, and warnings are not redacted, so
+`store-root = /var/lib/selinux # password=...` would carry the note into
+both exports' snapshot and audit report, the README and the HTML report.
+`PolicyStore` has no `Display`; a warning names the store by
+`PolicyStore::LABEL`, a place in it by its relative name
+(`modules/disabled/ in ...`, `the priority 400 modules in ...`), and an
+error by `e.kind()` only, since an I/O error's text can hold the path
+(the size-cap error in `RealExecutor::read_file` does, and so does every
+`MockExecutor` error). A new warning about the store follows the same
+rule; `a_configured_store_root_reaches_no_export` checks every file of
+both exports and refine's view for a sentinel in `store-root`.
 
 `store_root_from_conf()` follows libsemanage's own lexer and parser
 (`libsemanage/src/conf-scan.l` and `conf-parse.y`, SELinux 3.6), not a

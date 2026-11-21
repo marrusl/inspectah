@@ -76,7 +76,7 @@ impl Inspector for SelinuxInspector {
 
         collect_selinux_mode(exec, &mut section, &mut degraded_reasons);
         let policy_type = read_policy_type(exec);
-        let store = active_store(exec, &policy_type);
+        let store = PolicyStore::active(exec, &policy_type);
         collect_custom_modules(exec, &mut section, &mut warnings, &store);
         collect_boolean_overrides(
             exec,
@@ -191,16 +191,46 @@ const DEFAULT_STORE_ROOT: &str = "/var/lib/selinux";
 /// The `semanage.conf` key that relocates the policy store.
 const STORE_ROOT_KEY: &str = "store-root";
 
-/// The active policy store for `policy_type`:
-/// `<store-root>/<policy_type>/active`, with `store-root` read from
-/// `semanage.conf` by [`store_root_from_conf`].
-fn active_store(exec: &dyn Executor, policy_type: &str) -> String {
-    let root = exec
-        .read_file(Path::new(SEMANAGE_CONF))
-        .ok()
-        .and_then(|content| store_root_from_conf(&content))
-        .unwrap_or_else(|| DEFAULT_STORE_ROOT.to_string());
-    format!("{}/{policy_type}/active", root.trim_end_matches('/'))
+/// The active policy store: `<store-root>/<policy_type>/active`.
+///
+/// Both parts of its path come from configuration, `store-root` from
+/// `semanage.conf` and the policy type from `/etc/selinux/config`, and a
+/// value there runs to the end of its line, so the path can hold any text
+/// an operator wrote after it, a credential note included. Warnings are
+/// not redacted. The path is therefore used to reach the filesystem and
+/// never written into a diagnostic: the type has no `Display`, and a
+/// diagnostic names the store by [`PolicyStore::LABEL`].
+struct PolicyStore {
+    path: String,
+}
+
+impl PolicyStore {
+    /// How a diagnostic names the store, whatever its configured path.
+    const LABEL: &'static str =
+        "the active policy store that /etc/selinux/semanage.conf and /etc/selinux/config select";
+
+    /// The store for `policy_type`, with `store-root` read from
+    /// `semanage.conf` by [`store_root_from_conf`].
+    fn active(exec: &dyn Executor, policy_type: &str) -> Self {
+        let root = exec
+            .read_file(Path::new(SEMANAGE_CONF))
+            .ok()
+            .and_then(|content| store_root_from_conf(&content))
+            .unwrap_or_else(|| DEFAULT_STORE_ROOT.to_string());
+        Self {
+            path: format!("{}/{policy_type}/active", root.trim_end_matches('/')),
+        }
+    }
+
+    /// The store itself, for filesystem access only.
+    fn root(&self) -> &Path {
+        Path::new(&self.path)
+    }
+
+    /// `relative` inside the store, for filesystem access only.
+    fn join(&self, relative: &str) -> std::path::PathBuf {
+        Path::new(&self.path).join(relative)
+    }
 }
 
 /// The `store-root` that `semanage.conf` sets, read as libsemanage's
@@ -303,21 +333,27 @@ fn is_policy_generated(priority: u16, name: &str) -> bool {
 /// missing store is no finding on a host without SELinux; on a host with
 /// an SELinux config it is reported, since the modules could not be read.
 /// A store with no `disabled/` has nothing disabled.
+///
+/// A warning names a directory by its place in the store and an error by
+/// its kind only: an I/O error's text can carry the path (see
+/// [`PolicyStore`]).
 fn collect_custom_modules(
     exec: &dyn Executor,
     section: &mut SelinuxSection,
     warnings: &mut Vec<Warning>,
-    store: &str,
+    store: &PolicyStore,
 ) {
-    let modules_dir = format!("{store}/modules");
-    let entries = match exec.read_dir_strict(Path::new(&modules_dir)) {
+    let label = PolicyStore::LABEL;
+    let modules_dir = store.join("modules");
+    let entries = match exec.read_dir_strict(&modules_dir) {
         Ok(entries) => entries,
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound
                 || exec.file_exists(Path::new(SELINUX_CONFIG))
             {
                 warnings.push(selinux_warning(format!(
-                    "SELinux custom policy modules not read: {modules_dir}: {e}"
+                    "SELinux custom policy modules not read: modules/ in {label}: {}",
+                    e.kind()
                 )));
             }
             return;
@@ -329,27 +365,28 @@ fn collect_custom_modules(
         .iter()
         .filter_map(|e| local_module_priority(e).map(|p| (p, e)))
     {
-        let dir = format!("{modules_dir}/{dir}");
-        match exec.read_dir_strict(Path::new(&dir)) {
+        match exec.read_dir_strict(&modules_dir.join(dir)) {
             Ok(names) => local.extend(
                 names
                     .into_iter()
                     .filter(|name| !is_policy_generated(priority, name)),
             ),
             Err(e) => warnings.push(selinux_warning(format!(
-                "SELinux custom policy modules not read: {dir}: {e}"
+                "SELinux custom policy modules not read: the priority {priority} modules in \
+                 {label}: {}",
+                e.kind()
             ))),
         }
     }
 
-    let disabled_dir = format!("{modules_dir}/{DISABLED_DIR}");
-    let disabled = match exec.read_dir_strict(Path::new(&disabled_dir)) {
+    let disabled = match exec.read_dir_strict(&modules_dir.join(DISABLED_DIR)) {
         Ok(names) => names,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => {
             warnings.push(selinux_warning(format!(
-                "SELinux disabled policy modules not read: {disabled_dir}: {e}; the modules \
-                 listed as custom may include disabled ones"
+                "SELinux disabled policy modules not read: modules/{DISABLED_DIR}/ in {label}: \
+                 {}; the modules listed as custom may include disabled ones",
+                e.kind()
             )));
             Vec::new()
         }
@@ -481,10 +518,10 @@ fn collect_boolean_overrides(
     section: &mut SelinuxSection,
     warnings: &mut Vec<Warning>,
     degraded_reasons: &mut Vec<String>,
-    store: &str,
+    store: &PolicyStore,
 ) {
-    let local = format!("{store}/{BOOLEANS_LOCAL}");
-    match exec.read_file(Path::new(&local)) {
+    let label = PolicyStore::LABEL;
+    match exec.read_file(&store.join(BOOLEANS_LOCAL)) {
         Ok(content) => {
             let (booleans, faults) = parse_booleans_local(&content);
             section.boolean_overrides = booleans;
@@ -494,16 +531,14 @@ fn collect_boolean_overrides(
                     .map(|(line, fault)| format!("line {line} ({})", fault.describe()))
                     .collect();
                 warnings.push(selinux_warning(format!(
-                    "SELinux booleans.local lines not read in {local}: {}",
+                    "SELinux {BOOLEANS_LOCAL} lines not read in {label}: {}",
                     lines.join(", ")
                 )));
             }
             return;
         }
         // A readable store with no `booleans.local`: nothing set locally.
-        Err(e)
-            if e.kind() == std::io::ErrorKind::NotFound && exec.file_exists(Path::new(store)) =>
-        {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && exec.file_exists(store.root()) => {
             return;
         }
         Err(_) => {}
@@ -521,7 +556,8 @@ fn collect_boolean_overrides(
         return;
     }
     warnings.push(selinux_warning(format!(
-        "SELinux booleans set with setsebool -P not read: {local} is not readable and semanage boolean -l -C failed"
+        "SELinux booleans set with setsebool -P not read: {BOOLEANS_LOCAL} in {label} is not \
+         readable and semanage boolean -l -C failed"
     )));
     degraded_reasons.push("persistent SELinux booleans unavailable".into());
 }
@@ -1152,9 +1188,11 @@ mod tests {
         let (section, warnings) = inspect_with(&module_host("targeted", None, &[]));
         assert!(section.custom_modules.is_empty());
         assert!(
-            warnings.iter().any(|w| w
-                .message
-                .contains("modules not read: /var/lib/selinux/targeted/active/modules")),
+            warnings.iter().any(|w| w.message
+                == format!(
+                    "SELinux custom policy modules not read: modules/ in {}: entity not found",
+                    PolicyStore::LABEL
+                )),
             "{warnings:?}"
         );
 
@@ -1240,13 +1278,18 @@ mod tests {
             ("/var/lib/selinux", "400", &["myapp"]),
             ("/var/lib/selinux", "disabled", &["apache"]),
         ];
-        // (directory that fails part way, what is still listed)
-        let cases: &[(String, &[&str])] = &[
-            (modules.to_string(), &[]),
-            (format!("{modules}/400"), &[]),
-            (format!("{modules}/disabled"), &["myapp"]),
+        // (directory that fails part way, what is still listed, how the
+        // warning names it)
+        let cases: &[(String, &[&str], &str)] = &[
+            (modules.to_string(), &[], "modules/ in"),
+            (format!("{modules}/400"), &[], "the priority 400 modules in"),
+            (
+                format!("{modules}/disabled"),
+                &["myapp"],
+                "modules/disabled/ in",
+            ),
         ];
-        for (dir, custom) in cases {
+        for (dir, custom, place) in cases {
             let exec = module_host("targeted", None, layout)
                 .with_dir_iteration_error(dir, std::io::ErrorKind::PermissionDenied);
             let (section, warnings) = inspect_with(&exec);
@@ -1254,7 +1297,7 @@ mod tests {
             assert!(
                 warnings
                     .iter()
-                    .any(|w| w.message.contains("not read") && w.message.contains(dir.as_str())),
+                    .any(|w| w.message.contains("not read") && w.message.contains(place)),
                 "{dir}: {warnings:?}"
             );
         }
@@ -1270,9 +1313,93 @@ mod tests {
         assert!(
             warnings
                 .iter()
-                .any(|w| w.message.contains(&format!("{modules}/disabled"))),
+                .any(|w| w.message.contains("modules/disabled/ in")),
             "{warnings:?}"
         );
+    }
+
+    // ---- Test 7d: the configured store path reaches no warning ----
+
+    /// The store's path comes from `semanage.conf` and `/etc/selinux/config`,
+    /// and a value in either runs to the end of its line, so an operator's
+    /// note after it is part of the path. Every warning about the store
+    /// names it by [`PolicyStore::LABEL`] and an error by its kind, never by
+    /// the path, which an I/O error's text also carries: warnings are not
+    /// redacted.
+    #[test]
+    fn store_warnings_never_carry_the_configured_path() {
+        const ROOT_SENTINEL: &str = "inspectah-sentinel-credential-1e5a";
+        const TYPE_SENTINEL: &str = "inspectah-sentinel-credential-6d0c";
+        let policy_type = format!("targeted # {TYPE_SENTINEL}");
+        let root = format!("/var/lib/selinux # password={ROOT_SENTINEL}");
+        let conf = format!("store-root = {root}\n");
+        let store = format!("{root}/{policy_type}/active");
+        let label = PolicyStore::LABEL;
+
+        // A store that is not there: the modules and booleans.local.
+        let missing = MockExecutor::new()
+            .with_file(
+                "/etc/selinux/config",
+                &format!("SELINUX=enforcing\nSELINUXTYPE={policy_type}\n"),
+            )
+            .with_file("/etc/selinux/semanage.conf", &conf);
+        // One that is there, with a priority directory, disabled/ and a
+        // booleans.local line that do not read.
+        let unreadable = module_host(&policy_type, Some(&conf), &[(&root, "400", &["myapp"])])
+            .with_dir(&store, vec!["modules", "booleans.local"])
+            .with_file(&format!("{store}/booleans.local"), "virt_use_nfs=maybe\n")
+            .with_dir_iteration_error(
+                &format!("{store}/modules/400"),
+                std::io::ErrorKind::PermissionDenied,
+            )
+            .with_dir_error(
+                &format!("{store}/modules/disabled"),
+                std::io::ErrorKind::PermissionDenied,
+            );
+        let cases = [
+            (
+                "missing",
+                missing,
+                vec![
+                    format!(
+                        "SELinux custom policy modules not read: modules/ in {label}: \
+                         entity not found"
+                    ),
+                    format!(
+                        "SELinux booleans set with setsebool -P not read: booleans.local in \
+                         {label} is not readable and semanage boolean -l -C failed"
+                    ),
+                ],
+            ),
+            (
+                "unreadable",
+                unreadable,
+                vec![
+                    format!(
+                        "SELinux custom policy modules not read: the priority 400 modules in \
+                         {label}: permission denied"
+                    ),
+                    format!(
+                        "SELinux disabled policy modules not read: modules/disabled/ in \
+                         {label}: permission denied; the modules listed as custom may \
+                         include disabled ones"
+                    ),
+                    format!(
+                        "SELinux booleans.local lines not read in {label}: \
+                         line 1 (the value is not 0, 1, true or false)"
+                    ),
+                ],
+            ),
+        ];
+        for (case, exec, expected) in cases {
+            let (_, warnings) = inspect_with(&exec);
+            let messages: Vec<&str> = warnings.iter().map(|w| w.message.as_str()).collect();
+            assert_eq!(messages, expected, "{case}");
+            let json = serde_json::to_string(&warnings).expect("the warnings serialize");
+            for sentinel in [ROOT_SENTINEL, TYPE_SENTINEL] {
+                assert!(!json.contains(sentinel), "{case}: {json}");
+            }
+        }
     }
 
     // ---- Test 8: persistent booleans come from the policy store ----
@@ -1449,10 +1576,11 @@ virt_use_nfs                   (on   ,   on)  Allow virt to use nfs\n";
         assert_eq!(
             messages,
             [format!(
-                "SELinux booleans.local lines not read in {VAR_STORE}/booleans.local: \
+                "SELinux booleans.local lines not read in {}: \
                  line 2 (the value is not 0, 1, true or false), \
                  line 3 (the value is not 0, 1, true or false), \
-                 line 4 (no name=value assignment)"
+                 line 4 (no name=value assignment)",
+                PolicyStore::LABEL
             )
             .as_str()]
         );
