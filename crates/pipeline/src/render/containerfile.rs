@@ -916,7 +916,8 @@ fn packages_section_lines(
 
     let no_uploads = inspectah_core::types::verified_upload::VerifiedUploads::new();
     let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
-    let pulled_in = super::unit_plan::pulled_in_by_included(rpm, &install_repos);
+    let pulled_in = super::unit_plan::pulled_in_by_included(snap, &install_repos);
+    let leaf_pulled_in = super::unit_plan::pulled_in_by_installed_leaves(rpm, &install_repos);
     let unit_owners = default_carried_unit_owners(snap);
 
     let installable_packages: Vec<&PackageEntry> = rpm
@@ -957,8 +958,11 @@ fn packages_section_lines(
             }
             let id = canonical_package_id(&pkg.name, &pkg.arch);
             // An auto package that owns a unit enabled on the source host
-            // is carried by default, so it is named although it is no leaf.
-            if unit_owners.contains(&id) {
+            // is carried by default, so it is named although it is no leaf,
+            // unless an installed leaf already brings it. A leaf is always
+            // named, so this cannot leave out two owners that need each
+            // other, as asking every root would.
+            if unit_owners.contains(&id) && !leaf_pulled_in.contains(&id) {
                 return true;
             }
             if let Some(orig) = original_includes {
@@ -3308,6 +3312,7 @@ mod tests {
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
                 default_target: None,
+                enabled_on_any_host: Vec::new(),
             });
             snap
         };
@@ -3913,6 +3918,7 @@ mod tests {
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
             default_target: None,
+            enabled_on_any_host: Vec::new(),
         });
 
         let output = render_containerfile(&snap, None, None);

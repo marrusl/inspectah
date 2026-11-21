@@ -136,8 +136,8 @@ struct Evidence<'a> {
     file_owners: HashMap<&'a str, &'a str>,
     /// The names of the `packages_added` entries the export installs:
     /// the included ones it installs on their own route
-    /// ([`installs_on_its_own_route`]), and the ones a leaf it installs
-    /// pulls in ([`pulled_in_by_included`]) whatever their own
+    /// ([`installs_on_its_own_route`]), and the ones a leaf or carried unit
+    /// owner it installs pulls in ([`pulled_in_by_included`]) whatever their own
     /// disposition, since dnf installs those with the leaf.
     ///
     /// Deliberately wider than the Containerfile's own install loop,
@@ -179,7 +179,7 @@ impl<'a> Evidence<'a> {
                 }
             }
             let repos = super::repoless::InstallRepos::of(snap);
-            let pulled_in = pulled_in_by_included(rpm, &repos);
+            let pulled_in = pulled_in_by_included(snap, &repos);
             install_set = rpm
                 .packages_added
                 .iter()

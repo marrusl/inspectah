@@ -1915,6 +1915,7 @@ impl Inspector for UnitsInspector {
                             manual_links: Vec::new(),
                             undetermined_installs: Vec::new(),
                             default_target: None,
+                            enabled_on_any_host: Vec::new(),
                         }),
                         warnings,
                         redaction_hints: Vec::new(),
@@ -2051,6 +2052,7 @@ impl Inspector for UnitsInspector {
             manual_links,
             undetermined_installs,
             default_target,
+            enabled_on_any_host: Vec::new(),
         };
 
         // Preset file read failures are correctness-bearing: a missing

@@ -209,10 +209,10 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
     }
 
     // A Site package that owns a unit enabled on the source host is
-    // carried by default, as the scan carries it. The pipeline decides
-    // which those are, from the leaf dispositions settled above; it never
-    // names a package the trust gate excluded, an aggregate's or an
-    // anaconda-classified one.
+    // carried by default, as the scan carries it, whether or not a leaf
+    // pulls it in. The pipeline decides which those are from the snapshot
+    // alone; it never names a package the trust gate excluded, an
+    // aggregate's or an anaconda-classified one.
     let unit_owners = default_carried_unit_owners(snapshot);
     if let Some(rpm) = snapshot.rpm.as_mut() {
         for i in site {

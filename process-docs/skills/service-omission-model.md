@@ -463,9 +463,18 @@ the variant, which refine's view sends as the reason.
 
 An aggregate's `packages_added` is leaf-only, so the tiers that read
 absence from it (3, 6, 7) would omit the unit of an auto dependency the
-image does install. Aggregate rendering applies Tier 2 alone
+image does install. Aggregate rendering applies Tier 2
 (`aggregate_presence`), because an explicit exclusion on an entry that is
-present cannot be faked by leaf filtering, and emits everything else.
+present cannot be faked by leaf filtering. Then it omits the unit of a
+package the merge provably dropped (`not_carried::FleetDrops`: in
+neither the baseline nor `packages_added`, and pulled in by no kept
+leaf, from the leaves' closures joined across hosts): `NotCarried` when
+the fleet's not-carried list names it, `NotInTargetImage` otherwise.
+Without a baseline or a host of leaf authority nothing is proved, and
+everything else emits, an unknown owner included. Before this, a fleet
+whose hosts enabled `rhcd.service` against its preset carried
+`systemctl enable rhcd.service` although the merge had dropped `rhc`,
+and the build failed.
 
 ## What does not show omissions
 
@@ -484,7 +493,10 @@ operator's explicit exclusion alike.
 
 `pulled_in_by_included` in `unit_plan.rs` is the one answer:
 every auto dependency `leaf_dep_tree` lists under a leaf the export
-installs (`installs_on_its_own_route`). An included leaf that renders
+installs (`installs_on_its_own_route`), and every one `auto_dep_tree`
+lists under a carried unit owner it installs
+(`not_carried::default_carried_unit_owners`). It takes the snapshot,
+since the owners come from the units section. An included leaf that renders
 only as a manual step (a `# TODO`, the repo-less `# MANUAL` block with
 no cached or uploaded RPM, or the repo-enabling `# FIXME` after its
 serving repo was dropped and with no upload) is never installed, so it
@@ -495,12 +507,15 @@ Tier 5 for them, in single-host and aggregate mode. The disabled-repo
 package selection in `containerfile.rs` asks the same function; do not
 write a second copy.
 
-Its limits are the tree's. `leaf_dep_tree` maps each leaf to the
-transitive closure of its **auto** dependencies only. With no leaf data
-the set is empty, and a leaf that another leaf depends on, or a
-dependency of an auto package included on its own, is not recorded. In
-those cases an excluded package's unit is still omitted although dnf may
-install it, which is the behavior from before the rule existed.
+Its limits are the trees'. They map each root to the transitive closure
+of its **auto** dependencies only. With no leaf data the set is empty,
+and a leaf that another leaf depends on, or a dependency of an auto
+package an operator included by hand (not a carried owner), is not
+counted. In those cases an excluded package's unit is still omitted
+although dnf may install it, which is the behavior from before the rule
+existed. A carried owner's dependency is counted: its recorded
+`systemctl disable` survives, where the owner's default carry used to
+install it with no command, preset and all.
 
 ### The not-carried class is this rule applied to auto packages
 

@@ -2,7 +2,7 @@ use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
 use super::repo::{RepoAttribution, RepoId};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -297,6 +297,16 @@ pub struct RpmSection {
     /// this must serialize as an empty object.
     #[serde(default)]
     pub leaf_dep_tree: serde_json::Value,
+    /// Maps every authoritative auto `name.arch` identity to the auto
+    /// identities installing it installs: the same closure `leaf_dep_tree`
+    /// records for a leaf, the package itself left out. An auto package an
+    /// export installs on its own, such as one carried because it owns an
+    /// enabled unit, brings these with it.
+    ///
+    /// `None` whenever `auto_packages` is `None`, and for an aggregate,
+    /// whose `packages_added` holds leaves only.
+    #[serde(default)]
+    pub auto_dep_tree: Option<BTreeMap<String, Vec<String>>>,
     #[serde(default)]
     pub module_streams: Vec<EnabledModuleStream>,
     #[serde(default)]

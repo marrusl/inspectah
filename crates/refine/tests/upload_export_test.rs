@@ -1936,6 +1936,7 @@ fn an_uploaded_package_installs_before_its_units_and_its_dependents() {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
     let mut h = Harness::with_snapshot(snap);
     h.set_include("openh264", "x86_64", true);

@@ -316,6 +316,48 @@ fn schema_27_snapshot_is_refused() {
     }
 }
 
+/// A schema-28 snapshot records the dependency closures of leaves only,
+/// so the dependencies of an auto package an export carries read as not
+/// installed. Refine refuses to open it. The same payload with the
+/// closures and the current version opens, so the version gate is what
+/// refuses it.
+#[test]
+fn schema_28_snapshot_is_refused() {
+    let schema_28 =
+        include_str!("../../../testdata/fixtures/snapshot/schema-28-leaf-closures-only.json");
+
+    let mut current: serde_json::Value = serde_json::from_str(schema_28).unwrap();
+    current["rpm"]["auto_dep_tree"] = serde_json::json!({
+        "firewalld.noarch": ["python3-firewall.noarch"],
+        "python3-firewall.noarch": []
+    });
+    current["schema_version"] = inspectah_core::snapshot::SCHEMA_VERSION.into();
+    let dir = tempdir().unwrap();
+    let tarball = write_flat_tarball(dir.path(), &current.to_string());
+    let session = inspectah_refine::tarball::from_tarball(&tarball)
+        .expect("the same payload with the closures opens at the current version");
+    assert!(
+        session
+            .snapshot()
+            .rpm
+            .as_ref()
+            .and_then(|rpm| rpm.auto_dep_tree.as_ref())
+            .is_some(),
+        "the closures are recorded"
+    );
+
+    let dir = tempdir().unwrap();
+    let tarball = write_flat_tarball(dir.path(), schema_28);
+    match inspectah_refine::tarball::from_tarball(&tarball) {
+        Err(RefineError::SnapshotLoad(msg)) => assert!(
+            msg.contains("unsupported schema version: 28"),
+            "expected the schema refusal, got: {msg}"
+        ),
+        Err(other) => panic!("expected SnapshotLoad, got: {other:?}"),
+        Ok(_) => panic!("a schema-28 snapshot must not open in refine"),
+    }
+}
+
 #[test]
 fn reject_missing_snapshot_json() {
     let dir = tempdir().unwrap();

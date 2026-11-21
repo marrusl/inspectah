@@ -20,7 +20,7 @@ use inspectah_core::types::rpm::{
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
 use rich_dep::{Atom, Constraint, DepExpr, Providers, SupplementTriggers};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// RPM query format string for NEVRA parsing.
 const RPM_QA_FORMAT: &str = "%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}";
@@ -67,6 +67,7 @@ struct LeafClassification {
     leaf_packages: Option<Vec<String>>,
     auto_packages: Option<Vec<String>>,
     leaf_dep_tree: serde_json::Value,
+    auto_dep_tree: Option<BTreeMap<String, Vec<String>>>,
 }
 
 impl LeafClassification {
@@ -74,11 +75,13 @@ impl LeafClassification {
         leaf_packages: Vec<String>,
         auto_packages: Vec<String>,
         leaf_dep_tree: serde_json::Value,
+        auto_dep_tree: BTreeMap<String, Vec<String>>,
     ) -> Self {
         Self {
             leaf_packages: Some(leaf_packages),
             auto_packages: Some(auto_packages),
             leaf_dep_tree,
+            auto_dep_tree: Some(auto_dep_tree),
         }
     }
 
@@ -87,6 +90,7 @@ impl LeafClassification {
             leaf_packages: None,
             auto_packages: None,
             leaf_dep_tree: empty_leaf_dep_tree(),
+            auto_dep_tree: None,
         }
     }
 }
@@ -539,6 +543,7 @@ impl Inspector for RpmInspector {
             leaf_packages: leaf_classification.leaf_packages,
             auto_packages: leaf_classification.auto_packages,
             leaf_dep_tree: leaf_classification.leaf_dep_tree,
+            auto_dep_tree: leaf_classification.auto_dep_tree,
             baseline_suppressed,
             installed_groups,
             ..Default::default()
@@ -1282,39 +1287,41 @@ fn classify_leaf_auto(
     auto.retain(|pkg| !baseline_names.contains(pkg));
     auto.sort();
 
-    // Build per-leaf dep tree: for each leaf, list its auto dependencies.
+    // Per-root dep trees: for each leaf, and for each auto package, its
+    // auto dependencies. An auto package's closure is what installing it
+    // on its own brings, which an export that carries it (an enabled
+    // unit's owner) needs as much as a leaf's.
     let auto_set: HashSet<&str> = auto.iter().map(|s| s.as_str()).collect();
-    let mut dep_tree = serde_json::Map::new();
+    let auto_closure = |root: &str| -> Vec<String> {
+        // DNF --recursive already gave the transitive closure; rpm gives
+        // only direct deps, so walk the graph.
+        let reachable: HashSet<String> = if graph.transitive {
+            depends_on.get(root).cloned().unwrap_or_default()
+        } else {
+            leaf_closure(root, depends_on, &graph.joint)
+        };
+        let mut filtered: Vec<String> = reachable
+            .into_iter()
+            .filter(|d| d != root && auto_set.contains(d.as_str()))
+            .collect();
+        filtered.sort();
+        filtered
+    };
+    let dep_tree: serde_json::Map<String, serde_json::Value> = leaf
+        .iter()
+        .map(|lf| (lf.clone(), serde_json::json!(auto_closure(lf))))
+        .collect();
+    let auto_dep_tree: BTreeMap<String, Vec<String>> = auto
+        .iter()
+        .map(|id| (id.clone(), auto_closure(id)))
+        .collect();
 
-    if graph.transitive {
-        // DNF --recursive already gave transitive closure.
-        for lf in &leaf {
-            let mut filtered: Vec<String> = depends_on
-                .get(lf)
-                .map(|deps| {
-                    deps.iter()
-                        .filter(|d| auto_set.contains(d.as_str()))
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default();
-            filtered.sort();
-            dep_tree.insert(lf.clone(), serde_json::json!(filtered));
-        }
-    } else {
-        // rpm gives only direct deps; walk the graph for transitive closure.
-        for lf in &leaf {
-            let reachable = leaf_closure(lf, depends_on, &graph.joint);
-            let mut filtered: Vec<String> = reachable
-                .into_iter()
-                .filter(|d| auto_set.contains(d.as_str()))
-                .collect();
-            filtered.sort();
-            dep_tree.insert(lf.clone(), serde_json::json!(filtered));
-        }
-    }
-
-    LeafClassification::authoritative(leaf, auto, serde_json::Value::Object(dep_tree))
+    LeafClassification::authoritative(
+        leaf,
+        auto,
+        serde_json::Value::Object(dep_tree),
+        auto_dep_tree,
+    )
 }
 
 /// Everything installing `leaf` installs: the packages reachable along
@@ -2213,6 +2220,7 @@ mod tests {
         assert_eq!(rpm.leaf_packages, None);
         assert_eq!(rpm.auto_packages, None);
         assert_eq!(rpm.leaf_dep_tree, serde_json::json!({}));
+        assert_eq!(rpm.auto_dep_tree, None);
     }
 
     #[test]
@@ -3085,6 +3093,81 @@ mod tests {
     // -----------------------------------------------------------------------
     // classify_deps_rpm tests
     // -----------------------------------------------------------------------
+
+    /// Every auto package gets its closure, as every leaf does, from the
+    /// rpm route's direct edges walked transitively: `daemon` needs
+    /// `helper`, which needs `libhelper`, and none is a leaf. An auto
+    /// package's closure leaves itself out; a leaf's lists auto packages
+    /// only, so `daemon`, which only the leaf `app` does not need, is in
+    /// no leaf's.
+    #[test]
+    fn classify_leaf_auto_records_each_auto_packages_closure() {
+        let sentinel_output = "\
+@@app
+@@daemon
+R\thelper
+@@helper
+R\tlibhelper.so.1()(64bit)
+@@libhelper
+";
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "app.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!(
+                    "rpm -q --queryformat {} app daemon helper libhelper",
+                    RPM_DEPS_FORMAT
+                ),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: sentinel_output.into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "helper.x86_64\t0\t\thelper\n\
+                             libhelper.x86_64\t0\t\tlibhelper.so.1()(64bit)\n"
+                        .into(),
+                    stderr: String::new(),
+                },
+            );
+        let added: Vec<PackageEntry> = ["app", "daemon", "helper", "libhelper"]
+            .iter()
+            .map(|name| make_test_entry(name, "x86_64"))
+            .collect();
+
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
+
+        assert_eq!(
+            classification.leaf_packages,
+            Some(vec!["app.x86_64".into()])
+        );
+        assert_eq!(
+            classification.leaf_dep_tree,
+            serde_json::json!({"app.x86_64": []})
+        );
+        let closures = classification
+            .auto_dep_tree
+            .expect("an authoritative classification records the closures");
+        let expected: BTreeMap<String, Vec<String>> = [
+            ("daemon.x86_64", vec!["helper.x86_64", "libhelper.x86_64"]),
+            ("helper.x86_64", vec!["libhelper.x86_64"]),
+            ("libhelper.x86_64", vec![]),
+        ]
+        .into_iter()
+        .map(|(id, deps)| (id.into(), deps.into_iter().map(String::from).collect()))
+        .collect();
+        assert_eq!(closures, expected);
+    }
 
     #[test]
     fn classify_deps_rpm_builds_arch_aware_graph() {

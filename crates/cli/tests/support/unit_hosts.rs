@@ -63,6 +63,15 @@ const RPM_QF: &str = "rpm -qf --queryformat %{NAME}\n";
 const DNF_SOURCE_REPO: &str = "dnf repoquery --installed --queryformat";
 /// The repo every [`UnitHost::package`] is installed from.
 const PACKAGE_REPO: &str = "appstream";
+/// The query the RPM inspector lists user-installed packages with.
+const DNF_USERINSTALLED: &str = "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n";
+/// The query the RPM inspector reads one package's recursive requires
+/// with, before the package id. Every other form of the dependency query
+/// is unregistered, so the inspector takes this route.
+const DNF_RECURSIVE_REQUIRES: &str = "dnf repoquery --requires --resolve --recursive --installed";
+/// The `bash` every host has installed, as `rpm -qa` lists it.
+const BASH_VERSION: &str = "5.2.26";
+const BASH_RELEASE: &str = "3.el9";
 /// The listing the units inspector reads unit states from.
 const LIST_UNIT_FILES: &str = "systemctl list-unit-files --no-pager";
 /// The `list-unit-files` header systemd 252 (RHEL 9) prints. Newer
@@ -122,6 +131,22 @@ pub struct UnitHost {
     base_packages: Vec<String>,
     /// What `rpm -Va` prints and its exit code, when not a clean verify.
     rpm_va: Option<(String, i32)>,
+    /// Source repos that differ from `appstream`, by package.
+    package_repos: BTreeMap<String, String>,
+    /// The leaf classification answers, when the host gives any. Without
+    /// them every dependency query fails and the scan has no leaf data.
+    classification: Option<Classification>,
+}
+
+/// What the RPM inspector's leaf classification reads.
+#[derive(Debug, Default)]
+struct Classification {
+    /// `dnf repoquery --userinstalled`, by package name; `None` when the
+    /// query fails.
+    userinstalled: Option<Vec<String>>,
+    /// The packages each package needs, transitively, by name: what
+    /// `dnf repoquery --requires --resolve --recursive` answers.
+    requires: BTreeMap<String, Vec<String>>,
 }
 
 impl UnitHost {
@@ -150,10 +175,75 @@ impl UnitHost {
     /// A package the base image ships, installed on the host as
     /// [`package`](UnitHost::package) installs it. The scan then records a
     /// baseline, so refine sorts the host's other added packages into its
-    /// Site tier rather than Investigate.
+    /// Site tier rather than Investigate. `bash`, which every host already
+    /// has, is only added to the base image.
     pub fn base_package(mut self, name: &str) -> Self {
         self.base_packages.push(name.into());
+        if name == "bash" {
+            return self;
+        }
         self.package(name)
+    }
+
+    /// An installed `x86_64` package named `name`, installed from `repo`.
+    pub fn package_from(mut self, name: &str, repo: &str) -> Self {
+        self.package_repos.insert(name.into(), repo.into());
+        self.package(name)
+    }
+
+    /// `dnf repoquery --userinstalled` lists `names`, so the scan
+    /// classifies leaves. Every other installed package is auto.
+    pub fn userinstalled(mut self, names: &[&str]) -> Self {
+        self.classification.get_or_insert_default().userinstalled =
+            Some(names.iter().map(|n| (*n).to_owned()).collect());
+        self
+    }
+
+    /// `dnf repoquery --userinstalled` fails, so the scan classifies from
+    /// the dependency graph alone.
+    pub fn userinstalled_unavailable(mut self) -> Self {
+        self.classification.get_or_insert_default().userinstalled = None;
+        self
+    }
+
+    /// Installing `name` installs `needs`, transitively, as dnf's
+    /// recursive requires answer for it. Turns on leaf classification.
+    pub fn requires(mut self, name: &str, needs: &[&str]) -> Self {
+        self.classification
+            .get_or_insert_default()
+            .requires
+            .insert(name.into(), needs.iter().map(|n| (*n).to_owned()).collect());
+        self
+    }
+
+    /// The baseline the scan collects against: the base image's packages,
+    /// or `None` when the host names none.
+    pub fn baseline(&self) -> Option<BaselineData> {
+        (!self.base_packages.is_empty()).then(|| BaselineData {
+            image_digest: "sha256:0000".into(),
+            packages: self
+                .base_packages
+                .iter()
+                .map(|name| {
+                    let (version, release) = if name == "bash" {
+                        (BASH_VERSION, BASH_RELEASE)
+                    } else {
+                        ("1.0", "1.el9")
+                    };
+                    (
+                        format!("{name}.x86_64"),
+                        BaselinePackageEntry {
+                            name: name.clone(),
+                            epoch: None,
+                            version: version.into(),
+                            release: release.into(),
+                            arch: "x86_64".into(),
+                        },
+                    )
+                })
+                .collect(),
+            extracted_at: "2026-11-14T00:00:00Z".into(),
+        })
     }
 
     /// A preset rule (`enable foo.service`, `disable *`), after the
@@ -279,18 +369,25 @@ impl UnitHost {
         listing.push_str(&format!("\n{} unit files listed.\n", self.units.len()));
 
         let presets: String = self.presets.iter().map(|r| format!("{r}\n")).collect();
-        let installed: String = std::iter::once("0:bash-5.2.26-3.el9.x86_64".to_owned())
-            .chain(
-                self.packages
-                    .iter()
-                    .map(|name| format!("0:{name}-1.0-1.el9.x86_64")),
-            )
-            .map(|nevra| format!("{nevra}\n"))
-            .collect();
+        let installed: String =
+            std::iter::once(format!("0:bash-{BASH_VERSION}-{BASH_RELEASE}.x86_64"))
+                .chain(
+                    self.packages
+                        .iter()
+                        .map(|name| format!("0:{name}-1.0-1.el9.x86_64")),
+                )
+                .map(|nevra| format!("{nevra}\n"))
+                .collect();
         let source_repos: String = self
             .packages
             .iter()
-            .map(|name| format!("{name} {PACKAGE_REPO}\n"))
+            .map(|name| {
+                let repo = self
+                    .package_repos
+                    .get(name)
+                    .map_or(PACKAGE_REPO, String::as_str);
+                format!("{name} {repo}\n")
+            })
             .collect();
         let this = self.file(PRESET_FILE, &presets);
 
@@ -308,6 +405,30 @@ impl UnitHost {
             .with_command(RPM_FILE_OWNERSHIP, ok(&ownership))
             .with_command(LIST_UNIT_FILES, ok(&listing))
             .with_command_prefix(DNF_SOURCE_REPO, ok(&source_repos));
+        if let Some(classification) = &this.classification {
+            let userinstalled = match &classification.userinstalled {
+                Some(names) => ok(&names
+                    .iter()
+                    .map(|n| format!("{n}.x86_64\n"))
+                    .collect::<String>()),
+                None => ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            };
+            mock = mock
+                .with_command(DNF_USERINSTALLED, userinstalled)
+                .with_command_prefix(DNF_RECURSIVE_REQUIRES, ok(""));
+            for (name, needs) in &classification.requires {
+                let answer: String = needs.iter().map(|n| format!("{n}.x86_64\n")).collect();
+                mock = mock.with_command(
+                    &format!(
+                        "{DNF_RECURSIVE_REQUIRES} --queryformat %{{name}}.%{{arch}}\n {name}.x86_64"
+                    ),
+                    ok(&answer),
+                );
+            }
+        }
         // One answer per vendor file: a batch query over several files is
         // unregistered, so the inspector falls back to these.
         for path in &this.vendor_units {
@@ -591,26 +712,7 @@ fn pkg_source() -> SourceSystem {
 /// the RPM, config, units and scheduled-task inspectors. The snapshot is
 /// not redacted yet.
 pub fn scan_unredacted(host: UnitHost) -> InspectionSnapshot {
-    let baseline = (!host.base_packages.is_empty()).then(|| BaselineData {
-        image_digest: "sha256:0000".into(),
-        packages: host
-            .base_packages
-            .iter()
-            .map(|name| {
-                (
-                    format!("{name}.x86_64"),
-                    BaselinePackageEntry {
-                        name: name.clone(),
-                        epoch: None,
-                        version: "1.0".into(),
-                        release: "1.el9".into(),
-                        arch: "x86_64".into(),
-                    },
-                )
-            })
-            .collect(),
-        extracted_at: "2026-11-14T00:00:00Z".into(),
-    });
+    let baseline = host.baseline();
     let exec = host.build();
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),

@@ -163,6 +163,42 @@ fn schema_27_snapshot_is_refused() {
     }
 }
 
+/// A schema-28 snapshot, the last whose dependency tree records leaf
+/// closures only. The other production loaders' refusal tests read the
+/// same fixture file with `include_str!`.
+const SCHEMA_28_SNAPSHOT: &str =
+    include_str!("../../../testdata/fixtures/snapshot/schema-28-leaf-closures-only.json");
+
+/// Schema 28 is the last version collected without each auto package's
+/// dependency closure. Its payload parses, with `auto_dep_tree` absent, and
+/// an export then reads the dependencies of an auto package it carries
+/// (`python3-firewall` under the enabled-unit owner `firewalld` here) as
+/// not installed, with nothing in the payload to say they are. Only a
+/// re-scan records the closures. The same payload with the closures and
+/// the current version loads, so the version gate is what refuses it.
+#[test]
+fn schema_28_snapshot_is_refused() {
+    let mut current: serde_json::Value = serde_json::from_str(SCHEMA_28_SNAPSHOT).unwrap();
+    current["rpm"]["auto_dep_tree"] = serde_json::json!({
+        "firewalld.noarch": ["python3-firewall.noarch"],
+        "python3-firewall.noarch": []
+    });
+    current["schema_version"] = SCHEMA_VERSION.into();
+    let loaded = InspectionSnapshot::load(&current.to_string())
+        .expect("the same payload with the closures loads at the current version");
+    let closures = loaded
+        .rpm
+        .expect("the rpm section")
+        .auto_dep_tree
+        .expect("the closures are recorded");
+    assert_eq!(closures["firewalld.noarch"], ["python3-firewall.noarch"]);
+
+    match InspectionSnapshot::load(SCHEMA_28_SNAPSHOT) {
+        Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 28),
+        other => panic!("expected UnsupportedVersion(28), got {other:?}"),
+    }
+}
+
 /// A unit name in a state change is parsed on load: a name with a byte
 /// outside the systemd unit name set fails the load, and the error names
 /// the rule. The same payload with a valid name loads.
@@ -679,6 +715,7 @@ const PACKAGE_ENTRY_KEYS: &[&str] = &[
 
 /// The serialized keys of a fully populated `RpmSection`.
 const RPM_SECTION_KEYS: &[&str] = &[
+    "auto_dep_tree",
     "auto_packages",
     "base_image",
     "base_image_only",
@@ -710,6 +747,7 @@ const RPM_SECTION_KEYS: &[&str] = &[
 /// The serialized keys of a `UnitSection`.
 const UNIT_SECTION_KEYS: &[&str] = &[
     "drop_ins",
+    "enabled_on_any_host",
     "inventory",
     "manual_links",
     "mount_findings",
@@ -731,15 +769,15 @@ fn expected_keys(keys: &[&str]) -> BTreeSet<String> {
     keys.iter().map(|k| (*k).to_string()).collect()
 }
 
-/// The snapshot format guard: schema 28 and the key sets of the package
+/// The snapshot format guard: schema 29 and the key sets of the package
 /// and unit structs are pinned. Serde ignores unknown fields and
 /// defaults missing ones, so a field added, renamed or removed with
 /// `#[serde(default)]` passes every round-trip test; this one fails
 /// instead. Every `skip_serializing_if` field is set to a non-default
 /// value so it appears.
 #[test]
-fn schema_28_format_guard_pins_package_and_unit_keys() {
-    assert_eq!(SCHEMA_VERSION, 28);
+fn schema_29_format_guard_pins_package_and_unit_keys() {
+    assert_eq!(SCHEMA_VERSION, 29);
 
     let package = PackageEntry {
         locked: true,
@@ -764,10 +802,13 @@ fn schema_28_format_guard_pins_package_and_unit_keys() {
     };
     assert_eq!(serialized_keys(&rpm), expected_keys(RPM_SECTION_KEYS));
 
-    assert_eq!(
-        serialized_keys(&UnitSection::default()),
-        expected_keys(UNIT_SECTION_KEYS)
-    );
+    let units = UnitSection {
+        enabled_on_any_host: vec![
+            UnitName::try_from("httpd.service".to_string()).expect("a valid unit name"),
+        ],
+        ..Default::default()
+    };
+    assert_eq!(serialized_keys(&units), expected_keys(UNIT_SECTION_KEYS));
 }
 
 /// T26: `default_target` holds a `TargetUnit`, so a snapshot whose default

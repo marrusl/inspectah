@@ -28,7 +28,10 @@ use super::configtree::{
     Destination, ETC_UNIT_DIR, FLATPAK_SERVICE, PathError, StagedWrites, WithheldWhy, is_staged,
     staged_unit_file,
 };
-use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
+use super::not_carried::{
+    FleetDrops, NOT_CARRIED_REASON, default_carried_unit_owners, fleet_not_carried_packages,
+    not_carried_packages,
+};
 use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
 use super::repoless::{InstallRepos, PackageRoute, route_for};
 use super::safety::{operand_refusal, shell_word};
@@ -149,7 +152,7 @@ pub(crate) fn installs_on_its_own_route(
             ))
 }
 
-/// The canonical `name.arch` ids of `packages_added` entries that a leaf
+/// The canonical `name.arch` ids of `packages_added` entries that a root
 /// the export installs pulls in as a dependency, whatever their own
 /// disposition.
 ///
@@ -157,28 +160,57 @@ pub(crate) fn installs_on_its_own_route(
 /// it with the package that needs it. That holds for refine's default
 /// exclusion of a non-leaf package and for an operator's explicit
 /// exclusion alike, so "excluded" never means "absent" for such a package.
-/// This is the one place that answers the question; the service tiers and
-/// the package selection both ask it.
+/// This is the one place that answers the question; the service tiers, the
+/// package selection, the disabled-repo install and the not-carried class
+/// all ask it.
 ///
-/// A leaf contributes only when [`installs_on_its_own_route`] holds for
-/// it. An included leaf the export renders as a manual step (no repo
-/// serves it and no RPM is carried, or a repo-enabling package demoted for
-/// a dropped repo with no upload) is never installed by the image, so dnf
-/// never resolves its dependencies either.
+/// The roots are the leaves ([`pulled_in_by_installed_leaves`]) and the
+/// auto packages carried because they own an enabled unit
+/// (`not_carried::default_carried_unit_owners`), each only when
+/// [`installs_on_its_own_route`] holds for it: an included root the export
+/// renders as a manual step (no repo serves it and no RPM is carried, or a
+/// repo-enabling package demoted for a dropped repo with no upload) is
+/// never installed by the image, so dnf never resolves its dependencies
+/// either. A carried owner's closure is its `auto_dep_tree` entry.
 ///
-/// The answer comes from `leaf_dep_tree`, which maps each leaf to the
-/// transitive closure of its auto (non-leaf) dependencies. Two limits
-/// follow from what the tree records, and both fall back to treating the
-/// package by its disposition alone, which is what the renderer did before
-/// this existed:
+/// Two limits follow from what the trees record, and both fall back to
+/// treating the package by its disposition alone, which is what the
+/// renderer did before this existed:
 ///
-/// - With no dependency data (`leaf_packages` unavailable, the tree empty)
-///   the set is empty, so an excluded dependency reads as absent and its
-///   unit is omitted even when dnf installs it.
-/// - The tree lists only auto dependencies of leaves. A leaf another leaf
-///   depends on, or a dependency of an auto package an operator included
-///   on its own, is not in it.
+/// - With no dependency data (`leaf_packages` unavailable, the trees
+///   empty) the set is empty, so an excluded dependency reads as absent
+///   and its unit is omitted even when dnf installs it.
+/// - The trees list only auto dependencies. A leaf another leaf depends
+///   on, or a dependency of an auto package an operator included on its
+///   own, is not in them.
 pub fn pulled_in_by_included(
+    snap: &InspectionSnapshot,
+    repos: &InstallRepos,
+) -> std::collections::HashSet<String> {
+    let Some(rpm) = snap.rpm.as_ref() else {
+        return std::collections::HashSet::new();
+    };
+    let mut pulled_in = pulled_in_by_installed_leaves(rpm, repos);
+    let Some(closures) = rpm.auto_dep_tree.as_ref() else {
+        return pulled_in;
+    };
+    let owners = default_carried_unit_owners(snap);
+    for pkg in &rpm.packages_added {
+        let id = format!("{}.{}", pkg.name, pkg.arch);
+        if owners.contains(&id) && installs_on_its_own_route(rpm, repos, pkg) {
+            pulled_in.extend(closures.get(&id).into_iter().flatten().cloned());
+        }
+    }
+    pulled_in
+}
+
+/// The part of [`pulled_in_by_included`] the leaves pull in, from
+/// `leaf_dep_tree`, which maps each leaf to the transitive closure of its
+/// auto (non-leaf) dependencies.
+///
+/// The Containerfile names a carried unit owner on its install line only
+/// when this does not hold for it: an installed leaf already brings it.
+pub(crate) fn pulled_in_by_installed_leaves(
     rpm: &RpmSection,
     repos: &InstallRepos,
 ) -> std::collections::HashSet<String> {
@@ -205,14 +237,17 @@ pub fn pulled_in_by_included(
 /// user-included added packages and the added packages an included one
 /// pulls in ([`pulled_in_by_included`]).
 pub fn effective_target_packages(
-    rpm: &RpmSection,
+    snap: &InspectionSnapshot,
     repos: &InstallRepos,
 ) -> std::collections::BTreeSet<String> {
     let mut names = std::collections::BTreeSet::new();
+    let Some(rpm) = snap.rpm.as_ref() else {
+        return names;
+    };
     if let Some(baseline) = &rpm.baseline_package_names {
         names.extend(baseline.iter().cloned());
     }
-    let pulled_in = pulled_in_by_included(rpm, repos);
+    let pulled_in = pulled_in_by_included(snap, repos);
     names.extend(
         rpm.packages_added
             .iter()
@@ -2730,16 +2765,41 @@ fn excluded_owner(
 /// absence from it (3, 6 and 7) would omit the unit of an auto dependency
 /// that the image does install. Tier 2 reads an explicit exclusion on an
 /// entry that is present, which leaf filtering cannot fake, so it applies
-/// here as it does to a single host; every other unit emits.
+/// here as it does to a single host. Then a package the merge provably
+/// dropped ([`FleetDrops`]) omits the unit: `NotCarried` when the fleet's
+/// not-carried list names it, `NotInTargetImage` otherwise. Every other
+/// unit emits, an unknown owner among them.
 fn aggregate_presence(
     unit: &CarriedUnit,
     rpm: &RpmSection,
     target_packages: &std::collections::BTreeSet<String>,
     not_carried: &std::collections::HashSet<String>,
+    fleet: &FleetPresence<'_>,
 ) -> PresenceDecision {
-    excluded_owner(unit, rpm, target_packages, not_carried).unwrap_or(PresenceDecision::Emit {
-        advisory_reasons: None,
-    })
+    if let Some(omit) = excluded_owner(unit, rpm, target_packages, not_carried) {
+        return omit;
+    }
+    match unit.owning_package() {
+        Some(owner) if fleet.drops.as_ref().is_some_and(|d| d.dropped(owner)) => {
+            let package = owner.to_owned();
+            PresenceDecision::Omit(if fleet.not_carried.contains(owner) {
+                OmissionReason::NotCarried { package }
+            } else {
+                OmissionReason::NotInTargetImage { package }
+            })
+        }
+        _ => PresenceDecision::Emit {
+            advisory_reasons: None,
+        },
+    }
+}
+
+/// What an aggregate's presence decision reads beyond the single-host
+/// tiers: which packages the merge provably dropped, and the names the
+/// fleet's not-carried list gives.
+struct FleetPresence<'a> {
+    drops: Option<FleetDrops<'a>>,
+    not_carried: std::collections::HashSet<String>,
 }
 
 /// What the presence tiers read, computed once per plan.
@@ -2748,31 +2808,44 @@ struct Presence<'a> {
     target_packages: std::collections::BTreeSet<String>,
     not_carried: std::collections::HashSet<String>,
     baseline_unavailable: bool,
-    is_aggregate: bool,
+    /// `Some` for an aggregate snapshot, whose `packages_added` is
+    /// leaf-only, so the tiers that read absence from it would omit units
+    /// whose owning package is an auto (non-leaf) dependency. Aggregate
+    /// applies Tier 2 and the merge's proven drops alone; see
+    /// `aggregate_presence`.
+    fleet: Option<FleetPresence<'a>>,
 }
 
 impl<'a> Presence<'a> {
-    fn new(snap: &InspectionSnapshot, rpm: &'a RpmSection) -> Self {
+    fn new(snap: &'a InspectionSnapshot, rpm: &'a RpmSection) -> Self {
         Self {
             rpm,
-            target_packages: effective_target_packages(rpm, &InstallRepos::of(snap)),
+            target_packages: effective_target_packages(snap, &InstallRepos::of(snap)),
             baseline_unavailable: rpm.baseline_package_names.is_none(),
             // Empty for an aggregate, which `not_carried` never classifies.
             not_carried: not_carried_packages(snap)
                 .into_iter()
                 .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
                 .collect(),
-            // Aggregate snapshots use leaf-only packages_added, so the
-            // tiers that read absence from it would omit units whose owning
-            // package is an auto (non-leaf) dependency. Aggregate applies
-            // Tier 2 alone; see `aggregate_presence`.
-            is_aggregate: snap.aggregate_meta.is_some(),
+            fleet: snap.aggregate_meta.is_some().then(|| FleetPresence {
+                drops: FleetDrops::of(snap),
+                not_carried: fleet_not_carried_packages(snap)
+                    .into_iter()
+                    .map(|pkg| pkg.name)
+                    .collect(),
+            }),
         }
     }
 
     fn decide(&self, unit: &CarriedUnit) -> PresenceDecision {
-        if self.is_aggregate {
-            aggregate_presence(unit, self.rpm, &self.target_packages, &self.not_carried)
+        if let Some(fleet) = &self.fleet {
+            aggregate_presence(
+                unit,
+                self.rpm,
+                &self.target_packages,
+                &self.not_carried,
+                fleet,
+            )
         } else {
             classify_service_presence(
                 unit,

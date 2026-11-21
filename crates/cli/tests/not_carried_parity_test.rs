@@ -106,15 +106,20 @@ const LEAF: &str = "httpd";
 /// enabled against its preset.
 const UNIT_OWNERS: &[(&str, &str)] = &[("firewalld", "noarch"), ("rhc", "x86_64")];
 
-/// The default not-carried list. Only `firewalld` needs
-/// `python3-firewall`, and dnf installs it with `firewalld`, but the
-/// dependency tree records leaf closures only, so it is listed: the known
-/// limit, pinned here so a change to it is deliberate.
-const EXPECTED_NOT_CARRIED: &[&str] = &["python3-firewall"];
+/// The default not-carried list: the one auto package nothing needs.
+/// `python3-firewall` is not in it: only `firewalld` needs it, and the
+/// carried `firewalld`'s recorded closure says dnf installs it with it.
+const EXPECTED_NOT_CARRIED: &[&str] = &["dracut-config-rescue"];
 
 /// The not-carried list once an operator excludes both unit owners, in
-/// display order: the owners first, then the rest.
-const OWNERS_EXCLUDED_NOT_CARRIED: &[&str] = &["firewalld", "rhc", "python3-firewall"];
+/// display order: the owners first, then the rest. With `firewalld` out,
+/// nothing installs `python3-firewall` either.
+const OWNERS_EXCLUDED_NOT_CARRIED: &[&str] = &[
+    "firewalld",
+    "rhc",
+    "dracut-config-rescue",
+    "python3-firewall",
+];
 
 /// The notice an export carries when both unit owners are left out.
 const OWNERS_NOTICE: &str = "2 packages that own a unit enabled on the source host are not \
@@ -139,6 +144,7 @@ const HOST_PACKAGES: &[(&str, &str, &str)] = &[
     ("firewalld", "noarch", "baseos"),
     ("python3-firewall", "noarch", "baseos"),
     ("rhc", "x86_64", "baseos"),
+    ("dracut-config-rescue", "x86_64", "baseos"),
     ("langpacks-en", "noarch", "anaconda"),
     ("vendor-agent", "x86_64", "@commandline"),
 ];
@@ -196,7 +202,7 @@ fn pkg_source() -> SourceSystem {
     }
 }
 
-fn ok(stdout: &str) -> ExecResult {
+pub(crate) fn ok(stdout: &str) -> ExecResult {
     ExecResult {
         stdout: stdout.into(),
         exit_code: 0,
@@ -375,7 +381,7 @@ fn collected(exec: &MockExecutor) -> InspectionSnapshot {
 
 /// The rest of the scan command: its dispositions step, then what it
 /// stages for the tarball.
-fn scan_export(mut snapshot: InspectionSnapshot, out: &Path) -> InspectionSnapshot {
+pub(crate) fn scan_export(mut snapshot: InspectionSnapshot, out: &Path) -> InspectionSnapshot {
     apply_scan_package_defaults(&mut snapshot);
     render::render_all(&snapshot, &RenderContext { target: None }, out).expect("render");
     let warnings =
@@ -388,12 +394,12 @@ fn scan_export(mut snapshot: InspectionSnapshot, out: &Path) -> InspectionSnapsh
 
 /// A refine session opened on `snapshot` and exported with no operations.
 /// Returns the unpacked export root.
-fn refine_export(snapshot: InspectionSnapshot, dir: &Path) -> PathBuf {
+pub(crate) fn refine_export(snapshot: InspectionSnapshot, dir: &Path) -> PathBuf {
     export_session(RefineSession::new(snapshot), dir)
 }
 
 /// `session` exported with no operations. Returns the unpacked export root.
-fn export_session(session: RefineSession, dir: &Path) -> PathBuf {
+pub(crate) fn export_session(session: RefineSession, dir: &Path) -> PathBuf {
     let tarball = dir.join("export.tar.gz");
     session
         .export_plan(session.generation())
@@ -404,7 +410,7 @@ fn export_session(session: RefineSession, dir: &Path) -> PathBuf {
 }
 
 /// Unpacks `tarball` under `dir` and returns its single top-level member.
-fn unpack(tarball: &Path, dir: &Path) -> PathBuf {
+pub(crate) fn unpack(tarball: &Path, dir: &Path) -> PathBuf {
     let unpacked = dir.join("unpacked");
     std::fs::create_dir_all(&unpacked).expect("mkdir");
     let file = std::fs::File::open(tarball).expect("the tarball opens");
@@ -424,16 +430,16 @@ fn unpack(tarball: &Path, dir: &Path) -> PathBuf {
 
 /// What one export path wrote, cut down to the compared surfaces.
 #[derive(Debug)]
-struct Surfaces {
-    containerfile: String,
-    audit: String,
-    var_conf: Option<String>,
+pub(crate) struct Surfaces {
+    pub(crate) containerfile: String,
+    pub(crate) audit: String,
+    pub(crate) var_conf: Option<String>,
     /// Every file staged under `config/etc/`, relative to `config/`, sorted.
     etc_files: Vec<String>,
 }
 
 impl Surfaces {
-    fn read(root: &Path) -> Self {
+    pub(crate) fn read(root: &Path) -> Self {
         let read = |rel: &str| {
             std::fs::read_to_string(root.join(rel))
                 .unwrap_or_else(|e| panic!("{rel} in {}: {e}", root.display()))
@@ -450,7 +456,7 @@ impl Surfaces {
     }
 
     /// The Containerfile's count of captured config files.
-    fn config_count_lines(&self) -> Vec<&str> {
+    pub(crate) fn config_count_lines(&self) -> Vec<&str> {
         self.containerfile
             .lines()
             .filter(|l| l.ends_with("config file(s) captured"))
@@ -459,7 +465,7 @@ impl Surfaces {
 
     /// Every name on every `RUN dnf install` line, in order, without the
     /// out-of-class packages.
-    fn install_names(&self) -> Vec<String> {
+    pub(crate) fn install_names(&self) -> Vec<String> {
         let mut names = Vec::new();
         let mut in_install = false;
         for line in self.containerfile.lines() {
@@ -484,7 +490,7 @@ impl Surfaces {
 
     /// Every line of every `systemctl` instruction, continuation lines
     /// included: the renderer puts the unit names on those.
-    fn systemctl_lines(&self) -> Vec<&str> {
+    pub(crate) fn systemctl_lines(&self) -> Vec<&str> {
         let mut lines = Vec::new();
         let mut continued = false;
         for line in self.containerfile.lines() {
@@ -496,7 +502,7 @@ impl Surfaces {
         lines
     }
 
-    fn omitted_lines(&self) -> Vec<&str> {
+    pub(crate) fn omitted_lines(&self) -> Vec<&str> {
         self.containerfile
             .lines()
             .filter(|l| l.starts_with("# Omitted:"))
@@ -504,7 +510,7 @@ impl Surfaces {
     }
 
     /// The `# Not carried:` block, header through its last entry.
-    fn not_carried_block(&self) -> Vec<&str> {
+    pub(crate) fn not_carried_block(&self) -> Vec<&str> {
         self.containerfile
             .lines()
             .skip_while(|l| !l.starts_with("# Not carried:"))
@@ -513,7 +519,7 @@ impl Surfaces {
     }
 
     /// The `### Not carried` table, heading through its last row.
-    fn not_carried_table(&self) -> Vec<&str> {
+    pub(crate) fn not_carried_table(&self) -> Vec<&str> {
         self.audit
             .lines()
             .skip_while(|l| !l.starts_with("### Not carried"))
@@ -794,7 +800,7 @@ fn out_of_class_packages_are_in_neither_not_carried_list() {
 // ── The export's not-carried notice ──────────────────────────────────
 
 /// The warnings an export of `session` returns.
-fn export_warnings(session: &RefineSession) -> Vec<ExportWarning> {
+pub(crate) fn export_warnings(session: &RefineSession) -> Vec<ExportWarning> {
     let dir = tempfile::tempdir().expect("tempdir");
     session
         .export_plan(session.generation())
@@ -914,7 +920,7 @@ fn the_notice_leads_a_failure_from_the_same_export() {
 
 /// What an export of `session` writes, with no operations beyond the
 /// session's own.
-fn surfaces_of(session: &RefineSession) -> Surfaces {
+pub(crate) fn surfaces_of(session: &RefineSession) -> Surfaces {
     let dir = tempfile::tempdir().expect("tempdir");
     let tarball = dir.path().join("export.tar.gz");
     session
@@ -927,7 +933,7 @@ fn surfaces_of(session: &RefineSession) -> Surfaces {
 
 impl Surfaces {
     /// The package names in the `# Not carried:` block, in its order.
-    fn not_carried_block_names(&self) -> Vec<&str> {
+    pub(crate) fn not_carried_block_names(&self) -> Vec<&str> {
         self.not_carried_block()
             .into_iter()
             .skip(1)
@@ -937,7 +943,7 @@ impl Surfaces {
     }
 
     /// The package names in the `### Not carried` table, in its order.
-    fn not_carried_table_names(&self) -> Vec<&str> {
+    pub(crate) fn not_carried_table_names(&self) -> Vec<&str> {
         self.not_carried_table()
             .into_iter()
             .skip(4)
@@ -948,7 +954,7 @@ impl Surfaces {
 }
 
 /// The display names of the session's not-carried rows, in order.
-fn projected_not_carried(session: &RefineSession) -> Vec<String> {
+pub(crate) fn projected_not_carried(session: &RefineSession) -> Vec<String> {
     session
         .decisions()
         .not_carried
@@ -959,7 +965,7 @@ fn projected_not_carried(session: &RefineSession) -> Vec<String> {
 
 /// Include or exclude one package through refine's ordinary decision op,
 /// the one the packages view sends.
-fn set_package(session: &mut RefineSession, name: &str, arch: &str, include: bool) {
+pub(crate) fn set_package(session: &mut RefineSession, name: &str, arch: &str, include: bool) {
     session
         .apply(RefinementOp::SetInclude {
             item_id: ItemId::Package {
@@ -1064,10 +1070,8 @@ fn the_projections_unit_owners_are_the_ones_the_notice_names() {
 /// `firewalld` owns `/var/lib/firewalld`, which is provisioned once the
 /// package that creates it is left out.
 ///
-/// `python3-firewall` is listed throughout: the dependency tree records
-/// leaf closures only, so the dependency of a carried auto package is not
-/// credited as pulled in. That is the known limit, pinned here so a
-/// change to it is deliberate.
+/// `python3-firewall` follows `firewalld`: carried with it, from its
+/// recorded closure, and listed only while it is left out.
 #[test]
 fn excluding_a_unit_owner_lists_it_and_including_it_restores_the_default() {
     for (label, snapshot) in refine_snapshots() {
@@ -1137,11 +1141,12 @@ fn excluding_a_unit_owner_lists_it_and_including_it_restores_the_default() {
                     );
                 }
             }
-            assert!(
+            assert_eq!(
                 projected_not_carried(&session)
                     .iter()
                     .any(|n| n == "python3-firewall"),
-                "{ctx}: the known limit no longer holds; update the docs"
+                *name == "firewalld",
+                "{ctx}: python3-firewall is listed only while firewalld is left out"
             );
 
             set_package(&mut session, name, arch, true);
@@ -1165,6 +1170,119 @@ fn excluding_a_unit_owner_lists_it_and_including_it_restores_the_default() {
                 "{ctx}"
             );
         }
+    }
+}
+
+/// The auto package the leaf pulls in that owns the user-enabled
+/// `httpd.service`.
+const PULLED_IN_OWNER: (&str, &str) = ("httpd-core", "x86_64");
+
+/// A unit owner the leaf pulls in is carried by default in its own right,
+/// so excluding the leaf leaves it in the image: installed by name, its
+/// unit enabled, and not listed. Excluding the owner alone lists nothing
+/// either, since the leaf still pulls it in; only excluding both lists it,
+/// with the notice. Each step restores the default exactly.
+#[test]
+fn excluding_the_leaf_keeps_the_unit_owner_it_pulled_in() {
+    let (owner, owner_arch) = PULLED_IN_OWNER;
+    for (label, snapshot) in refine_snapshots() {
+        let mut session = RefineSession::new(snapshot);
+        let shown = session
+            .view()
+            .packages
+            .iter()
+            .find(|p| p.entry.name == owner)
+            .map(|p| p.entry.disposition.is_included());
+        assert_eq!(shown, Some(true), "{label}: {owner} is included by default");
+        let before = surfaces_of(&session);
+        assert!(
+            !before.install_names().iter().any(|n| n == owner),
+            "{label}: the installed leaf brings {owner}, so it is not named:\n{}",
+            before.containerfile
+        );
+
+        set_package(&mut session, LEAF, "x86_64", false);
+        let after = surfaces_of(&session);
+        let ctx = format!("{label}, {LEAF} excluded");
+        assert!(
+            after.install_names().iter().any(|n| n == owner),
+            "{ctx}: {owner} is installed:\n{}",
+            after.containerfile
+        );
+        assert!(
+            after
+                .systemctl_lines()
+                .iter()
+                .any(|l| l.contains("httpd.service")),
+            "{ctx}: its unit is enabled:\n{}",
+            after.containerfile
+        );
+        assert!(
+            !projected_not_carried(&session).iter().any(|n| n == owner),
+            "{ctx}: {:?}",
+            projected_not_carried(&session)
+        );
+        assert!(
+            !after.not_carried_block_names().contains(&owner),
+            "{ctx}:\n{}",
+            after.containerfile
+        );
+        assert_eq!(session.decisions().not_carried_notice, None, "{ctx}");
+
+        set_package(&mut session, LEAF, "x86_64", true);
+        assert_eq!(
+            surfaces_of(&session).containerfile,
+            before.containerfile,
+            "{label}, {LEAF} included again"
+        );
+
+        set_package(&mut session, owner, owner_arch, false);
+        let ctx = format!("{label}, {owner} excluded");
+        let after = surfaces_of(&session);
+        assert!(
+            after
+                .systemctl_lines()
+                .iter()
+                .any(|l| l.contains("httpd.service")),
+            "{ctx}: the leaf still pulls it in:\n{}",
+            after.containerfile
+        );
+        assert!(
+            !projected_not_carried(&session).iter().any(|n| n == owner),
+            "{ctx}"
+        );
+        assert_eq!(session.decisions().not_carried_notice, None, "{ctx}");
+
+        set_package(&mut session, LEAF, "x86_64", false);
+        let ctx = format!("{label}, {LEAF} and {owner} excluded");
+        let after = surfaces_of(&session);
+        assert!(
+            after.not_carried_block_names().contains(&owner),
+            "{ctx}:\n{}",
+            after.containerfile
+        );
+        assert!(
+            after
+                .omitted_lines()
+                .iter()
+                .any(|l| l.contains("httpd.service")),
+            "{ctx}:\n{}",
+            after.containerfile
+        );
+        let notice = session
+            .decisions()
+            .not_carried_notice
+            .clone()
+            .unwrap_or_else(|| panic!("{ctx}: an excluded owner gives a notice"));
+        assert!(notice.text().contains(owner), "{ctx}: {notice:?}");
+
+        set_package(&mut session, LEAF, "x86_64", true);
+        set_package(&mut session, owner, owner_arch, true);
+        assert_eq!(
+            surfaces_of(&session).containerfile,
+            before.containerfile,
+            "{label}, both included again"
+        );
     }
 }
 
@@ -1248,6 +1366,12 @@ const FLEET_TARGET_IMAGE: &str = "registry.redhat.io/rhel9/rhel-bootc:9.4";
 /// `# Not carried` block and the audit table, `inspectah aggregate` prints
 /// the notice the scan would, and the refine export of the aggregate sends
 /// it in its warnings: the same notice a single host's export gives.
+///
+/// Neither export enables `rhcd.service`, which both hosts enabled against
+/// its preset: its package is not in the image, so `systemctl enable`
+/// would fail the build. Each says why in an `# Omitted:` line instead.
+/// `httpd.service` is enabled: the merge dropped `httpd-core` too, but the
+/// leaf `httpd` pulls it in.
 #[test]
 fn the_fleet_export_notices_the_unit_owners_its_merge_drops() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1322,6 +1446,30 @@ fn the_fleet_export_notices_the_unit_owners_its_merge_drops() {
                 fleet.containerfile
             );
         }
+        assert!(
+            !fleet
+                .systemctl_lines()
+                .iter()
+                .any(|l| l.contains("rhcd.service")),
+            "{label}: the unit of a dropped owner is not enabled:\n{}",
+            fleet.containerfile
+        );
+        assert!(
+            fleet
+                .omitted_lines()
+                .iter()
+                .any(|l| l.contains("rhcd.service") && l.contains("rhc")),
+            "{label}: the omission is explained:\n{}",
+            fleet.containerfile
+        );
+        assert!(
+            fleet
+                .systemctl_lines()
+                .iter()
+                .any(|l| l.contains("httpd.service")),
+            "{label}: the unit of a pulled-in package is enabled:\n{}",
+            fleet.containerfile
+        );
     }
 }
 

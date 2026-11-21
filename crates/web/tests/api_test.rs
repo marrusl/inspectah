@@ -688,6 +688,7 @@ fn units_view_state() -> Arc<AppState> {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
@@ -786,6 +787,7 @@ fn scheduled_timer_state() -> Arc<AppState> {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
     snap.scheduled_tasks = Some(ScheduledTaskSection {
         cron_jobs: vec![CronJob {
@@ -1089,6 +1091,7 @@ fn generated_collision_state(collected: bool) -> Arc<AppState> {
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
             default_target: None,
+            enabled_on_any_host: Vec::new(),
         });
     }
     // With `collected`, the host's own timer of the generated name is a
@@ -2098,6 +2101,7 @@ fn rich_snapshot() -> InspectionSnapshot {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
 
     snap.containers = Some(ContainerSection {
@@ -3198,6 +3202,7 @@ fn service_subsection_state() -> Arc<AppState> {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
     snap.warnings.push(Warning {
         inspector: "units".into(),
@@ -3397,6 +3402,7 @@ fn locked_package_state() -> Arc<AppState> {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
     snap.config = Some(ConfigSection { files: vec![] });
     Arc::new(AppState {

@@ -108,7 +108,11 @@ fn test_effective_target_packages_uses_plain_names_and_include_true() {
         ..Default::default()
     };
 
-    let names = effective_target_packages(&rpm, &InstallRepos::default());
+    let snap = InspectionSnapshot {
+        rpm: Some(rpm),
+        ..Default::default()
+    };
+    let names = effective_target_packages(&snap, &InstallRepos::default());
 
     assert!(names.contains("firewalld"));
     assert!(names.contains("systemd"));
@@ -179,6 +183,7 @@ fn test_service_render_plan_omits_proven_absent_service() {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -234,6 +239,7 @@ fn test_service_render_plan_emits_package_unreachable_service() {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -275,6 +281,7 @@ fn test_service_render_plan_keeps_unknown_owner_conservative() {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -333,6 +340,7 @@ fn test_service_render_plan_proven_present_emits_clean() {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -379,6 +387,7 @@ fn test_service_render_plan_pure_baseline_unavailable_advisory() {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -439,6 +448,7 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -494,6 +504,7 @@ fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -557,6 +568,7 @@ fn a_commandline_package_owning_a_unit_is_unreachable_unless_a_repo_serves_it() 
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
             default_target: None,
+            enabled_on_any_host: Vec::new(),
         });
         snap
     };
@@ -837,6 +849,7 @@ fn test_service_presence_tiers_table() {
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
                 default_target: None,
+                enabled_on_any_host: Vec::new(),
             });
 
             let plan = render(&snap);
@@ -1002,6 +1015,7 @@ fn leaf_snapshot(
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
     snap
 }
@@ -1423,8 +1437,12 @@ fn only_a_leaf_the_export_installs_pulls_in_its_dependencies() {
             leaf_dep_tree: serde_json::json!({ "vendor-app.x86_64": ["vendor-lib.x86_64"] }),
             ..Default::default()
         };
+        let snap = InspectionSnapshot {
+            rpm: Some(rpm),
+            ..Default::default()
+        };
         assert_eq!(
-            pulled_in_by_included(&rpm, &InstallRepos::default()).contains("vendor-lib.x86_64"),
+            pulled_in_by_included(&snap, &InstallRepos::default()).contains("vendor-lib.x86_64"),
             pulls_in,
             "{root_kind}"
         );
@@ -1514,6 +1532,7 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
             default_target: None,
+            enabled_on_any_host: Vec::new(),
         };
 
         let mut excluded = InspectionSnapshot::new();

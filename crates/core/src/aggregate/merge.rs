@@ -1304,29 +1304,35 @@ pub fn merge_rpm_sections(
             // Aggregate auto_packages: None (not independently meaningful).
             let auto = None;
 
-            // Dep tree from first authoritative host (sorted by hostname),
-            // filtered to intersection entries only.
+            // Dep tree for the intersection leaves: each leaf's closures on
+            // every authoritative host, joined. One host's closure is not
+            // enough to say what installing the leaf installs: a host where
+            // a dependency is itself user-installed leaves it out, since the
+            // collector records auto dependencies only, and the merge then
+            // drops that dependency for not being a leaf everywhere.
             let leaf_ids: HashSet<&str> = sorted_leaf.iter().map(|s| s.as_str()).collect();
             let dep_tree = {
-                let mut auth_pairs: Vec<(usize, &str)> = authoritative_indices
-                    .iter()
-                    .map(|&i| (i, hostnames.get(i).map(|s| s.as_str()).unwrap_or("")))
-                    .collect();
-                auth_pairs.sort_by_key(|(_, h)| *h);
-
-                let donor_idx = auth_pairs[0].0;
-                let donor_tree = &sections[donor_idx].as_ref().unwrap().leaf_dep_tree;
-
-                if let Some(obj) = donor_tree.as_object() {
-                    let filtered: serde_json::Map<String, serde_json::Value> = obj
-                        .iter()
-                        .filter(|(k, _)| leaf_ids.contains(k.as_str()))
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
-                    serde_json::Value::Object(filtered)
-                } else {
-                    serde_json::Value::Object(serde_json::Map::new())
+                let mut joined: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+                for &i in &authoritative_indices {
+                    let tree = &sections[i].as_ref().unwrap().leaf_dep_tree;
+                    for (leaf, deps) in tree.as_object().into_iter().flatten() {
+                        if !leaf_ids.contains(leaf.as_str()) {
+                            continue;
+                        }
+                        joined.entry(leaf.as_str()).or_default().extend(
+                            deps.as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(serde_json::Value::as_str),
+                        );
+                    }
                 }
+                serde_json::Value::Object(
+                    joined
+                        .into_iter()
+                        .map(|(leaf, deps)| (leaf.to_string(), serde_json::json!(deps)))
+                        .collect(),
+                )
             };
 
             (Some(sorted_leaf), Some(union), auto, dep_tree)
@@ -1501,6 +1507,9 @@ pub fn merge_rpm_sections(
             leaf_packages,
             auto_packages,
             leaf_dep_tree,
+            // Leaves only survive the merge, so no auto package is left to
+            // carry a closure for.
+            auto_dep_tree: None,
             module_streams,
             version_locks,
             module_stream_conflicts,
@@ -1567,6 +1576,15 @@ pub fn merge_service_sections(
         hostnames,
     );
     let inventory = merge_unit_inventory(&sections);
+    let enabled_on_any_host: Vec<UnitName> = sections
+        .iter()
+        .flatten()
+        .flat_map(|s| &s.inventory)
+        .filter(|entry| entry.state == UnitState::Enabled)
+        .map(|entry| entry.unit.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
     let mount_findings = merge_items(
         collect_items(&sections, |s| &s.mount_findings),
         total_hosts,
@@ -1596,6 +1614,7 @@ pub fn merge_service_sections(
         manual_links,
         undetermined_installs,
         default_target: merge_default_target(&sections, total_hosts, hostnames),
+        enabled_on_any_host,
     })
 }
 

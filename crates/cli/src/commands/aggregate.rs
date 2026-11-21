@@ -680,18 +680,57 @@ mod tests {
         );
     }
 
+    /// A schema-28 host tarball records leaf dependency closures only, so
+    /// the dependencies of an auto package an export carries read as not
+    /// installed. The aggregate loader refuses it, and the merge never sees
+    /// it. The same payload with the closures and the current version
+    /// loads, so the version gate is what refuses it.
+    #[test]
+    fn schema_28_snapshot_is_refused() {
+        let schema_28: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../testdata/fixtures/snapshot/schema-28-leaf-closures-only.json"
+        ))
+        .unwrap();
+
+        let mut current = schema_28.clone();
+        current["rpm"]["auto_dep_tree"] = serde_json::json!({
+            "firewalld.noarch": ["python3-firewall.noarch"],
+            "python3-firewall.noarch": []
+        });
+        current["schema_version"] = inspectah_core::snapshot::SCHEMA_VERSION.into();
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = make_test_tarball(dir.path(), "host-a.tar.gz", &current);
+        let loaded = load_snapshot_from_tarball(&tarball)
+            .expect("the same payload with the closures loads at the current version");
+        assert!(
+            loaded
+                .rpm
+                .and_then(|rpm| rpm.auto_dep_tree)
+                .is_some_and(|tree| tree.contains_key("firewalld.noarch")),
+            "the closures are recorded"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = make_test_tarball(dir.path(), "host-a.tar.gz", &schema_28);
+        let err = load_snapshot_from_tarball(&tarball).expect_err("schema 28 is refused");
+        assert!(
+            format!("{err:#}").contains("unsupported schema version: 28"),
+            "expected the schema refusal, got: {err:#}"
+        );
+    }
+
     /// Build two valid aggregate-ready tarballs in `dir`. Each snapshot has
     /// an `os_release` section so it passes the non-empty check, and uses
     /// distinct hostnames to avoid the duplicate-hostname error.
     fn make_aggregate_pair(dir: &Path) -> (PathBuf, PathBuf) {
         let json_a = serde_json::json!({
-            "schema_version": 28,
+            "schema_version": 29,
             "meta": {"hostname": "host-a.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
         });
         let json_b = serde_json::json!({
-            "schema_version": 28,
+            "schema_version": 29,
             "meta": {"hostname": "host-b.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
@@ -775,7 +814,7 @@ mod tests {
 
         // Create one normal snapshot and one sensitive snapshot
         let json_normal = serde_json::json!({
-            "schema_version": 28,
+            "schema_version": 29,
             "meta": {"hostname": "host-normal.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -783,7 +822,7 @@ mod tests {
         });
 
         let json_sensitive = serde_json::json!({
-            "schema_version": 28,
+            "schema_version": 29,
             "meta": {"hostname": "host-sensitive.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -833,7 +872,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let json_sensitive = serde_json::json!({
-            "schema_version": 28,
+            "schema_version": 29,
             "meta": {"hostname": "host-a.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -844,7 +883,7 @@ mod tests {
         });
 
         let json_b = serde_json::json!({
-            "schema_version": 28,
+            "schema_version": 29,
             "meta": {"hostname": "host-b.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},

@@ -66,10 +66,10 @@ expect() {
     ok "$desc"
 }
 
-CLEAN_SNAPSHOT='{"schema_version":28,"redaction_state":{"state":"fully_redacted","redacted_by":"t","config_hash":"h"}}'
-RETAINED_SNAPSHOT='{"schema_version":28,"redaction_state":{"state":"sensitive_retained","redacted_by":"t","config_hash":"h","unresolved_count":0}}'
+CLEAN_SNAPSHOT='{"schema_version":29,"redaction_state":{"state":"fully_redacted","redacted_by":"t","config_hash":"h"}}'
+RETAINED_SNAPSHOT='{"schema_version":29,"redaction_state":{"state":"sensitive_retained","redacted_by":"t","config_hash":"h","unresolved_count":0}}'
 # An aggregate snapshot: the merge drops redaction_state and keeps the flag.
-FLAGGED_SNAPSHOT='{"schema_version":28,"sensitive_snapshot":true,"preserved_subscription":true}'
+FLAGGED_SNAPSHOT='{"schema_version":29,"sensitive_snapshot":true,"preserved_subscription":true}'
 
 make_tarball retained host-a "$RETAINED_SNAPSHOT"
 make_tarball flagged fleet "$FLAGGED_SNAPSHOT"

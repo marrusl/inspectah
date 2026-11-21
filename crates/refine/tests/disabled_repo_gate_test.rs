@@ -237,6 +237,7 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
     let about_the_packages = |containerfile: &str| -> Vec<String> {
         containerfile

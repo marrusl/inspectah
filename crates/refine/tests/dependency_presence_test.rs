@@ -79,6 +79,7 @@ fn snapshot() -> InspectionSnapshot {
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
         default_target: None,
+        enabled_on_any_host: Vec::new(),
     });
     snap
 }

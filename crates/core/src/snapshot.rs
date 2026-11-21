@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 28;
+pub const SCHEMA_VERSION: u32 = 29;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -111,7 +111,15 @@ impl InspectionSnapshot {
     /// section held services only, so every socket and timer state the
     /// host had is absent from it with nothing to say so. Only a re-scan
     /// can collect them.
-    const MIN_SCHEMA: u32 = 28;
+    ///
+    /// Schema 29 records the dependency closure of every auto package
+    /// (`rpm.auto_dep_tree`), and for an aggregate the units enabled on any
+    /// host (`units.enabled_on_any_host`). A schema-28 payload deserializes
+    /// with neither, and a carried auto package's dependencies then read as
+    /// not installed: listed as not carried, left out of the disabled-repo
+    /// install that needs them, and their recorded `systemctl` commands
+    /// dropped. Only a re-scan records the closures.
+    const MIN_SCHEMA: u32 = 29;
 
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
         let snap: Self = serde_json::from_str(json)?;
@@ -240,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_future_version_rejected() {
-        let json = r#"{"schema_version": 29, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let json = r#"{"schema_version": 30, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
         assert!(
             result.is_err(),

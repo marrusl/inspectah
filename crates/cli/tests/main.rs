@@ -22,4 +22,5 @@ mod not_carried_parity_test;
 mod refine_e2e_test;
 mod staged_writes_parity_test;
 mod sysctl_scan_test;
+mod unit_owner_evidence_test;
 mod warning_markdown_test;

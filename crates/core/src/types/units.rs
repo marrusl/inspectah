@@ -1433,6 +1433,12 @@ pub struct UnitSection {
     /// The default target, when the host sets one (§ 7.6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_target: Option<DefaultTarget>,
+    /// For an aggregate, every unit enabled on at least one host, sorted,
+    /// whatever state `inventory` keeps for it: the inventory keeps the
+    /// state most hosts have, so a unit one host enabled can read as
+    /// disabled there. Empty for a single host, whose inventory says it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enabled_on_any_host: Vec<UnitName>,
 }
 
 /// The target `/etc/systemd/system/default.target` links to on the source
@@ -1846,6 +1852,7 @@ mod tests {
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
             default_target: None,
+            enabled_on_any_host: Vec::new(),
         };
 
         let json = serde_json::to_string(&section).unwrap();
@@ -1944,6 +1951,7 @@ mod tests {
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
             default_target: None,
+            enabled_on_any_host: Vec::new(),
         };
         let json = serde_json::to_string(&section).unwrap();
         let parsed: UnitSection = serde_json::from_str(&json).unwrap();
