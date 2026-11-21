@@ -303,7 +303,36 @@ jobs:
           path: homebrew-tap
           persist-credentials: false
 
+      # A re-run of an older release's packaging run, made after a newer
+      # release already reached the tap, would otherwise rewrite the formula
+      # back to the older version and push it as an ordinary fast-forward.
+      # Gem::Version orders prereleases below their release and compares
+      # numeric parts as numbers (0.9.0-beta.9 < 0.9.0-beta.10 < 0.9.0),
+      # which `sort -V` does not. An equal version carries on: the commit
+      # step below turns an identical formula into a no-op.
+      - name: Skip a release older than the tap
+        id: order
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        working-directory: homebrew-tap
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          CURRENT=$(sed -n 's/^  version "\(.*\)"$/\1/p' "$FORMULA")
+          if [ "$(printf '%s' "$CURRENT" | grep -c '^')" -ne 1 ]; then
+            echo "::error::could not read exactly one version from the tap's ${FORMULA}: '${CURRENT}'" >&2
+            exit 1
+          fi
+          ORDER=$(ruby -e 'puts Gem::Version.new(ARGV[0]) <=> Gem::Version.new(ARGV[1])' "$VERSION" "$CURRENT")
+          if [ "$ORDER" = "-1" ]; then
+            echo "::notice::The tap is at ${CURRENT}, newer than ${VERSION}; this release is superseded. Nothing to test or push."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
       - name: Update formula
+        if: steps.order.outputs.proceed == 'true'
         env:
           VERSION: ${{ steps.asset.outputs.version }}
           SHA256: ${{ steps.asset.outputs.sha256 }}
@@ -341,6 +370,7 @@ jobs:
 
       - name: Commit the formula locally
         id: commit
+        if: steps.order.outputs.proceed == 'true'
         env:
           TAG: ${{ github.event.release.tag_name }}
         working-directory: homebrew-tap
