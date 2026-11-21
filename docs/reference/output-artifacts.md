@@ -130,14 +130,19 @@ it, the Containerfile installs it, or a package it installs requires it. When
 dnf may or may not install the package, the command runs only if the unit
 file is in the image. That happens for one of several packages that provide
 something an installed package needs, a package only a conditional dependency
-brings, a package you include by hand in refine and the packages it needs,
-and, on a fleet, the packages a package only some hosts have needs. These
-commands follow the others in one `RUN`, under one comment:
+brings, a package another package only recommends or supplements (dnf skips
+one it cannot install), a package you include by hand in refine and the
+packages it needs, and, on a fleet, the packages a package only some hosts
+have needs. A timer's `enable` also waits for the file of the unit it starts
+when that unit comes from such a package. These commands follow the others
+in one `RUN`, under one comment, and the audit report lists them under its
+unit state changes:
 
 ```dockerfile
 # dnf may or may not install the packages these units come from, so each
-# command runs only if the unit file is in the image.
-RUN if [ -e /usr/lib/systemd/system/alt.service ]; then systemctl disable -- alt.service; fi
+# command runs only if the unit files it tests are in the image.
+RUN if [ -e /usr/lib/systemd/system/alt.service ]; then systemctl disable -- alt.service; fi && \
+    if [ -e /etc/systemd/system/report.service ]; then systemctl enable -- report.timer; fi
 ```
 
 A `mask` is always plain, since `systemctl mask` succeeds whether or not the

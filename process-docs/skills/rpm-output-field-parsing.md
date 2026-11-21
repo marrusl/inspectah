@@ -112,16 +112,35 @@ below. A capability inside a rich dependency keeps its comparison.
 
 ## What the dependency tree counts as pulled in
 
-The collector walks two graphs over the same edges. `depends_on` holds
-every edge: `a -> b` means installing `a` with dnf defaults may install
-`b`. `requires` holds the edges a real requirement establishes:
-`DepExpr::required` keeps a provider only when it is the sole installed
-provider of what `a` requires or recommends, an `or` only when one
-operand holds and no operand holds an `if` or `unless`, and an `if`
-branch only when its condition holds through the base image and `a`
-alone, or the `else` when the condition holds through nothing (else what
-both branches need); a Supplements edge always counts, since any trigger
-pulls the package in.
+The collector builds three graphs over the added packages.
+
+- **`depends_on`, what the image may install** (`DepExpr::possible`):
+  `a -> b` means installing `a` may install `b` whatever the export
+  leaves out. Nothing is evaluated: every operand of an `or` counts,
+  since dnf may pick any that is available, and both branches of every
+  `if` and `unless`, since which applies depends on what the image ends
+  up with. `(plugin if switch else helper)` needs `helper` once `switch`
+  is left out. Conditions are still never credited. This is the absence
+  side: a package outside it is called not carried and its command
+  omitted, so it must be a superset.
+- **`held`, what held on the source host** (`DepExpr::pulled`): each
+  condition evaluated against what was installed, each `or` by its first
+  operand present. Only the leaf fallback (`graph_based_split`) reads it.
+  **Never infer roots from `depends_on`.** An edge only the image could
+  need, `app -> alternate` through `(alternate if (missing-cap if
+  switch))` while `switch` is installed, turns a root into a dependency,
+  and both exports then drop its recorded command. The fallback also
+  keeps every member of a dependency cycle no root reaches: someone
+  installed one of them, and which is not known.
+- **`requires`, what installing `a` certainly installs**
+  (`DepExpr::required`): a provider only when it is the sole installed
+  provider of what `a` requires, an `or` only when one operand holds and
+  no operand holds an `if` or `unless`, and an `if` branch only when its
+  condition holds through the base image and `a` alone, or the `else`
+  when the condition holds through nothing (else what both branches
+  need). **Weak dependencies are never certain.** dnf skips a Recommends
+  or Supplements it cannot install, so neither, nor any path through one,
+  is in `requires`, and a joint Supplements never fires there.
 
 **`required` only has to be right in one direction.** What it keeps is
 counted as certainly installed, and a unit command for it is written
@@ -134,11 +153,10 @@ make such a condition fail. A nested one can flip the other way:
 while `switch` is installed and holds once it is left out, so
 `(alternate if (missing-cap if switch))` must not credit `alternate`
 because the condition holds through the base image alone. A non-monotone
-condition always takes what both branches need, and `pulled` pulls in
-both branches of it, since either may apply. A requirement that another
-requirement makes hold, such as `(plugin if helper)` beside `helper`, is
-not settled either: `helper` is not assured, so `plugin` is only
-possible.
+condition always takes what both branches need. A requirement that
+another requirement makes hold, such as `(plugin if helper)` beside
+`helper`, is not settled either: `helper` is not assured, so `plugin` is
+only possible.
 
 `dep_closures` is each leaf's and auto package's walk of `requires` over
 the classified packages, leaves included; `dep_alternatives` is the rest
@@ -186,7 +204,9 @@ dependencies: mod_http2, mod_lua` on both. So:
   failed index. An empty list would silently drop every file-only edge
   (git to perl-interpreter) from a tree that still reported itself
   authoritative.
-- **Recommends** (`W`): treated as Requires.
+- **Recommends** (`W`): an edge in `depends_on` and `held` like a
+  Requires, never in `requires`: dnf skips one it cannot install, so a
+  plain command resting on it could fail the build on a missing unit.
 - **Supplements** (`S`): the reverse. `b` Supplements `x` means `b` is
   installed when `x` is. **Never turn an `and` into one edge per
   operand.** For `b` Supplements `(shared-lib and desktop)`, an edge from
@@ -200,12 +220,15 @@ dependencies: mod_http2, mod_lua` on both. So:
   satisfies adds no group. An expression that holds through base-image
   packages alone pulls nothing, because dnf does not act on a Supplements
   that already held. A one-group clause is an ordinary edge from each
-  member to `b`. A clause with several groups is a `JointSupplement`,
-  which `leaf_closure` fires only when the leaf and what it reaches cover
-  every group. `graph_based_split` counts its package as depended on.
-- **Rich (boolean) dependencies** (`rich_dep.rs`): evaluated against the
-  installed host, not solved, over sets of installed provider ids rather
-  than capability names. `(a if c)` pulls a provider of `a` only when some
+  member to `b`, in `depends_on` and `held` only, since a Supplements is
+  weak too. A clause with several groups is a `JointSupplement`, which
+  `leaf_closure` fires only when the leaf and what it reaches cover every
+  group, and never on the `requires` walk. `graph_based_split` counts its
+  package as depended on.
+- **Rich (boolean) dependencies** (`rich_dep.rs`): for `held`, evaluated
+  against the installed host, not solved, over sets of installed provider
+  ids rather than capability names; `possible` takes every operand and
+  branch, as above. On the host, `(a if c)` pulls a provider of `a` only when some
   installed package (base image included) provides `c`, and never pulls
   `c`; `unless` and `else` likewise. A provider of `a` is held back
   only when no branch that could be taken requires it: `c` holds through
@@ -251,13 +274,17 @@ rejects as well, is dropped. So is a Supplements that expands past
 `MAX_SUPPLEMENT_CLAUSES` (64). The tree is reachability only: it does not
 record which kind of edge put a package there.
 
-**Judged on the source host, not the target.** dnf evaluates `or`
-alternatives and `if` conditions against the base image plus the included
-packages. The tree evaluates them against the host. `(addon or base-cap)`
-credits `addon` even when the target baseline satisfies `base-cap`.
-`(plugin if desktop)` credits `plugin` even when refine excludes
-`desktop`. A joint Supplements whose operands come from two different
-leaves is in neither list. Fixing this means storing the predicates in
+**Judged on the source host, not the target, where that is safe.** dnf
+evaluates `or` alternatives and `if` conditions against the base image
+plus the included packages. `held` evaluates them against the host, which
+is right for telling the host's roots apart. `depends_on` evaluates
+nothing, so it over-counts rather than under-counts: `(addon or
+base-cap)` credits `addon` even when the target baseline satisfies
+`base-cap`, which keeps `addon` included by default and guards its
+command. `requires` leaves out anything the host cannot settle. A
+Supplements is still judged on the host: one whose condition fails there
+is in no graph, and a joint Supplements whose operands come from two
+different leaves is in neither list. Fixing this means storing the predicates in
 the snapshot and evaluating them at render time. On RHEL 9.8 and 10.2
 the tree matched an independent libsolv closure check on all 28 leaves,
 at `1be5bd44` and again at `e55a45f7` (2026-11-09), so this has no

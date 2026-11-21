@@ -380,16 +380,22 @@ showed, and the build failed with no warning anywhere.
   not staged means the recorded trigger may not be the image's, so the
   check declines rather than re-resolve it. **An instance trigger loads
   from its template's file** (`trigger_file`): `worker@a.service` has no
-  file of its own, so `local_trigger_missing` looks at
+  file of its own, so `trigger_presence` looks at
   `/etc/systemd/system/worker@.service` unless the snapshot holds
   something at the instance's own name. Looking at the instance's path
   finds nothing and reads the trigger as provided, which carries the
   timer with its unit excluded. A timer with no description,
   or an `unresolved` trigger, declines too: an unknown trigger is never
   read as no local trigger. A local trigger is a unit file under
-  `/etc/systemd/system` with no vendor file (`local_trigger_missing`); a
-  staged file at its path, a generated one included, or a package in the
-  image that owns it, provides it. On the collector side
+  `/etc/systemd/system` with no vendor file (`trigger_presence`); a
+  staged file at its path, a generated one included, or a package
+  certainly in the image that owns it, provides it, and the enable is
+  plain. **A trigger only a possible package ships guards the enable.**
+  When the owner of its config entry, or of a vendor trigger recorded by
+  a state change, is possible but not certain, the timer's `enable` also
+  waits for the trigger's file (`/etc/systemd/system/<file>` or the
+  vendor file), so a timer is never enabled plain while dnf may leave its
+  unit out. Without a baseline the owner is taken to be possible. On the collector side
   (`scheduled.rs`, `timer_trigger`), drop-ins are listed with
   `systemd_reads_drop_in` (a hidden `.override.conf` is no evidence) and
   selected with the `[Install]` reader's `selected_drop_ins`, so `Unit=`
@@ -404,7 +410,7 @@ showed, and the build failed with no warning anywhere.
   timer itself ("Units cannot trigger themselves"), skipped in
   `accepted_trigger` before the first accepted value is chosen. Skipping
   it matters: recorded as the trigger, the timer's own staged file would
-  satisfy `local_trigger_missing` while the real trigger is excluded.
+  satisfy `trigger_presence` while the real trigger is excluded.
   **Another timer's name is `Unresolved`.** systemd accepts a timer as a
   timer's trigger (no type check in `config_parse_trigger_unit` or
   `timer.c`, 252 and 257) but rejects any name of the timer itself
@@ -463,7 +469,9 @@ from `export_installs`:
 - **certain**: the baseline's packages, every package the Containerfile
   names on an install line, and what one of those certainly pulls in;
 - **possible**: `certain`, every included `packages_added` entry, and
-  everything an included package may pull in.
+  everything an included package may pull in: every `or` operand, both
+  branches of every conditional, and every weak dependency
+  (`DepExpr::possible` in the collector).
 
 `classify_service_presence`, evaluated in order:
 
@@ -472,9 +480,10 @@ from `export_installs`:
 3. The owner possible: guarded. This covers an excluded provider of a
    capability another package provides too, an included auto package the
    Containerfile does not name (kept as one provider a leaf may pull in),
-   a dependency only a conditional requirement brings, an auto package an
-   operator included by hand and its dependencies, and an included entry
-   rendered only as a manual step. When in doubt a package is possible,
+   a dependency only a conditional requirement brings, an `or` operand or
+   branch the host did not take, a recommended or supplementing package,
+   an auto package an operator included by hand and its dependencies, and
+   an included entry rendered only as a manual step. When in doubt a package is possible,
    never absent.
 4. The owner in `packages_added`, every entry excluded, and nothing
    installed may pull it in: decline with `NotCarried` or
@@ -506,9 +515,11 @@ certain when:
   package may pull in (`possibly_pulled_in_by_included`) that only a
   host-disabled repo serves;
 - a named package's `dep_closures` entry lists it and a repo the image
-  enables serves it, or the disabled-repo transaction names it. A
-  recommended package no repo serves is skipped by dnf, so it is not
-  counted. A snapshot without `dep_closures` (older than schema 29, or
+  enables serves it, or the disabled-repo transaction names it.
+  `dep_closures` follows Requires only: a Recommends or Supplements, and
+  every path through one, is possible only, because dnf skips a weak
+  dependency it cannot install and a plain `disable` of the missing unit
+  then fails on systemd 252. A snapshot without `dep_closures` (older than schema 29, or
   hand-built) has only `leaf_dep_tree`, which holds everything a leaf may
   install, so it makes nothing certain.
 
@@ -526,19 +537,28 @@ provider on some host, whose closure then leaves the dependency out.
 ### Guarded commands
 
 A planned unit with a guard (`PlannedUnit::guard`, and
-`PlannedTarget::guard` for `set-default`) carries the vendor file the
-command waits for: a `Vendor` fragment's file (the unit's own name, or
-its template's for an instance) or a package-owned storage unit's name.
+`PlannedTarget::guard` for `set-default`) carries the files, as absolute
+paths, the command waits for, every one of which must exist: the vendor
+file of a unit whose package is only possible (a `Vendor` fragment's
+file, the unit's own name or its template's for an instance, or a
+package-owned storage unit's name), and for a timer's `enable`, the file
+of a trigger only a possible package ships (`timer_trigger_check`).
 `systemctl_lines` writes the plain commands as before, then every guarded
 one in one `RUN`, under `GUARDED_COMMANDS_COMMENT`, in the same order
 (`set-default`, then enable, disable, mask; by kind, then name):
 
 ```dockerfile
 # dnf may or may not install the packages these units come from, so each
-# command runs only if the unit file is in the image.
+# command runs only if the unit files it tests are in the image.
 RUN if [ -e /usr/lib/systemd/system/alt.service ]; then systemctl disable -- alt.service; fi && \
-    if [ -e /usr/lib/systemd/system/worker@.service ]; then systemctl enable -- worker@blue.service; fi
+    if [ -e /usr/lib/systemd/system/worker@.service ]; then systemctl enable -- worker@blue.service; fi && \
+    if [ -e /etc/systemd/system/report.service ]; then systemctl enable -- report.timer; fi
 ```
+
+A command with two files tests each, `[ -e a ] && [ -e b ]`. The audit
+report lists every guarded command under its unit state changes
+(`guarded_unit_commands` in `audit.rs`); refine's rows do not mark them
+yet.
 
 - **The test is a file test, not `systemctl`.** No service manager runs
   in an image build: `systemctl cat` exits 1 there even for a unit that

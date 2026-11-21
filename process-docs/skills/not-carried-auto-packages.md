@@ -48,7 +48,10 @@ Everything that asks whether a package is in the image asks
   the disabled-repo transaction names), and what one of those certainly
   pulls in;
 - **possible**: that, every included package, and everything an included
-  package may pull in.
+  package may pull in: every operand of an `or`, both branches of every
+  conditional, and every weak dependency, whatever held on the source
+  host (`DepExpr::possible`). A Recommends or Supplements is never
+  certain, since dnf skips one it cannot install.
 
 The unit plan writes a package's commands plain when it is certain,
 guarded by its unit file when it is only possible, and omits them only
@@ -180,10 +183,12 @@ scan does.
 
 `classify_auto_carriage` returns `None`, and so nothing is excluded and
 no list is emitted, when the list below holds. The unit owners are still
-carried in every case but the first and the last: a host where dnf could
-not name the user-installed packages, and whose added packages need each
-other, falls back to the graph with no leaf and an empty tree, and its
-owner still installs. The cases:
+carried in every case but the first and the last. The collector's graph
+fallback, for a host where dnf could not name the user-installed
+packages, reads the edges that held on the host and keeps each member of
+a dependency cycle no root reaches as a leaf, so collector output no
+longer gives an empty tree over auto packages; a hand-built snapshot
+still can, and its owner still installs. The cases:
 
 - `leaf_packages` or `auto_packages` is `None` (the collector's
   unavailable or degraded state);
@@ -312,14 +317,14 @@ than one arch of that name. All reason wording comes from the one constant `NOT_
 - A closure is the source host's dependency graph, not the target's: the
   image's dnf resolves against the target repos, which may offer a
   provider the host lacked.
-- The possible side is less careful than the certain one. `DepExpr::pulled`
-  takes an `or`'s first satisfied operand, and an `if` whose condition
-  holds on the host pulls in only its `then` branch, though a condition
-  an excluded package satisfied can fail in the image. A package missed
-  that way reads as certainly absent: its commands are omitted although
-  dnf may install it, which leaves a unit in its preset state rather
-  than failing the build. A condition that holds a condition pulls in
-  both branches.
+- The possible side over-counts on purpose. It counts every `or`
+  operand and both branches of every conditional without evaluating
+  them, so a package the image will not install can stay included by
+  default and keep a guarded command; that is the price of never calling
+  an installed package absent. A Supplements is the exception: it is
+  still judged on the host, so one whose condition fails there pulls
+  nothing in. A rich expression the parser cannot read (one rpm itself
+  rejects) is dropped.
 - When several added packages provide a capability and the export
   installs none of them itself, dnf installs one: each one's commands
   are guarded, so whichever dnf picks keeps its own. The class counts
