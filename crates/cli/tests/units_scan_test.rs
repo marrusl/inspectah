@@ -5187,8 +5187,7 @@ fn t21_every_systemctl_command_in_the_containerfile_is_planned() {
             (
                 p.action().to_string(),
                 p.name().as_str().to_owned(),
-                p.guard()
-                    .map(|file| format!("/usr/lib/systemd/system/{}", file.as_str())),
+                (!p.guard().is_empty()).then(|| p.guard().join(" ")),
             )
         })
         .collect();
@@ -6571,6 +6570,141 @@ fn t37_timers_whose_trigger_is_provided_are_carried() {
         &[(config_item(&etc_path("report.service")), false)],
     ));
     assert!(acts(&cf, "mask", "report.timer"), "mask:\n{cf}");
+}
+
+/// `report.timer`'s trigger `report.service` as the package `alt` ships
+/// it, under `/etc/systemd/system`, modified, so the scan captures it as a
+/// config row. The leaf `app` requires `transport`, which `alt` provides;
+/// with `competing`, the base image's `base-provider` provides it too, and
+/// dnf need not install `alt` for `app`.
+fn t37_packaged_trigger_host(competing: bool) -> UnitHost {
+    let trigger = etc_path("report.service");
+    let mut host = UnitHost::new()
+        .base_package("bash")
+        .base_package("glibc")
+        .package("app")
+        .package("alt")
+        .provides("alt", "transport")
+        .requires("app", &["transport"])
+        .userinstalled(&["bash", "app"])
+        .unit("report.timer", "enabled")
+        .unit("report.service", "static")
+        .preset("disable *")
+        .etc_unit(
+            "report.timer",
+            "[Unit]\nDescription=Nightly report\n[Timer]\nOnCalendar=daily\n\
+             [Install]\nWantedBy=timers.target\n",
+        )
+        .owned_file(
+            &trigger,
+            "[Service]\nType=oneshot\nExecStart=/usr/bin/report\n",
+            "alt",
+        )
+        .rpm_va(&format!("S.5....T.  c {trigger}\n"), 1);
+    if competing {
+        host = host
+            .base_package("base-provider")
+            .provides("base-provider", "transport");
+    }
+    host
+}
+
+/// T37, a trigger a package may or may not bring: the export excludes the
+/// config row of `report.service` and keeps or excludes `alt`, whose
+/// package file it is. With `base-provider` there too, dnf need not
+/// install `alt`, so the timer's enable runs only if the trigger's file is
+/// in the image: a plain enable would start a timer whose unit is missing.
+/// Control: with `alt` the only provider, `app` certainly brings it, and
+/// the enable is plain.
+#[test]
+fn t37_a_trigger_whose_package_may_be_absent_guards_the_enable() {
+    let trigger = etc_path("report.service");
+    let snap = scan(t37_packaged_trigger_host(true));
+    assert_eq!(report_timer(&snap).trigger, trigger_unit("report.service"));
+    assert!(
+        snap.config
+            .iter()
+            .flat_map(|c| &c.files)
+            .any(|f| f.path == trigger && f.package.as_deref() == Some("alt")),
+        "the trigger is a config row of alt's"
+    );
+    let unchanged = containerfile_in(&exported_after(&snap, &[]));
+    assert!(acts(&unchanged, "enable", "report.timer"), "{unchanged}");
+
+    for alt_included in [true, false] {
+        let cf = containerfile_in(&exported_after(
+            &snap,
+            &[
+                (config_item(&trigger), false),
+                (package_item("alt"), alt_included),
+            ],
+        ));
+        assert!(
+            !acts(&cf, "enable", "report.timer"),
+            "alt included {alt_included}: not plain:\n{cf}"
+        );
+        assert_eq!(
+            unit_hosts::guarded_commands(&cf),
+            [(
+                "enable".to_owned(),
+                "report.timer".to_owned(),
+                trigger.clone()
+            )],
+            "alt included {alt_included}:\n{cf}"
+        );
+    }
+
+    let only = scan(t37_packaged_trigger_host(false));
+    let cf = containerfile_in(&exported_after(
+        &only,
+        &[(config_item(&trigger), false), (package_item("alt"), false)],
+    ));
+    assert!(acts(&cf, "enable", "report.timer"), "alt is certain:\n{cf}");
+}
+
+/// T37, a vendor trigger with a state change: `report.timer` names
+/// `vendor.service`, which `alt` ships under `/usr/lib/systemd/system` and
+/// which was enabled against a preset that disables it. `app` requires
+/// `transport`, which `alt` and the base image's `base-provider` provide,
+/// so once the operator excludes `alt` dnf need not install it: both the
+/// service's own enable and the timer's wait for the vendor file.
+#[test]
+fn t37_a_vendor_trigger_whose_package_may_be_absent_guards_the_enable() {
+    let vendor = "/usr/lib/systemd/system/vendor.service".to_owned();
+    let snap = scan(
+        t37_host("Unit=vendor.service\n")
+            .base_package("bash")
+            .base_package("base-provider")
+            .provides("base-provider", "transport")
+            .package("app")
+            .package("alt")
+            .provides("alt", "transport")
+            .requires("app", &["transport"])
+            .userinstalled(&["bash", "app"])
+            .unit("vendor.service", "enabled")
+            .vendor_unit("vendor.service", WANTED_UNIT, Some("alt")),
+    );
+    assert_eq!(report_timer(&snap).trigger, trigger_unit("vendor.service"));
+    let cf = containerfile_in(&exported_after(&snap, &[(package_item("alt"), false)]));
+    let mut guarded = unit_hosts::guarded_commands(&cf);
+    guarded.sort();
+    assert_eq!(
+        guarded,
+        [
+            (
+                "enable".to_owned(),
+                "report.timer".to_owned(),
+                vendor.clone()
+            ),
+            (
+                "enable".to_owned(),
+                "vendor.service".to_owned(),
+                vendor.clone()
+            ),
+        ],
+        "{cf}"
+    );
+    assert!(!acts(&cf, "enable", "report.timer"), "{cf}");
 }
 
 const WORKER_INSTANCE_TIMER: &str = "worker@a.timer";

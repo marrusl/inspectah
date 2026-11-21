@@ -897,7 +897,7 @@ pub enum AdvisoryReason {
 pub struct PlannedUnit {
     name: UnitName,
     action: UnitAction,
-    guard: Option<UnitName>,
+    guard: Vec<String>,
 }
 
 impl PlannedUnit {
@@ -911,12 +911,14 @@ impl PlannedUnit {
         self.action
     }
 
-    /// The vendor unit file the command waits for, when dnf may or may
-    /// not install the unit's package: the command runs only if that file
-    /// is in the image ([`systemctl_lines`]). `None` for a command that
-    /// always runs.
-    pub fn guard(&self) -> Option<&UnitName> {
-        self.guard.as_ref()
+    /// The unit files, as absolute paths, the command waits for: the
+    /// command runs only if every one is in the image
+    /// ([`systemctl_lines`]). The unit's vendor file, when dnf may or may
+    /// not install its package, and for a timer's `enable`, its trigger's
+    /// file when dnf may or may not install the package that ships it
+    /// ([`timer_trigger_check`]). Empty for a command that always runs.
+    pub fn guard(&self) -> &[String] {
+        &self.guard
     }
 }
 
@@ -926,7 +928,7 @@ impl PlannedUnit {
 #[derive(Debug, PartialEq, Eq)]
 pub struct PlannedTarget {
     name: TargetUnitName,
-    guard: Option<UnitName>,
+    guard: Vec<String>,
 }
 
 impl PlannedTarget {
@@ -935,10 +937,10 @@ impl PlannedTarget {
         &self.name
     }
 
-    /// The vendor unit file `set-default` waits for, as
+    /// The unit files `set-default` waits for, as
     /// [`PlannedUnit::guard`].
-    pub fn guard(&self) -> Option<&UnitName> {
-        self.guard.as_ref()
+    pub fn guard(&self) -> &[String] {
+        &self.guard
     }
 }
 
@@ -1099,7 +1101,7 @@ fn plan_generated(snap: &InspectionSnapshot, staged: &StagedWrites<'_>, plan: &m
                 Ok(()) => plan.scheduled.push(PlannedUnit {
                     name: unit,
                     action: UnitAction::Enable,
-                    guard: None,
+                    guard: Vec::new(),
                 }),
                 Err(reason) => plan.generated_declined.push(GeneratedDecline {
                     source: GeneratedSource::Cron {
@@ -1123,7 +1125,7 @@ fn plan_generated(snap: &InspectionSnapshot, staged: &StagedWrites<'_>, plan: &m
             Ok(()) => plan.workloads.push(PlannedUnit {
                 name: unit,
                 action: UnitAction::Enable,
-                guard: None,
+                guard: Vec::new(),
             }),
             Err(reason) => plan.generated_declined.push(GeneratedDecline {
                 source: GeneratedSource::FlatpakProvisioning,
@@ -1140,10 +1142,10 @@ enum PresenceDecision {
     Omit(OmissionReason),
     /// Keep the unit; optionally attach advisory reasons. `guard` is the
     /// vendor file the command waits for when the package may or may not
-    /// be installed ([`PlannedUnit::guard`]), `None` when it certainly is.
+    /// be installed ([`PlannedUnit::guard`]), empty when it certainly is.
     Emit {
         advisory_reasons: Option<(String, Vec<AdvisoryReason>)>,
-        guard: Option<UnitName>,
+        guard: Vec<String>,
     },
 }
 
@@ -1153,7 +1155,7 @@ impl PresenceDecision {
     fn certain(advisory_reasons: Option<(String, Vec<AdvisoryReason>)>) -> Self {
         Self::Emit {
             advisory_reasons,
-            guard: None,
+            guard: Vec::new(),
         }
     }
 
@@ -1165,7 +1167,10 @@ impl PresenceDecision {
     ) -> Self {
         Self::Emit {
             advisory_reasons,
-            guard: vendor_file(unit),
+            guard: vendor_file(unit)
+                .map(|file| format!("{VENDOR_UNIT_DIR}/{}", file.as_str()))
+                .into_iter()
+                .collect(),
         }
     }
 }
@@ -1190,18 +1195,23 @@ fn vendor_file(unit: &CarriedUnit) -> Option<UnitName> {
 /// The comment written once above the guarded commands.
 pub const GUARDED_COMMANDS_COMMENT: [&str; 2] = [
     "# dnf may or may not install the packages these units come from, so each",
-    "# command runs only if the unit file is in the image.",
+    "# command runs only if the unit files it tests are in the image.",
 ];
 
-/// One guarded command: `systemctl <verb> -- <unit>`, run only if `file`
-/// is in the vendor unit directory. A plain file test, not `systemctl
-/// cat` or `is-enabled`: no service manager runs during an image build,
-/// where `systemctl cat` fails for a unit that is there, and `is-enabled`
-/// exits nonzero for a disabled unit and a missing one alike.
-fn guarded_command(verb: &str, unit: &UnitName, file: &UnitName) -> String {
+/// One guarded command: `systemctl <verb> -- <unit>`, run only if every
+/// one of `files` is in the image, `[ -e <file> ]` for each joined by
+/// `&&`. A plain file test, not `systemctl cat` or `is-enabled`: no
+/// service manager runs during an image build, where `systemctl cat`
+/// fails for a unit that is there, and `is-enabled` exits nonzero for a
+/// disabled unit and a missing one alike.
+fn guarded_command(verb: &str, unit: &UnitName, files: &[String]) -> String {
+    let tests: Vec<String> = files
+        .iter()
+        .map(|file| format!("[ -e {} ]", shell_word(file)))
+        .collect();
     format!(
-        "if [ -e {} ]; then systemctl {verb} -- {}; fi",
-        shell_word(&format!("{VENDOR_UNIT_DIR}/{}", file.as_str())),
+        "if {}; then systemctl {verb} -- {}; fi",
+        tests.join(" && "),
         shell_word(unit.as_str())
     )
 }
@@ -1214,8 +1224,9 @@ fn guarded_command(verb: &str, unit: &UnitName, file: &UnitName) -> String {
 ///
 /// The commands with a guard follow, under [`GUARDED_COMMANDS_COMMENT`],
 /// in one `RUN`: one `if [ -e <file> ]; then systemctl <verb> -- <unit>;
-/// fi` each, in the same order, joined by `&&` so a command that runs and
-/// fails still fails the build.
+/// fi` each, with one `[ -e <file> ]` test per guard file, in the same
+/// order, joined by `&&` so a command that runs and fails still fails the
+/// build.
 ///
 /// Each name goes through [`shell_word`], which leaves it bare unless it
 /// holds a byte the shell would read, in practice the `\` of an escaped
@@ -1227,7 +1238,7 @@ pub fn systemctl_lines(
     units: &[PlannedUnit],
 ) -> Vec<String> {
     let mut lines: Vec<String> = default_target
-        .filter(|target| target.guard.is_none())
+        .filter(|target| target.guard.is_empty())
         .map(|target| {
             format!(
                 "RUN systemctl set-default -- {}",
@@ -1237,28 +1248,23 @@ pub fn systemctl_lines(
         .into_iter()
         .collect();
     let mut guarded: Vec<String> = default_target
-        .and_then(|target| {
-            let file = target.guard.as_ref()?;
-            Some(guarded_command(
-                "set-default",
-                target.name.as_unit_name(),
-                file,
-            ))
-        })
+        .filter(|target| !target.guard.is_empty())
+        .map(|target| guarded_command("set-default", target.name.as_unit_name(), &target.guard))
         .into_iter()
         .collect();
     for action in [UnitAction::Enable, UnitAction::Disable, UnitAction::Mask] {
         let mut of_verb: Vec<&PlannedUnit> = units.iter().filter(|u| u.action == action).collect();
         of_verb.sort_by(|a, b| (a.name.kind(), &a.name).cmp(&(b.name.kind(), &b.name)));
         let verb = action.to_string();
-        guarded.extend(of_verb.iter().filter_map(|u| {
-            u.guard
-                .as_ref()
-                .map(|file| guarded_command(&verb, &u.name, file))
-        }));
+        guarded.extend(
+            of_verb
+                .iter()
+                .filter(|u| !u.guard.is_empty())
+                .map(|u| guarded_command(&verb, &u.name, &u.guard)),
+        );
         let names: Vec<&UnitName> = of_verb
             .iter()
-            .filter(|u| u.guard.is_none())
+            .filter(|u| u.guard.is_empty())
             .map(|u| &u.name)
             .collect();
         if names.is_empty() {
@@ -2399,16 +2405,22 @@ fn rule_5_file(
 ///    [`OmissionReason::TimerTriggerUnresolved`]. A timer with no
 ///    description records no trigger, which is read the same way;
 /// 3. the trigger is not a local unit whose file is unstaged with nothing
-///    else providing it ([`local_trigger_missing`]), else
+///    else providing it ([`trigger_presence`]), else
 ///    [`OmissionReason::TimerTriggerNotStaged`].
+///
+/// `Ok` holds the files the enable must also wait for: a trigger only a
+/// package ships that dnf may or may not install is provided only if that
+/// package's file is in the image, so the enable is guarded by it
+/// ([`PlannedUnit::guard`]). The enable is plain only when every trigger
+/// is staged or comes from a package certainly in the image.
 fn timer_trigger_check(
     snap: &InspectionSnapshot,
     timer: &UnitName,
     presence: Option<&Presence<'_>>,
     staged: &StagedWrites<'_>,
-) -> Result<(), OmissionReason> {
+) -> Result<Vec<String>, OmissionReason> {
     if timer.kind() != UnitKind::Ordinary(OrdinaryKind::Timer) {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let stem = timer
         .as_str()
@@ -2429,6 +2441,7 @@ fn timer_trigger_check(
     if recorded.is_empty() {
         return Err(OmissionReason::TimerTriggerUnresolved);
     }
+    let mut guard = Vec::new();
     for description in recorded {
         if let Some(path) = description
             .trigger_drop_ins
@@ -2440,39 +2453,71 @@ fn timer_trigger_check(
         let TimerTrigger::Unit(trigger) = &description.trigger else {
             return Err(OmissionReason::TimerTriggerUnresolved);
         };
-        if local_trigger_missing(snap, trigger, presence, staged) {
-            return Err(OmissionReason::TimerTriggerNotStaged {
-                trigger: trigger.clone(),
-            });
+        match trigger_presence(snap, trigger, presence, staged) {
+            TriggerPresence::Provided => {}
+            TriggerPresence::IfPackaged(file) => {
+                if !guard.contains(&file) {
+                    guard.push(file);
+                }
+            }
+            TriggerPresence::Missing => {
+                return Err(OmissionReason::TimerTriggerNotStaged {
+                    trigger: trigger.clone(),
+                });
+            }
         }
     }
-    Ok(())
+    Ok(guard)
 }
 
-/// Whether `trigger` is a local unit the image would lack: the snapshot
-/// holds it as a unit file under `/etc/systemd/system` with no vendor file
-/// of that name (a config entry at its path that shadows nothing, or a
-/// state change recorded `Local`), that file is not staged, and nothing
-/// else provides the unit. A staged generated unit of the name is a
-/// staged file at the path. A package in the image that owns the config
-/// entry provides it; one whose presence cannot be decided is taken to,
-/// as the presence tiers take an unproved absence. A vendor file is known
-/// from a state change recorded `Vendor` or `Shadowed`, or a drop-in row
-/// at the path, which is a full shadow. The file of an instance trigger is
-/// its template's unless the snapshot holds one at the instance's own name
-/// ([`trigger_file`]).
-fn local_trigger_missing(
+/// Whether the image has a timer's trigger ([`trigger_presence`]).
+enum TriggerPresence {
+    /// Staged, shipped by a package certainly in the image, or not known
+    /// to hang on anything the export decides.
+    Provided,
+    /// Shipped only by a package dnf may or may not install: provided
+    /// when this file, an absolute path, is in the image.
+    IfPackaged(String),
+    /// A local unit the image lacks.
+    Missing,
+}
+
+/// Whether the image has `trigger`.
+///
+/// [`TriggerPresence::Missing`] for a local unit the image would lack: the
+/// snapshot holds it as a unit file under `/etc/systemd/system` with no
+/// vendor file of that name (a config entry at its path that shadows
+/// nothing, or a state change recorded `Local`), that file is not staged,
+/// and no package that may be in the image owns the config entry. A staged
+/// generated unit of the name is a staged file at the path.
+///
+/// A package that owns the config entry provides it, plainly when it is
+/// certainly in the image, else [`TriggerPresence::IfPackaged`] with the
+/// entry's path: when its presence cannot be decided (no baseline), it is
+/// taken to be possible, as the presence tiers take an unproved absence.
+/// A vendor trigger recorded by a state change, `Vendor` or a
+/// package-owned storage unit, is [`TriggerPresence::IfPackaged`] by its
+/// vendor file unless its owner is certainly in the image. A full shadow,
+/// a `Shadowed` state change or a drop-in row at the path, is provided:
+/// the vendor file loads whatever the export does with the shadow. The
+/// file of an instance trigger is its template's unless the snapshot holds
+/// one at the instance's own name ([`trigger_file`]).
+fn trigger_presence(
     snap: &InspectionSnapshot,
     trigger: &UnitName,
     presence: Option<&Presence<'_>>,
     staged: &StagedWrites<'_>,
-) -> bool {
+) -> TriggerPresence {
     let path = etc_unit_path(&trigger_file(snap, trigger));
     if is_staged(staged, &path) {
-        return false;
+        return TriggerPresence::Provided;
     }
     let Ok(dest) = Destination::new(&path) else {
-        return false;
+        return TriggerPresence::Provided;
+    };
+    let certain = |package: &str| presence.is_none_or(|p| p.certain.contains(package));
+    let possible = |package: &str| {
+        presence.is_none_or(|p| p.baseline_unavailable || p.possible.contains(package))
     };
     let at_dest = |p: &str| Destination::new(p).is_ok_and(|d| d == dest);
     let change = snap
@@ -2480,19 +2525,28 @@ fn local_trigger_missing(
         .iter()
         .flat_map(|u| &u.state_changes)
         .find(|sc| sc.unit().name() == trigger);
-    let vendor_file = change.is_some_and(|sc| match sc.unit() {
-        CarriedUnit::Ordinary(ordinary) => matches!(
-            ordinary.fragment(),
-            UnitFragment::Vendor { .. } | UnitFragment::Shadowed { .. }
-        ),
-        CarriedUnit::PackagedStorage(_) => true,
+    if let Some(sc) = change
+        && let Some(file) = vendor_file(sc.unit())
+    {
+        return match sc.unit().owning_package() {
+            Some(owner) if !certain(owner) => {
+                TriggerPresence::IfPackaged(format!("{VENDOR_UNIT_DIR}/{}", file.as_str()))
+            }
+            _ => TriggerPresence::Provided,
+        };
+    }
+    let shadowed = change.is_some_and(|sc| {
+        matches!(
+            sc.unit(),
+            CarriedUnit::Ordinary(ordinary) if matches!(ordinary.fragment(), UnitFragment::Shadowed { .. })
+        )
     }) || snap
         .units
         .iter()
         .flat_map(|u| &u.drop_ins)
         .any(|d| at_dest(&d.path));
-    if vendor_file {
-        return false;
+    if shadowed {
+        return TriggerPresence::Provided;
     }
     let entries: Vec<_> = snap
         .config
@@ -2500,13 +2554,15 @@ fn local_trigger_missing(
         .flat_map(|c| &c.files)
         .filter(|f| at_dest(&f.path) && f.shadowed_by.is_none())
         .collect();
-    let packaged = entries.iter().any(|f| {
-        f.package.as_deref().is_some_and(|package| {
-            presence.is_none_or(|p| p.baseline_unavailable || p.possible.contains(package))
-        })
-    });
-    if packaged {
-        return false;
+    let owners: Vec<&str> = entries
+        .iter()
+        .filter_map(|f| f.package.as_deref())
+        .collect();
+    if owners.iter().any(|owner| certain(owner)) {
+        return TriggerPresence::Provided;
+    }
+    if owners.iter().any(|owner| possible(owner)) {
+        return TriggerPresence::IfPackaged(path);
     }
     let local_change = change.is_some_and(|sc| {
         matches!(
@@ -2514,7 +2570,11 @@ fn local_trigger_missing(
             CarriedUnit::Ordinary(ordinary) if matches!(ordinary.fragment(), UnitFragment::Local { .. })
         )
     });
-    local_change || !entries.is_empty()
+    if local_change || !entries.is_empty() {
+        TriggerPresence::Missing
+    } else {
+        TriggerPresence::Provided
+    }
 }
 
 /// The unit file under `/etc/systemd/system` that loads for `trigger`: its
@@ -3295,7 +3355,7 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
             .as_ref()
             .filter(|_| needs_its_package(sc.unit()))
             .map(|p| p.decide(sc.unit()));
-        let (advisory, guard) = match decision {
+        let (advisory, mut guard) = match decision {
             Some(PresenceDecision::Omit(reason)) => {
                 plan.declined.push((name, action, reason));
                 continue;
@@ -3311,18 +3371,23 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
                 }),
                 guard,
             ),
-            None => (None, None),
+            None => (None, Vec::new()),
         };
         // `systemctl mask` makes its link whether or not the unit exists
         // (measured on systemd 252 and 257), so a mask never fails the
         // build and needs no guard. `enable` fails for a missing unit on
         // both, and `disable` on 252.
-        let guard = guard.filter(|_| action != UnitAction::Mask);
-        if action == UnitAction::Enable
-            && let Err(reason) = timer_trigger_check(snap, &name, presence.as_ref(), staged)
-        {
-            plan.declined.push((name, action, reason));
-            continue;
+        if action == UnitAction::Mask {
+            guard.clear();
+        }
+        if action == UnitAction::Enable {
+            match timer_trigger_check(snap, &name, presence.as_ref(), staged) {
+                Ok(trigger_files) => guard.extend(trigger_files),
+                Err(reason) => {
+                    plan.declined.push((name, action, reason));
+                    continue;
+                }
+            }
         }
         let notes = if action == UnitAction::Enable {
             match rule_6_instance_config(snap, sc, staged) {
@@ -3518,7 +3583,7 @@ fn plan_default_target(
                 );
             guard
         }
-        None => None,
+        None => Vec::new(),
     };
     plan.default_target = Some(PlannedTarget { name, guard });
 }

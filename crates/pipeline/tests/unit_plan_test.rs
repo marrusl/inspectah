@@ -2085,7 +2085,7 @@ fn planned_unit_has_no_public_field_or_constructor() {
         [
             "name: UnitName,",
             "action: UnitAction,",
-            "guard: Option<UnitName>,"
+            "guard: Vec<String>,"
         ]
     );
 
