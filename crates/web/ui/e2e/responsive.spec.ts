@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { applyMockApi, clearMocks } from "./helpers/mock-api";
+import { sidebarLink } from "./helpers/assertions";
 
 test.describe("Responsive layout", () => {
   test.beforeEach(async ({ page }) => {
@@ -41,7 +42,7 @@ test.describe("Responsive layout", () => {
     await expect(overlaySidebar).toBeVisible();
 
     // Sidebar should show sections
-    await expect(overlaySidebar.getByText("Packages")).toBeVisible();
+    await expect(sidebarLink(overlaySidebar, "Packages")).toBeVisible();
   });
 
   test("sidebar visible at desktop viewport", async ({ page }) => {

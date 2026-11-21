@@ -8,7 +8,7 @@
         "release": "3.el9",
         "arch": "x86_64",
         "state": "base_image_only",
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "source_repo": "rhel-9-for-x86_64-baseos-rpms",
         "aggregate": null
       },
@@ -26,7 +26,7 @@
         "release": "11.el9_4.1",
         "arch": "x86_64",
         "state": "added",
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "source_repo": "rhel-9-for-x86_64-appstream-rpms",
         "aggregate": null
       },
@@ -44,7 +44,7 @@
         "release": "28.el9_4",
         "arch": "x86_64",
         "state": "modified",
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "source_repo": "rhel-9-for-x86_64-baseos-rpms",
         "aggregate": null
       },
@@ -62,7 +62,7 @@
         "release": "1.el9",
         "arch": "x86_64",
         "state": "added",
-        "include": false,
+        "disposition": { "kind": "actionable", "include": false },
         "source_repo": "rhel-9-for-x86_64-appstream-rpms",
         "aggregate": null
       },
@@ -80,7 +80,7 @@
         "release": "1.el9",
         "arch": "x86_64",
         "state": "local_install",
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "source_repo": "",
         "aggregate": null
       },
@@ -98,7 +98,7 @@
         "release": "11.el9_4.1",
         "arch": "x86_64",
         "state": "added",
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "source_repo": "rhel-9-for-x86_64-appstream-rpms",
         "aggregate": null
       },
@@ -119,7 +119,7 @@
         "rpm_va_flags": "S.5....T.",
         "package": "initscripts",
         "diff_against_rpm": null,
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "tie": false,
         "tie_winner": false,
         "aggregate": null
@@ -139,7 +139,7 @@
         "rpm_va_flags": "S.5....T.",
         "package": "chrony",
         "diff_against_rpm": null,
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "tie": false,
         "tie_winner": false,
         "aggregate": null
@@ -159,7 +159,7 @@
         "rpm_va_flags": null,
         "package": null,
         "diff_against_rpm": null,
-        "include": false,
+        "disposition": { "kind": "actionable", "include": false },
         "tie": false,
         "tie_winner": false,
         "aggregate": null
@@ -338,13 +338,16 @@
     {
       "name": "Web Server",
       "member_count": 2,
+      "effective_member_count": 2,
+      "effective_included": 2,
+      "added_count": 2,
       "locked_count": 0,
       "optional_spillover_count": 1,
       "render_state": "renderable",
       "degradation_reason": null,
       "members": [
-        { "name": "httpd", "locked": false, "overlap_groups": [] },
-        { "name": "mod_ssl", "locked": false, "overlap_groups": [] }
+        { "name": "httpd", "locked": false, "overlap_groups": [], "in_base_image": false },
+        { "name": "mod_ssl", "locked": false, "overlap_groups": [], "in_base_image": false }
       ]
     }
   ],

@@ -25,7 +25,7 @@ function recorded(name: string): string {
   return path.join(RECORDED, `${name}.json`);
 }
 
-/** `/api/groups` is not in the preset route map; serve the recorded body. */
+/** Serve the `/api/groups` body recorded with this layout's session. */
 async function serveGroups(page: Page, layout: string) {
   const body = fs.readFileSync(recorded(`${layout}.groups`), "utf-8");
   await page.route("**/api/groups", (route) =>

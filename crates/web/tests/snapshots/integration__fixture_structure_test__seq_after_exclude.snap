@@ -18,7 +18,10 @@ expression: value
         "category": "other",
         "content": "NETWORKING=yes\nHOSTNAME=test-host-01.example.com\n",
         "diff_against_rpm": "--- /etc/sysconfig/network.rpmorig\n+++ /etc/sysconfig/network\n@@ -1 +1,2 @@\n NETWORKING=yes\n+HOSTNAME=test-host-01.example.com\n",
-        "include": true,
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
         "kind": "modified",
         "package": "initscripts",
         "path": "/etc/sysconfig/network",
@@ -41,7 +44,10 @@ expression: value
         "category": "other",
         "content": "# Use internal NTP servers\nserver ntp1.example.com iburst\nserver ntp2.example.com iburst\ndriftfile /var/lib/chrony/drift\nmakestep 1.0 3\nrtcsync\n",
         "diff_against_rpm": null,
-        "include": true,
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
         "kind": "modified",
         "package": "chrony",
         "path": "/etc/chrony.conf",
@@ -64,7 +70,10 @@ expression: value
         "category": "sysctl",
         "content": "# Custom sysctl overrides\nnet.core.somaxconn = 4096\nvm.swappiness = 10\n",
         "diff_against_rpm": null,
-        "include": false,
+        "disposition": {
+          "include": false,
+          "kind": "actionable"
+        },
         "kind": "unowned",
         "package": null,
         "path": "/etc/sysctl.d/99-custom.conf",
@@ -100,8 +109,11 @@ expression: value
       "entry": {
         "aggregate": null,
         "arch": "x86_64",
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
         "epoch": "0",
-        "include": true,
         "name": "bash",
         "release": "3.el9",
         "source_repo": "rhel-9-for-x86_64-baseos-rpms",
@@ -121,8 +133,11 @@ expression: value
       "entry": {
         "aggregate": null,
         "arch": "x86_64",
+        "disposition": {
+          "include": false,
+          "kind": "actionable"
+        },
         "epoch": "0",
-        "include": false,
         "name": "httpd",
         "release": "11.el9_4.1",
         "source_repo": "rhel-9-for-x86_64-appstream-rpms",
@@ -142,8 +157,11 @@ expression: value
       "entry": {
         "aggregate": null,
         "arch": "x86_64",
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
         "epoch": "1",
-        "include": true,
         "name": "openssl",
         "release": "28.el9_4",
         "source_repo": "rhel-9-for-x86_64-baseos-rpms",
@@ -163,8 +181,11 @@ expression: value
       "entry": {
         "aggregate": null,
         "arch": "x86_64",
+        "disposition": {
+          "include": false,
+          "kind": "actionable"
+        },
         "epoch": "2",
-        "include": false,
         "name": "vim-enhanced",
         "release": "1.el9",
         "source_repo": "rhel-9-for-x86_64-appstream-rpms",
@@ -184,8 +205,11 @@ expression: value
       "entry": {
         "aggregate": null,
         "arch": "x86_64",
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
         "epoch": "0",
-        "include": true,
         "name": "custom-agent",
         "release": "1.el9",
         "source_repo": "",

@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { gzipSync } from "zlib";
 import {
   applyMockApi,
   clearMocks,
@@ -6,6 +7,10 @@ import {
   mockPostResponse,
   mockError,
 } from "./helpers/mock-api";
+import { sidebarLink } from "./helpers/assertions";
+
+/** An empty tar archive is two 512-byte zero blocks. */
+const EMPTY_TAR_BYTES = 1024;
 
 test.describe("Triage workflow", () => {
   test.describe.configure({ mode: "serial" });
@@ -49,10 +54,7 @@ test.describe("Triage workflow", () => {
   // ── 2. Config toggle ──────────────────────────────────────────────
   test("config toggle — stats update via GET refetch", async ({ page }) => {
     // Navigate to Config Files section
-    await page
-      .locator(".inspectah-layout__sidebar")
-      .getByText("Config Files")
-      .click();
+    await sidebarLink(page.locator(".inspectah-layout__sidebar"), "Configuration Files").click();
 
     const statsBar = page.locator(".inspectah-statsbar");
     await expect(statsBar.getByText(/Configs:\s*2 included/)).toBeVisible();
@@ -168,10 +170,16 @@ test.describe("Triage workflow", () => {
 
   // ── 5. Export download ─────────────────────────────────────────────
   test("export tarball triggers download", async ({ page }) => {
-    await mockPostResponse(
-      page,
-      "/api/tarball",
-      "post-responses/tarball/stub.tar.gz",
+    // An empty tar archive (two zero blocks), gzipped. Built here because
+    // the repo ignores *.tar.gz under e2e/fixtures, so a stub file there is
+    // never committed and the test could only pass on a machine that had one.
+    await page.route("**/api/tarball", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/gzip",
+        headers: { "content-disposition": 'attachment; filename="export.tar.gz"' },
+        body: gzipSync(Buffer.alloc(EMPTY_TAR_BYTES)),
+      }),
     );
 
     // Click the Export button in the StatsBar to open ExportDialog

@@ -213,10 +213,15 @@ test.describe("Aggregate mode", () => {
   // 7. Aggregate keyboard shortcuts
   // -----------------------------------------------------------------------
   test("? opens shortcut overlay with aggregate shortcuts", async ({ page }) => {
-    await page.keyboard.press("?");
-
     const overlay = page.locator('[data-testid="shortcut-overlay"]');
-    await expect(overlay).toBeVisible({ timeout: 2_000 });
+    // Shortcuts are ignored while any role="dialog" is in the document, so a
+    // press in the first moments after load can be dropped (seen once in
+    // four CI-mode runs). Press again until the overlay opens; once it is
+    // open, a further press is ignored for the same reason.
+    await expect(async () => {
+      await page.keyboard.press("?");
+      await expect(overlay).toBeVisible({ timeout: 500 });
+    }).toPass({ timeout: 5_000 });
 
     // Aggregate mode adds the "c" shortcut for "Compare variants"
     await expect(overlay).toContainText("Compare variants");

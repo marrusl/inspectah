@@ -1,13 +1,5 @@
 import { test, expect } from "@playwright/test";
-import * as fs from "fs";
-import * as path from "path";
-import { fileURLToPath } from "url";
 import { applyMockApi, clearMocks } from "./helpers/mock-api";
-
-const FIXTURES_DIR = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "fixtures",
-);
 
 // The export's warnings travel in the x-export-warnings response header
 // (process-docs/skills/refine-export-warnings-header.md), so the tarball
@@ -15,42 +7,6 @@ const FIXTURES_DIR = path.join(
 test.describe("Export warnings", () => {
   test.beforeEach(async ({ page }) => {
     await applyMockApi(page, "single-host");
-    // /api/groups has no fixture in the single-host preset. Without a
-    // route it falls through to the dev proxy and the app shows
-    // "Failed to load"; an empty list is enough for the export path.
-    await page.route("**/api/groups", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: "[]",
-      }),
-    );
-    // The preset's package and config rows predate the disposition field
-    // and crash MainContent (see process-docs/skills/
-    // e2e-fixtures-are-hand-maintained.md). The export path needs only the
-    // stats bar, so serve the preset view with its item lists emptied.
-    // Registered after applyMockApi, so this route wins.
-    const view = JSON.parse(
-      fs.readFileSync(
-        path.join(FIXTURES_DIR, "single-host", "view.json"),
-        "utf-8",
-      ),
-    );
-    await page.route("**/api/view", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          ...view,
-          packages: [],
-          config_files: [],
-          repo_groups: [],
-          version_changes: [],
-          unit_states: [],
-          users_groups_decisions: [],
-        }),
-      }),
-    );
     await page.goto("/");
     await expect(page.locator(".inspectah-statsbar")).toBeVisible();
   });

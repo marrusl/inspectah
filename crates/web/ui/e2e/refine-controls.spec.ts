@@ -16,10 +16,8 @@ const QUADLET_TRIAGE = {
 };
 
 /**
- * The groups fixture with what this spec needs to render: its package rows
- * predate the disposition field and crash MainContent (process-docs/skills/
- * e2e-fixtures-are-hand-maintained.md), so each gets one from its `include`,
- * the lists this spec does not use are emptied, and two quadlets are added.
+ * The groups fixture with what this spec needs to render: the lists this
+ * spec does not use are emptied, and two quadlets are added.
  */
 function viewFixture() {
   const view = JSON.parse(
@@ -30,15 +28,6 @@ function viewFixture() {
   );
   return {
     ...view,
-    packages: view.packages.map(
-      (p: { entry: { include: boolean } }) => ({
-        ...p,
-        entry: {
-          ...p.entry,
-          disposition: { kind: "actionable", include: p.entry.include },
-        },
-      }),
-    ),
     config_files: [],
     unit_states: [],
     users_groups_decisions: [],
@@ -73,8 +62,7 @@ test.describe("Refine controls", () => {
     await applyMockApi(page, "single-host");
     const view = viewFixture();
     // Registered after applyMockApi, so these routes win.
-    // /api/groups has no fixture in the single-host preset; the sidebar
-    // needs the two sections this spec visits.
+    // /api/groups narrowed to the two sections this spec visits.
     await page.route("**/api/groups", (route) =>
       route.fulfill({
         status: 200,

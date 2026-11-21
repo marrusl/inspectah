@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { applyMockApi, clearMocks } from "./helpers/mock-api";
+import { sidebarLink } from "./helpers/assertions";
 
 test.describe("Smoke tests", () => {
   test.beforeEach(async ({ page }) => {
@@ -19,14 +20,14 @@ test.describe("Smoke tests", () => {
   test("sidebar shows decision sections", async ({ page }) => {
     const sidebar = page.locator(".inspectah-layout__sidebar");
     await expect(sidebar).toBeVisible();
-    await expect(sidebar.getByText("Packages")).toBeVisible();
-    await expect(sidebar.getByText("Config Files")).toBeVisible();
+    await expect(sidebarLink(sidebar, "Packages")).toBeVisible();
+    await expect(sidebarLink(sidebar, "Configuration Files")).toBeVisible();
   });
 
   test("sidebar shows reference sections", async ({ page }) => {
     const sidebar = page.locator(".inspectah-layout__sidebar");
-    await expect(sidebar.getByText("Systemd units")).toBeVisible();
-    await expect(sidebar.getByText("Users & Groups")).toBeVisible();
+    await expect(sidebarLink(sidebar, "Systemd units")).toBeVisible();
+    await expect(sidebarLink(sidebar, "Users & Groups")).toBeVisible();
   });
 
   test("stats bar renders package and config counts", async ({ page }) => {

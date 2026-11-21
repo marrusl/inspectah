@@ -133,30 +133,27 @@ test.describe("Group rendering", () => {
   });
 
   // ── 5. Excluded-group optional spillover remains visible ──────────
+  // The group row has no include toggle any more (GroupRow.tsx), so the
+  // excluded state is served directly rather than reached by a click.
   test("excluded-group optional spillover remains visible and toggleable", async ({
     page,
   }) => {
-    // Set up sequence: initial view → after excluding the group
-    await mockSequence(
-      page,
-      "/api/view",
-      [
-        "single-host/view-with-groups.json",
-        "sequences/group-exclude/01-after-group-exclude.json",
-      ],
-      { triggerOn: "/api/op" },
-    );
+    await applyMockApi(page, "single-host", {
+      "/api/view": path.join(
+        FIXTURES,
+        "sequences",
+        "group-exclude",
+        "01-after-group-exclude.json",
+      ),
+    });
+    await page.goto("/");
+    await expect(page.locator(".inspectah-statsbar")).toBeVisible();
 
-    // Exclude the group by toggling it off
+    // The group members (httpd, mod_ssl) are excluded, but the optional
+    // spillover package (custom-agent) stays visible and independently
+    // toggleable in the individual zone.
     const groupRow = page.getByTestId("group-row-Web Server");
-    const groupToggle = groupRow.locator(
-      `#group-toggle-Web\\ Server`,
-    );
-    await groupToggle.click({ force: true });
-
-    // After excluding the group, the group members (httpd, mod_ssl) become
-    // excluded, but the optional spillover package (custom-agent) should
-    // remain visible and independently toggleable in the individual zone.
+    await expect(groupRow.getByText("1 optional still included")).toBeVisible();
     const individualZone = page.getByTestId("individual-packages-zone");
     const customAgentRow = individualZone.getByTestId(
       "package-row-custom-agent.x86_64",
@@ -169,8 +166,8 @@ test.describe("Group rendering", () => {
     await expect(checkbox).toBeChecked();
   });
 
-  // ── 6. Native tab traversal follows chevron → ungroup → toggle ────
-  test("native tab traversal follows chevron → ungroup → toggle order", async ({
+  // ── 6. Native tab traversal follows chevron → ungroup ─────────────
+  test("native tab traversal follows chevron → ungroup order", async ({
     page,
   }) => {
     const groupRow = page.getByTestId("group-row-Web Server");
@@ -185,13 +182,5 @@ test.describe("Group rendering", () => {
     await page.keyboard.press("Tab");
     const ungroupBtn = groupRow.getByRole("button", { name: /ungroup/i });
     await expect(ungroupBtn).toBeFocused();
-
-    // Tab to toggle switch
-    await page.keyboard.press("Tab");
-    // The Switch component renders an input inside the toggle container
-    const toggleInput = groupRow.locator(
-      `#group-toggle-Web\\ Server`,
-    );
-    await expect(toggleInput).toBeFocused();
   });
 });

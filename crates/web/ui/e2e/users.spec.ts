@@ -6,6 +6,7 @@ import {
   clearMocks,
   mockPostResponse,
 } from "./helpers/mock-api";
+import { sidebarLink } from "./helpers/assertions";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,10 +19,7 @@ test.describe("Users & Groups", () => {
     await expect(page.locator(".inspectah-statsbar")).toBeVisible();
 
     // Navigate to Users & Groups section
-    await page
-      .locator(".inspectah-layout__sidebar")
-      .getByText("Users & Groups")
-      .click();
+    await sidebarLink(page.locator(".inspectah-layout__sidebar"), "Users & Groups").click();
   });
 
   test.afterEach(async ({ page }) => {
@@ -165,10 +163,7 @@ test.describe("Users & Groups", () => {
     await expect(page.locator(".inspectah-statsbar")).toBeVisible();
 
     // Navigate back to Users & Groups
-    await page
-      .locator(".inspectah-layout__sidebar")
-      .getByText("Users & Groups")
-      .click();
+    await sidebarLink(page.locator(".inspectah-layout__sidebar"), "Users & Groups").click();
 
     // Open preview
     const previewBtn = page.getByRole("button", {
@@ -223,6 +218,11 @@ test.describe("Users & Groups", () => {
     await setBtn.click();
 
     // Error message should appear
-    await expect(card.getByText("Passwords do not match.")).toBeVisible();
+    // The field's helper text, not the screen-reader copy that repeats it.
+    await expect(
+      card.locator(".pf-v6-c-helper-text__item-text", {
+        hasText: "Passwords do not match.",
+      }),
+    ).toBeVisible();
   });
 });

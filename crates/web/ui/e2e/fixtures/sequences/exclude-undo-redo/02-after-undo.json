@@ -8,7 +8,7 @@
         "release": "3.el9",
         "arch": "x86_64",
         "state": "base_image_only",
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "source_repo": "rhel-9-for-x86_64-baseos-rpms",
         "aggregate": null
       },
@@ -26,7 +26,7 @@
         "release": "11.el9_4.1",
         "arch": "x86_64",
         "state": "added",
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "source_repo": "rhel-9-for-x86_64-appstream-rpms",
         "aggregate": null
       },
@@ -44,7 +44,7 @@
         "release": "28.el9_4",
         "arch": "x86_64",
         "state": "modified",
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "source_repo": "rhel-9-for-x86_64-baseos-rpms",
         "aggregate": null
       },
@@ -62,7 +62,7 @@
         "release": "1.el9",
         "arch": "x86_64",
         "state": "added",
-        "include": false,
+        "disposition": { "kind": "actionable", "include": false },
         "source_repo": "rhel-9-for-x86_64-appstream-rpms",
         "aggregate": null
       },
@@ -80,7 +80,7 @@
         "release": "1.el9",
         "arch": "x86_64",
         "state": "local_install",
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "source_repo": "",
         "aggregate": null
       },
@@ -107,7 +107,7 @@
         "rpm_va_flags": "S.5....T.",
         "package": "initscripts",
         "diff_against_rpm": "--- /etc/sysconfig/network.rpmorig\n+++ /etc/sysconfig/network\n@@ -1 +1,2 @@\n NETWORKING=yes\n+HOSTNAME=test-host-01.example.com\n",
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "tie": false,
         "tie_winner": false,
         "aggregate": null
@@ -127,7 +127,7 @@
         "rpm_va_flags": "S.5....T.",
         "package": "chrony",
         "diff_against_rpm": null,
-        "include": true,
+        "disposition": { "kind": "actionable", "include": true },
         "tie": false,
         "tie_winner": false,
         "aggregate": null
@@ -147,7 +147,7 @@
         "rpm_va_flags": null,
         "package": null,
         "diff_against_rpm": null,
-        "include": false,
+        "disposition": { "kind": "actionable", "include": false },
         "tie": false,
         "tie_winner": false,
         "aggregate": null

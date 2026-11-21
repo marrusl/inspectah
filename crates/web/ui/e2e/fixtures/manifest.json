@@ -18,7 +18,6 @@
     "post-responses/undo/success.json": { "category": "wrapper", "schema": "ViewResponse" },
     "post-responses/undo/nothing-to-undo.json": { "category": "error-envelope" },
     "post-responses/redo/success.json": { "category": "wrapper", "schema": "ViewResponse" },
-    "post-responses/tarball/stub.tar.gz": { "category": "excluded" },
     "post-responses/tarball/stale.json": { "category": "error-envelope" },
     "post-responses/tarball/sensitive-required.json": { "category": "wrapper", "schema": "TarballSensitivity" },
     "post-responses/user-strategy/success.json": { "category": "wrapper", "schema": "ViewResponse" },

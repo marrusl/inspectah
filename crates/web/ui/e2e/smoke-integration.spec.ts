@@ -1,4 +1,9 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Response } from "@playwright/test";
+
+/** The UI's POST /api/op, not its GET /api/ops refetch, which also contains "/api/op". */
+function isOpPost(res: Response): boolean {
+  return res.request().method() === "POST" && new URL(res.url()).pathname === "/api/op";
+}
 
 test.describe("Smoke integration (real server)", () => {
   test.describe.configure({ mode: "serial" });
@@ -107,16 +112,20 @@ test.describe("Smoke integration (real server)", () => {
 
       const firstToggle = page.locator("input[type='checkbox']").first();
       await expect(firstToggle).toBeVisible({ timeout: 5000 });
+      // Listen before clicking: the POST can finish before a listener
+      // added afterwards is in place.
+      const opDone = page.waitForResponse(isOpPost);
       await firstToggle.click({ force: true });
-      await page.waitForResponse((res) => res.url().includes("/api/op"));
+      await opDone;
       const afterExclude = await (await page.request.get("http://127.0.0.1:8642/api/view")).json();
       expect(afterExclude.generation).toBeGreaterThan(initialView.generation);
       expect(afterExclude.stats.can_undo).toBe(true);
 
       const undoButton = page.locator(".inspectah-statsbar").getByRole("button", { name: /undo/i });
       await expect(undoButton).toBeVisible();
+      const undoDone = page.waitForResponse((res) => res.url().includes("/api/undo"));
       await undoButton.click();
-      await page.waitForResponse((res) => res.url().includes("/api/undo"));
+      await undoDone;
       const afterUndo = await (await page.request.get("http://127.0.0.1:8642/api/view")).json();
       expect(afterUndo.generation).toBeGreaterThan(afterExclude.generation);
       expect(afterUndo.stats.can_redo).toBe(true);
@@ -126,15 +135,25 @@ test.describe("Smoke integration (real server)", () => {
       await page.goto("http://localhost:5174/");
       await expect(page.locator(".inspectah-statsbar")).toBeVisible();
 
-      const opsBefore = await (await page.request.get("http://127.0.0.1:8642/api/ops")).json();
-      const countBefore = opsBefore.length;
+      // Count active entries only. The previous test leaves an undone op on
+      // the timeline, and a new op discards it, so the raw length can stay
+      // the same while the mutation still lands.
+      const activeOps = async () =>
+        (
+          (await (await page.request.get("http://127.0.0.1:8642/api/ops")).json()) as {
+            active: boolean;
+          }[]
+        ).filter((entry) => entry.active).length;
+      const countBefore = await activeOps();
 
       const firstToggle = page.locator("input[type='checkbox']").first();
+      // Listen before clicking: the POST can finish before a listener
+      // added afterwards is in place.
+      const opDone = page.waitForResponse(isOpPost);
       await firstToggle.click({ force: true });
-      await page.waitForResponse((res) => res.url().includes("/api/op"));
+      await opDone;
 
-      const opsAfter = await (await page.request.get("http://127.0.0.1:8642/api/ops")).json();
-      expect(opsAfter.length).toBe(countBefore + 1);
+      expect(await activeOps()).toBe(countBefore + 1);
     });
 
     test("viewed persistence across reload", async ({ page }) => {

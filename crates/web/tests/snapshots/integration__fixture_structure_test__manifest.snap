@@ -41,9 +41,6 @@ expression: value
     "post-responses/tarball/stale.json": {
       "category": "error-envelope"
     },
-    "post-responses/tarball/stub.tar.gz": {
-      "category": "excluded"
-    },
     "post-responses/undo/nothing-to-undo.json": {
       "category": "error-envelope"
     },

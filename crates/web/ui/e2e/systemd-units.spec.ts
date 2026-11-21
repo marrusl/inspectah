@@ -10,9 +10,9 @@ import type { UnitFields } from "../src/components/unitOutcome";
 //
 // Every test calls setupUnits (§ 10.1): the view and sections bodies were
 // recorded from one refine session serving a kitchen-sink scan, and
-// `/api/groups` is the recorded body `system_tuning_fixtures_test` holds to
-// the real handler. The hand-written preset view is not used: its package
-// and config rows have no disposition and crash the app.
+// `/api/groups` is the preset's, the recorded body `system_tuning_fixtures_test`
+// holds to the real handler. The hand-written preset view is not used: it has
+// no unit rows.
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SINGLE_HOST = path.join(HERE, "fixtures", "single-host");
@@ -27,15 +27,6 @@ const AFTER_EXCLUDE_TMP_MOUNT = path.join(
   "sequences",
   "units-exclude-tmp-mount",
   "01-after-exclude.json",
-);
-const GROUPS_BODY = path.join(
-  HERE,
-  "..",
-  "src",
-  "__tests__",
-  "fixtures",
-  "system-tuning",
-  "files-no-tuned.groups.json",
 );
 
 /** Bound on Tab and `j` presses while walking to a target, so a miss fails instead of looping. */
@@ -147,11 +138,6 @@ async function setupUnits(page: Page, view: keyof typeof VIEW_BODIES = "kitchen-
     "/api/view": VIEW_BODIES[view],
     "/api/snapshot/sections": SECTIONS_BODY,
   });
-  // `/api/groups` is not in the preset route map; serve the recorded body.
-  const groups = fs.readFileSync(GROUPS_BODY, "utf-8");
-  await page.route("**/api/groups", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: groups }),
-  );
   page.on("pageerror", (err) => pageErrors.push(err.message));
 }
 

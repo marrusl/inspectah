@@ -24,6 +24,23 @@ const PRESET_ROUTE_MAP: Record<string, string> = {
   "aggregate-view.json": "/api/aggregate/view",
 };
 
+// `/api/groups` is the same for every session: the handler returns the
+// fixed section-group list, whatever was scanned. So every preset serves
+// the body `system_tuning_fixtures_test` records from the real handler and
+// fails on when it changes, rather than a hand-written copy that can drift.
+// A route override or a later `page.route` still wins.
+const GROUPS_ROUTE = "/api/groups";
+const GROUPS_RECORDING = path.join(
+  __dirname,
+  "..",
+  "..",
+  "src",
+  "__tests__",
+  "fixtures",
+  "system-tuning",
+  "files-no-tuned.groups.json",
+);
+
 const PRESET_DIR_MAP: Record<Preset, string> = {
   "single-host": "single-host",
   "aggregate-3": "aggregate",
@@ -65,8 +82,15 @@ export async function applyMockApi(
 
   const dir = path.join(FIXTURES_DIR, PRESET_DIR_MAP[preset]);
 
-  for (const [filename, route] of Object.entries(PRESET_ROUTE_MAP)) {
-    const fixturePath = overrides?.[route] ?? path.join(dir, filename);
+  const routes: [string, string][] = [
+    ...Object.entries(PRESET_ROUTE_MAP).map(
+      ([filename, route]): [string, string] => [path.join(dir, filename), route],
+    ),
+    [GROUPS_RECORDING, GROUPS_ROUTE],
+  ];
+
+  for (const [presetPath, route] of routes) {
+    const fixturePath = overrides?.[route] ?? presetPath;
 
     if (typeof fixturePath !== "string" || !fs.existsSync(fixturePath)) continue;
 
@@ -103,29 +127,16 @@ export async function applyMockApi(
 // --- mockPostResponse: per-test POST handler ---
 // Reads { "_status": N, ...body } from fixture, strips _status
 // Runtime assertion if JSON fixture missing _status
-// Binary fixtures (.tar.gz) hardcode 200
 export async function mockPostResponse(
   page: Page,
   route: string,
   fixturePath: string,
 ): Promise<void> {
   const fullPath = path.join(FIXTURES_DIR, fixturePath);
-  const isBinary = fullPath.endsWith(".tar.gz");
 
   await page.route(`**${route}`, (routeObj) => {
     if (routeObj.request().method() !== "POST") {
       routeObj.continue();
-      return;
-    }
-
-    if (isBinary) {
-      const buffer = fs.readFileSync(fullPath);
-      routeObj.fulfill({
-        status: 200,
-        contentType: "application/gzip",
-        headers: { "content-disposition": 'attachment; filename="export.tar.gz"' },
-        body: buffer,
-      });
       return;
     }
 

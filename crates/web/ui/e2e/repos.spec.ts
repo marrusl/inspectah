@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { applyMockApi, clearMocks, mockSequence } from "./helpers/mock-api";
+import { sidebarLink } from "./helpers/assertions";
 
 test.describe("Repo surfaces on Packages page", () => {
   test.beforeEach(async ({ page }) => {
@@ -8,10 +9,7 @@ test.describe("Repo surfaces on Packages page", () => {
     await expect(page.locator(".inspectah-statsbar")).toBeVisible();
 
     // Navigate to Packages section
-    await page
-      .locator(".inspectah-layout__sidebar")
-      .getByText("Packages")
-      .click();
+    await sidebarLink(page.locator(".inspectah-layout__sidebar"), "Packages").click();
   });
 
   test.afterEach(async ({ page }) => {
@@ -83,9 +81,7 @@ test.describe("Repo surfaces on Packages page", () => {
 test.describe("Repo disagreement (position 29)", () => {
   test.beforeEach(async ({ page }) => {
     await applyMockApi(page, "single-host");
-    // /api/groups has no fixture in the single-host preset; mock it directly
-    // so the sidebar has a "Packages" nav item to click (an empty array
-    // renders no sections at all, per Sidebar.tsx's `groups.map(...)`).
+    // /api/groups narrowed to the one "Packages" nav item this spec clicks.
     await page.route("**/api/groups", (routeObj) => {
       if (routeObj.request().method() !== "GET") {
         routeObj.continue();
@@ -133,10 +129,7 @@ test.describe("Repo disagreement (position 29)", () => {
     });
 
     await page.goto("/");
-    await page
-      .locator(".inspectah-layout__sidebar")
-      .getByText("Packages")
-      .click();
+    await sidebarLink(page.locator(".inspectah-layout__sidebar"), "Packages").click();
 
     const vendorSwitch = page.locator("#repo-toggle-vendor");
     await expect(vendorSwitch).toBeVisible();
@@ -185,10 +178,7 @@ test.describe("Repo disagreement (position 29)", () => {
     });
 
     await page.goto("/");
-    await page
-      .locator(".inspectah-layout__sidebar")
-      .getByText("Packages")
-      .click();
+    await sidebarLink(page.locator(".inspectah-layout__sidebar"), "Packages").click();
 
     const vendorSwitch = page.locator("#repo-toggle-vendor");
     await expect(vendorSwitch).toBeVisible();

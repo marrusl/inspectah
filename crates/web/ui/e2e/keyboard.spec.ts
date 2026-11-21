@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { applyMockApi, clearMocks } from "./helpers/mock-api";
+import { sidebarLink } from "./helpers/assertions";
 
 test.describe("Keyboard navigation", () => {
   test.beforeEach(async ({ page }) => {
@@ -14,7 +15,7 @@ test.describe("Keyboard navigation", () => {
   });
 
   test("j/k navigate decision items", async ({ page }) => {
-    await page.locator(".inspectah-layout__sidebar").getByText("Config Files").click();
+    await sidebarLink(page.locator(".inspectah-layout__sidebar"), "Configuration Files").click();
     // Expand the summary group to reveal individual items
     await page.getByText("Routine").click();
     // Click the first visible decision item to give the DecisionList focus
@@ -30,7 +31,7 @@ test.describe("Keyboard navigation", () => {
   });
 
   test("/ opens section search", async ({ page }) => {
-    await page.locator(".inspectah-layout__sidebar").getByText("Config Files").click();
+    await sidebarLink(page.locator(".inspectah-layout__sidebar"), "Configuration Files").click();
     await page.locator(".inspectah-layout__main").click();
     await page.keyboard.press("/");
     const searchInput = page.locator('[data-testid="section-search"] input');

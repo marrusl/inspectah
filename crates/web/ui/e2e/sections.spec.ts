@@ -1,41 +1,35 @@
 import { test, expect } from "@playwright/test";
 import { applyMockApi, clearMocks } from "./helpers/mock-api";
+import { sidebarLink } from "./helpers/assertions";
 
-// Sidebar labels from REVIEW_SECTIONS and REFERENCE_SECTIONS in Sidebar.tsx
+// The sidebar draws one link per section `/api/groups` returns. Triage
+// sections carry a decision count, reference sections an item count.
 const REVIEW_SECTIONS = [
   "Packages",
-  "Config Files",
+  "Configuration Files",
+  "Kernel & Boot",
+  "System Tuning",
+  "Security & Access Control",
+  "Systemd units",
+  "Scheduled Tasks",
+  "Containers",
+  "Users & Groups",
+  "Non-RPM Software",
+  "Language Packages",
+  "Unmanaged Files",
+];
+
+const REFERENCE_SECTIONS = ["Network", "Storage", "Secrets", "Subscription"];
+
+// Sections with rows in the single-host preset view. The rest render too,
+// but may only show an empty state.
+const SECTIONS_WITH_FIXTURE_DATA = [
+  "Packages",
+  "Configuration Files",
   "Users & Groups",
   "Systemd units",
   "Containers",
   "System Tuning",
-];
-
-const REFERENCE_SECTIONS = [
-  "Version Changes",
-  "Compose",
-  "Network",
-  "Storage",
-  "Scheduled Tasks",
-  "Non-RPM Software",
-  "Kernel & Boot",
-  "Security & Access Control",
-];
-
-const ALL_SECTIONS = [...REVIEW_SECTIONS, ...REFERENCE_SECTIONS];
-
-// Sections that have corresponding fixture data (from single-host/sections.json)
-// Others will render but may show empty states
-const SECTIONS_WITH_FIXTURE_DATA = [
-  "Packages",      // packages
-  "Config Files",  // configs
-  "Users & Groups",// users_groups
-  "Systemd units", // units
-  "Containers",    // containers (maps to compose in fixture)
-  "System Tuning", // sysctls + tuned
-  "Version Changes", // version_changes
-  // repos exists but no sidebar entry for it (merged into Packages view)
-  // Note: Compose section exists in sidebar but maps to containers fixture
 ];
 
 test.describe("Context sections", () => {
@@ -50,21 +44,21 @@ test.describe("Context sections", () => {
   test("sidebar renders all review sections", async ({ page }) => {
     const sidebar = page.locator(".inspectah-layout__sidebar");
     for (const name of REVIEW_SECTIONS) {
-      await expect(sidebar.getByText(name)).toBeVisible();
+      await expect(sidebarLink(sidebar, name)).toBeVisible();
     }
   });
 
   test("sidebar renders all reference sections", async ({ page }) => {
     const sidebar = page.locator(".inspectah-layout__sidebar");
     for (const name of REFERENCE_SECTIONS) {
-      await expect(sidebar.getByText(name)).toBeVisible();
+      await expect(sidebarLink(sidebar, name)).toBeVisible();
     }
   });
 
   // Test sections that have fixture data
   for (const section of SECTIONS_WITH_FIXTURE_DATA) {
     test(`clicking ${section} renders content pane with data`, async ({ page }) => {
-      await page.locator(".inspectah-layout__sidebar").getByText(section).click();
+      await sidebarLink(page.locator(".inspectah-layout__sidebar"), section).click();
       const main = page.locator(".inspectah-layout__main");
       await expect(main).toBeVisible();
 
@@ -78,4 +72,13 @@ test.describe("Context sections", () => {
       expect(hasDecisionItems + hasContextItems + hasHeading + hasEmptyMessage).toBeGreaterThan(0);
     });
   }
+
+  // Version Changes is no longer a sidebar section: it is a collapsed panel
+  // at the foot of Packages.
+  test("Packages shows the Version Changes panel", async ({ page }) => {
+    await sidebarLink(page.locator(".inspectah-layout__sidebar"), "Packages").click();
+    const panel = page.getByTestId("version-changes-panel");
+    await panel.getByRole("button", { name: "Version Changes" }).click();
+    await expect(panel.getByText("openssl")).toBeVisible();
+  });
 });

@@ -1,5 +1,5 @@
 // e2e/helpers/assertions.ts
-import { Page, expect } from "@playwright/test";
+import { Locator, Page, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
 export async function expectStatsBar(
@@ -10,6 +10,20 @@ export async function expectStatsBar(
   await expect(statsBar).toBeVisible();
   if (expected.packages) await expect(statsBar.getByText("Packages:")).toBeVisible();
   if (expected.configs) await expect(statsBar.getByText("Configs:")).toBeVisible();
+}
+
+/**
+ * The sidebar link for one section, by its label from `/api/groups`.
+ *
+ * Matches the link's accessible name, the label followed by its count
+ * badge, so "Packages" does not also find "Language Packages" and a cleared
+ * section's screen-reader announcement is not mistaken for the link.
+ */
+export function sidebarLink(sidebar: Locator, label: string): Locator {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return sidebar.getByRole("link", {
+    name: new RegExp(`^${escaped} \\S+ (decisions|items)\\b`),
+  });
 }
 
 export async function expectSidebarSection(
