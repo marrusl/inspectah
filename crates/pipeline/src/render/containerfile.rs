@@ -2098,14 +2098,20 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // outer header if there's actual content to show.
     let mut body = Vec::new();
 
+    // The snapshot names the modules but does not hold them, so the export
+    // cannot carry them: name each and say how to get it from the host.
     if !sel.custom_modules.is_empty() {
         body.push(format!(
-            "# FIXME: {} custom policy module(s) detected — \
-             export .pp files to config/selinux/ and uncomment the COPY + semodule lines below",
-            sel.custom_modules.len()
+            "# FIXME: {} custom SELinux policy module(s) not carried: {}",
+            sel.custom_modules.len(),
+            sel.custom_modules.join(", ")
         ));
+        body.push(
+            "# On the host, `semodule -c -E <name>` writes <name>.cil. Put each file in".into(),
+        );
+        body.push("# config/selinux/ and uncomment the two lines below.".into());
         body.push("# COPY config/selinux/ /tmp/selinux/".into());
-        body.push("# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/".into());
+        body.push("# RUN semodule -i /tmp/selinux/*.cil && rm -rf /tmp/selinux/".into());
     }
 
     // Non-default booleans

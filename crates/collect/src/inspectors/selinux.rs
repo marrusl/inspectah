@@ -76,7 +76,8 @@ impl Inspector for SelinuxInspector {
 
         collect_selinux_mode(exec, &mut section, &mut degraded_reasons);
         let policy_type = read_policy_type(exec);
-        collect_custom_modules(exec, &mut section, &policy_type);
+        let store = active_store(exec, &policy_type);
+        collect_custom_modules(exec, &mut section, &mut warnings, &store);
         collect_boolean_overrides(exec, &mut section, &mut warnings, &mut degraded_reasons);
         collect_fcontext_rules(exec, &mut section, &policy_type);
         collect_port_labels(exec, &mut section);
@@ -146,9 +147,12 @@ fn collect_selinux_mode(
 // Policy type
 // ---------------------------------------------------------------------------
 
+/// The SELinux configuration file.
+const SELINUX_CONFIG: &str = "/etc/selinux/config";
+
 /// Reads SELINUXTYPE from `/etc/selinux/config`, defaulting to "targeted".
 fn read_policy_type(exec: &dyn Executor) -> String {
-    let content = match exec.read_file(Path::new("/etc/selinux/config")) {
+    let content = match exec.read_file(Path::new(SELINUX_CONFIG)) {
         Ok(c) => c,
         Err(_) => return "targeted".to_string(),
     };
@@ -166,21 +170,120 @@ fn read_policy_type(exec: &dyn Executor) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Custom modules (priority-400 store)
+// Policy store
 // ---------------------------------------------------------------------------
 
-/// Discovers custom SELinux modules from the priority-400 module store.
-/// Modules at priority 400 were installed locally via `semodule -i`.
-fn collect_custom_modules(exec: &dyn Executor, section: &mut SelinuxSection, policy_type: &str) {
-    let store_path = format!("/etc/selinux/{policy_type}/active/modules/400");
-    let entries = match exec.read_dir(Path::new(&store_path)) {
-        Ok(e) => e,
-        Err(_) => return,
+/// libsemanage's configuration, which names the policy store's root.
+const SEMANAGE_CONF: &str = "/etc/selinux/semanage.conf";
+
+/// The policy store root libsemanage uses when `semanage.conf` sets no
+/// `store-root`. Package-mode RHEL 9 and 10 hosts keep their modules and
+/// local settings here, not under `/etc/selinux` (measured on RHEL 9.8 and
+/// 10.2); a bootc image sets `store-root=/etc/selinux` instead.
+const DEFAULT_STORE_ROOT: &str = "/var/lib/selinux";
+
+/// The `semanage.conf` key that relocates the policy store.
+const STORE_ROOT_KEY: &str = "store-root";
+
+/// The active policy store for `policy_type`:
+/// `<store-root>/<policy_type>/active`, with `store-root` read from
+/// `semanage.conf` as libsemanage reads it.
+fn active_store(exec: &dyn Executor, policy_type: &str) -> String {
+    let root = exec
+        .read_file(Path::new(SEMANAGE_CONF))
+        .ok()
+        .and_then(|content| {
+            content.lines().find_map(|line| {
+                let (key, value) = line.trim().split_once('=')?;
+                (key.trim() == STORE_ROOT_KEY && !value.trim().is_empty())
+                    .then(|| value.trim().trim_end_matches('/').to_string())
+            })
+        })
+        .unwrap_or_else(|| DEFAULT_STORE_ROOT.to_string());
+    format!("{root}/{policy_type}/active")
+}
+
+// ---------------------------------------------------------------------------
+// Custom modules
+// ---------------------------------------------------------------------------
+
+/// The priority the distribution's base policy modules are installed at.
+const BASE_POLICY_PRIORITY: u16 = 100;
+
+/// The priority an RPM's `%selinux_modules_install` installs its modules
+/// at. The package that ships the module carries it into the image.
+const PACKAGED_MODULE_PRIORITY: u16 = 200;
+
+/// Modules selinux-policy generates itself at the default local priority,
+/// 400: `/usr/libexec/selinux/varrun-convert.sh` and `binsbin-convert.sh`
+/// build them from the installed packages' file contexts, and the policy's
+/// RPM macros rebuild them in every transaction, so an image has its own
+/// (`rhel-bootc:10.3` carries `extra_varrun` at 400).
+const POLICY_GENERATED_MODULES: [&str; 2] = ["extra_varrun", "extra_binsbin"];
+
+/// Whether a `modules/<priority>` directory holds locally installed
+/// modules: any numeric priority except the base policy's and the one
+/// packages install at. `semodule -i` uses 400; `semodule -X <n> -i` can
+/// put a local module at any other. `disabled/` is not a priority.
+fn is_local_module_priority(dir: &str) -> bool {
+    dir.parse::<u16>()
+        .is_ok_and(|p| p != BASE_POLICY_PRIORITY && p != PACKAGED_MODULE_PRIORITY)
+}
+
+/// Discovers locally installed SELinux policy modules in the active policy
+/// store: every module at a local priority (see
+/// [`is_local_module_priority`]) except the ones selinux-policy generates.
+/// A module installed at two local priorities is listed once; `semodule
+/// -E` extracts the highest.
+///
+/// A missing store is no finding on a host without SELinux; on a host with
+/// an SELinux config it is reported, since the modules could not be read.
+fn collect_custom_modules(
+    exec: &dyn Executor,
+    section: &mut SelinuxSection,
+    warnings: &mut Vec<Warning>,
+    store: &str,
+) {
+    let modules_dir = format!("{store}/modules");
+    let priorities = match exec.read_dir(Path::new(&modules_dir)) {
+        Ok(entries) => entries,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound
+                || exec.file_exists(Path::new(SELINUX_CONFIG))
+            {
+                warnings.push(selinux_warning(format!(
+                    "SELinux custom policy modules not read: {modules_dir}: {e}"
+                )));
+            }
+            return;
+        }
     };
 
-    let mut names: Vec<String> = entries.into_iter().collect();
-    names.sort();
-    section.custom_modules = names;
+    let mut names = std::collections::BTreeSet::new();
+    for priority in priorities.iter().filter(|p| is_local_module_priority(p)) {
+        let dir = format!("{modules_dir}/{priority}");
+        match exec.read_dir(Path::new(&dir)) {
+            Ok(entries) => names.extend(
+                entries
+                    .into_iter()
+                    .filter(|name| !POLICY_GENERATED_MODULES.contains(&name.as_str())),
+            ),
+            Err(e) => warnings.push(selinux_warning(format!(
+                "SELinux custom policy modules not read: {dir}: {e}"
+            ))),
+        }
+    }
+    section.custom_modules = names.into_iter().collect();
+}
+
+/// A warning from this inspector.
+fn selinux_warning(message: String) -> Warning {
+    Warning {
+        inspector: "selinux".into(),
+        message,
+        severity: None,
+        extra: Default::default(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -728,79 +831,160 @@ mod tests {
         assert_eq!(policy_type, "targeted");
     }
 
-    // ---- Test 6: test_custom_modules_found ----
+    // ---- Test 6: custom modules come from the active policy store ----
 
-    #[test]
-    fn test_custom_modules_found() {
-        let exec = MockExecutor::new()
-            .with_command(
-                "getenforce",
-                ExecResult {
-                    stdout: "Enforcing\n".into(),
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
-            .with_file(
-                "/etc/selinux/config",
-                "SELINUX=enforcing\nSELINUXTYPE=targeted\n",
-            )
-            .with_dir(
-                "/etc/selinux/targeted/active/modules/400",
-                vec!["myapp", "custom_policy", "webapp"],
-            );
-
+    /// The inspector's output over `exec`, with the warnings.
+    fn inspect_with(exec: &MockExecutor) -> (SelinuxSection, Vec<Warning>) {
         let rpm_state = empty_rpm_state();
         let source = test_source_system();
-        let inspector = SelinuxInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: exec,
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
-
-        let result = inspector.inspect(&ctx, &NullProgress);
-        let section = extract_section(&result);
-        assert_eq!(section.custom_modules.len(), 3);
-        // Should be sorted
-        assert_eq!(section.custom_modules[0], "custom_policy");
-        assert_eq!(section.custom_modules[1], "myapp");
-        assert_eq!(section.custom_modules[2], "webapp");
+        let output = match SelinuxInspector::new().inspect(&ctx, &NullProgress) {
+            Ok(output) => output,
+            Err(InspectorError::Degraded { partial, .. }) => *partial,
+            Err(e) => panic!("unexpected error: {e}"),
+        };
+        match output.section {
+            SectionData::Selinux(section) => (section, output.warnings),
+            other => panic!("expected Selinux section, got {other:?}"),
+        }
     }
 
-    // ---- Test 7: test_custom_modules_empty ----
+    /// A host with an SELinux config of `SELINUXTYPE=<policy_type>`, an
+    /// optional `semanage.conf`, and the module store `modules` laid out
+    /// as `(store_root, priority, module names)`.
+    fn module_host(
+        policy_type: &str,
+        semanage_conf: Option<&str>,
+        modules: &[(&str, &str, &[&str])],
+    ) -> MockExecutor {
+        let mut exec = MockExecutor::new().with_file(
+            "/etc/selinux/config",
+            &format!("SELINUX=enforcing\nSELINUXTYPE={policy_type}\n"),
+        );
+        if let Some(conf) = semanage_conf {
+            exec = exec.with_file("/etc/selinux/semanage.conf", conf);
+        }
+        let mut priorities: std::collections::BTreeMap<String, Vec<&str>> = Default::default();
+        for (root, priority, names) in modules {
+            let modules_dir = format!("{root}/{policy_type}/active/modules");
+            priorities
+                .entry(modules_dir.clone())
+                .or_default()
+                .push(priority);
+            exec = exec.with_dir(&format!("{modules_dir}/{priority}"), names.to_vec());
+        }
+        for (dir, entries) in priorities {
+            exec = exec.with_dir(&dir, entries);
+        }
+        exec
+    }
 
     #[test]
-    fn test_custom_modules_empty() {
-        // No modules/400 directory -> empty custom modules list
-        let exec = MockExecutor::new()
-            .with_command(
-                "getenforce",
-                ExecResult {
-                    stdout: "Enforcing\n".into(),
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
-            .with_file(
-                "/etc/selinux/config",
-                "SELINUX=enforcing\nSELINUXTYPE=targeted\n",
-            );
+    fn custom_modules_are_read_from_the_policy_store() {
+        let var = "/var/lib/selinux";
+        let etc = "/etc/selinux";
+        // (case, policy type, semanage.conf, store layout, expected modules)
+        type Case<'a> = (
+            &'a str,
+            &'a str,
+            Option<&'a str>,
+            Vec<(&'a str, &'a str, &'a [&'a str])>,
+            &'a [&'a str],
+        );
+        let cases: Vec<Case> = vec![
+            (
+                "priority 400 in the default store, sorted",
+                "targeted",
+                None,
+                vec![(var, "400", &["webapp", "myapp", "permissive_rhcd_t"])],
+                &["myapp", "permissive_rhcd_t", "webapp"],
+            ),
+            (
+                "the base policy (100) and packaged modules (200) are not local",
+                "targeted",
+                None,
+                vec![
+                    (var, "100", &["apache", "base"]),
+                    (var, "200", &["container"]),
+                    (var, "400", &["myapp"]),
+                    (var, "disabled", &["zebra"]),
+                ],
+                &["myapp"],
+            ),
+            (
+                "any other numeric priority is local; a name at two is listed once",
+                "targeted",
+                None,
+                vec![
+                    (var, "300", &["myapp", "lowprio"]),
+                    (var, "400", &["myapp"]),
+                    (var, "500", &["override"]),
+                ],
+                &["lowprio", "myapp", "override"],
+            ),
+            (
+                "modules selinux-policy generates are not local",
+                "targeted",
+                None,
+                vec![(var, "400", &["extra_varrun", "extra_binsbin", "myapp"])],
+                &["myapp"],
+            ),
+            (
+                "the policy type comes from the SELinux config",
+                "mls",
+                None,
+                vec![(var, "400", &["mlsapp"])],
+                &["mlsapp"],
+            ),
+            (
+                "semanage.conf relocates the store",
+                "targeted",
+                Some("module-store = direct\nstore-root=/etc/selinux\n"),
+                vec![(etc, "400", &["myapp"]), (var, "400", &["stale"])],
+                &["myapp"],
+            ),
+            (
+                "the /etc/selinux policy directory is not the default store",
+                "targeted",
+                None,
+                vec![(etc, "400", &["not_a_store"])],
+                &[],
+            ),
+        ];
+        for (case, policy_type, conf, layout, expected) in cases {
+            let (section, _) = inspect_with(&module_host(policy_type, conf, &layout));
+            assert_eq!(section.custom_modules, expected, "{case}");
+        }
+    }
 
-        let rpm_state = empty_rpm_state();
-        let source = test_source_system();
-        let inspector = SelinuxInspector::new();
-        let ctx = InspectionContext {
-            source_system: &source,
-            executor: &exec,
-            rpm_state: Some(&rpm_state),
-            baseline_data: None,
-        };
+    // ---- Test 7: a missing store ----
 
-        let result = inspector.inspect(&ctx, &NullProgress);
-        let section = extract_section(&result);
+    #[test]
+    fn missing_module_store_warns_only_when_selinux_is_configured() {
+        // SELinux configured, no store: the modules could not be read.
+        let (section, warnings) = inspect_with(&module_host("targeted", None, &[]));
         assert!(section.custom_modules.is_empty());
+        assert!(
+            warnings.iter().any(|w| w
+                .message
+                .contains("modules not read: /var/lib/selinux/targeted/active/modules")),
+            "{warnings:?}"
+        );
+
+        // No SELinux at all: nothing to report.
+        let (section, warnings) = inspect_with(&MockExecutor::new());
+        assert!(section.custom_modules.is_empty());
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.message.contains("modules not read")),
+            "{warnings:?}"
+        );
     }
 
     // ---- Test 8: test_parse_semanage_booleans ----

@@ -20,6 +20,7 @@ mod copy_source_exists_test;
 mod fleet_repo_precedence_test;
 mod not_carried_parity_test;
 mod refine_e2e_test;
+mod selinux_scan_test;
 mod staged_writes_parity_test;
 mod sysctl_scan_test;
 mod unit_owner_evidence_test;

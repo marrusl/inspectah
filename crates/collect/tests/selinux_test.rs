@@ -78,9 +78,13 @@ fn full_mock() -> MockExecutor {
         )
         // /etc/selinux/config for policy type
         .with_file("/etc/selinux/config", SELINUX_CONFIG)
-        // Custom modules at priority 400
+        // Custom modules at priority 400, in the policy store's default root
         .with_dir(
-            "/etc/selinux/targeted/active/modules/400",
+            "/var/lib/selinux/targeted/active/modules",
+            vec!["100", "200", "400", "disabled"],
+        )
+        .with_dir(
+            "/var/lib/selinux/targeted/active/modules/400",
             vec!["myapp", "custom_ports"],
         )
         // semanage boolean -l via chroot

@@ -263,10 +263,10 @@ fn smoke_containerfile_config() {
 fn smoke_containerfile_selinux() {
     let snap = snapshot_with_selinux();
     let output = containerfile::render_containerfile(&snap, None, None);
-    // Custom modules trigger FIXME + commented semodule lines
+    // Custom modules trigger a FIXME naming each + commented semodule lines
     assert!(
-        output.contains("custom policy module"),
-        "must reference custom policy modules"
+        output.contains("custom SELinux policy module(s) not carried: myapp, webapp"),
+        "must name the custom policy modules"
     );
     assert!(
         output.contains("semodule"),

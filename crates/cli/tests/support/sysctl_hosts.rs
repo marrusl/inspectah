@@ -23,6 +23,7 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
+use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::{ExecResult, Executor};
 use inspectah_core::traits::inspector::{
@@ -330,6 +331,18 @@ pub fn scan(host: SysctlHost) -> InspectionSnapshot {
             Box::new(RpmInspector::new()),
             Box::new(ConfigInspector::new()),
             Box::new(KernelbootInspector::new()),
+        ],
+    )
+}
+
+/// The scan path with the RPM, config and SELinux inspectors.
+pub fn scan_selinux(host: SysctlHost) -> InspectionSnapshot {
+    scan_with(
+        host,
+        vec![
+            Box::new(RpmInspector::new()),
+            Box::new(ConfigInspector::new()),
+            Box::new(SelinuxInspector::new()),
         ],
     )
 }
