@@ -1,11 +1,19 @@
 /**
- * Portal idempotency proof test (#3).
+ * Portal navigation tests.
  *
  * Proves that calling the portal navigation (banner/search → expand variant)
- * twice with the same target keeps the variant view open (doesn't toggle shut).
+ * twice with the same target keeps the variant view open (doesn't toggle shut)
+ * (#3), and that a target the user navigated away from is not revealed when
+ * they come back to its section.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  act,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AggregateApp } from "../../AggregateApp";
 import type {
@@ -237,5 +245,94 @@ describe("portal idempotency", () => {
     await waitFor(() => {
       expect(document.querySelector(".inspectah-highlight")).not.toBeNull();
     });
+  });
+});
+
+describe("superseded portal target", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Hold animation frames so a reveal stays pending until flushed. */
+  function holdAnimationFrames() {
+    const held = new Map<number, FrameRequestCallback>();
+    let nextId = 1;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      const id = nextId++;
+      held.set(id, cb);
+      return id;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      held.delete(id);
+    });
+    return {
+      get pending() {
+        return held.size;
+      },
+      /** Run held frames, including any they schedule, until none remain. */
+      flush() {
+        while (held.size > 0) {
+          const batch = [...held.values()];
+          held.clear();
+          act(() => {
+            for (const cb of batch) cb(0);
+          });
+        }
+      },
+      release() {
+        vi.mocked(window.requestAnimationFrame).mockRestore();
+        vi.mocked(window.cancelAnimationFrame).mockRestore();
+      },
+    };
+  }
+
+  it("does not reveal a target the user left before its reveal ran", async () => {
+    mockFetchAggregateView.mockResolvedValue(makeAggregateViewWithVariants());
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const user = userEvent.setup();
+
+    render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
+    });
+    const sidebar = screen.getByTestId("aggregate-sidebar");
+    await user.click(within(sidebar).getByText("Config Files"));
+
+    // Navigate from the banner, but hold the reveal frame so the user can
+    // leave the section before it runs.
+    const frames = holdAnimationFrames();
+    await act(async () => {
+      screen
+        .getByRole("button", { name: /navigate to \/etc\/httpd/i })
+        .click();
+    });
+    expect(frames.pending).toBeGreaterThan(0);
+
+    // Leave for Packages, which unmounts the section and cancels the
+    // reveal, then come back.
+    await user.click(within(sidebar).getByText("Packages"));
+    await user.click(within(sidebar).getByText("Config Files"));
+    frames.flush();
+
+    // The returning section must not reveal the abandoned target.
+    expect(scroll).not.toHaveBeenCalled();
+    expect(document.querySelector(".inspectah-highlight")).toBeNull();
+
+    // A fresh banner request afterwards still reveals its target.
+    frames.release();
+    await act(async () => {
+      screen
+        .getByRole("button", { name: /navigate to \/etc\/httpd/i })
+        .click();
+    });
+    const target = document.querySelector(
+      `[data-item-id='${JSON.stringify(configItemWithVariants().item_id)}']`,
+    );
+    expect(target).not.toBeNull();
+    await waitFor(() => {
+      expect(scroll).toHaveBeenCalledTimes(1);
+    });
+    expect(scroll.mock.contexts[0]).toBe(target);
+    expect(target).toHaveClass("inspectah-highlight");
   });
 });

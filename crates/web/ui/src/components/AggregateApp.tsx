@@ -210,6 +210,15 @@ export function AggregateApp({
     setPendingNavTarget(null);
   }, []);
 
+  // Section navigation by the user (sidebar, number keys, a search result
+  // with no item) supersedes any portal target still waiting to be revealed.
+  // Without this, leaving the section before its reveal ran left the target
+  // pending, and the next visit to that section revealed it.
+  const handleSelectSection = useCallback((sectionId: string) => {
+    setPendingNavTarget(null);
+    setActiveSection(sectionId);
+  }, []);
+
   // Track shell's filterClearCounter to reset filterText when
   // GlobalSearch navigation clears the section search.
   const filterClearRef = useRef(0);
@@ -297,10 +306,10 @@ export function AggregateApp({
         setPendingNavTarget({ sectionId, itemId: parsed });
       } catch {
         // Fallback: just navigate to the section
-        setActiveSection(sectionId);
+        handleSelectSection(sectionId);
       }
     },
-    [],
+    [handleSelectSection],
   );
 
   // --- Dismissed conflict state (bridges PackageList → RepoBar) ---
@@ -496,7 +505,7 @@ export function AggregateApp({
           }}
           isPending={isPending}
           activeSection={activeSection}
-          onNavigateSection={setActiveSection}
+          onNavigateSection={handleSelectSection}
           searchPackageItems={[]}
           searchConfigItems={[]}
           searchContextSections={searchContextSections}
@@ -542,7 +551,7 @@ export function AggregateApp({
                   <AggregateSidebar
                     sections={aggregateView.sections}
                     activeSection={activeSection}
-                    onSelect={setActiveSection}
+                    onSelect={handleSelectSection}
                     ackState={ack}
                     searchSlot={searchSlot}
                   />
