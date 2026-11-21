@@ -28,8 +28,7 @@ const GETENFORCE_ENFORCING: &str =
 const GETENFORCE_DISABLED: &str =
     include_str!("../../../testdata/fixtures/selinux/getenforce-disabled.txt");
 const SELINUX_CONFIG: &str = include_str!("../../../testdata/fixtures/selinux/selinux-config.txt");
-const SEMANAGE_BOOLEAN: &str =
-    include_str!("../../../testdata/fixtures/selinux/semanage-boolean-output.txt");
+const BOOLEANS_LOCAL: &str = include_str!("../../../testdata/fixtures/selinux/booleans-local.txt");
 const SEMANAGE_FCONTEXT: &str =
     include_str!("../../../testdata/fixtures/selinux/semanage-fcontext-output.txt");
 const SEMANAGE_PORT: &str =
@@ -87,14 +86,14 @@ fn full_mock() -> MockExecutor {
             "/var/lib/selinux/targeted/active/modules/400",
             vec!["myapp", "custom_ports"],
         )
-        // semanage boolean -l via chroot
-        .with_command(
-            "chroot / semanage boolean -l",
-            ExecResult {
-                stdout: SEMANAGE_BOOLEAN.into(),
-                exit_code: 0,
-                ..Default::default()
-            },
+        // Booleans set with setsebool -P, as the policy store records them
+        .with_dir(
+            "/var/lib/selinux/targeted/active",
+            vec!["booleans.local", "modules"],
+        )
+        .with_file(
+            "/var/lib/selinux/targeted/active/booleans.local",
+            BOOLEANS_LOCAL,
         )
         // semanage fcontext -l -C via chroot
         .with_command(
@@ -170,21 +169,15 @@ fn test_selinux_inspector_happy_path() {
         "should find myapp module"
     );
 
-    // Boolean overrides (only non-default booleans)
-    assert!(
-        !section.boolean_overrides.is_empty(),
-        "should have boolean overrides"
-    );
-    // httpd_can_network_connect is on but default off -- should appear
-    let has_httpd_bool = section.boolean_overrides.iter().any(|b| {
-        b.get("name")
-            .and_then(|v| v.as_str())
-            .map(|n| n == "httpd_can_network_connect")
-            .unwrap_or(false)
-    });
-    assert!(
-        has_httpd_bool,
-        "httpd_can_network_connect override should be detected"
+    // Booleans set persistently, from booleans.local
+    let booleans: Vec<(&str, bool)> = section
+        .boolean_overrides
+        .iter()
+        .map(|b| (b.name.as_str(), b.value))
+        .collect();
+    assert_eq!(
+        booleans,
+        [("httpd_can_network_connect", true), ("virt_use_nfs", true)]
     );
 
     // Fcontext rules
@@ -253,7 +246,8 @@ fn test_selinux_inspector_disabled() {
     assert!(!section.fips_mode, "FIPS should be disabled");
 }
 
-/// semanage unavailable -- fallback behavior, may produce Degraded.
+/// No policy store and no semanage: the section degrades, and the
+/// runtime values in sysfs are not taken for persistent booleans.
 #[test]
 fn test_selinux_inspector_degraded_no_semanage() {
     let exec = MockExecutor::new()
@@ -266,8 +260,8 @@ fn test_selinux_inspector_degraded_no_semanage() {
             },
         )
         .with_file("/etc/selinux/config", SELINUX_CONFIG)
-        // No semanage commands -- all will return 127
-        // Sysfs booleans fallback
+        // No policy store, and semanage commands all return 127
+        // Runtime values only
         .with_dir(
             "/sys/fs/selinux/booleans",
             vec![
@@ -293,26 +287,19 @@ fn test_selinux_inspector_degraded_no_semanage() {
 
     let result = SelinuxInspector::new().inspect(&ctx, &NullProgress);
 
-    // Should succeed or degrade -- both are acceptable
     let section = match &result {
-        Ok(output) => match &output.section {
-            SectionData::Selinux(s) => s,
-            other => panic!("expected Selinux, got {:?}", other),
-        },
         Err(InspectorError::Degraded { partial, .. }) => match &partial.section {
             SectionData::Selinux(s) => s,
             other => panic!("expected Selinux in partial, got {:?}", other),
         },
-        Err(other) => panic!("unexpected error: {other}"),
+        other => panic!("expected a degraded section, got {other:?}"),
     };
 
     assert_eq!(section.mode, "Enforcing");
-
-    // Should still get boolean overrides from sysfs fallback
-    // httpd_can_network_connect: current=1, pending=0 -> non-default
     assert!(
-        !section.boolean_overrides.is_empty(),
-        "sysfs fallback should produce boolean overrides"
+        section.boolean_overrides.is_empty(),
+        "sysfs holds runtime values, not persistent ones: {:?}",
+        section.boolean_overrides
     );
 }
 
@@ -543,7 +530,7 @@ fn policy_store_forms_and_order() {
             "/srv/www(/.*)?  system_u:object_r:httpd_sys_content_t:s0\n/srv/.*  system_u:object_r:var_t:s0\n",
         )
         .with_dir("/etc/pam.d", vec![])
-        .with_dir("/sys/fs/selinux/booleans", vec![])
+        .with_dir("/var/lib/selinux/targeted/active", vec![])
         .with_file("/proc/sys/crypto/fips_enabled", "0\n");
 
     let source = pkg_source();
@@ -605,7 +592,7 @@ fn policy_store_forms_and_order() {
             },
         )
         .with_dir("/etc/pam.d", vec![])
-        .with_dir("/sys/fs/selinux/booleans", vec![])
+        .with_dir("/var/lib/selinux/targeted/active", vec![])
         .with_file("/proc/sys/crypto/fips_enabled", "0\n");
     let ctx2 = InspectionContext {
         source_system: &source,
@@ -651,7 +638,7 @@ fn policy_store_forms_and_order() {
             "/home1 /home\n",
         )
         .with_dir("/etc/pam.d", vec![])
-        .with_dir("/sys/fs/selinux/booleans", vec![])
+        .with_dir("/var/lib/selinux/targeted/active", vec![])
         .with_file("/proc/sys/crypto/fips_enabled", "0\n");
     let ctx3 = InspectionContext {
         source_system: &source,
@@ -708,7 +695,7 @@ fn policy_store_forms_and_order() {
             "/distro1 /distro\n",
         )
         .with_dir("/etc/pam.d", vec![])
-        .with_dir("/sys/fs/selinux/booleans", vec![])
+        .with_dir("/var/lib/selinux/targeted/active", vec![])
         .with_file("/proc/sys/crypto/fips_enabled", "0\n");
     let ctx4 = InspectionContext {
         source_system: &source,

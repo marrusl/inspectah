@@ -12,7 +12,7 @@ image-mode migration. The structure has 32 top-level fields, listed in the
 tables below. A snapshot loads only in the inspectah release that wrote it:
 see [Loading and schema version](#loading-and-schema-version).
 
-**Schema version:** 29
+**Schema version:** 30
 {: .label .label-blue }
 
 **Source:** `crates/core/src/snapshot.rs`
@@ -40,7 +40,7 @@ see [Loading and schema version](#loading-and-schema-version).
 
 | Field | Type | Description |
 |:------|:-----|:------------|
-| `schema_version` | `u32` | Schema version number, currently **29**. Checked on load: any other value is rejected. |
+| `schema_version` | `u32` | Schema version number, currently **30**. Checked on load: any other value is rejected. |
 | `meta` | `Map<String, Value>` | Free-form metadata written by `scan`: `hostname`, `hostname_source`, `timestamp` (RFC 3339), and `inspectah_version`. `hostname` is the static name from `/etc/hostname`, or when that is empty the transient name from `/proc/sys/kernel/hostname`, and is omitted when neither names the host. `hostname_source` is the file that supplied it, or `none` when no name was found. |
 | `os_release` | `OsRelease?` | Parsed `/etc/os-release` fields (name, version, version ID, ID, ID-like, pretty name, variant ID). |
 | `system_type` | `SystemType` | Detected system kind, serialized as `package-mode`, `rpm-ostree`, or `bootc`. Default: `unknown`. |
@@ -62,7 +62,7 @@ All are `Option` types: absent when the inspector did not run or was not applica
 | `non_rpm_software` | `NonRpmSoftwareSection?` | `NonRpmInspector` | Python virtualenvs, pip packages, Node.js modules, `.env` files, git repositories, unpackaged binaries. |
 | `unmanaged_files` | `UnmanagedFileSection?` | `scan` | Files under `/opt`, `/srv`, and `/usr/local` that no RPM owns, with size, type, and provenance signals. Present only when the scan ran with `--include-unmanaged`; omitted from the JSON otherwise. |
 | `kernel_boot` | `KernelBootSection?` | `KernelbootInspector` | Kernel command line, GRUB defaults, the sysctl section (`sysctl`: the files on the sysctl search path and the running value of each key they name, recorded for explanation only), loaded kernel modules (`lsmod`), active tuned profile, locale, timezone, alternatives. Loaded modules carry their own dispositions and the sysctl section carries none; module-loading configuration and sysctl files are in `config`. `sysctl` is absent when its collection failed and on an aggregate. |
-| `selinux` | `SelinuxSection?` | `SelinuxInspector` | SELinux mode, custom modules, boolean overrides, fcontext rules and where they were read from, port labels, FIPS mode. PAM files, audit rules, and custom tuned profiles are not here: they are `config` entries. |
+| `selinux` | `SelinuxSection?` | `SelinuxInspector` | SELinux mode, custom modules, booleans set persistently, fcontext rules and where they were read from, port labels, FIPS mode. PAM files, audit rules, and custom tuned profiles are not here: they are `config` entries. |
 | `users_groups` | `UserGroupSection?` | `UsersGroupsInspector` | Non-system users/groups, shadow entries, sudoers rules, SSH key references, subuid/subgid mappings. |
 | `subscription` | `SubscriptionSection?` | `SubscriptionInspector` | RHEL subscription material: entitlement cert/key pairs, CA certs, rhsm.conf, redhat.repo. Includes cert expiry dates, bundle completeness, and org metadata. Only populated when `--preserve subscription` is used. |
 
@@ -118,21 +118,21 @@ Snapshots serialize to JSON via `serde`. Key behaviors:
 
 - Fields with `skip_serializing_if` annotations are omitted when empty, `None`, or `false` to keep output compact. Examples: `unmanaged_files`, `redaction_state`, `baseline`, and the four sensitivity flags.
 - `serde(default)` on a field means a key missing from a snapshot of the current schema parses as that field's default. It is not a compatibility mechanism across schema versions. Findings are the one place the default is not uniform: a missing `disposition` key reads back as Actionable and included for most types, as Inventory for network findings and loaded kernel modules, and as excluded for `tuned_disposition`. See [Triage Classification](triage-classification.md#finding-dispositions).
-- Schema version is checked on load, after the JSON parses. See below.
+- Schema version is checked on load, before the rest of the JSON is read. See below.
 
 ## Loading and schema version
 
-`SCHEMA_VERSION` and `MIN_SCHEMA` in `crates/core/src/snapshot.rs` are both 29. The loading contract is an exact match, not a rolling window: a snapshot whose `schema_version` is anything other than 29 does not load, whether it is older or newer. There is no migration. A schema bump renames or retypes fields, and some of the data a new field holds is observed on the host at scan time, so it cannot be derived from an older snapshot afterward. Schema 29 adds `rpm.dep_closures`, what each added package needs. A schema 28 snapshot still parses, but without it the packages that a carried package such as `firewalld` needs read as not installed, and nothing in it says so.
+`SCHEMA_VERSION` and `MIN_SCHEMA` in `crates/core/src/snapshot.rs` are both 30. The loading contract is an exact match, not a rolling window: a snapshot whose `schema_version` is anything other than 30 does not load, whether it is older or newer. There is no migration. A schema bump renames or retypes fields, and some of the data a new field holds is observed on the host at scan time, so it cannot be derived from an older snapshot afterward. Schema 30 replaces `selinux.boolean_overrides` with the booleans set persistently on the host (`setsebool -P`), each `{"name", "value"}`, read from the policy store. Older snapshots listed the booleans whose running value differed from the stored one: runtime-only changes, with every persistent change missing.
 
 In practice:
 
 - A tarball from a different inspectah release does not load in `refine` or `aggregate` when the two releases use different schema versions, which is the usual case between releases. Re-scan the host with the release you are running.
-- `refine` stops with an error. For a tarball whose snapshot is schema 28, the output is:
+- `refine` stops with an error. For a tarball whose snapshot is schema 29, the output is:
 
   ```text
   Loading snapshot...
-  error: snapshot load error: unsupported schema version: 28 (accepted: 29)
+  error: snapshot load error: unsupported schema version: 29 (accepted: 30)
   ```
 
 - `aggregate` prints a warning for each tarball it cannot load and skips it, then refuses to merge fewer than two snapshots.
-- The file is parsed before its version is compared. A snapshot from an older schema whose fields no longer parse reports a `json error` describing what failed to parse, in place of the version message. It does not load either way.
+- The version is read before the rest of the file, so a snapshot from another schema reports the version message even when its fields no longer parse. A file that is not JSON, or has no `schema_version`, reports a `json error`.

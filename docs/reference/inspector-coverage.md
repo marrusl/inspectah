@@ -467,7 +467,7 @@ The audit report, the HTML report and the System Tuning section in `refine` expl
 | `/etc/selinux/config` | Policy type (`SELINUXTYPE`, default `targeted`) |
 | `/etc/selinux/semanage.conf` | Policy store root (`store-root`, default `/var/lib/selinux`) |
 | `<store-root>/<type>/active/modules/<priority>` | Locally installed policy modules: every priority except 100 (base policy) and 200 (installed by packages), less `extra_varrun` and `extra_binsbin`, which selinux-policy generates |
-| `semanage boolean -l`, then `/sys/fs/selinux/booleans/` | Booleans whose current value differs from the default |
+| `<store-root>/<type>/active/booleans.local`, then `semanage boolean -l -C` | Booleans set persistently (`setsebool -P`); a runtime-only change is not collected, because the host itself loses it at reboot |
 | `/etc/selinux/<type>/contexts/files/file_contexts.local` and `file_contexts.subs` | Custom file context rules, in the order the policy resolves them |
 | `semanage fcontext -l -C` | File context rules, only when neither file above is readable |
 | `semanage port -l -C` | Custom port label assignments |
@@ -475,7 +475,7 @@ The audit report, the HTML report and the System Tuning section in `refine` expl
 
 The `semanage` commands run through `chroot` into the host root.
 
-The scan records module names, not their content, so the Containerfile cannot carry a custom module. It names each one in a `FIXME` with commented-out `COPY` and `semodule -i` lines; `semodule -c -E <name>` on the source host writes the `<name>.cil` file they install.
+Each boolean set persistently is carried as `RUN setsebool -P <name> on|off`. The scan records module names, not their content, so the Containerfile cannot carry a custom module. It names each one in a `FIXME` with commented-out `COPY` and `semodule -i` lines; `semodule -c -E <name>` on the source host writes the `<name>.cil` file they install.
 
 PAM files and audit rules are not read here. They are Configuration Files entries (see [ConfigInspector](#configinspector)).
 

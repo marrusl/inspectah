@@ -175,10 +175,10 @@ fn contract_snapshot() -> InspectionSnapshot {
     snap.selinux = Some(SelinuxSection {
         mode: "enforcing".into(),
         fips_mode: false,
-        boolean_overrides: vec![serde_json::json!({
-            "name": "httpd_can_network_connect",
-            "state": true,
-        })],
+        boolean_overrides: vec![inspectah_core::types::selinux::SelinuxBoolean {
+            name: "httpd_can_network_connect".into(),
+            value: true,
+        }],
         custom_modules: vec!["myapp_policy".into()],
         ..Default::default()
     });

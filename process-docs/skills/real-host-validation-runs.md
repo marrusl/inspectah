@@ -341,9 +341,10 @@ against `hostnamectl` on the host.
 (`setsebool -P`) updates the stored default, so both columns read the
 same. Only a runtime-only change leaves them different. Any filter of the
 form `current != default` therefore keeps transient state and discards
-durable admin customisation — the exact inverse of what a migration
-wants. Use `semanage boolean -l -C`, which lists customised booleans
-directly, as the `fcontext` and `port` collectors already do.
+durable admin customisation, the exact inverse of what a migration
+wants. The collector reads the policy store's `booleans.local` instead,
+with `semanage boolean -l -C` as the fallback; see `selinux-policy-store`.
+On a real host, check the snapshot against `semanage boolean -l -C`.
 
 ## sysctl values are not string-comparable
 

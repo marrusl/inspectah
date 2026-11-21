@@ -1,6 +1,6 @@
 ---
 name: selinux-policy-store
-description: Where an SELinux host keeps its local modules and settings, and why the collector reads the policy store rather than /etc/selinux/<type>.
+description: Where an SELinux host keeps its local modules and persistent booleans, and why the collector reads the policy store rather than /etc/selinux/<type> or semanage boolean -l.
 ---
 
 # The SELinux policy store
@@ -49,9 +49,39 @@ on the host writes `<name>.cil` from the highest priority, and `semodule
 Not collected: `disabled/`, which records modules turned off with
 `semodule -d`, including base modules.
 
+## Booleans
+
+`setsebool -P` and `semanage boolean -m` write `active/booleans.local`:
+a libsemanage comment header, then `name=0|1` lines (it also reads
+`true`/`false`). That file is the set of booleans set persistently, a
+persistent `off` included. The collector reads it (a file read, so the
+host needs no `semanage`) and falls back to `chroot <root> semanage
+boolean -l -C` only when the store cannot be read; that command prints
+`(running, persistent)` and the second column is the one kept. A readable
+store with no `booleans.local` means none are set. A line the parser does
+not understand is named in a scan warning.
+
+Not collected:
+
+- **`semanage boolean -l` without `-C`**: a persistent change rewrites
+  the default it prints, so "current differs from default" keeps exactly
+  the runtime-only changes and drops the persistent ones. The collector
+  did this until 2026-11-21.
+- **Runtime-only changes** (`setsebool` without `-P`, or the sysfs files
+  under `/sys/fs/selinux/booleans/`, which hold running and pending values
+  only): the host loses them at its next boot, so the image matches the
+  host as it boots.
+
+The renderer emits `RUN setsebool -P <name> on|off` per boolean;
+`setsebool -P` succeeds in a `rhel-bootc:10.3` container (2026-11-21).
+The bootc base image itself carries `virt_use_nfs=1` and
+`virt_sandbox_use_all_caps=1` in its `booleans.local`, so a RHEL 10 host
+usually lists those too; setting them again is harmless.
+
 ## Testing
 
 Mock the store at its real path through the collector (see
-`crates/cli/tests/selinux_scan_test.rs`), and render both exports from
-what the collector produced. A hand-built `SelinuxSection` cannot catch a
+`crates/cli/tests/selinux_scan_test.rs`, which also mocks a runtime-only
+boolean in sysfs to prove it is not carried), and render both exports
+from what the collector produced. A hand-built `SelinuxSection` cannot catch a
 collector that reads the wrong path.

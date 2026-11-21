@@ -9,30 +9,31 @@ description: Snapshot JSON schema is version-gated by exact match (MIN_SCHEMA ==
 `schema_version` field. The loading contract is an exact match:
 
 ```rust
-pub const SCHEMA_VERSION: u32 = 29;
+pub const SCHEMA_VERSION: u32 = 30;
 
 // ...
 
-const MIN_SCHEMA: u32 = 29;
+const MIN_SCHEMA: u32 = 30;
 
-if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSION {
-    return Err(SnapshotError::UnsupportedVersion(snap.schema_version));
+// `schema_version` is read alone first, then the rest
+if !(Self::MIN_SCHEMA..=SCHEMA_VERSION).contains(&version) {
+    return Err(SnapshotError::UnsupportedVersion(version));
 }
 ```
 
 `MIN_SCHEMA` and `SCHEMA_VERSION` are independent constants, not tied
 together by the type system -- they just currently hold the same value
-(both 29). Only `schema_version == 29` loads; any other value is
+(both 30). Only `schema_version == 30` loads; any other value is
 rejected. Snapshots on an older schema must be re-scanned -- there is no
 migration path, and with the window closed to an exact match there is no
 longer even a one-release grace period for a prior version.
 
 **Raise `MIN_SCHEMA` with `SCHEMA_VERSION`, and decide it explicitly.**
-Bumping `SCHEMA_VERSION` alone widens the window: 29 with `MIN_SCHEMA`
-still 28 accepts both. Ask what the prior version *is* before leaving it
+Bumping `SCHEMA_VERSION` alone widens the window: 30 with `MIN_SCHEMA`
+still 29 accepts both. Ask what the prior version *is* before leaving it
 accepted, and derive the answer rather than reusing the last one.
 
-Six bumps, two different arguments, all landing on "reject":
+Seven bumps, two different arguments, all landing on "reject":
 
 - 23 -> 24 added a cross-inspector annotation written once, at collect
   time, so a schema-23 snapshot is by definition one collected before
@@ -92,6 +93,18 @@ Six bumps, two different arguments, all landing on "reject":
   which. **Semantic staleness.** Its refusal tests read
   `testdata/fixtures/snapshot/schema-28-leaf-closures-only.json`, and each
   first loads the same payload with the closures at the current version.
+- 29 -> 30 retyped `selinux.boolean_overrides` from free-form JSON
+  objects to `SelinuxBoolean { name, value }`, the booleans set with
+  `setsebool -P` as the policy store records them. The old objects were
+  the booleans whose running value differed from the stored one, which is
+  every runtime-only change and no persistent one. **Unreadable and
+  semantically stale.** It is the first bump whose old payload fails to
+  deserialize, so `load()` now reads `schema_version` alone before the
+  rest, and the refusal is the version message rather than a field error.
+  The refusal tests read
+  `testdata/fixtures/snapshot/schema-29-selinux-runtime-booleans.json`,
+  and the core test also loads it at the current version to show the
+  field error the order avoids.
 
 The second argument does not follow from the first. A renamed field
 would force the bump even if the data were recoverable, and stale
@@ -174,9 +187,11 @@ requires re-scanning all constituent hosts.
 
 ## Why This Matters
 
-If you add a required field without `serde(default)`, all existing
-snapshots on disk become unloadable with an opaque serde error instead
-of the clean `UnsupportedVersion` message. With the window closed to an
+Since schema 30 an old snapshot is refused by version before its fields
+are read, so a retyped field no longer turns the refusal into an opaque
+serde error. A required field without `serde(default)` still does that
+to a snapshot **of the current version** that lacks it, such as a
+hand-written fixture. With the window closed to an
 exact match, a snapshot from the prior release no longer loads at all --
 get the serde annotations right on the first commit, and re-scan rather
 than rely on a grace period that no longer exists.

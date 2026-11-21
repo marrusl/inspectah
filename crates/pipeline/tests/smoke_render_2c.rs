@@ -130,8 +130,14 @@ fn snapshot_with_selinux() -> InspectionSnapshot {
         mode: "enforcing".into(),
         custom_modules: vec!["myapp".into(), "webapp".into()],
         boolean_overrides: vec![
-            serde_json::json!({"name": "httpd_can_network_connect", "state": true}),
-            serde_json::json!({"name": "container_manage_cgroup", "state": true}),
+            inspectah_core::types::selinux::SelinuxBoolean {
+                name: "httpd_can_network_connect".into(),
+                value: true,
+            },
+            inspectah_core::types::selinux::SelinuxBoolean {
+                name: "container_manage_cgroup".into(),
+                value: false,
+            },
         ],
         fcontext_rules: vec![FcontextRule::Label {
             spec: "/opt/app(/.*)?".into(),
@@ -272,6 +278,9 @@ fn smoke_containerfile_selinux() {
         output.contains("semodule"),
         "must contain semodule instruction"
     );
+    // Persistent booleans are set again, off as well as on
+    assert!(output.contains("RUN setsebool -P httpd_can_network_connect on"));
+    assert!(output.contains("RUN setsebool -P container_manage_cgroup off"));
     // Port labels trigger semanage port
     assert!(
         output.contains("semanage port"),

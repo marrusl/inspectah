@@ -2744,9 +2744,10 @@ mod tests {
         snap.selinux = Some(inspectah_core::types::selinux::SelinuxSection {
             mode: "enforcing".into(),
             custom_modules: vec!["myapp".into()],
-            boolean_overrides: vec![
-                serde_json::json!({"name": "httpd_can_network_connect", "state": true}),
-            ],
+            boolean_overrides: vec![inspectah_core::types::selinux::SelinuxBoolean {
+                name: "httpd_can_network_connect".into(),
+                value: true,
+            }],
             fcontext_rules: vec![inspectah_core::types::selinux::FcontextRule::Label {
                 spec: "/opt/app(/.*)?".into(),
                 file_type: inspectah_core::types::selinux::FcontextFileType::All,

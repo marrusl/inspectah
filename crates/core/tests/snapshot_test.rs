@@ -2,7 +2,7 @@ use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION, SnapshotError
 use inspectah_core::types::kernelboot::KernelBootSection;
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, RpmSection};
-use inspectah_core::types::selinux::SelinuxSection;
+use inspectah_core::types::selinux::{SelinuxBoolean, SelinuxSection};
 use inspectah_core::types::units::{
     UnitName, UnitNameError, UnitSection, UnitState, UnitStateChangeError,
 };
@@ -96,6 +96,58 @@ fn schema_26_snapshot_is_refused() {
         Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 26),
         other => panic!("expected UnsupportedVersion(26), got {other:?}"),
     }
+}
+
+/// A schema-29 snapshot, the last whose `selinux.boolean_overrides` holds
+/// free-form objects. The other production loaders' refusal tests read the
+/// same fixture file with `include_str!`.
+const SCHEMA_29_SNAPSHOT: &str =
+    include_str!("../../../testdata/fixtures/snapshot/schema-29-selinux-runtime-booleans.json");
+
+/// Schema 29 is the last version whose booleans were the ones with a
+/// running value different from the stored one: runtime-only changes,
+/// with every `setsebool -P` change missing. Its objects do not
+/// deserialize as `SelinuxBoolean`, so the payload is refused by version
+/// before its fields are read; the same payload at the current version
+/// fails on the field instead, which shows the order.
+#[test]
+fn schema_29_snapshot_is_refused() {
+    match InspectionSnapshot::load(SCHEMA_29_SNAPSHOT) {
+        Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 29),
+        other => panic!("expected UnsupportedVersion(29), got {other:?}"),
+    }
+
+    let mut current: serde_json::Value = serde_json::from_str(SCHEMA_29_SNAPSHOT).unwrap();
+    current["schema_version"] = SCHEMA_VERSION.into();
+    match InspectionSnapshot::load(&current.to_string()) {
+        Err(SnapshotError::Json(err)) => {
+            assert!(err.to_string().contains("value"), "{err}")
+        }
+        other => panic!("expected a field error at the current version, got {other:?}"),
+    }
+}
+
+/// A persistent boolean is `{"name", "value"}` on the wire, `value` a bool.
+#[test]
+fn selinux_boolean_wire_form() {
+    let snap = InspectionSnapshot {
+        schema_version: SCHEMA_VERSION,
+        selinux: Some(SelinuxSection {
+            boolean_overrides: vec![SelinuxBoolean {
+                name: "virt_use_nfs".into(),
+                value: false,
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let json = serde_json::to_value(&snap).unwrap();
+    assert_eq!(
+        json["selinux"]["boolean_overrides"],
+        serde_json::json!([{"name": "virt_use_nfs", "value": false}])
+    );
+    let loaded = InspectionSnapshot::load(&json.to_string()).expect("the snapshot loads");
+    assert_eq!(loaded, snap);
 }
 
 /// A schema-27 snapshot, the last with the `services` section. The other
@@ -771,15 +823,15 @@ fn expected_keys(keys: &[&str]) -> BTreeSet<String> {
     keys.iter().map(|k| (*k).to_string()).collect()
 }
 
-/// The snapshot format guard: schema 29 and the key sets of the package
+/// The snapshot format guard: schema 30 and the key sets of the package
 /// and unit structs are pinned. Serde ignores unknown fields and
 /// defaults missing ones, so a field added, renamed or removed with
 /// `#[serde(default)]` passes every round-trip test; this one fails
 /// instead. Every `skip_serializing_if` field is set to a non-default
 /// value so it appears.
 #[test]
-fn schema_29_format_guard_pins_package_and_unit_keys() {
-    assert_eq!(SCHEMA_VERSION, 29);
+fn schema_30_format_guard_pins_package_and_unit_keys() {
+    assert_eq!(SCHEMA_VERSION, 30);
 
     let package = PackageEntry {
         locked: true,

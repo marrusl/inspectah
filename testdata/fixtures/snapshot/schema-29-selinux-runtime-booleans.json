@@ -1,0 +1,22 @@
+{
+  "schema_version": 29,
+  "meta": {"hostname": "host-a.example.com"},
+  "system_type": "package-mode",
+  "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
+  "preflight": {"status": "ok"},
+  "warnings": [],
+  "redactions": [],
+  "redaction_state": {"state": "fully_redacted", "redacted_by": "t", "config_hash": "h"},
+  "selinux": {
+    "mode": "Enforcing",
+    "boolean_overrides": [
+      {
+        "name": "container_manage_cgroup",
+        "current": "on",
+        "default": "off",
+        "non_default": true,
+        "description": "Allow container to manage cgroup"
+      }
+    ]
+  }
+}

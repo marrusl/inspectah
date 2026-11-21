@@ -120,6 +120,26 @@ pub struct SelinuxPortLabel {
     pub aggregate: Option<AggregatePrevalence>,
 }
 
+/// An SELinux boolean the administrator set persistently on the host, with
+/// `setsebool -P` or `semanage boolean -m`, as the policy store's
+/// `booleans.local` records it.
+///
+/// A runtime-only change (`setsebool` without `-P`) is not one: the host
+/// itself loses it at its next boot, so the image does not carry it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SelinuxBoolean {
+    pub name: String,
+    /// The persistent value: `true` is on.
+    pub value: bool,
+}
+
+impl SelinuxBoolean {
+    /// The value as `setsebool` and `semanage boolean -l` write it.
+    pub fn value_word(&self) -> &'static str {
+        if self.value { "on" } else { "off" }
+    }
+}
+
 /// Security & access control section (SELinux and FIPS).
 ///
 /// PAM configs and audit rules are not here: they are `config.files`
@@ -134,8 +154,9 @@ pub struct SelinuxSection {
     pub mode: String,
     #[serde(default)]
     pub custom_modules: Vec<String>,
+    /// The booleans set persistently on the host, in the store's order.
     #[serde(default)]
-    pub boolean_overrides: Vec<serde_json::Value>,
+    pub boolean_overrides: Vec<SelinuxBoolean>,
     #[serde(default)]
     pub fcontext_rules: Vec<FcontextRule>,
     #[serde(default)]
@@ -190,9 +211,10 @@ mod tests {
         let section = SelinuxSection {
             mode: "enforcing".to_string(),
             custom_modules: vec!["myapp".to_string()],
-            boolean_overrides: vec![
-                serde_json::json!({"name": "httpd_can_network_connect", "state": true}),
-            ],
+            boolean_overrides: vec![SelinuxBoolean {
+                name: "httpd_can_network_connect".to_string(),
+                value: true,
+            }],
             fcontext_rules: vec![FcontextRule::Label {
                 spec: "/opt/app(/.*)?".to_string(),
                 file_type: FcontextFileType::All,

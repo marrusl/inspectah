@@ -822,7 +822,7 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
 /// - **mode**: synthetic item with key `"SELinux mode"`, summary = mode string
 /// - **FIPS mode**: always emitted, summary = `"enabled"` / `"disabled"`
 /// - **SelinuxPortLabel**: key = `protocol/port`, summary = label type, tags = `["port-label"]`
-/// - **boolean_overrides**: key = boolean name, summary = value/state, tags = `["boolean"]`
+/// - **boolean_overrides**: key = boolean name, summary = `on` / `off`, tags = `["boolean"]`
 /// - **custom_modules**: key = module name, tags = `["module"]`
 /// - **fcontext_rules**: key = rule identity (spec, or `subject = labeled_like`
 ///   for an equivalence, or the raw text for an unparsed line), tags = `["fcontext"]`
@@ -881,20 +881,10 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
 
     // Boolean overrides
     for bo in &se.boolean_overrides {
-        let name = bo
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let value = bo
-            .get("value")
-            .or_else(|| bo.get("state"))
-            .map(|v| v.to_string())
-            .unwrap_or_default();
         items.push(GenericRefItem {
-            id: name.clone(),
-            key: name,
-            summary: Some(value),
+            id: bo.name.clone(),
+            key: bo.name.clone(),
+            summary: Some(bo.value_word().into()),
             content: None,
             tags: vec!["boolean".into()],
             unit_link: None,
@@ -2859,10 +2849,10 @@ mod tests {
     fn test_selinux_boolean_overrides() {
         let snap = InspectionSnapshot {
             selinux: Some(SelinuxSection {
-                boolean_overrides: vec![serde_json::json!({
-                    "name": "httpd_can_network_connect",
-                    "state": true,
-                })],
+                boolean_overrides: vec![inspectah_core::types::selinux::SelinuxBoolean {
+                    name: "httpd_can_network_connect".into(),
+                    value: true,
+                }],
                 ..Default::default()
             }),
             ..Default::default()
@@ -2875,7 +2865,7 @@ mod tests {
             .find(|i| i.id == "httpd_can_network_connect")
             .unwrap();
         assert_eq!(bool_item.tags, vec!["boolean"]);
-        assert!(bool_item.summary.is_some());
+        assert_eq!(bool_item.summary.as_deref(), Some("on"));
     }
 
     #[test]

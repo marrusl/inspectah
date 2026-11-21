@@ -701,12 +701,10 @@ fn module(name: &str, stream: &str, profile: &str) -> String {
 fn selinux(boolean: (&str, &str), port: (&str, &str, &str)) -> String {
     let mut snap = InspectionSnapshot::new();
     snap.selinux = Some(SelinuxSection {
-        boolean_overrides: vec![serde_json::json!({
-            "name": boolean.0,
-            "current_value": boolean.1,
-            "non_default": true,
-            "include": true,
-        })],
+        boolean_overrides: vec![inspectah_core::types::selinux::SelinuxBoolean {
+            name: boolean.0.into(),
+            value: boolean.1 == "on",
+        }],
         port_labels: vec![SelinuxPortLabel {
             label_type: port.0.into(),
             protocol: port.1.into(),
@@ -797,16 +795,6 @@ const OPERAND_ROWS: &[OperandRow] = &[
     OperandRow {
         field: "setsebool name",
         render: |v| selinux((v, "on"), ("http_port_t", "tcp", "8080")),
-        fixme: "# FIXME: boolean",
-    },
-    OperandRow {
-        field: "setsebool value",
-        render: |v| {
-            selinux(
-                ("httpd_can_network_connect", v),
-                ("http_port_t", "tcp", "8080"),
-            )
-        },
         fixme: "# FIXME: boolean",
     },
     OperandRow {

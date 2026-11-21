@@ -6,18 +6,18 @@ use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::selinux::{
-    FcontextFileType, FcontextRule, FcontextSource, SelinuxContext, SelinuxPortLabel,
-    SelinuxSection,
+    FcontextFileType, FcontextRule, FcontextSource, SelinuxBoolean, SelinuxContext,
+    SelinuxPortLabel, SelinuxSection,
 };
 use inspectah_core::types::warnings::Warning;
 use regex::Regex;
 use std::path::Path;
 use std::sync::LazyLock;
 
-/// Regex for parsing `semanage boolean -l` output lines:
-///   name  (current , default)  description
+/// Regex for parsing `semanage boolean -l -C` output lines:
+///   name  (running , persistent)  description
 static BOOL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\S+)\s+\((\w+)\s*,\s*(\w+)\)\s+(.*)").unwrap());
+    LazyLock::new(|| Regex::new(r"^(\S+)\s+\((\w+)\s*,\s*(\w+)\)").unwrap());
 
 /// Regex for parsing `semanage port -l -C` output lines:
 ///   type  protocol  port[,port...]
@@ -78,7 +78,13 @@ impl Inspector for SelinuxInspector {
         let policy_type = read_policy_type(exec);
         let store = active_store(exec, &policy_type);
         collect_custom_modules(exec, &mut section, &mut warnings, &store);
-        collect_boolean_overrides(exec, &mut section, &mut warnings, &mut degraded_reasons);
+        collect_boolean_overrides(
+            exec,
+            &mut section,
+            &mut warnings,
+            &mut degraded_reasons,
+            &store,
+        );
         collect_fcontext_rules(exec, &mut section, &policy_type);
         collect_port_labels(exec, &mut section);
         collect_fips_mode(exec, &mut section);
@@ -290,104 +296,111 @@ fn selinux_warning(message: String) -> Warning {
 // Boolean overrides
 // ---------------------------------------------------------------------------
 
-/// Parses `semanage boolean -l` output and returns booleans where current
-/// state differs from default.
-fn parse_semanage_booleans(text: &str) -> Vec<serde_json::Value> {
-    let mut results = Vec::new();
+/// The active store's record of the booleans set persistently: a comment
+/// header, then one `name=0|1` line per boolean (libsemanage's format,
+/// checked in a `rhel-bootc:10.3` container).
+const BOOLEANS_LOCAL: &str = "booleans.local";
+
+/// Parses `booleans.local` into the booleans it sets and the lines it
+/// could not read. libsemanage writes `name=0|1` and also reads
+/// `true`/`false`; comment and blank lines are skipped.
+fn parse_booleans_local(text: &str) -> (Vec<SelinuxBoolean>, Vec<String>) {
+    let mut booleans = Vec::new();
+    let mut unparsed = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("SELinux boolean") {
+        if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        let Some(caps) = BOOL_RE.captures(trimmed) else {
-            continue;
-        };
-        let name = &caps[1];
-        let current = &caps[2];
-        let default_val = &caps[3];
-        let desc = caps[4].trim();
-
-        if current != default_val {
-            results.push(serde_json::json!({
-                "name": name,
-                "current": current,
-                "default": default_val,
-                "non_default": true,
-                "description": desc,
-            }));
+        let parsed = trimmed.split_once('=').and_then(|(name, value)| {
+            let value = match value.trim() {
+                "1" | "true" | "TRUE" => true,
+                "0" | "false" | "FALSE" => false,
+                _ => return None,
+            };
+            let name = name.trim();
+            (!name.is_empty()).then(|| SelinuxBoolean {
+                name: name.to_string(),
+                value,
+            })
+        });
+        match parsed {
+            Some(boolean) => booleans.push(boolean),
+            None => unparsed.push(trimmed.to_string()),
         }
     }
-    results
+    (booleans, unparsed)
 }
 
-/// Reads boolean runtime values from `/sys/fs/selinux/booleans/` as a
-/// fallback when semanage is unavailable. Each sysfs boolean file contains
-/// two integers: current and pending (policy-loaded) values.
-fn read_bools_from_fs(exec: &dyn Executor) -> Option<Vec<serde_json::Value>> {
-    let bool_dir = "/sys/fs/selinux/booleans";
-    let entries = exec.read_dir(Path::new(bool_dir)).ok()?;
-
-    let mut results = Vec::new();
-    for entry_name in &entries {
-        let file_path = format!("{bool_dir}/{entry_name}");
-        let content = match exec.read_file(Path::new(&file_path)) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        let parts: Vec<&str> = content.split_whitespace().collect();
-        if parts.len() < 2 {
-            continue;
-        }
-
-        let current = if parts[0] == "1" { "on" } else { "off" };
-        let pending = if parts[1] == "1" { "on" } else { "off" };
-
-        if current != pending {
-            results.push(serde_json::json!({
-                "name": entry_name,
-                "current": current,
-                "default": pending,
-                "non_default": true,
-                "description": "",
-            }));
-        }
-    }
-
-    Some(results)
+/// Parses `semanage boolean -l -C`, which lists only the booleans set
+/// locally. Each row prints the running value, then the persistent one;
+/// the persistent one is what the host keeps across a reboot.
+fn parse_semanage_local_booleans(text: &str) -> Vec<SelinuxBoolean> {
+    text.lines()
+        .filter_map(|line| BOOL_RE.captures(line.trim()))
+        .map(|caps| SelinuxBoolean {
+            name: caps[1].to_string(),
+            value: &caps[3] == "on",
+        })
+        .collect()
 }
 
-/// Tries `semanage boolean -l` via chroot, then falls back to reading
-/// `/sys/fs/selinux/booleans/`.
+/// Collects the booleans set persistently on the host.
+///
+/// The source is the active store's `booleans.local`, which `setsebool
+/// -P` and `semanage boolean -m` write; it is a file read, so it does not
+/// need `semanage` on the host. When the store cannot be read, `semanage
+/// boolean -l -C` lists the same set. A runtime-only change is in neither
+/// and is not collected: the host loses it at its next boot.
+///
+/// `semanage boolean -l` without `-C` is not used: a persistent change
+/// rewrites the policy default it prints, so a "current differs from
+/// default" filter over it keeps exactly the runtime-only changes and
+/// drops the persistent ones.
 fn collect_boolean_overrides(
     exec: &dyn Executor,
     section: &mut SelinuxSection,
     warnings: &mut Vec<Warning>,
     degraded_reasons: &mut Vec<String>,
+    store: &str,
 ) {
+    let local = format!("{store}/{BOOLEANS_LOCAL}");
+    match exec.read_file(Path::new(&local)) {
+        Ok(content) => {
+            let (booleans, unparsed) = parse_booleans_local(&content);
+            section.boolean_overrides = booleans;
+            if !unparsed.is_empty() {
+                warnings.push(selinux_warning(format!(
+                    "SELinux booleans not read from {local}, lines not understood: {}",
+                    unparsed.join("; ")
+                )));
+            }
+            return;
+        }
+        // A readable store with no `booleans.local`: nothing set locally.
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound && exec.file_exists(Path::new(store)) =>
+        {
+            return;
+        }
+        Err(_) => {}
+    }
+
     let host_root = exec.host_root().to_string_lossy().to_string();
-    let res = exec.run("chroot", &[&host_root, "semanage", "boolean", "-l"]);
-    if res.success() && !res.stdout.trim().is_empty() {
-        section.boolean_overrides = parse_semanage_booleans(&res.stdout);
+    let res = exec.run("chroot", &[&host_root, "semanage", "boolean", "-l", "-C"]);
+    if res.success() {
+        section.boolean_overrides = parse_semanage_local_booleans(&res.stdout);
         return;
     }
 
-    // Fallback to filesystem
-    if let Some(fallback) = read_bools_from_fs(exec) {
-        section.boolean_overrides = fallback;
+    // No store and no semanage on a host without SELinux: nothing to read.
+    if !exec.file_exists(Path::new(SELINUX_CONFIG)) {
         return;
     }
-
-    // Neither method worked
-    if !exec.file_exists(Path::new("/sys/fs/selinux/booleans")) {
-        warnings.push(Warning {
-            inspector: "selinux".into(),
-            message: "SELinux boolean override detection unavailable — semanage failed and /sys/fs/selinux/booleans not accessible".into(),
-            severity: None,
-            extra: Default::default(),
-        });
-    }
-    degraded_reasons.push("semanage boolean unavailable and sysfs fallback failed".into());
+    warnings.push(selinux_warning(format!(
+        "SELinux booleans set with setsebool -P not read: {local} is not readable and semanage boolean -l -C failed"
+    )));
+    degraded_reasons.push("persistent SELinux booleans unavailable".into());
 }
 
 // ---------------------------------------------------------------------------
@@ -987,91 +1000,194 @@ mod tests {
         );
     }
 
-    // ---- Test 8: test_parse_semanage_booleans ----
+    // ---- Test 8: persistent booleans come from the policy store ----
 
-    #[test]
-    fn test_parse_semanage_booleans() {
-        let output = "\
+    /// The active store on a package-mode host.
+    const VAR_STORE: &str = "/var/lib/selinux/targeted/active";
+
+    /// `booleans.local` as libsemanage writes it.
+    const BOOLEANS_LOCAL_FILE: &str = "# This file is auto-generated by libsemanage\n\
+         # Do not edit directly.\n\
+         \n\
+         virt_use_nfs=1\n\
+         httpd_can_network_connect=1\n\
+         ftpd_full_access=0\n";
+
+    /// `semanage boolean -l` without `-C` on the same host after a
+    /// runtime-only `setsebool container_manage_cgroup on`: the two
+    /// persistent changes print equal columns, the runtime one does not.
+    const SEMANAGE_BOOLEAN_L: &str = "\
 SELinux boolean                State  Default Description\n\
 \n\
-httpd_can_network_connect      (on   ,   off)  Allow httpd to make outbound network connections\n\
-virt_use_nfs                   (on   ,   off)  Allow virt to use nfs\n\
-samba_enable_home_dirs          (on   ,   on)  Allow samba to enable home dirs\n\
-container_manage_cgroup        (off  ,   on)  Allow container to manage cgroup\n\
-httpd_enable_cgi               (on   ,   on)  Allow httpd to enable cgi\n\
-ftpd_full_access               (off  ,   off)  Allow ftpd full access\n";
+container_manage_cgroup        (on   ,  off)  Allow container to manage cgroup\n\
+httpd_can_network_connect      (on   ,   on)  Allow httpd to can network connect\n\
+virt_use_nfs                   (on   ,   on)  Allow virt to use nfs\n";
 
-        let results = parse_semanage_booleans(output);
-        // Only non-default: httpd_can_network_connect (on!=off),
-        // virt_use_nfs (on!=off), container_manage_cgroup (off!=on)
-        assert_eq!(results.len(), 3);
-
-        assert_eq!(results[0]["name"], "httpd_can_network_connect");
-        assert_eq!(results[0]["current"], "on");
-        assert_eq!(results[0]["default"], "off");
-        assert_eq!(results[0]["non_default"], true);
-
-        assert_eq!(results[1]["name"], "virt_use_nfs");
-        assert_eq!(results[1]["current"], "on");
-        assert_eq!(results[1]["default"], "off");
-
-        assert_eq!(results[2]["name"], "container_manage_cgroup");
-        assert_eq!(results[2]["current"], "off");
-        assert_eq!(results[2]["default"], "on");
+    fn boolean(name: &str, value: bool) -> SelinuxBoolean {
+        SelinuxBoolean {
+            name: name.into(),
+            value,
+        }
     }
 
-    // ---- Test 9: test_boolean_fallback_sysfs ----
+    fn ok(stdout: &str) -> ExecResult {
+        ExecResult {
+            stdout: stdout.into(),
+            exit_code: 0,
+            ..Default::default()
+        }
+    }
+
+    /// A configured targeted host, its store at `store` holding `local`
+    /// as `booleans.local` when given, with a runtime-only change visible
+    /// to `semanage boolean -l` and in sysfs.
+    fn boolean_host(store: Option<&str>, local: Option<&str>) -> MockExecutor {
+        let mut exec = MockExecutor::new()
+            .with_file(
+                "/etc/selinux/config",
+                "SELINUX=enforcing\nSELINUXTYPE=targeted\n",
+            )
+            .with_command("chroot / semanage boolean -l", ok(SEMANAGE_BOOLEAN_L))
+            .with_dir("/sys/fs/selinux/booleans", vec!["container_manage_cgroup"])
+            .with_file("/sys/fs/selinux/booleans/container_manage_cgroup", "1 1");
+        if let Some(store) = store {
+            exec = exec.with_dir(store, vec!["modules"]);
+            if let Some(local) = local {
+                exec = exec.with_file(&format!("{store}/booleans.local"), local);
+            }
+        }
+        exec
+    }
 
     #[test]
-    fn test_boolean_fallback_sysfs() {
-        // semanage fails (command not found), sysfs booleans available.
-        // sysfs boolean files contain "current pending" (e.g., "1 0" means
-        // current=on, pending=off -> non-default).
-        let exec = MockExecutor::new()
-            .with_command(
-                "getenforce",
-                ExecResult {
-                    stdout: "Enforcing\n".into(),
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
-            .with_dir(
-                "/sys/fs/selinux/booleans",
-                vec![
-                    "httpd_can_network_connect",
-                    "container_manage_cgroup",
-                    "virt_use_nfs",
-                ],
-            )
-            .with_file("/sys/fs/selinux/booleans/httpd_can_network_connect", "1 0")
-            .with_file("/sys/fs/selinux/booleans/container_manage_cgroup", "0 1")
-            .with_file("/sys/fs/selinux/booleans/virt_use_nfs", "1 1"); // same -> excluded
+    fn persistent_booleans_are_read_from_booleans_local() {
+        let (section, warnings) =
+            inspect_with(&boolean_host(Some(VAR_STORE), Some(BOOLEANS_LOCAL_FILE)));
+        // In the file's order; a persistent `off` is carried too. The
+        // runtime-only change is not.
+        assert_eq!(
+            section.boolean_overrides,
+            [
+                boolean("virt_use_nfs", true),
+                boolean("httpd_can_network_connect", true),
+                boolean("ftpd_full_access", false),
+            ]
+        );
+        assert!(
+            !warnings.iter().any(|w| w.message.contains("booleans")),
+            "{warnings:?}"
+        );
+    }
 
+    #[test]
+    fn booleans_local_follows_a_relocated_store() {
+        let exec = boolean_host(
+            Some("/etc/selinux/targeted/active"),
+            Some("httpd_can_network_relay=1\n"),
+        )
+        .with_file("/etc/selinux/semanage.conf", "store-root=/etc/selinux\n");
+        let (section, _) = inspect_with(&exec);
+        assert_eq!(
+            section.boolean_overrides,
+            [boolean("httpd_can_network_relay", true)]
+        );
+    }
+
+    #[test]
+    fn a_store_without_booleans_local_has_no_persistent_booleans() {
+        let (section, warnings) = inspect_with(&boolean_host(Some(VAR_STORE), None));
+        assert!(section.boolean_overrides.is_empty());
+        assert!(
+            !warnings.iter().any(|w| w.message.contains("booleans")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn parse_booleans_local_accepts_what_libsemanage_reads() {
+        let (booleans, unparsed) = parse_booleans_local(
+            "# header\n a = 1 \nb=true\nc=FALSE\nd=0\ne=2\n=1\nnot a boolean\n",
+        );
+        assert_eq!(
+            booleans,
+            [
+                boolean("a", true),
+                boolean("b", true),
+                boolean("c", false),
+                boolean("d", false),
+            ]
+        );
+        assert_eq!(unparsed, ["e=2", "=1", "not a boolean"]);
+    }
+
+    #[test]
+    fn an_unreadable_booleans_local_line_is_reported() {
+        let (section, warnings) = inspect_with(&boolean_host(
+            Some(VAR_STORE),
+            Some("virt_use_nfs=1\nvirt_use_samba=maybe\n"),
+        ));
+        assert_eq!(section.boolean_overrides, [boolean("virt_use_nfs", true)]);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("virt_use_samba=maybe")),
+            "{warnings:?}"
+        );
+    }
+
+    // ---- Test 9: without a readable store ----
+
+    #[test]
+    fn without_a_store_semanage_local_list_supplies_the_persistent_value() {
+        // `-l -C` prints (running, persistent); the persistent value wins.
+        let exec = boolean_host(None, None).with_command(
+            "chroot / semanage boolean -l -C",
+            ok("\
+SELinux boolean                State  Default Description\n\
+\n\
+httpd_can_network_connect      (on   ,   on)  Allow httpd to can network connect\n\
+virt_use_nfs                   (on   ,  off)  Allow virt to use nfs\n"),
+        );
+        let (section, _) = inspect_with(&exec);
+        assert_eq!(
+            section.boolean_overrides,
+            [
+                boolean("httpd_can_network_connect", true),
+                boolean("virt_use_nfs", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn without_a_store_or_semanage_the_section_degrades() {
+        let exec = boolean_host(None, None);
         let rpm_state = empty_rpm_state();
         let source = test_source_system();
-        let inspector = SelinuxInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
-
-        let result = inspector.inspect(&ctx, &NullProgress);
-        let section = extract_section(&result);
-        // httpd_can_network_connect: current=on, default=off -> non-default
-        // container_manage_cgroup: current=off, default=on -> non-default
-        // virt_use_nfs: current=on, default=on -> excluded
-        assert_eq!(section.boolean_overrides.len(), 2);
-
-        let names: Vec<String> = section
-            .boolean_overrides
-            .iter()
-            .map(|b| b["name"].as_str().unwrap_or("").to_string())
-            .collect();
-        assert!(names.contains(&"httpd_can_network_connect".to_string()));
-        assert!(names.contains(&"container_manage_cgroup".to_string()));
+        match SelinuxInspector::new().inspect(&ctx, &NullProgress) {
+            Err(InspectorError::Degraded { partial, reason }) => {
+                assert!(reason.contains("persistent SELinux booleans"), "{reason}");
+                assert!(
+                    partial
+                        .warnings
+                        .iter()
+                        .any(|w| w.message.contains("setsebool -P not read")),
+                    "{:?}",
+                    partial.warnings
+                );
+                // The runtime-only change in sysfs is not a substitute.
+                let SectionData::Selinux(section) = partial.section else {
+                    panic!("expected the SELinux section");
+                };
+                assert!(section.boolean_overrides.is_empty());
+            }
+            other => panic!("expected a degraded section, got {other:?}"),
+        }
     }
 
     // ---- Test 10: test_fcontext_rules_parsed ----

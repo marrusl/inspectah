@@ -2114,40 +2114,22 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         body.push("# RUN semodule -i /tmp/selinux/*.cil && rm -rf /tmp/selinux/".into());
     }
 
-    // Non-default booleans
-    let non_default: Vec<_> = sel
-        .boolean_overrides
-        .iter()
-        .filter(|b| {
-            let inc = b.get("include").and_then(|v| v.as_bool()).unwrap_or(true);
-            let nd = b
-                .get("non_default")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            inc && nd
-        })
-        .collect();
-
-    if !non_default.is_empty() {
+    // Booleans set persistently on the host. `setsebool -P` writes the
+    // image's policy store at build time (it succeeds in a container
+    // build), so each one is carried as the command that set it.
+    if !sel.boolean_overrides.is_empty() {
         body.push(format!(
-            "# FIXME: {} non-default boolean(s) detected — verify each is still needed",
-            non_default.len()
+            "# {} SELinux boolean(s) set persistently on the host",
+            sel.boolean_overrides.len()
         ));
-        for b in &non_default {
-            let bname = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let bval = b
-                .get("current_value")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if bname.is_empty() {
-                continue;
-            }
-            if is_shell_operand(bname) && is_shell_operand(bval) {
-                body.push(format!("RUN setsebool -P {} {}", bname, bval));
+        for b in &sel.boolean_overrides {
+            if is_shell_operand(&b.name) {
+                body.push(format!("RUN setsebool -P {} {}", b.name, b.value_word()));
             } else {
                 body.push(format!(
-                    "# FIXME: boolean name/value contains unsafe characters, skipped: {:?}={:?}",
-                    bname, bval
+                    "# FIXME: boolean name contains unsafe characters, skipped: {:?}={}",
+                    b.name,
+                    b.value_word()
                 ));
             }
         }

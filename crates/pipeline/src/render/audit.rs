@@ -645,10 +645,10 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
                     sel.custom_modules.len()
                 ));
             }
-            let non_default_booleans = sel.boolean_overrides.len();
-            if non_default_booleans > 0 {
+            let persistent_booleans = sel.boolean_overrides.len();
+            if persistent_booleans > 0 {
                 lines.push(format!(
-                    "- **Non-default booleans:** {non_default_booleans}"
+                    "- **Booleans set persistently:** {persistent_booleans}"
                 ));
             }
             // § 4: decision-bearing rules only. This will not match the

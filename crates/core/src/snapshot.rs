@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 29;
+pub const SCHEMA_VERSION: u32 = 30;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -121,14 +121,30 @@ impl InspectionSnapshot {
     /// not installed: listed as not carried, left out of the disabled-repo
     /// install that needs them, and their recorded `systemctl` commands
     /// dropped. Only a re-scan records the closures.
-    const MIN_SCHEMA: u32 = 29;
+    ///
+    /// Schema 30 retypes `selinux.boolean_overrides` to the booleans set
+    /// persistently on the host (`SelinuxBoolean`), read from the policy
+    /// store. An older payload holds free-form objects for the booleans
+    /// whose running value differed from the stored one: runtime-only
+    /// changes, the inverse of what an image should carry, with every
+    /// persistent change missing. Only a re-scan reads the store.
+    const MIN_SCHEMA: u32 = 30;
 
+    /// Loads a snapshot of exactly this schema version.
+    ///
+    /// The version is read before the rest, so a payload from another
+    /// version is refused as one even when its fields no longer
+    /// deserialize.
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
-        let snap: Self = serde_json::from_str(json)?;
-        if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSION {
-            return Err(SnapshotError::UnsupportedVersion(snap.schema_version));
+        #[derive(Deserialize)]
+        struct VersionOnly {
+            schema_version: u32,
         }
-        Ok(snap)
+        let version = serde_json::from_str::<VersionOnly>(json)?.schema_version;
+        if !(Self::MIN_SCHEMA..=SCHEMA_VERSION).contains(&version) {
+            return Err(SnapshotError::UnsupportedVersion(version));
+        }
+        Ok(serde_json::from_str(json)?)
     }
 }
 
@@ -250,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_future_version_rejected() {
-        let json = r#"{"schema_version": 30, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let json = r#"{"schema_version": 31, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
         assert!(
             result.is_err(),

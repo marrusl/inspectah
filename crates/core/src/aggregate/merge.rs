@@ -2169,13 +2169,13 @@ pub fn merge_selinux_sections(
         FcontextSource::SemanageList
     };
 
-    // Dedup boolean_overrides by JSON equality
-    let boolean_overrides = dedup_json_values(
-        sections
-            .iter()
-            .filter_map(|s| s.as_ref().map(|s| s.boolean_overrides.clone()))
-            .collect(),
-    );
+    // Dedup boolean_overrides by equality, first host's order first
+    let mut boolean_overrides = Vec::new();
+    for boolean in sections.iter().flatten().flat_map(|s| &s.boolean_overrides) {
+        if !boolean_overrides.contains(boolean) {
+            boolean_overrides.push(boolean.clone());
+        }
+    }
 
     // Most-prevalent scalar fields
     let mode = most_prevalent_scalar(&sections, |s| &s.mode);

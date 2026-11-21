@@ -251,6 +251,26 @@ fn schema_26_snapshot_is_refused() {
     }
 }
 
+/// A schema-29 snapshot's SELinux booleans are runtime-only changes in a
+/// form that no longer deserializes. Refine refuses it by version, not
+/// with a field error.
+#[test]
+fn schema_29_snapshot_is_refused() {
+    let dir = tempdir().unwrap();
+    let snap_json =
+        include_str!("../../../testdata/fixtures/snapshot/schema-29-selinux-runtime-booleans.json");
+    let tarball = write_flat_tarball(dir.path(), snap_json);
+
+    match inspectah_refine::tarball::from_tarball(&tarball) {
+        Err(RefineError::SnapshotLoad(msg)) => assert!(
+            msg.contains("unsupported schema version: 29"),
+            "expected the schema refusal, got: {msg}"
+        ),
+        Err(other) => panic!("expected SnapshotLoad, got: {other:?}"),
+        Ok(_) => panic!("a schema-29 snapshot must not open in refine"),
+    }
+}
+
 /// A schema-27 snapshot holds services only, under `services`: every
 /// socket and timer state the host had is absent from it with nothing to
 /// say so. Refine refuses to open it. The same section under `units` at

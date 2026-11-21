@@ -186,8 +186,8 @@ expression: json
       {
         "detail": null,
         "id": "httpd_can_network_connect",
-        "searchable_text": "httpd_can_network_connect true boolean",
-        "subtitle": "true",
+        "searchable_text": "httpd_can_network_connect on boolean",
+        "subtitle": "on",
         "title": "httpd_can_network_connect"
       },
       {

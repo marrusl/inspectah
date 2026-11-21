@@ -1775,7 +1775,10 @@ fn test_merge_selinux_sections_dedup_and_merge() {
         custom_modules: vec!["mymodule".into()],
         fcontext_rules: vec![fcontext_label("/opt/app(/.*)?")],
         fcontext_source: FcontextSource::PolicyStore,
-        boolean_overrides: vec![serde_json::json!({"httpd_can_network_connect": true})],
+        boolean_overrides: vec![inspectah_core::types::selinux::SelinuxBoolean {
+            name: "httpd_can_network_connect".into(),
+            value: true,
+        }],
         fips_mode: false,
     };
     let s2 = SelinuxSection {
@@ -1788,7 +1791,10 @@ fn test_merge_selinux_sections_dedup_and_merge() {
         custom_modules: vec!["mymodule".into(), "othermodule".into()],
         fcontext_rules: vec![fcontext_label("/opt/app(/.*)?")],
         fcontext_source: FcontextSource::PolicyStore,
-        boolean_overrides: vec![serde_json::json!({"httpd_can_network_connect": true})],
+        boolean_overrides: vec![inspectah_core::types::selinux::SelinuxBoolean {
+            name: "httpd_can_network_connect".into(),
+            value: true,
+        }],
         fips_mode: false,
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
@@ -1825,7 +1831,7 @@ fn test_merge_selinux_sections_dedup_and_merge() {
     }
     assert_eq!(result.fcontext_source, FcontextSource::PolicyStore);
 
-    // JSON deduped
+    // Equal booleans deduped
     assert_eq!(result.boolean_overrides.len(), 1);
 
     // Most-prevalent scalar (both hosts agree here)
