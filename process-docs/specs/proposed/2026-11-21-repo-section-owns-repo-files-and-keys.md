@@ -8,7 +8,7 @@
 | Status   | Proposed |
 | Release  | 0.9.0-beta.7 |
 | Decision | The repo section owns both the `/etc/yum.repos.d/*.repo` file and the keys its `gpgkey=` names. The repo toggle decides whether its `.repo` file and those keys ship, and their Configuration rows become read-only inventory, "decided under Repositories". Position 26 of the refine-ui-fixup spec is reopened so a repo whose packages have all been excluded can still be toggled (Mark Russell, 2026-11-21). |
-| Verified | Code citations checked against inspectah commit `102a9f77`; the crates are unchanged at `b3d2622e` and at `5b041d8a`, where the aggregate merge citations of § 3.4 were re-read. Source reading only; no new host run. |
+| Verified | Code citations checked against inspectah commit `102a9f77`; the crates are unchanged at `b3d2622e` and at `5b041d8a`, where the aggregate merge citations of § 3.4 were re-read, and at `e078fa22`, where the scan sequencing, redaction and `RepoId` ordering citations of § 3.2 and § 3.4 were re-read. Source reading only; no new host run. |
 | Supersedes | Position 26 of `2026-10-26-refine-ui-fixup.md`, rewritten in place to point here. Position 29 and the § 3.2 repo no-op paragraph there are rewritten to § 5's rule. |
 
 ## 1. Problem
@@ -28,12 +28,12 @@ The repo toggle already moves the file and key dispositions (`session.rs:2840-29
 1. One parser, and one owner: a `.repo` file in `rpm.repo_files` and a key in `rpm.gpg_keys` are decided by the repo toggle and by nothing else, and every such entry the export can carry has a toggle that can drop it (§ 3).
 2. What the toggle does to each export path (§ 4).
 3. The repo's decision kept apart from what its files actually do, and a no-op rule over both (§ 5).
-4. A rule for each kind of shared file (§ 6).
+4. A rule for each kind of shared file, and for a key no stored repo file names (§ 6).
 5. The refine half, separated for the frontend implementer (§ 7).
 6. The snapshot and API changes, and the changelog lines (§ 8).
 7. The tests (§ 9).
 
-Out of scope: § 10. Open decisions: § 11.
+Out of scope: § 10. Decisions: § 11.
 
 ## 3. Ownership model
 
@@ -64,26 +64,45 @@ Every consumer that asks which keys a section names reads `GpgKeyRef::Local` fro
 
 ### 3.2 What a repo owns
 
-A repo is a `[section]` by its exact spelling, as `RepoIndex::repo_identity` names it. It owns:
+A repo is a `[section]` by its exact spelling. dnf keys repos case-sensitively, so `[site]` and `[SITE]` in one file are two repos, each with its own decision. `RepoId` cannot carry that identity: its equality, hashing and ordering fold ASCII case (`crates/core/src/types/repo.rs:117-145`), which is right for attributing a package's recorded `%{from_repo}` and wrong for ownership, where a set of `RepoId` keeps whichever of `site` and `SITE` was inserted first. Ownership therefore uses its own identity:
+
+```rust
+// crates/core/src/types/repo.rs
+/// A `[section]` header exactly as the host wrote it. Equality, hashing and
+/// ordering are the string's own, case included: the identity of a repo
+/// decision and of an owner. `RepoId` keeps its case-folding semantics for
+/// package attribution; the only way from one to the other is
+/// `RepoIndex::repo_identity`, which picks the section a package names.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SectionId(String);
+```
+
+`RepoSectionDef::id` (`repo.rs:224`) becomes a `SectionId`; attribution code that matches a section against a package's recorded value builds `RepoId::new(id.as_str())` at that comparison, which is where case folding belongs. `RepoIndex`'s exact-spelling maps (`repo_file_by_section`, `gpg_keys_by_section`, `provenance_map`, `crates/refine/src/repo_index.rs:24-45`), which hold `String` today for this reason, key by `SectionId`. No `From` conversion joins the two types. A repo owns:
 
 - every entry of `rpm.repo_files` that defines that section, and
 - every entry of `rpm.gpg_keys` that a `GpgKeyRef::Local` of that section's final `gpgkey=` names (`RepoFile::is_key_named_by`).
 
-**Ownership is membership in the repo inventory, and owners are read from the repo files the snapshot holds.** In a scan, two collector facts give every entry an owner:
+**Ownership is membership in the repo inventory, and owners are read from the repo files the snapshot holds.** At collection, two collector facts give every entry an owner:
 
 - `rpm.repo_files` holds only `.repo` files in `/etc/yum.repos.d/` that define at least one section (§ 3.1).
 - `rpm.gpg_keys` has one source, `extract_gpg_keys`, run over the sections `parse_repo_sections` returns for each entry of `rpm.repo_files` (`crates/collect/src/inspectors/rpm/mod.rs:200-215`). Every key in it was named by some section's `Local` reference. A key under `/etc/pki/rpm-gpg/` that no section names never enters `rpm.gpg_keys`, and stays an ordinary config row with its own control.
 
-An aggregate breaks the second fact. Repo files and keys merge independently, each to one representative payload (`merge_rpm_sections`, `crates/core/src/aggregate/merge.rs:1158-1168`), so a key every host collected can be named by no representative: three hosts whose `x.repo`, `y.repo` and `z.repo` each name key A on two hosts and key B on the third, a different third host for each file, merge to three representatives naming only A, while B, which every host collected, is universal. Ownership is therefore never read from how the snapshot was collected. It is read, by one function, from the repo files the snapshot holds: `repo_ownership` (§ 3.4) parses each entry of `rpm.repo_files` with § 3.1's parser and maps every destination in `rpm.repo_files` and `rpm.gpg_keys` to the sections that own it. A repo file always has one, since every representative defines a section. A key may have none in an aggregate; it is never carriable, and § 3.4's pass excludes it. `RepoIndex::build` (`crates/refine/src/repo_index.rs:66-160`) takes its `repo_file_by_section` and `gpg_keys_by_section` maps from `repo_ownership`, so refine, the pass and the load check cannot disagree about who owns what. § 9 T1 pins the collector invariant over the inputs where the two parsers disagree today, and T7 the aggregate case.
+Two later producer stages break the second fact.
+
+- **Redaction.** The scan redacts repo file content after collection (`crates/cli/src/commands/scan.rs:763-767`, `crates/pipeline/src/orchestrate.rs:58-60`, through the repo file loop of `redact`, `crates/pipeline/src/redaction/engine.rs:1209-1230`), and it never touches a key's path. A section naming `gpgkey=file:///etc/pki/rpm-gpg/token=vendor` matches the generic credential pattern (`crates/pipeline/src/redaction/patterns.rs:93-97`), so the stored reference names a redaction token while the key stays recorded at `/etc/pki/rpm-gpg/token=vendor`. No stored repo file names that key any more.
+- **An aggregate.** Repo files and keys merge independently, each to one representative payload (`merge_rpm_sections`, `crates/core/src/aggregate/merge.rs:1158-1168`), so a key every host collected can be named by no representative: three hosts whose `x.repo`, `y.repo` and `z.repo` each name key A on two hosts and key B on the third, a different third host for each file, merge to three representatives naming only A, while B, which every host collected, is universal.
+
+Ownership is therefore never read from how the snapshot was collected. It is read, by one function, from the repo files the snapshot holds as stored: `repo_ownership` (§ 3.4) parses each entry of `rpm.repo_files` with § 3.1's parser and maps every destination in `rpm.repo_files` and `rpm.gpg_keys` to the sections that own it. A key may have no owner after redaction or in an aggregate; a repo file has none only if redaction rewrote every header it had. An entry with no owner is never carriable, and § 3.4's pass excludes it. `RepoIndex::build` (`crates/refine/src/repo_index.rs:66-160`) takes its `repo_file_by_section` and `gpg_keys_by_section` maps from `repo_ownership`, so refine, the pass and the load check cannot disagree about who owns what. § 9 T1 pins the collector invariant over the inputs where the two parsers disagree today, T7 the aggregate case, and T10 the redaction case.
 
 **Identity is the destination.** `RepoIndex` keys every owned entry by `Destination::new(path)`, the stager's normalized path, and the repo arm moves every inventory entry at that destination. A key named once as `/etc/pki/rpm-gpg//KEY` and once as `/etc/pki/rpm-gpg/KEY` is recorded twice by `record_each_key_once`, which merges by raw path; to every decision it is one entry.
 
 **Carriable entries.** An owned entry is carriable when a repo op can carry it:
 
-- a repo file that is not a default repo file (`is_default_repo`) and not locked;
+- a repo file that has an owner, is not a default repo file (`is_default_repo`), and is not locked;
 - a key that has an owner, is not rejected (§ 3.6), is not shipped by the base image (`shipped_by_base`), and is not locked.
 
-A default repo file, a base-shipped key and a rejected key are still owned, shown, and explained (§ 7), but no op ever includes one. A key with no owner is shown and explained too, and no op can reach it. A default repo file is excluded by the scan because the subscription flow mounts `redhat.repo` at build time, and the scan treats the other default names the same way; the repo include arm stops overriding that, as it already stops for a base-shipped key. `locked` is never set on a repo file or key by `normalize`; it can only arrive in an imported snapshot, where `clamp_locked_items` already holds a locked repo file excluded (`session.rs:415-419`).
+A default repo file, a base-shipped key and a rejected key are still owned, shown, and explained (§ 7), but no op ever includes one. An entry with no owner is shown and explained too, and no op can reach it. A default repo file is excluded by the scan because the subscription flow mounts `redhat.repo` at build time, and the scan treats the other default names the same way; the repo include arm stops overriding that, as it already stops for a base-shipped key. `locked` is never set on a repo file or key by `normalize`; it can only arrive in an imported snapshot, where `clamp_locked_items` already holds a locked repo file excluded (`session.rs:415-419`).
 
 ### 3.3 The link: options
 
@@ -108,7 +127,7 @@ pub enum ConfigShadow {
 
 ### 3.4 The ownership pass
 
-The ownership and shadow invariants are established in one place, over a whole snapshot, after the last change to its `rpm` and `config` sections, by whichever producer made it. A scan establishes them per host. An aggregate establishes them again over the merged sections, after representative selection, because neither survives the merge on its own: repo files and keys pick their representatives independently (§ 3.2), and the config merge clones the first host's entry for each content variant (`merge_with_variants`, `crates/core/src/aggregate/merge.rs:667-678`) without reconciling its shadow, so a key that is repo-owned on one host and an ordinary config row on another can merge to an actionable, included config row.
+The ownership and shadow invariants are established by one function, over a whole snapshot, after the last change to the content of its `rpm.repo_files`, `rpm.gpg_keys` and `config` entries, by whichever producer made it. A scan establishes them per host, after redaction, the last stage that rewrites repo content. An aggregate establishes them again over the merged sections, after representative selection, because neither survives the merge on its own: repo files and keys pick their representatives independently (§ 3.2), and the config merge clones the first host's entry for each content variant (`merge_with_variants`, `crates/core/src/aggregate/merge.rs:667-678`) without reconciling its shadow, so a key that is repo-owned on one host and an ordinary config row on another can merge to an actionable, included config row.
 
 ```rust
 // crates/core/src/repo_ownership.rs (new)
@@ -116,9 +135,10 @@ The ownership and shadow invariants are established in one place, over a whole s
 /// Who owns each destination of `rpm.repo_files` and `rpm.gpg_keys`.
 pub struct RepoOwnership {
     /// Every destination either list records, with its owning sections by
-    /// exact spelling. A key that no section of any `rpm.repo_files`
-    /// entry names maps to an empty set.
-    owners: BTreeMap<Destination, BTreeSet<RepoId>>,
+    /// exact spelling, so `[site]` and `[SITE]` are two owners (§ 3.2). An
+    /// entry that no section of any `rpm.repo_files` entry, as stored,
+    /// defines or names maps to an empty set.
+    owners: BTreeMap<Destination, BTreeSet<SectionId>>,
 }
 
 /// Ownership read from the repo files `rpm` holds, through
@@ -129,8 +149,8 @@ pub fn repo_ownership(rpm: &RpmSection) -> RepoOwnership;
 /// Establishes § 3.2 over `snapshot` as it stands. Idempotent.
 ///
 /// 1. Excludes every repo file or key no repo op can carry: a default
-///    repo file, a rejected key, a base-shipped key, and a key with no
-///    owner.
+///    repo file, a rejected key, a base-shipped key, and a repo file or
+///    key with no owner.
 /// 2. Marks every config entry at a destination `repo_ownership` records,
 ///    every content variant and every path spelling of it, as
 ///    `FindingKind::Inventory` with
@@ -145,7 +165,20 @@ pub fn check_repo_ownership(snapshot: &InspectionSnapshot) -> Result<(), RepoOwn
 
 **Where it runs.**
 
-- **Scan.** `finalize_cross_inspector` (`crates/pipeline/src/collect.rs:338-340`) calls `settle_repo_ownership` beside `shadow_unit_owned_paths`, each its own unconditional call, per the `cross-inspector-shadow-passes` skill. On a scan, step 1 changes nothing, since the collector already excludes those entries (§ 3.7), and every key has an owner (§ 3.2).
+- **Collection.** `finalize_cross_inspector` (`crates/pipeline/src/collect.rs:338-340`) calls `settle_repo_ownership` beside `shadow_unit_owned_paths`, each its own unconditional call, per the `cross-inspector-shadow-passes` skill, so every `collect()` output holds the invariants. There step 1 changes nothing, since the collector already excludes those entries (§ 3.7), and every entry has an owner (§ 3.2).
+- **Scan, after redaction.** Redaction rewrites repo content after collection (§ 3.2), so the scan settles again once it is done. The post-redaction tail that the scan command and `run_pipeline` each spell out today (`scan_dnf_cache_for_repoless`, then `apply_scan_package_defaults`: `scan.rs:810-823`, `orchestrate.rs:61-71`) becomes one function both call, so the two paths cannot drift:
+
+  ```rust
+  // crates/pipeline/src/orchestrate.rs
+  /// The scan's last snapshot changes, run after redaction (or after
+  /// `--no-redaction` marks the snapshot raw) and before anything
+  /// serializes or renders it: the repo-less cache annotation, the scan
+  /// package defaults, then `settle_repo_ownership`. Nothing after it
+  /// writes the snapshot.
+  pub fn finish_scan(snapshot: &mut InspectionSnapshot, executor: &dyn Executor);
+  ```
+
+  The scan command calls it after the unmanaged-file scan, which writes only `unmanaged_files`, and before both the `--inspect-only` branch and the render, so the JSON snapshot and the tarball's snapshot are one value. `run_pipeline` calls it after `redact`. Here step 1 excludes a key whose only naming reference redaction rewrote, and § 6.6 says how the export reports it. Every other entry is unchanged, since redaction changes no path, disposition or shadow.
 - **Aggregate.** `merge_snapshots` (`crates/core/src/aggregate/mod.rs:42`) calls it once, after every section is merged and before it returns (`mod.rs:259`). It therefore reads the selected representatives, and the serialized aggregate carries the result before either export path or refine reads it. The base-shipped re-exclusion in `merge_rpm_sections` (`merge.rs:1172-1175`) moves into step 1, as do the default repo file and rejected key exclusions of § 3.7, so no merge function writes an ownership fact.
 - **Refine.** Not run. No op changes the content of `rpm.repo_files` or `rpm.gpg_keys` or a config row's shadow, and the repo arm includes only carriable entries (§ 6.1), so every projection keeps both invariants.
 
@@ -160,16 +193,16 @@ pub enum RepoOwnershipViolation {
     /// inventory does not record.
     ShadowWithoutOwner { path: String },
     /// An included default repo file, rejected key, base-shipped key, or
-    /// key with no owner.
+    /// repo file or key with no owner.
     UncarriableIncluded { path: String },
 }
 ```
 
-The message is `<path>: <rule>. inspectah always writes snapshots that hold this; this one was edited or written by another version. Re-scan the host, or re-aggregate the scans.` The load refuses rather than repairs: a repair cannot recover the disposition a shadow overwrote, so it would guess a decision, and only an edited file reaches a violation. Every reader that loads through `InspectionSnapshot::load`, `refine`, `aggregate` and a re-render from a snapshot, gets the check.
+The message is `<path>: <rule>. inspectah always writes snapshots that hold this; this one was edited or written by another version. Re-scan the host, or re-aggregate the scans.` The load refuses rather than repairs: a repair cannot recover the disposition a shadow overwrote, so it would guess a decision. Every producer settles after its last content change (the scan after redaction, the aggregate after the merge), so only an edited file, or one another version wrote, reaches a violation; T10 holds a redacted scan to that through serialization, refine load and aggregate load. Every reader that loads through `InspectionSnapshot::load`, `refine`, `aggregate` and a re-render from a snapshot, gets the check.
 
-**Destinations.** Both steps and the check compare through `Destination::new`. A key path comes from a `gpgkey=` value, which can be written `/etc/pki/rpm-gpg//KEY` or with a `./` component, and the ostree branch of the config walk records paths without the leading `/` (`etc/yum.repos.d/custom.repo`, `crates/collect/src/inspectors/config/mod.rs:786`), while the RPM inventory records absolute paths. The config merge keys on the raw path, so an aggregate of an ostree host and a package-mode host holds two config entries for one destination, and step 2 shadows both. `Destination` and `PathError` move from `crates/pipeline/src/render/configtree.rs:59` to `crates/core/src/types/`, re-exported by the pipeline, because the pass and the check live in core; the stager's own methods on it (`relative`, `parent`, `is_unit_file_path`) stay in the pipeline. `shadow_matching_config_entries` (`collect.rs:383-399`) moves with it and compares by destination for the Units pass and this one alike. The API join uses the same normalization, done once on the server (§ 7.1). The advisory exception stays: an advisory config entry is never materialized, and shadowing it would erase its warning. An entry whose path `Destination::new` refuses has no destination: nothing shadows by it, and the stager already refuses to write it.
+**Destinations.** Both steps and the check compare through `Destination::new`. A key path comes from a `gpgkey=` value, which can be written `/etc/pki/rpm-gpg//KEY` or with a `./` component, and the ostree branch of the config walk records paths without the leading `/` (`etc/yum.repos.d/custom.repo`, `crates/collect/src/inspectors/config/mod.rs:786`), while the RPM inventory records absolute paths. The config merge keys on the raw path, so an aggregate of an ostree host and a package-mode host holds two config entries for one destination, and step 2 shadows both. `Destination` and `PathError` move from `crates/pipeline/src/render/configtree.rs:59` to `crates/core/src/types/`, re-exported by the pipeline, because the pass and the check live in core. A crate cannot add inherent methods to another crate's type, so the methods split by what they read. `relative` and `parent` (`configtree.rs:98-108`) are plain path accessors, and `parent` builds a `Destination` from the private field, so both move with the type and become `pub`. `is_unit_file_path` (`configtree.rs:110-119`) reads the pipeline's `ETC_UNIT_DIR` and `UNIT_TYPE_SUFFIXES`, so it stays in `configtree.rs` as a private function `is_unit_file_path(dest: &Destination) -> bool` over `as_str()`. No extension trait is needed for one caller. `shadow_matching_config_entries` (`collect.rs:383-399`) moves to core with `Destination` and compares by destination for the Units pass and this one alike. The API join uses the same normalization, done once on the server (§ 7.1). The advisory exception stays: an advisory config entry is never materialized, and shadowing it would erase its warning. An entry whose path `Destination::new` refuses has no destination: nothing shadows by it, and the stager already refuses to write it.
 
-**A key with no owner.** Step 1 excludes it, and no repo op can include it, since no section owns it, so it never ships. That is the right default: no repo file the export copies names it, so nothing in the image needs it, which is § 6.4's steer for a key that exists only for the source host's repos. Its config row stays shadowed: its destination is still in the repo inventory, and making the row live again would need the disposition the per-host shadow overwrote. § 6.5 says how the export reports it, and § 7 how refine shows it.
+**An entry with no owner.** Step 1 excludes it, and no repo op can include it, since no section owns it, so it never ships. That is the right default: no repo file the export copies names it as stored, so nothing in the image can use it, which is § 6.4's steer for a key that exists only for the source host's repos. Its config row stays shadowed: its destination is still in the repo inventory, and making the row live again would need the disposition the shadow overwrote. It has two causes, and the export and refine name the one that applies: redaction rewrote the reference that named it (§ 6.6), or, in an aggregate, no representative repo file names it (§ 6.5). § 7 says how refine shows each.
 
 **Shadows across hosts.** Step 2 reads the merged repo inventory, narrowed entries included, so a destination that any host's repo owns shadows every config variant at it, whatever the other hosts recorded. In the two-host case, `host-a` has an unowned key K under `/etc/pki/rpm-gpg/` that no repo names, so its config row is actionable, and `host-b` has the same K bytes and an unowned `custom.repo` naming K, so its row is inventory. The merged K repo entry has one host of two and is narrowed out; the merged config entry is one universal variant, cloned from whichever host sorts first. Step 2 makes that config entry inventory in both host orders, and K is decided by `custom`'s switch alone: excluded by default, as `custom.repo` is, included with it, and excluded with it again. Without step 2, `host-a` sorting first gave an actionable, included config row, and excluding `custom` dropped the repo copy while the config copy still staged K.
 
@@ -212,8 +245,8 @@ Once a snapshot is produced, by a scan or an aggregate merge, each ending with �
 
 What the dispositions start as:
 
-- **Scan.** A repo file is included unless it is a default repo file; a key is included unless the base image ships it or it is rejected (`repos.rs:71-77`, `repos.rs:317-342`, `repos.rs:367-398`). Only the `rejected` field is new.
-- **Aggregate.** `merge_items` includes every universal item and narrows the rest (`merge.rs:591-602`). Step 1 of § 3.4's pass then excludes every entry no op can carry, a default repo file, a rejected key, a base-shipped key and a key with no owner, since none of those exclusions is about prevalence; the base-shipped re-exclusion at `merge.rs:1172-1175` moves into it. A rejected payload takes part in choosing a key's representative only when no host has a usable key at that path. A custom repo file that only some hosts have stays excluded by narrowing; that is a default like any other, and § 5 reads it.
+- **Scan.** A repo file is included unless it is a default repo file; a key is included unless the base image ships it or it is rejected (`repos.rs:71-77`, `repos.rs:317-342`, `repos.rs:367-398`). New: the `rejected` field, and the exclusion `finish_scan` makes when redaction leaves an entry with no owner (§ 3.4).
+- **Aggregate.** `merge_items` includes every universal item and narrows the rest (`merge.rs:591-602`). Step 1 of § 3.4's pass then excludes every entry no op can carry, a default repo file, a rejected key, a base-shipped key and an entry with no owner, since none of those exclusions is about prevalence; the base-shipped re-exclusion at `merge.rs:1172-1175` moves into it. A rejected payload takes part in choosing a key's representative only when no host has a usable key at that path. A custom repo file that only some hosts have stays excluded by narrowing; that is a default like any other, and § 5 reads it.
 - **Refine decisions.** Every repo starts kept (§ 5.1). A decision is never seeded from dispositions: the scan or aggregate default lives in the dispositions, and § 5's rule reads the decision and the dispositions separately.
 
 ## 4. The toggle's effect on each export path
@@ -267,7 +300,7 @@ pub enum RepoControl {
 - **`CarriageOnly`** for a repo that is not `toggleable` and owns a carriable entry, when it can keep one (§ 6.1: it is enabled in a file that defines it, or it is host-disabled with an attributed package), or when it owns a carriable entry that no repo with a `Full` control or a control from the first clause owns.
 - **`None`** otherwise.
 
-The carriage-only control exists because the decision gives the repo section every repo file and key, and a carriable entry that only a distro or host-disabled section owns would otherwise ship with no control at all once its config row is read-only. A non-default `company.repo` defining `[baseos]` for an internal mirror, a custom `.repo` file whose every section is disabled, and `epel-cisco-openh264.repo` are such files. The switch never cascades to members: a distro repo's members are the bulk of the install list, and a host-disabled repo's members already follow their route, losing it with the existing demotion FIXME when the file goes. The two clauses give a control to every section that can keep an entry (§ 6.1) and to the owners of an entry nothing can keep, such as a file whose every section is disabled or a key only a disabled section names. So every carriable entry has a control that can drop it, which is what § 9 T3 asserts. `[epel-debuginfo]` beside `[epel]` gets no control: `[epel]` reaches `epel.repo` and the key both name. This control is open decision 2 (§ 11).
+The carriage-only control exists because the decision gives the repo section every repo file and key, and a carriable entry that only a distro or host-disabled section owns would otherwise ship with no control at all once its config row is read-only. A non-default `company.repo` defining `[baseos]` for an internal mirror, a custom `.repo` file whose every section is disabled, and `epel-cisco-openh264.repo` are such files. The switch never cascades to members: a distro repo's members are the bulk of the install list, and a host-disabled repo's members already follow their route, losing it with the existing demotion FIXME when the file goes. The two clauses give a control to every section that can keep an entry (§ 6.1) and to the owners of an entry nothing can keep, such as a file whose every section is disabled or a key only a disabled section names. So every carriable entry has a control that can drop it, which is what § 9 T3 asserts. `[epel-debuginfo]` beside `[epel]` gets no control: `[epel]` reaches `epel.repo` and the key both name. This control is decision 2 (§ 11).
 
 ### 5.3 The rule
 
@@ -366,17 +399,29 @@ pub payload_hosts: Option<Vec<String>>,
 
 `merge_items` fills it in its non-variant branch from the `payload_counts` it already builds. When a repo-owned entry that ships has `payload_hosts`, the Containerfile's Custom Repositories or GPG Keys section says so in one comment line, built as § 6.3's is:
 
-`# <path>: <k> of <count> hosts with this file have a different version; the export copies the version on <hosts>`
+`# <path>: the export copies the version <n> of <count> hosts with this file have; a different version is on <hosts>`
 
-`<hosts>` names up to three hosts, then `and <m> more`. The line reads the merged entry, so it covers an unmodified RPM-owned file that two `-release` versions put on different hosts, which no config walk records.
+`<hosts>` are the hosts in `AggregatePrevalence::hosts` and not in `payload_hosts`, the ones whose file the image will not match, named up to three, then `and <m> more`. The line reads the merged entry, so it covers an unmodified RPM-owned file that two `-release` versions put on different hosts, which no config walk records.
 
 **A key no copied version names.** Representative selection can leave a key that every host collected named by no representative (§ 3.2); § 3.4's pass excludes it and no op reaches it. Every export of such an aggregate adds one `ExportWarning::notice` per such key, which the refine export puts in `x-export-warnings` and the CLI prints:
 
 `<path> is not copied: no version of a repo file that the export copies names it. <hosts> have it because a different version of a repo file names it there.`
 
-`<hosts>` reads the key's `AggregatePrevalence::hosts` and is shortened as above. The aggregate view does not render owner text on config rows in this release (§ 7.3), so this notice is what tells the operator; `RepoOwnedExport::NoOwner` (§ 7.1) still exists so that `repo_owned` has a state for every entry a snapshot can hold.
+`<hosts>` reads the key's `AggregatePrevalence::hosts` and is shortened as above. When `snapshot.redactions` also names a repo file in the aggregate, the notice appends § 6.6's review sentence, since a host's redaction can be the cause instead. The aggregate view does not render owner text on config rows in this release (§ 7.3), so this notice is what tells the operator; `RepoOwnedExport::NoOwner` (§ 7.1) still exists so that `repo_owned` has a state for every entry a snapshot can hold.
 
-This keeps "nothing carried without the operator being told" for the fleet case without designing variant selection for repo files, which belongs with the fleet work that follows single-host correctness. The default is open decision 1 (§ 11).
+This keeps "nothing carried without the operator being told" for the fleet case without designing variant selection for repo files, which belongs with the fleet work that follows single-host correctness. This is decision 1 (§ 11).
+
+### 6.6 A key whose reference redaction rewrote
+
+A `gpgkey=` value can match a credential pattern, as `file:///etc/pki/rpm-gpg/token=vendor` matches the generic one (§ 3.2). Redaction rewrites the reference in the stored repo file and leaves the key at its path, so after `finish_scan` the key has no owner, is excluded, and is never staged (§ 3.4). The repo file still ships under its repo's switch, with the redacted reference in it.
+
+The export says so. Every export of a single-host snapshot holding such a key, the CLI scan tarball and the refine export, adds one `ExportWarning::notice` per key, which the refine export puts in `x-export-warnings` and the CLI prints:
+
+`<path> is not copied: redaction changed a gpgkey= reference in <repo files>, so no repo file the export copies names it. Review the redacted reference; if it named this key, restore it and add the key to the image yourself.`
+
+An aggregate's export gives § 6.5's notice for the key instead, with this one's second sentence appended when a redaction finding names a repo file, so each key gets one notice.
+
+`<repo files>` are the paths of `snapshot.redactions` findings whose destination is in `rpm.repo_files`, shortened as § 6.5's host list is. In a single-host snapshot, redaction is the only stage after collection that rewrites repo content, so it is the only cause of a key with no owner there; for a snapshot another version wrote, where no redaction finding names a repo file, the clause reads `a gpgkey= reference that named it was changed after the scan`. Making redaction skip `gpgkey=` values is not this spec's call: a remote key URL can carry a real token, and the redaction rules are their own spec's.
 
 ## 7. The refine half (frontend)
 
@@ -463,11 +508,24 @@ pub enum RepoOwnedExport {
     DefaultRepoFile,
     /// A key the scan refused to store (§ 3.6).
     Rejected { reason: KeyRejection },
-    /// A key no repo file in the snapshot names: only an aggregate has
-    /// one (§ 3.4). `hosts` are the hosts that have it.
-    NoOwner { hosts: Vec<String> },
+    /// An entry no repo file in the snapshot, as stored, defines or names
+    /// (§ 3.4), with the cause.
+    NoOwner { cause: NoOwnerCause },
     /// Included, and withheld by the stager, with its reason.
     Withheld { reason: String },
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum NoOwnerCause {
+    /// A single-host snapshot: redaction rewrote the reference that named
+    /// it (§ 6.6). `repo_files`: the repo files `snapshot.redactions`
+    /// names, empty for a snapshot another version wrote.
+    Redacted { repo_files: Vec<String> },
+    /// An aggregate: no representative repo file names it (§ 6.5).
+    /// `hosts`: the hosts that have it. `redacted_repo_files`: as above,
+    /// since a host's redaction can be the cause instead.
+    Fleet { hosts: Vec<String>, redacted_repo_files: Vec<String> },
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -480,7 +538,7 @@ pub struct Keeper {
 }
 ```
 
-`export` is read from the projected snapshot's dispositions and from the stager's plan for that snapshot (`staged_writes`, as `InstallRepos::from_staged` reads it), never from the repo's tier. `recompute_view` computes the plan once per view if it does not already.
+`export` is read from the projected snapshot's dispositions and from the stager's plan for that snapshot (`staged_writes`, as `InstallRepos::from_staged` reads it), never from the repo's tier. A `no_owner` cause is `fleet` when the entry carries `aggregate` prevalence and `redacted` otherwise. `owners`, `Keeper::section_id` and `RepoOwner::section_id` serialize each owner's `SectionId`, so `site` and `SITE` are two owners on the wire as in core. `recompute_view` computes the plan once per view if it does not already.
 
 **The Units join follows the same rule.** Once `shadow_matching_config_entries` compares through `Destination` (§ 3.4), an ostree scan's relative drop-in path is shadowed by an absolute `unit_dropins[].path`, and today's join on that path string (`shadowOwner.ts:37-47`) cannot find it. `DropInDecisionDto` gains `config_paths: Vec<String>`, the paths of the config rows its destination shadows, and `resolveShadowOwner` joins a `"units"` row on `config_paths.includes(entry.path)`.
 
@@ -508,8 +566,9 @@ The 422 `NoopTarget` texts change to § 5.3's.
   - `default_repo_file`: `This is a default repo file, which the export never copies. The build is expected to get it from the base image or the subscription mount.`
   - `rejected`: `The scan did not store this file because it <is not a PGP public key | holds private key material>, so the export never copies it.`
   - `withheld`: `The export withholds this file: <reason>.`
-  - `no_owner`: `Every host that has this key had it because a repo file named it, but no version of a repo file that the export copies names it, so the export never copies it. Hosts with it: <hosts>.`
-- **target:** `{ sectionId: "packages", itemId: "repo:<first owner by section id whose control is not none>" }`, or null when no owner has a switch or there is no owner (a key with `no_owner`; a default repo file whose sections are distro, for instance)
+  - `no_owner`, cause `redacted`: `The scan found this key because a repo file named it, but redaction changed that gpgkey= reference (<repo files>), so no repo file the export copies names it and the export never copies it. Review the redacted reference.`
+  - `no_owner`, cause `fleet` (the aggregate view does not show it in this release, § 7.3): `Every host that has this key had it because a repo file named it, but no version of a repo file that the export copies names it, so the export never copies it. Hosts with it: <hosts>.`
+- **target:** `{ sectionId: "packages", itemId: "repo:<first owner by section id whose control is not none>" }`, or null when no owner has a switch or there is no owner (an entry with `no_owner`; a default repo file whose sections are distro, for instance)
 
 The row has no include checkbox: the server already refuses `SetInclude` on an `Inventory` entry. The single-host view gets this; the aggregate view renders shadowed config rows as it does for the Units shadow today, and does not change in this release.
 
@@ -522,7 +581,7 @@ In § 9, T8.
 **Snapshot:**
 
 - `ConfigShadow::Repositories`, serialized `"repositories"`. Every config entry at a repo-owned destination, in every content variant and path spelling, is `FindingKind::Inventory` with `shadowed_by: Some(ConfigShadow::Repositories)`, in a scan and in an aggregate alike (§ 3.4).
-- An aggregate's key that no repo file in it names is excluded (§ 3.4). No field records it: `repo_ownership` derives it from the repo files, as it derives every owner.
+- A repo file or key that no repo file in the snapshot, as stored, defines or names is excluded: in a scan when redaction rewrote the reference (§ 6.6), and in an aggregate (§ 6.5). No field records it: `repo_ownership` derives it from the repo files, as it derives every owner.
 - `InspectionSnapshot::load` refuses a snapshot that breaks § 3.4's invariants, with `SnapshotError::RepoOwnership`.
 - `RepoFile::rejected: Option<KeyRejection>` (§ 3.6) and `AggregatePrevalence::payload_hosts: Option<Vec<String>>` (§ 6.5), both omitted when absent.
 - `rpm.repo_files` holds no file that defines no section (§ 3.1), and `rpm.gpg_keys` no key that only a replaced or headerless `gpgkey=` named.
@@ -545,7 +604,7 @@ In § 9, T8.
 - **Breaking: snapshot schema is now <N>**: a `.repo` file or GPG key that a repo names is decided by that repo's switch, so its Configuration Files row is read-only and says "decided under Repositories". A `redhat.repo` or other default repo file that the scan recorded as a configuration file no longer ships. `refine` and `aggregate` load only schema <N>; re-scan each host and re-aggregate.
 
 ### Fixed
-- **A repo's switch is the one control for its `.repo` file and keys**: a file or key that also had a Configuration Files row shipped when either control was on. A repo with no packages left to change can now still be switched off, including a distribution or disabled repo that owns a file. A file or key another repo you kept still needs keeps shipping, and the export says why.
+- **A repo's switch is the one control for its `.repo` file and keys**: a file or key that also had a Configuration Files row shipped when either control was on. A repo with no packages left to change can now still be switched off, including a distribution or disabled repo that owns a file. A file or key another repo you kept still needs keeps shipping, and the export says why. A key whose `gpgkey=` reference redaction rewrote is no longer copied, since no copied `.repo` file names it any more, and the export names the key so you can review the reference.
 - **Aggregate exports follow each repo's switch for its files and keys**: a `redhat.repo` every host had, a key file the scan refused to store, or a key no copied `.repo` file names was included in an aggregate, and a key one host's repo named could ship as a plain configuration file after its repo was excluded. Each now follows its repo, and the export names any key it leaves out that way.
 ```
 
@@ -578,7 +637,7 @@ The parser inputs, all unowned, added for T1 to T3:
 
 **T1. One parser** (`crates/collect`). On that host: `A`, `B`, `NEW`, `BARE`, the EPEL key at its expanded path, `RPM-GPG-KEY-custom` and the two `reject.repo` keys are in `rpm.gpg_keys`; `OLD`, `PRE` and `RPM-GPG-KEY-orphan` are not; `empty.repo` is not in `rpm.repo_files`. The invariant over the whole scan: every `rpm.repo_files` entry defines at least one section, and every `rpm.gpg_keys` entry is named, through `is_key_named_by`, by a `GpgKeyRef::Local` of a section `parse_repo_sections` returns for some `rpm.repo_files` entry. `RPM-GPG-KEY-notpgp` and `RPM-GPG-KEY-priv` are excluded with `rejected` set to `not_pgp` and `private_key_material` and placeholder content. `[rej]`'s provenance is `Incomplete`.
 
-**T2. The ownership pass on a scan** (`pipeline::collect::finalize_tests`). The config rows for `custom.repo`, `epel.repo`, `RPM-GPG-KEY-custom`, `A`, `B` and `BARE` are `Inventory` with `ConfigShadow::Repositories`; the rows for `RPM-GPG-KEY-orphan`, `custom.repo.rpmnew`, `empty.repo`, `OLD` and `PRE` stay actionable and unshadowed. One case writes the key reference as `file:///etc/pki/rpm-gpg//RPM-GPG-KEY-custom` and is still shadowed. One case runs the config walk's ostree branch, which records `etc/yum.repos.d/custom.repo`, and that row is shadowed. Two direction tests, as the skill requires: the repo pass runs on a host where the units pass returns early (no units section), and the units pass runs where the repo pass does (no RPM section).
+**T2. The ownership pass on a scan** (`pipeline::collect::finalize_tests`). The config rows for `custom.repo`, `epel.repo`, `RPM-GPG-KEY-custom`, `A`, `B` and `BARE` are `Inventory` with `ConfigShadow::Repositories`; the rows for `RPM-GPG-KEY-orphan`, `custom.repo.rpmnew`, `empty.repo`, `OLD` and `PRE` stay actionable and unshadowed. One case writes the key reference as `file:///etc/pki/rpm-gpg//RPM-GPG-KEY-custom` and is still shadowed. One case runs the config walk's ostree branch, which records `etc/yum.repos.d/custom.repo`, and that row is shadowed. Two direction tests, as the skill requires: the repo pass runs on a host where the units pass returns early (no units section), and the units pass runs where the repo pass does (no RPM section). The scan's second run, after redaction, is T10's.
 
 **T3. Refine four-state contract and reach** (`crates/cli/tests`, new `repo_ownership_test.rs`). For each of `custom.repo`, `epel.repo` and `RPM-GPG-KEY-custom`, drive the repo switch and the config row through `RefineSession`, both directions each. Assert the contract, not a table: `SetInclude` on the config row is refused with `InventoryNotToggleable` every time; every repo op the session accepts is obeyed by the staged tree **and** the Containerfile; no path is written twice; `x-export-warnings` holds no `failure`. After every op, the projected `repo_files` and `gpg_keys` dispositions differ from the scan's only where a repo op moved them (the one-writer rule, § 3.7). **Reach:** for every carriable entry whose config row is shadowed, excluding every owner whose control is not `none`, in sorted order and in reverse, leaves it out of the staged tree; the rejected keys, a base-shipped key and a default repo file (T6's second host) are never staged in any state, and excluding then including `[rej]` leaves both rejected keys excluded, unstaged, and failing `keys_included`.
 
@@ -595,6 +654,7 @@ The parser inputs, all unowned, added for T1 to T3:
 
 - two files, `a.repo` with `[a]` and `b.repo` with `[b]`, naming one key, no members in either: excluding `a` is accepted though no staged byte changes, `a` reads `kept: false`, and the key's `repo_owned` entry is `ships` with `kept_by: [{ section_id: "b" }]`; excluding `b` too drops it; undo and redo move each step;
 - one file `ab.repo` with `[a]` and `[b]` enabled and `[a-source]` disabled, members in both: excluding `a` keeps the file whole, the Containerfile carries § 6.3's line and the export warnings its notice; excluding `b` too drops the file, and the disabled section does not keep it;
+- sections that differ only in case: `site.repo` with `[site]` and `[SITE]`, both enabled, each with its own `baseurl` and naming `file:///etc/pki/rpm-gpg/K`, `enabled_repos(["site", "SITE"])`, K an unowned public key, and `pkg` from `package_from("pkg", "SITE")`, included. Run twice, once with `[site]` written first in the file and once `[SITE]` first. In both: `repo_ownership` gives `site.repo` and K the owners `{SITE, site}`, and `RepoIndex::build`'s maps agree; `/api/view` lists `site` and `SITE` as two rows; excluding `site` is accepted, `pkg` stays included, and `site.repo` and K stay staged with `kept_by: [{ section_id: "SITE" }]`; with `site` included again, excluding `SITE` instead leaves both staged with `kept_by: [{ section_id: "site" }]`; excluding both drops both; undo and redo move each step;
 - the `--enablerepo` keeper: `a.repo` with `[a]` enabled and `d.repo` with `[d]` disabled, naming one key, and `pd` attributed to `d`, included. Before any op the export installs `pd` with `--enablerepo=d`. Excluding `a` keeps the key, with `kept_by: [{ section_id: "d", enablerepo_package: "pd" }]`, and `pd` still installs with `--enablerepo=d`. With `pd` excluded first, excluding `a` drops the key and `d`'s row reads carriage incomplete. `d`'s row has `control: "carriage_only"`; excluding it drops `d.repo` and leaves `pd`'s disposition alone.
 
 **T6. CLI export** (same file):
@@ -603,9 +663,9 @@ The parser inputs, all unowned, added for T1 to T3:
 - `render::render_all` over a refine session's `snapshot_projected()` after excluding `custom`: `custom.repo` and its key are absent, and the tree under `config/etc/yum.repos.d/` and `config/etc/pki/rpm-gpg/` equals the refine export's for the same session (the parity `staged_writes_parity_test.rs` keeps for the rest of the tree);
 - an aggregate of two hosts that both have the unowned `redhat.repo` and `reject.repo`'s keys: neither is staged, and both entries are excluded in the merged snapshot.
 
-**T7. Aggregate.** `fleet_repo_precedence_test.rs` is rewritten to the new contract: the two config variants are `Inventory` and their `SetInclude` is refused; the export stages the repo row's representative payload in both host orders; the Containerfile carries § 6.5's line naming the host whose version it copies. Added cases:
+**T7. Aggregate.** `fleet_repo_precedence_test.rs` is rewritten to the new contract: the two config variants are `Inventory` and their `SetInclude` is refused; the export stages the repo row's representative payload in both host orders; the Containerfile carries § 6.5's line naming the host whose version differs. Added cases:
 
-- three hosts, two with one `custom.repo` and one with another: the representative is the two-host version, `payload_hosts` names those two, and the line reads `1 of 3 hosts with this file have a different version; the export copies the version on <h1>, <h2>`;
+- three hosts, two with one `custom.repo` and one with another: the representative is the two-host version, `payload_hosts` names those two, and the line reads `the export copies the version 2 of 3 hosts with this file have; a different version is on <h3>`;
 - an unmodified, RPM-owned `epel.repo` from two `epel-release` versions, which no config walk records: the line still prints;
 - a key whose content differs between hosts: the GPG Keys section carries the line.
 
@@ -623,9 +683,18 @@ The ownership cases below build each host with `UnitHost` through `collect()` an
 - a `"units"` config row with a relative ostree path, joined through `config_paths`;
 - the hand-maintained e2e fixtures under `crates/web/ui/e2e/fixtures/` gain `control`, `kept`, the carriage counts, `owns`, `repo_owned` and `config_paths`, and lose `enabled` (the `e2e-fixtures-are-hand-maintained` skill).
 
-**T9. Schema and load.** A schema-28 snapshot is refused by `refine` and `aggregate`. In `crates/core`, over the JSON of T7's K aggregate: three edited copies, one per `RepoOwnershipViolation` (K's config row made actionable and included; a `Repositories` shadow on a config path the repo inventory does not record; T7's B made included in the correlated aggregate), are each refused by `InspectionSnapshot::load` with that violation and path, and the unedited JSON loads. `settle_repo_ownership` run a second time on each merged snapshot of T7 changes nothing, and `RepoIndex::build`'s owner maps equal `repo_ownership`'s over T1's host and T7's correlated aggregate.
+**T9. Schema and load.** A schema-28 snapshot is refused by `refine` and `aggregate`. In `crates/core`, over the JSON of T7's K aggregate: three edited copies, one per `RepoOwnershipViolation` (K's config row made actionable and included; a `Repositories` shadow on a config path the repo inventory does not record; T7's B made included in the correlated aggregate), are each refused by `InspectionSnapshot::load` with that violation and path, and the unedited JSON loads. `settle_repo_ownership` run a second time on each merged snapshot of T7 changes nothing, and `RepoIndex::build`'s owner maps equal `repo_ownership`'s over T1's host, T5's case-variant host in both section orders, and T7's correlated aggregate.
 
-**Skills.** The implementation updates `cross-inspector-shadow-passes.md` (a second pass now exists, in core, and runs again after an aggregate merge because a per-host shadow does not survive the config merge; both passes compare by destination; repo files and keys leave its "known and unmeasured" list), `dnf-variable-expansion.md` (the gap it states is closed), and the `ConfigShadow` note in `snapshot-schema-versioning.md` if the bump is this change's.
+**T10. Redaction** (`crates/cli/tests/repo_ownership_test.rs`). A host built with `UnitHost`: an unowned `/etc/yum.repos.d/vend.repo` with `[vend]` enabled, a `baseurl`, and `gpgkey=file:///etc/pki/rpm-gpg/token=vendor`; that key file present, unowned, a public key block, and named by no other section; `pkg` from `vend`, included. Through each stage, in order:
+
+- **Collection.** `collect()` records the key included, owned by `vend`, and its config row shadowed.
+- **Redaction and `finish_scan`.** On a copy, `redact` then `finish_scan`: the stored `vend.repo` names a redaction token in place of `token=vendor`, `snapshot.redactions` names `vend.repo`, the key's path is unchanged, the key is excluded with no owner, its config row is still `Inventory` shadowed by `Repositories`, and `check_repo_ownership` passes. The same through `run_pipeline` over the same `MockExecutor`, whose returned snapshot is compared with the copy's `rpm` and `config` sections and must equal them, and whose tarball stages `vend.repo` and not the key, with § 6.6's notice.
+- **Serialization and load.** The snapshot serialized as the `--inspect-only` branch writes it (`serde_json::to_string_pretty`), reloaded through `InspectionSnapshot::load`, passes, and so does a second `settle_repo_ownership`, which changes nothing.
+- **Refine load.** `load_for_refine` over that JSON succeeds; `repo_owned` lists the key with `export: { state: "no_owner", cause: { kind: "redacted", repo_files: ["/etc/yum.repos.d/vend.repo"] } }`; `vend`'s row has `control: "full"` and `carriage 1 of 1`; excluding and including `vend` moves `vend.repo` and `pkg` and never stages the key; the refine export carries § 6.6's notice.
+- **Aggregate load.** Two copies of that JSON with hostnames `h1` and `h2` load through the aggregate command's loader and merge; the merged key is excluded with cause `fleet` and both hosts, `check_repo_ownership` passes on the merged snapshot and on it reloaded, and the export carries § 6.5's notice with § 6.6's review sentence.
+- **Without redaction.** The same host with `snapshot.redaction_state` set raw and `redact` skipped, as `--no-redaction` does: `finish_scan` leaves the key included and owned, and the export stages it.
+
+**Skills.** The implementation updates `cross-inspector-shadow-passes.md` (a second pass now exists, in core, and runs again in `finish_scan` after redaction, because redaction rewrites repo content, and after an aggregate merge, because a per-host shadow does not survive the config merge; both passes compare by destination; repo files and keys leave its "known and unmeasured" list), `dnf-variable-expansion.md` (the gap it states is closed), and the `ConfigShadow` note in `snapshot-schema-versioning.md` if the bump is this change's.
 
 ## 10. Out of scope
 
@@ -639,7 +708,10 @@ The ownership cases below build each host with `UnitHost` through `collect()` an
 
 Related, and partly closed by § 5: `inspectah-serving-repo-cannot-be-dropped-through-the-repo-control`. A serving repo with no attributed package now has a row and a switch that drops its file and keys (T4, never attributed). The package-membership question that item raises, whether the serving repo's switch should also decide the `-release` package, is unchanged.
 
-## 11. Open decisions
+## 11. Decisions
 
-1. **Aggregate repo file content (§ 6.5). Open: asked 2026-11-21, not yet answered.** Making the config row read-only reverses `9bf5fb28` for an aggregate: an operator can no longer pick which host's version of a repo file the export carries. The proposed default is the most prevalent version, which `merge_items` already picks (ties to the first host by name), with a Containerfile line naming the hosts whose version is copied, and variant selection for repo files deferred to the fleet work. Under that default, `SelectVariant`, `EditVariant` and `DiscardVariant` on the row are refused (§ 3.7). The alternative is to keep `SelectVariant` live on a shadowed config row (content from the config row, ship-or-not from the repo), which this spec does not design and the review advised against as a second content authority. Confirm the default, or ask for the alternative.
-2. **A switch on distro and host-disabled rows that own a file (§ 5.2). Open.** Under the decision, every carriable repo file and key needs a repo control that can drop it, and a file only a distro or host-disabled section owns has none today. Options: (a) a carriage-only switch on those rows, moving files and keys and never members (proposed); (b) leave such files unshadowed, so their Configuration Files row stays their control and the repo inventory copy yields to it in both directions, which gives two kinds of repo-owned path and needs a per-host test of switchability before the aggregate merge; (c) ship them at their default with no control and say so on the row, which leaves a carried file the operator cannot drop. Recommendation (a): it is the only one that keeps one owner per path and a control for every path. It is visible on common EPEL hosts: `epel-cisco-openh264`'s row gains a switch for its file.
+1. **Aggregate repo file content (§ 6.5): the most common version (Mark Russell, 2026-11-21).** An aggregate's export copies the representative `merge_items` already picks, the most prevalent payload with ties to the first host by name, and the Containerfile names the hosts whose version differs in one comment line. Making the config row read-only reverses `9bf5fb28` for an aggregate, so an operator cannot pick another host's version in this release: `SelectVariant`, `EditVariant` and `DiscardVariant` on the row are refused (§ 3.7). Choosing a version per host waits for the Phase 2 fleet config-variant work (§ 10).
+   - Considered: keeping `SelectVariant` live on a shadowed config row, content from the config row and ship-or-not from the repo; a second content authority.
+2. **A switch on distro and host-disabled rows that own a carriable file or key (§ 5.2): the carriage-only switch (Mark Russell, 2026-11-21).** Such a row gets a switch that moves its carriable files and keys and never its members, so every repo-owned path keeps one owner and has a control that can drop it. It is visible on common EPEL hosts: `epel-cisco-openh264`'s row gains a switch for its file.
+   - Considered: leaving those files unshadowed with their Configuration Files row as the control, which gives two kinds of repo-owned path.
+   - Considered: shipping them at their default with no control, which leaves a carried file the operator cannot drop.
