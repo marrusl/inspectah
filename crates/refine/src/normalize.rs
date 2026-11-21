@@ -5,6 +5,7 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::units::UnitState;
 use inspectah_core::types::verified_upload::VerifiedUploads;
 use inspectah_pipeline::render::language_packages::is_language_env;
+use inspectah_pipeline::render::not_carried::default_carried_unit_owners;
 use inspectah_pipeline::render::repoless::{InstallRepos, PackageRoute, route_for};
 use serde_json::Value;
 
@@ -115,8 +116,10 @@ fn collect_dep_tree_names(tree: &serde_json::Value) -> std::collections::HashSet
 /// Baseline subtraction: Tier 1 (Routine/baseline match) packages are
 /// included because the package manager handles them. Tier 2
 /// (Informational/user-added) packages are included only if they are
-/// leaf packages (or if leaf data is unavailable). Tier 3
-/// (NeedsReview/unknown provenance) packages are excluded.
+/// leaf packages (or if leaf data is unavailable), or auto packages that
+/// own a unit enabled on the source host, which the scan carries by
+/// default too. Tier 3 (NeedsReview/unknown provenance) packages are
+/// excluded.
 pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &[RefinedPackage]) {
     // Built before the loop: it reads repo and config file dispositions,
     // which this function does not change. They must already be settled:
@@ -138,6 +141,7 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         set
     });
 
+    let mut site = Vec::new();
     for (i, refined) in packages.iter().enumerate() {
         if i >= rpm.packages_added.len() {
             break;
@@ -155,6 +159,7 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
                     rpm.packages_added[i].disposition = FindingKind::included();
                 }
                 TriageBucket::Site => {
+                    site.push(i);
                     let package_id = canonical_package_id(
                         rpm.packages_added[i].name.as_str(),
                         rpm.packages_added[i].arch.as_str(),
@@ -200,6 +205,21 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
             PackageRoute::ByName | PackageRoute::DisabledRepo(_)
         ) {
             rpm.packages_added[i].disposition = FindingKind::excluded();
+        }
+    }
+
+    // A Site package that owns a unit enabled on the source host is
+    // carried by default, as the scan carries it. The pipeline decides
+    // which those are, from the leaf dispositions settled above; it never
+    // names a package the trust gate excluded, an aggregate's or an
+    // anaconda-classified one.
+    let unit_owners = default_carried_unit_owners(snapshot);
+    if let Some(rpm) = snapshot.rpm.as_mut() {
+        for i in site {
+            let pkg = &mut rpm.packages_added[i];
+            if unit_owners.contains(&canonical_package_id(&pkg.name, &pkg.arch)) {
+                pkg.disposition = FindingKind::included();
+            }
         }
     }
 }

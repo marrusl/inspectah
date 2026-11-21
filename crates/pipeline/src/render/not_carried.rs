@@ -25,6 +25,19 @@
 //! auto package in the class), or the snapshot is an aggregate, whose
 //! `packages_added` is leaf-only.
 //!
+//! **Unit owners are carried by default.** A package in the class that
+//! owns a unit enabled on the source host is [`AutoCarriage::UnitOwner`]:
+//! the scan and refine both keep it included, and the Containerfile
+//! installs it although it is not a leaf. Only [`AutoCarriage::Unneeded`]
+//! packages are excluded by default. Either kind, once excluded (by the
+//! default or by an operator), is listed as not carried.
+//!
+//! **A fleet keeps only leaves.** The aggregate merge drops every package
+//! that is not a leaf on every host, so the fleet export cannot carry an
+//! auto package at all. [`fleet_not_carried_packages`] names the ones it
+//! drops that own an enabled unit, so the fleet export gives the same
+//! notice, block and table as a single host.
+//!
 //! **Limits inherited from the tree.** `leaf_dep_tree` maps each leaf to
 //! the transitive closure of its auto dependencies and records nothing
 //! else. An auto package that only another not-carried package needs is
@@ -35,6 +48,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::units::UnitState;
@@ -64,7 +78,12 @@ pub enum AutoCarriage {
     /// An auto package a leaf the export installs pulls in
     /// (`pulled_in_by_included`).
     PulledIn,
-    /// An auto package nothing included pulls in.
+    /// An auto package nothing included pulls in that owns a unit enabled
+    /// on the source host. Carried by default: a firewall or cron daemon
+    /// missing from the image surfaces long after the migration.
+    UnitOwner,
+    /// An auto package nothing included pulls in and that owns no enabled
+    /// unit. Excluded by default.
     Unneeded,
 }
 
@@ -111,6 +130,7 @@ pub fn classify_auto_carriage(snap: &InspectionSnapshot) -> Option<HashMap<Strin
         .map(String::as_str)
         .collect();
     let no_uploads = VerifiedUploads::new();
+    let unit_owners = enabled_units_by_owner(snap);
 
     let classes = rpm
         .packages_added
@@ -128,6 +148,8 @@ pub fn classify_auto_carriage(snap: &InspectionSnapshot) -> Option<HashMap<Strin
                 || route_for(rpm, &repos, pkg, &no_uploads) == PackageRoute::Repoless
             {
                 AutoCarriage::NotAuto
+            } else if unit_owners.contains_key(pkg.name.as_str()) {
+                AutoCarriage::UnitOwner
             } else {
                 AutoCarriage::Unneeded
             };
@@ -140,7 +162,8 @@ pub fn classify_auto_carriage(snap: &InspectionSnapshot) -> Option<HashMap<Strin
 /// Exclude every [`AutoCarriage::Unneeded`] package from a scan snapshot.
 ///
 /// This is the scan's default disposition for the class; every other
-/// package is left as it is, and under the fallback nothing changes.
+/// package, an [`AutoCarriage::UnitOwner`] included, is left as it is,
+/// and under the fallback nothing changes.
 /// Idempotent: only leaves contribute to [`pulled_in_by_included`], so
 /// excluding auto packages cannot change the class.
 pub fn apply_scan_package_defaults(snap: &mut InspectionSnapshot) {
@@ -158,15 +181,18 @@ pub fn apply_scan_package_defaults(snap: &mut InspectionSnapshot) {
     }
 }
 
-/// An excluded [`AutoCarriage::Unneeded`] package, as every surface shows
-/// it.
+/// An excluded [`AutoCarriage::Unneeded`] or [`AutoCarriage::UnitOwner`]
+/// package, or a package a fleet drops ([`fleet_not_carried_packages`]),
+/// as every surface shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotCarriedPackage {
     /// Package name.
     pub name: String,
-    /// Package architecture.
+    /// Package architecture. Empty for a fleet entry: the merge that
+    /// drops the package keeps no record of it but its name.
     pub arch: String,
-    /// Repository the package was installed from.
+    /// Repository the package was installed from. Empty for a fleet entry,
+    /// as `arch` is.
     pub source_repo: String,
     /// Units enabled in `units.inventory` that this package owns.
     pub enabled_units: Vec<String>,
@@ -196,8 +222,10 @@ impl NotCarriedPackage {
 /// Directory holding the vendor unit files packages ship.
 const VENDOR_UNIT_DIR: &str = "/usr/lib/systemd/system";
 
-/// Every surface: the excluded [`AutoCarriage::Unneeded`] packages, in
-/// display order.
+/// The single-host list: the excluded [`AutoCarriage::Unneeded`] and
+/// [`AutoCarriage::UnitOwner`] packages, in display order. Refine's view
+/// rows and the unit plan read this list; the export's block, table and
+/// notice read [`export_not_carried_packages`], which adds the fleet case.
 ///
 /// Packages owning a unit enabled in `units.inventory` come first, then
 /// the rest; each part is sorted by name, then arch. Empty under the
@@ -223,8 +251,10 @@ pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage>
         .iter()
         .filter(|pkg| {
             pkg.disposition == FindingKind::excluded()
-                && classes.get(&format!("{}.{}", pkg.name, pkg.arch))
-                    == Some(&AutoCarriage::Unneeded)
+                && matches!(
+                    classes.get(&format!("{}.{}", pkg.name, pkg.arch)),
+                    Some(AutoCarriage::Unneeded | AutoCarriage::UnitOwner)
+                )
         })
         .map(|pkg| NotCarriedPackage {
             name: pkg.name.clone(),
@@ -246,6 +276,12 @@ pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage>
         pkg.arch_qualified = arches_per_name[&pkg.name] > 1;
     }
 
+    sort_for_display(&mut list);
+    list
+}
+
+/// Unit owners first, then the rest; each part by name, then arch.
+fn sort_for_display(list: &mut [NotCarriedPackage]) {
     list.sort_by(|a, b| {
         // `false < true`, so unit owners sort first.
         a.enabled_units
@@ -254,10 +290,92 @@ pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage>
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.arch.cmp(&b.arch))
     });
+}
+
+/// The `name.arch` ids of the [`AutoCarriage::UnitOwner`] packages: the
+/// auto packages carried by default because they own a unit enabled on
+/// the source host. Empty under the [`classify_auto_carriage`] fallback.
+///
+/// The Containerfile installs an included one although it is not a leaf,
+/// and refine includes one by default and shows it in its package list.
+pub fn default_carried_unit_owners(snap: &InspectionSnapshot) -> HashSet<String> {
+    classify_auto_carriage(snap)
+        .into_iter()
+        .flatten()
+        .filter(|(_, class)| *class == AutoCarriage::UnitOwner)
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// The packages a fleet export drops that own a unit enabled in the
+/// merged inventory, in display order; empty for a single host.
+///
+/// The aggregate merge keeps in `packages_added` only packages that are a
+/// leaf on every host (or, for one not on every host, a leaf where it is),
+/// and drops the rest. A dropped package is one that owns an enabled unit
+/// and is in neither `baseline_package_names` nor `packages_added`, by
+/// name, and that no installed fleet leaf pulls in. Without a baseline a
+/// base-image package cannot be told from a dropped one, and with no host
+/// of leaf authority the merge drops nothing, so both give an empty list. The merge
+/// keeps only the name, so `arch` and `source_repo` are empty.
+pub fn fleet_not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage> {
+    if snap.aggregate_meta.is_none() {
+        return Vec::new();
+    }
+    let Some(rpm) = snap.rpm.as_ref() else {
+        return Vec::new();
+    };
+    // `leaf_authority_hosts`, not `leaf_packages`: refine clears an
+    // aggregate's leaf list when it opens one, and the count says the same
+    // thing, that the merge had leaf data and filtered by it.
+    let merge_filtered = rpm.leaf_authority_hosts.is_some_and(|hosts| hosts > 0);
+    let Some(baseline) = rpm
+        .baseline_package_names
+        .as_ref()
+        .filter(|_| merge_filtered)
+    else {
+        return Vec::new();
+    };
+    let kept: HashSet<&str> = baseline
+        .iter()
+        .map(String::as_str)
+        .chain(rpm.packages_added.iter().map(|pkg| pkg.name.as_str()))
+        .collect();
+    let pulled_in: HashSet<String> = pulled_in_by_included(rpm, &InstallRepos::of(snap))
+        .into_iter()
+        .filter_map(|id| id.rsplit_once('.').map(|(name, _)| name.to_string()))
+        .collect();
+    let mut list: Vec<NotCarriedPackage> = enabled_units_by_owner(snap)
+        .into_iter()
+        .filter(|(owner, _)| !kept.contains(owner) && !pulled_in.contains(*owner))
+        .map(|(owner, units)| NotCarriedPackage {
+            name: owner.to_string(),
+            arch: String::new(),
+            source_repo: String::new(),
+            enabled_units: units.into_iter().map(str::to_string).collect(),
+            arch_qualified: false,
+        })
+        .collect();
+    sort_for_display(&mut list);
     list
 }
 
+/// What the export lists as not carried: the `# Not carried` block, the
+/// audit table and the notice. [`fleet_not_carried_packages`] for an
+/// aggregate, [`not_carried_packages`] otherwise.
+pub fn export_not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage> {
+    if snap.aggregate_meta.is_some() {
+        fleet_not_carried_packages(snap)
+    } else {
+        not_carried_packages(snap)
+    }
+}
+
 /// Map each owning package name to the enabled units it owns, sorted.
+///
+/// A unit in `INCOMPATIBLE_SERVICES` is never counted: refine drops those
+/// from the inventory when it loads a snapshot, so counting them here
+/// would make the scan carry a package refine does not.
 fn enabled_units_by_owner(snap: &InspectionSnapshot) -> HashMap<&str, BTreeSet<&str>> {
     let mut owners: HashMap<&str, BTreeSet<&str>> = HashMap::new();
     let Some(services) = snap.units.as_ref() else {
@@ -268,6 +386,7 @@ fn enabled_units_by_owner(snap: &InspectionSnapshot) -> HashMap<&str, BTreeSet<&
         .iter()
         .filter(|e| e.state == UnitState::Enabled)
         .map(|e| e.unit.as_str())
+        .filter(|unit| !INCOMPATIBLE_SERVICES.iter().any(|s| s.unit == *unit))
         .collect();
 
     for change in &services.state_changes {
@@ -350,11 +469,12 @@ fn not_carried_notice_for_owners(owners: &[String]) -> Option<ExportWarning> {
 /// packages that own a unit enabled on the source host, or `None` when
 /// it leaves out none.
 ///
-/// The owners are the [`not_carried_packages`] entries with enabled
-/// units, so the notice names the same packages, in the same order, as
-/// the `# Not carried` block and the audit table rendered from `snap`.
+/// The owners are the [`export_not_carried_packages`] entries with
+/// enabled units, so the notice names the same packages, in the same
+/// order, as the `# Not carried` block and the audit table rendered from
+/// `snap`, for a single host and a fleet alike.
 pub fn not_carried_notice(snap: &InspectionSnapshot) -> Option<ExportWarning> {
-    not_carried_notice_for(&not_carried_packages(snap))
+    not_carried_notice_for(&export_not_carried_packages(snap))
 }
 
 /// [`not_carried_notice`] for a list [`not_carried_packages`] already
@@ -729,10 +849,24 @@ mod tests {
         snap
     }
 
-    /// The host as the scan writes it.
+    /// The host as the scan writes it. `firewalld` and `python3-firewall`
+    /// own an enabled unit, so the scan keeps both.
     fn scanned_host() -> InspectionSnapshot {
         let mut snap = host();
         apply_scan_package_defaults(&mut snap);
+        snap
+    }
+
+    /// The unit owners of [`host`], which the scan carries by default.
+    const HOST_UNIT_OWNERS: [&str; 2] = ["firewalld.noarch", "python3-firewall.noarch"];
+
+    /// The scanned host after an operator excluded both unit owners, so
+    /// every not-carried kind is listed.
+    fn owners_excluded() -> InspectionSnapshot {
+        let mut snap = scanned_host();
+        for id in HOST_UNIT_OWNERS {
+            set_disposition(&mut snap, id, FindingKind::excluded());
+        }
         snap
     }
 
@@ -751,6 +885,75 @@ mod tests {
             .find(|p| format!("{}.{}", p.name, p.arch) == id)
             .expect("fixture lists the package")
             .disposition = disposition;
+    }
+
+    /// Owners of an enabled unit are `UnitOwner`, found through either
+    /// owner record, and the scan keeps them; an operator's exclusion
+    /// lists them again and the notice names them.
+    #[test]
+    fn unit_owners_are_carried_by_default_and_listed_once_excluded() {
+        let classes = classify_auto_carriage(&host()).expect("leaf data is available");
+        for id in HOST_UNIT_OWNERS {
+            assert_eq!(classes[id], AutoCarriage::UnitOwner, "{id}");
+        }
+        let mut owners: Vec<String> = default_carried_unit_owners(&host()).into_iter().collect();
+        owners.sort();
+        assert_eq!(owners, HOST_UNIT_OWNERS);
+
+        let scanned = scanned_host();
+        for pkg in &scanned.rpm.as_ref().expect("rpm section").packages_added {
+            let id = format!("{}.{}", pkg.name, pkg.arch);
+            if HOST_UNIT_OWNERS.contains(&id.as_str()) {
+                assert!(pkg.disposition.is_included(), "{id} is carried");
+            }
+        }
+        assert_eq!(
+            not_carried_notice(&scanned),
+            None,
+            "every unit owner is carried, so there is no notice"
+        );
+
+        let excluded = owners_excluded();
+        let listed = ids(&not_carried_packages(&excluded));
+        for id in HOST_UNIT_OWNERS {
+            assert!(listed.contains(&id.to_string()), "{id} excluded is listed");
+        }
+        let notice = not_carried_notice(&excluded).expect("an excluded owner gives a notice");
+        assert!(
+            notice.text().starts_with(
+                "2 packages that own a unit enabled on the source host are not carried: \
+                 firewalld, python3-firewall."
+            ),
+            "{}",
+            notice.text()
+        );
+    }
+
+    /// Refine drops the incompatible services from the inventory when it
+    /// loads a snapshot, so an enabled one makes no package a unit owner
+    /// on the scan path either, and the two paths keep the same default.
+    #[test]
+    fn an_incompatible_service_makes_no_unit_owner() {
+        let mut snap = host();
+        let units = snap.units.as_mut().expect("units section");
+        units.inventory.push(UnitInventoryEntry {
+            unit: "packagekit.service"
+                .to_owned()
+                .try_into()
+                .expect("valid unit name"),
+            state: UnitState::Enabled,
+            preset: None,
+        });
+        snap.rpm
+            .as_mut()
+            .expect("rpm section")
+            .file_ownership
+            .push(FileOwnershipEntry {
+                package_name: "glibc".into(),
+                paths: vec![vendor_unit("packagekit.service")],
+            });
+        let classes = classify_auto_carriage(&snap).expect("leaf data is available");
+        assert_eq!(classes["glibc.i686"], AutoCarriage::Unneeded);
     }
 
     #[test]
@@ -796,7 +999,7 @@ mod tests {
 
     #[test]
     fn orders_unit_owners_first_then_by_name_and_arch() {
-        let list = not_carried_packages(&scanned_host());
+        let list = not_carried_packages(&owners_excluded());
         assert_eq!(
             ids(&list),
             [
@@ -810,7 +1013,7 @@ mod tests {
 
     #[test]
     fn attributes_only_the_enabled_units_a_package_owns() {
-        let list = not_carried_packages(&scanned_host());
+        let list = not_carried_packages(&owners_excluded());
         let units = |name: &str| {
             list.iter()
                 .find(|p| p.name == name)
@@ -842,12 +1045,13 @@ mod tests {
     }
 
     /// The inventory holds every unit kind, so an enabled vendor socket
-    /// credits its not-carried owner like a service does; the same socket
-    /// disabled credits nothing.
+    /// makes its owner a unit owner like a service does, carried by the
+    /// scan and credited once excluded; the same socket disabled credits
+    /// nothing and the scan excludes the package.
     #[test]
     fn an_enabled_socket_names_its_not_carried_owner() {
         for (state, named) in [(UnitState::Enabled, true), (UnitState::Disabled, false)] {
-            let mut snap = scanned_host();
+            let mut snap = host();
             snap.units
                 .as_mut()
                 .expect("units section")
@@ -860,6 +1064,21 @@ mod tests {
                     state,
                     preset: Some(PresetDefault::Disable),
                 });
+            apply_scan_package_defaults(&mut snap);
+            let carried = snap
+                .rpm
+                .as_ref()
+                .expect("rpm section")
+                .packages_added
+                .iter()
+                .find(|p| p.name == "cups-libs")
+                .expect("fixture lists cups-libs")
+                .disposition
+                .is_included();
+            assert_eq!(carried, named, "{state:?}: an owner is carried");
+            for id in HOST_UNIT_OWNERS.iter().chain(&["cups-libs.x86_64"]) {
+                set_disposition(&mut snap, id, FindingKind::excluded());
+            }
             let list = not_carried_packages(&snap);
             let cups_libs = list
                 .iter()
@@ -878,7 +1097,7 @@ mod tests {
 
     #[test]
     fn display_name_adds_the_arch_only_when_the_name_is_listed_twice() {
-        let single = not_carried_packages(&scanned_host());
+        let single = not_carried_packages(&owners_excluded());
         let names: Vec<String> = single.iter().map(NotCarriedPackage::display_name).collect();
         assert_eq!(
             names,
@@ -893,6 +1112,9 @@ mod tests {
             "cups.x86_64": ["cups-libs.x86_64"],
         });
         apply_scan_package_defaults(&mut both);
+        for id in HOST_UNIT_OWNERS {
+            set_disposition(&mut both, id, FindingKind::excluded());
+        }
         let names: Vec<String> = not_carried_packages(&both)
             .iter()
             .map(NotCarriedPackage::display_name)
@@ -911,11 +1133,13 @@ mod tests {
 
     /// The pipeline-side half of the parity check: dispositions as refine's
     /// leaf default sets them for the same host (leaves kept as decided,
-    /// every auto package excluded) give the scan path's list. The
-    /// cross-crate test against refine itself lives in the CLI crate.
+    /// every auto package excluded but the unit owners) give the scan
+    /// path's list. The cross-crate test against refine itself lives in
+    /// the CLI crate.
     #[test]
     fn leaf_default_dispositions_give_the_scan_list() {
         let mut leaf_default = host();
+        let owners = default_carried_unit_owners(&leaf_default);
         let rpm = leaf_default.rpm.as_mut().expect("rpm section");
         let leaves: HashSet<String> = rpm
             .leaf_packages
@@ -924,7 +1148,8 @@ mod tests {
             .into_iter()
             .collect();
         for pkg in &mut rpm.packages_added {
-            if !leaves.contains(&format!("{}.{}", pkg.name, pkg.arch)) {
+            let id = format!("{}.{}", pkg.name, pkg.arch);
+            if !leaves.contains(&id) && !owners.contains(&id) {
                 pkg.disposition = FindingKind::excluded();
             }
         }
@@ -934,6 +1159,111 @@ mod tests {
             "the comparison is not between two empty lists"
         );
         assert_eq!(not_carried_packages(&leaf_default), scan);
+    }
+
+    /// A merged fleet: `httpd` is the one leaf kept, and it pulls in
+    /// `apr`. Every other package the hosts had is gone from
+    /// `packages_added`, as the merge leaves it. Enabled units are owned by
+    /// a base-image package (`openssh-server`), a kept leaf (`httpd`), the
+    /// pulled-in `apr`, and two dropped packages (`firewalld`, `cronie`).
+    fn fleet() -> InspectionSnapshot {
+        let enabled = |unit: &str| UnitInventoryEntry {
+            unit: unit.to_owned().try_into().expect("valid unit name"),
+            state: UnitState::Enabled,
+            preset: None,
+        };
+        let owns = |package: &str, unit: &str| FileOwnershipEntry {
+            package_name: package.into(),
+            paths: vec![vendor_unit(unit)],
+        };
+        InspectionSnapshot {
+            aggregate_meta: Some(AggregateSnapshotMeta {
+                label: "fleet".into(),
+                host_count: 2,
+                hostnames: vec!["a".into(), "b".into()],
+                merged_at: "2026-11-21T00:00:00Z".into(),
+                baseline_provisional: false,
+                section_host_counts: Default::default(),
+            }),
+            rpm: Some(RpmSection {
+                packages_added: vec![pkg("httpd", "x86_64", true)],
+                leaf_packages: Some(vec!["httpd.x86_64".into()]),
+                leaf_dep_tree: serde_json::json!({ "httpd.x86_64": ["apr.x86_64"] }),
+                leaf_authority_hosts: Some(2),
+                leaf_total_hosts: Some(2),
+                baseline_package_names: Some(vec!["openssh-server".into()]),
+                file_ownership: vec![
+                    owns("openssh-server", "sshd.service"),
+                    owns("httpd", "httpd.service"),
+                    owns("apr", "apr-cache.service"),
+                    owns("firewalld", "firewalld.service"),
+                    owns("cronie", "crond.service"),
+                ],
+                ..Default::default()
+            }),
+            units: Some(UnitSection {
+                state_changes: vec![],
+                inventory: [
+                    "sshd.service",
+                    "httpd.service",
+                    "apr-cache.service",
+                    "firewalld.service",
+                    "crond.service",
+                ]
+                .into_iter()
+                .map(enabled)
+                .collect(),
+                drop_ins: vec![],
+                mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
+                default_target: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// The fleet export names exactly the dropped unit owners, in the
+    /// notice as in the export list; a single host and a fleet that cannot
+    /// tell base packages from dropped ones name none.
+    #[test]
+    fn a_fleet_names_the_unit_owners_its_merge_drops() {
+        let snap = fleet();
+        let listed: Vec<String> = export_not_carried_packages(&snap)
+            .iter()
+            .map(NotCarriedPackage::display_name)
+            .collect();
+        assert_eq!(listed, ["cronie", "firewalld"]);
+        assert_eq!(
+            not_carried_notice(&snap).expect("a fleet notice").text(),
+            "2 packages that own a unit enabled on the source host are not carried: \
+             cronie, firewalld. See the Not carried table in audit-report.md \
+             and the # Not carried block in the Containerfile."
+        );
+        assert!(
+            not_carried_packages(&snap).is_empty(),
+            "refine's view rows stay single-host: a fleet row has no entry to include"
+        );
+
+        let mut no_baseline = fleet();
+        no_baseline
+            .rpm
+            .as_mut()
+            .expect("rpm section")
+            .baseline_package_names = None;
+        assert!(fleet_not_carried_packages(&no_baseline).is_empty());
+
+        let mut no_authority = fleet();
+        no_authority
+            .rpm
+            .as_mut()
+            .expect("rpm section")
+            .leaf_authority_hosts = Some(0);
+        assert!(fleet_not_carried_packages(&no_authority).is_empty());
+
+        let mut single = fleet();
+        single.aggregate_meta = None;
+        assert!(fleet_not_carried_packages(&single).is_empty());
     }
 
     /// The not-carried notice: absent with no unit owners, singular for

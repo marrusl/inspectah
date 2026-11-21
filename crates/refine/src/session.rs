@@ -16,7 +16,7 @@ use inspectah_pipeline::render::configtree::unmanaged_withheld;
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
-use inspectah_pipeline::render::not_carried::not_carried_notice;
+use inspectah_pipeline::render::not_carried::{default_carried_unit_owners, not_carried_notice};
 use inspectah_pipeline::render::repoless::{InstallRepos, PackageRoute, route_for};
 
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
@@ -3512,6 +3512,9 @@ impl RefineSession {
             // aggregate mode uses prevalence-based intersection instead).
             if !is_aggregate && let Some(leaf_names) = rpm.leaf_packages.as_ref() {
                 let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
+                // Auto packages that own an enabled unit are carried by
+                // default, so the operator sees them beside the leaves.
+                let unit_owners = default_carried_unit_owners(&projected);
 
                 // Ungrouped group members must bypass the leaf filter so they
                 // appear as individual packages after ungrouping. Without this,
@@ -3543,6 +3546,7 @@ impl RefineSession {
                             .unwrap_or(pkg.entry.disposition.is_included());
 
                         leaf_set.contains(package_id.as_str())
+                            || unit_owners.contains(&package_id)
                             || pkg.triage.bucket() == TriageBucket::Investigate
                             || pkg.entry.disposition.is_included() != original_include
                             || ungrouped_member_names.contains(pkg.entry.name.as_str())

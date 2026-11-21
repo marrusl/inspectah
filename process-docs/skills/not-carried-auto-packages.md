@@ -30,12 +30,39 @@ It is never in the class, and keeps its existing handling, when it is:
 
 A package routed `DisabledRepo` is not exempt: it can be in the class.
 
+## Unit owners are carried by default
+
+A package in the class that owns a unit enabled on the source host is
+`AutoCarriage::UnitOwner`; the rest are `Unneeded` (Mark Russell,
+2026-11-21, reversing the not-carried default of 2026-11-10 for this case
+only). "Owns" and "enabled" are `enabled_units_by_owner`: an inventory
+entry with `state == Enabled`, credited to a `state_changes`
+`owning_package` or to the owner of the vendor unit file in
+`file_ownership`, by name. Units in `INCOMPATIBLE_SERVICES` never count,
+because refine's `load_for_refine` drops them from the inventory and the
+two paths would then disagree.
+
+Three places must carry one, and each asks
+`default_carried_unit_owners` rather than deciding it:
+
+| Where | What it does |
+|---|---|
+| `apply_scan_package_defaults` | excludes only `Unneeded`, so the scan keeps a unit owner included |
+| refine `normalize_package_defaults` | includes a Site-bucket unit owner after the leaf default, from the leaf dispositions it just settled |
+| Containerfile leaf filter (`packages_section_lines`) | names an included unit owner in `dnf install` although it is no leaf |
+
+The refine view's leaf filter (`session.rs`) shows them too, so the
+operator can exclude one. Miss any of the first three and the two exports
+disagree (`the_install_names_match`) or neither installs the package
+(`the_fixture_is_baseline_backed_and_has_a_not_carried_list`).
+
 ## The one decider
 
 `crates/pipeline/src/render/not_carried.rs` decides membership, through
 `classify_auto_carriage`. `apply_scan_package_defaults` excludes the
-class and `not_carried_packages` builds the display list; both reach the
-class through the classifier. No function outside the module decides
+`Unneeded` part and `not_carried_packages` lists every excluded
+`Unneeded` or `UnitOwner` package; both reach the class through the
+classifier. No function outside the module decides
 membership, and the module calls `pulled_in_by_included` and never copies
 it. The aggregate guard lives only in `classify_auto_carriage`.
 
@@ -63,6 +90,30 @@ no list is emitted, when:
 - `aggregate_meta` is set, because an aggregate's `packages_added` is
   leaf-only.
 
+## The fleet list
+
+The merge keeps in `packages_added` only packages that are a leaf on
+every host (or, for one not on every host, a leaf where it is), so a
+fleet export cannot carry an auto package at all. It does not get the
+single-host default; it gets the notice. `fleet_not_carried_packages`
+names the owners of enabled units (merged inventory and ownership) that
+are in neither `baseline_package_names` nor `packages_added`, by name,
+and that no installed fleet leaf pulls in. It needs a baseline (else a
+base-image owner such as `openssh-server` would be named) and
+`leaf_authority_hosts > 0`, not `leaf_packages`, which refine clears when
+it opens an aggregate. The merge keeps only names, so a fleet entry's
+`arch` and `source_repo` are empty and the audit table prints `-`.
+
+`export_not_carried_packages` is what the export's block, table and
+notice read: the fleet list for an aggregate, `not_carried_packages`
+otherwise. Refine's view rows and the unit plan read
+`not_carried_packages` only, so a fleet has no rows (a row's Include
+would name a package the merged snapshot does not hold) and no
+pre-download notice; the dialog shows the header entry after download.
+`the_fleet_export_notices_the_unit_owners_its_merge_drops` runs the
+`inspectah aggregate` binary and a refine export of its tarball over two
+collector-built hosts.
+
 ## Surfaces
 
 - Containerfile: a `# Not carried: <NOT_CARRIED_REASON> (N)` comment block
@@ -77,7 +128,8 @@ no list is emitted, when:
 - `/var`: the evidence counts pulled-in packages as carried, so their
   directories are not provisioned.
 - Refine export warnings: one `notice` entry in `x-export-warnings` when
-  the list holds packages that own an enabled unit, naming the count and
+  the export list holds packages that own an enabled unit (by default
+  only on a fleet, or once an operator excludes a unit owner), naming the count and
   the first three by display name, then `and N more`, and pointing at the
   audit table and the `# Not carried` block. `not_carried_notice`, in
   this module, builds it from `not_carried_packages` filtered to entries
@@ -86,7 +138,10 @@ no list is emitted, when:
   Contract: `refine-export-warnings-header.md`.
 - Scan stderr: `inspectah scan` prints the same notice as one
   `Notice: ...` line after it writes the tarball, quiet mode included,
-  and nothing with `--inspect-only`.
+  and nothing with `--inspect-only`. Since the scan carries every unit
+  owner, a single host prints it only for a snapshot whose owners were
+  excluded before the scan's defaults. `inspectah aggregate` prints the
+  fleet notice the same way, last.
 - Refine view: `GET /api/view` carries the list as
   `not_carried_packages` and the notice as `not_carried_notice`; see
   [Refine projection contract](#refine-projection-contract).
@@ -155,7 +210,9 @@ returns a view (`GET /api/view`, `POST /api/op`, `/api/undo`,
   from `not_carried_notice_for` on the same list, so a client can show it
   before download and skip the header entry equal to it afterwards.
 
-**Including one** is the ordinary package op, no new action:
+**Including one** is the ordinary package op, no new action (and
+`include: false` on a unit owner, which refine carries by default, lists
+it):
 
 ```json
 POST /api/op
@@ -177,11 +234,15 @@ in `crates/cli/tests/not_carried_parity_test.rs` pins every surface;
 `the_view_carries_the_not_carried_rows_and_notice` in
 `crates/web/tests/api_test.rs` pins the payload and the header match.
 
-**Known limit, for the UI to explain:** including an auto package does
-not credit its own dependencies as pulled in (the tree records leaf
-closures only), so they stay in `not_carried_packages` although dnf will
-install them with it. Including `firewalld` leaves `python3-firewall`
-listed. Nothing in the payload marks these rows; it is text for the UI.
+**Known limit, for the UI to explain:** a carried auto package, a unit
+owner by default or one an operator included, does not credit its own
+dependencies as pulled in (the tree records leaf closures only), so they
+stay in `not_carried_packages` although dnf installs them with it. With
+`firewalld` carried, `python3-firewall` is listed. Since unit owners are
+carried by default this holds on every stock RHEL host (`cronie-anacron`
+under `cronie`, for example). Nothing in the payload marks these rows;
+it is text for the UI. Fixing it needs the collector to record the
+closure of each auto package, which is a snapshot change.
 
 **The UI.** `NotCarriedGroup.tsx` renders the rows in the packages view,
 below the package list, in array order, with the owners marked by the

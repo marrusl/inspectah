@@ -15,7 +15,7 @@ use inspectah_core::types::users::UserGroupDecision;
 
 use super::baseline_fmt;
 use super::md_literal::{md_code, md_code_cell};
-use super::not_carried::{NOT_CARRIED_REASON, NotCarriedPackage, not_carried_packages};
+use super::not_carried::{NOT_CARRIED_REASON, NotCarriedPackage, export_not_carried_packages};
 use super::selinux;
 use super::sysctl_report::{
     AGGREGATE_LINE, AS_WRITTEN_GLOB_ASSIGN_LINE, AS_WRITTEN_GLOB_EXCLUDE_LINE, AS_WRITTEN_LABEL,
@@ -310,7 +310,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
                     render_packages_section(
                         rpm,
                         &super::repoless::InstallRepos::of(snap),
-                        &not_carried_packages(snap),
+                        &export_not_carried_packages(snap),
                         &mut group_lines,
                     );
                 }
@@ -391,7 +391,8 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
 }
 
 /// Render the Packages section content (not including the section heading).
-/// `not_carried` is the [`not_carried_packages`] list for the same snapshot.
+/// `not_carried` is the [`export_not_carried_packages`] list for the same
+/// snapshot.
 fn render_packages_section(
     rpm: &inspectah_core::types::rpm::RpmSection,
     repos: &super::repoless::InstallRepos,
@@ -421,7 +422,8 @@ fn render_packages_section(
     }
 
     // Packages the image leaves out because nothing it installs needs them,
-    // in the list's order. Enabled Units is the bare unit list, or `-`.
+    // in the list's order. Enabled Units is the bare unit list, or `-`;
+    // Source Repo is `-` for a fleet entry, whose repo the merge drops.
     if !not_carried.is_empty() {
         lines.push(format!("### Not carried ({})", not_carried.len()));
         lines.push(String::new());
@@ -433,11 +435,14 @@ fn render_packages_section(
             } else {
                 p.enabled_units.join(", ")
             };
+            let repo = if p.source_repo.is_empty() {
+                "-"
+            } else {
+                p.source_repo.as_str()
+            };
             lines.push(format!(
-                "| {} | {} | {} | {NOT_CARRIED_REASON} |",
+                "| {} | {repo} | {units} | {NOT_CARRIED_REASON} |",
                 p.display_name(),
-                p.source_repo,
-                units
             ));
         }
         lines.push(String::new());
@@ -2230,6 +2235,26 @@ mod tests {
         snap
     }
 
+    /// The unit owners of `not_carried_host`, which the scan carries.
+    const HOST_UNIT_OWNERS: [&str; 2] = ["cronie.x86_64", "firewalld.noarch"];
+
+    /// The scanned host after an operator excluded both unit owners, so
+    /// every not-carried kind is listed.
+    fn owners_excluded_host() -> InspectionSnapshot {
+        let mut snap = scanned_not_carried_host();
+        for pkg in &mut snap
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .packages_added
+        {
+            if HOST_UNIT_OWNERS.contains(&format!("{}.{}", pkg.name, pkg.arch).as_str()) {
+                pkg.disposition = FindingKind::excluded();
+            }
+        }
+        snap
+    }
+
     /// The `### Not carried` table: its heading through the line before the
     /// next blank line after the table. Empty when the report has no heading.
     fn not_carried_table(md: &str) -> Vec<&str> {
@@ -2244,7 +2269,7 @@ mod tests {
     #[test]
     fn not_carried_table_lists_each_package_in_display_order() {
         use super::super::not_carried::NOT_CARRIED_REASON;
-        let md = render_audit(&scanned_not_carried_host());
+        let md = render_audit(&owners_excluded_host());
         let row = |name: &str, units: &str| {
             format!("| {name} | baseos | {units} | {NOT_CARRIED_REASON} |")
         };
@@ -2306,25 +2331,31 @@ mod tests {
         );
 
         let md = render_audit(&scanned_not_carried_host());
-        assert!(md.contains("### Added Packages (2)"), "{md}");
+        assert!(md.contains("### Added Packages (4)"), "{md}");
         let added: Vec<&str> = md
             .lines()
             .skip_while(|l| !l.starts_with("### Added Packages"))
             .skip(1)
             .take_while(|l| !l.starts_with("###"))
             .collect();
-        for name in ["cronie", "firewalld", "dracut-config-rescue", "glibc"] {
-            assert!(
-                !added.iter().any(|l| l.starts_with(&format!("| {name} |"))),
-                "{name} is not an added package:\n{md}"
+        for (name, carried) in [
+            ("cronie", true),
+            ("firewalld", true),
+            ("dracut-config-rescue", false),
+            ("glibc", false),
+        ] {
+            assert_eq!(
+                added.iter().any(|l| l.starts_with(&format!("| {name} |"))),
+                carried,
+                "{name}: a unit owner is an added package, the rest are not:\n{md}"
             );
         }
     }
 
     /// Refine's leaf default keeps leaves as decided and excludes every
-    /// auto package. Set by hand here, it renders the same table as the
-    /// scan defaults; the check against refine's export lives in the CLI
-    /// crate.
+    /// auto package but the unit owners. Set by hand here, it renders the
+    /// same table as the scan defaults; the check against refine's export
+    /// lives in the CLI crate.
     #[test]
     fn not_carried_table_matches_under_leaf_default_dispositions() {
         let mut leaf_default = not_carried_host();
@@ -2334,7 +2365,8 @@ mod tests {
             .expect("fixture has an rpm section");
         let leaves = rpm.leaf_packages.clone().expect("fixture has leaf data");
         for pkg in &mut rpm.packages_added {
-            if !leaves.contains(&format!("{}.{}", pkg.name, pkg.arch)) {
+            let id = format!("{}.{}", pkg.name, pkg.arch);
+            if !leaves.contains(&id) && !HOST_UNIT_OWNERS.contains(&id.as_str()) {
                 pkg.disposition = FindingKind::excluded();
             }
         }

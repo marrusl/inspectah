@@ -35,8 +35,10 @@ back). `render_refine_export` in `crates/refine/src/session.rs` returns:
 - `not_carried_notice` (`crates/pipeline/src/render/not_carried.rs`):
   one notice, first in the list, when the export
   leaves out not-carried packages that own a unit enabled on the source
-  host. It reads `not_carried_packages`, the list the `# Not carried`
-  block renders, and filters to entries with enabled units. See
+  host. It reads `export_not_carried_packages`, the list the `# Not
+  carried` block renders (the fleet list for an aggregate), and filters
+  to entries with enabled units. Unit owners are carried by default, so
+  on a single host it appears only once an operator excludes one. See
   `not-carried-auto-packages.md`.
 - `not_verified_warning` (`session.rs`): one failure per included package that claimed
   a staged upload the export could not prove. Its `name.arch` is
@@ -91,8 +93,10 @@ notice anyway) the alert has no link, never a dead one.
 
 After download, `withoutShownNotice` (`exportWarnings.ts`) drops header
 entries whose `kind` and `text` equal the view's notice, and only those.
-The server builds both from `not_carried_notice_for` on the same list,
-so equality is the whole test; never match on a text pattern. A header
+For a single host the server builds both from `not_carried_notice_for`
+on the same list, so equality is the whole test; never match on a text
+pattern. For a fleet the view's notice is `null` and the header carries
+the fleet notice, so the dialog shows it after download. A header
 notice that differs (the view and the export drifted) has not been seen
 and stays in the list. If nothing is left, the dialog closes as it does
 for `[]`. The notice compared is the one the dialog showed, taken from
@@ -166,6 +170,11 @@ summarizes the `# Not carried` block and the audit report's table.
 Truncating the list loses a convenience, not a fact.
 
 ## Reading older measurements
+
+Since 2026-11-21 the scan and refine carry packages that own an enabled
+unit, so a stock single-host export is back to `x-export-warnings: []`
+and the scan prints no `Notice:` line; a fleet export carries the notice
+for the unit owners the merge drops. Before that, from 2026-11-12:
 
 Real-host notes from before 2026-11-12 record `x-export-warnings: []` on
 stock exports. On a host with not-carried unit owners (`cronie`,

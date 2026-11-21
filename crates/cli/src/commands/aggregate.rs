@@ -12,6 +12,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_pipeline::render;
+use inspectah_pipeline::render::not_carried::not_carried_notice;
 use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 
 #[derive(Debug, Args)]
@@ -272,6 +273,12 @@ fn run_aggregate(args: &AggregateArgs) -> Result<()> {
     }
 
     eprintln!("Output: {}", tarball_path.display());
+
+    // Last, as the scan prints it: the fleet export's audit report and
+    // Containerfile, which the notice points at, are in this tarball.
+    if let Some(notice) = not_carried_notice(&merged) {
+        eprintln!("{notice}");
+    }
 
     Ok(())
 }

@@ -33,7 +33,9 @@ use super::configtree::{
     staged_unit_file, staged_writes, unstaged_files, validate_path,
 };
 use super::language_packages;
-use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
+use super::not_carried::{
+    NOT_CARRIED_REASON, default_carried_unit_owners, export_not_carried_packages,
+};
 use super::repoless::PackageRoute;
 use super::safety::{
     BareWord, CopyToken, ExportPath, ExportToken, double_quoted_word_refusal, is_shell_operand,
@@ -915,6 +917,7 @@ fn packages_section_lines(
     let no_uploads = inspectah_core::types::verified_upload::VerifiedUploads::new();
     let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
     let pulled_in = super::unit_plan::pulled_in_by_included(rpm, &install_repos);
+    let unit_owners = default_carried_unit_owners(snap);
 
     let installable_packages: Vec<&PackageEntry> = rpm
         .packages_added
@@ -953,6 +956,11 @@ fn packages_section_lines(
                 return true;
             }
             let id = canonical_package_id(&pkg.name, &pkg.arch);
+            // An auto package that owns a unit enabled on the source host
+            // is carried by default, so it is named although it is no leaf.
+            if unit_owners.contains(&id) {
+                return true;
+            }
             if let Some(orig) = original_includes {
                 let was_included = orig
                     .get(&id)
@@ -1238,7 +1246,7 @@ fn packages_section_lines(
 }
 
 /// The `# Not carried:` block: a header with the reason and count, then
-/// one line per [`not_carried_packages`] entry, in its order, naming any
+/// one line per [`export_not_carried_packages`] entry, in its order, naming any
 /// units the package had enabled. Comments only, so nothing in it is
 /// installed. Empty, with no header, when the list is.
 ///
@@ -1248,7 +1256,7 @@ fn packages_section_lines(
 /// Exclusion keeps these packages away from the install-token checks, so
 /// nothing upstream has screened them.
 fn not_carried_lines(snap: &InspectionSnapshot) -> Vec<String> {
-    let list = not_carried_packages(snap);
+    let list = export_not_carried_packages(snap);
     if list.is_empty() {
         return Vec::new();
     }
@@ -7952,6 +7960,26 @@ RUN dnf install -y \
         snap
     }
 
+    /// The unit owners of `not_carried_host`, which the scan carries.
+    const HOST_UNIT_OWNERS: [&str; 2] = ["cronie.x86_64", "firewalld.noarch"];
+
+    /// The scanned host after an operator excluded both unit owners, so
+    /// every not-carried kind is listed.
+    fn owners_excluded_host() -> InspectionSnapshot {
+        let mut snap = scanned_not_carried_host();
+        for pkg in &mut snap
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .packages_added
+        {
+            if HOST_UNIT_OWNERS.contains(&format!("{}.{}", pkg.name, pkg.arch).as_str()) {
+                pkg.disposition = FindingKind::excluded();
+            }
+        }
+        snap
+    }
+
     /// The `# Not carried:` block: its header through the line before the
     /// next blank line. Empty when the output has no header.
     fn not_carried_block(output: &str) -> Vec<&str> {
@@ -7962,9 +7990,35 @@ RUN dnf install -y \
             .collect()
     }
 
+    /// The scan carries the auto packages that own an enabled unit: the
+    /// install line names them although they are not leaves, and the block
+    /// lists only the rest.
+    #[test]
+    fn the_scan_installs_unit_owners_and_lists_the_rest() {
+        let output = render_containerfile(&scanned_not_carried_host(), None, None);
+        let install: Vec<&str> = output
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .flat_map(str::split_whitespace)
+            .collect();
+        for name in ["httpd", "cronie", "firewalld"] {
+            assert!(install.contains(&name), "{name} is installed:\n{output}");
+        }
+        assert_eq!(
+            not_carried_block(&output),
+            [
+                format!("# Not carried: {NOT_CARRIED_REASON} (3)").as_str(),
+                "#   dracut-config-rescue",
+                "#   glibc.i686",
+                "#   glibc.x86_64",
+            ],
+            "{output}"
+        );
+    }
+
     #[test]
     fn not_carried_block_lists_each_package_after_the_install_lines() {
-        let output = render_containerfile(&scanned_not_carried_host(), None, None);
+        let output = render_containerfile(&owners_excluded_host(), None, None);
 
         assert_eq!(
             not_carried_block(&output),
@@ -8037,9 +8091,9 @@ RUN dnf install -y \
     }
 
     /// Refine's leaf default keeps leaves as decided and excludes every
-    /// auto package. Set by hand here, it renders the same block as the
-    /// scan defaults; the cross-crate check against refine's export lives
-    /// in the CLI crate.
+    /// auto package but the unit owners. Set by hand here, it renders the
+    /// same block as the scan defaults; the cross-crate check against
+    /// refine's export lives in the CLI crate.
     #[test]
     fn not_carried_block_matches_under_leaf_default_dispositions() {
         let mut leaf_default = not_carried_host();
@@ -8049,7 +8103,8 @@ RUN dnf install -y \
             .expect("fixture has an rpm section");
         let leaves = rpm.leaf_packages.clone().expect("fixture has leaf data");
         for pkg in &mut rpm.packages_added {
-            if !leaves.contains(&canonical_package_id(&pkg.name, &pkg.arch)) {
+            let id = canonical_package_id(&pkg.name, &pkg.arch);
+            if !leaves.contains(&id) && !HOST_UNIT_OWNERS.contains(&id.as_str()) {
                 pkg.disposition = FindingKind::excluded();
             }
         }

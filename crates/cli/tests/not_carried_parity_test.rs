@@ -2,8 +2,9 @@
 //! not-carried class.
 //!
 //! An auto package that nothing the image installs needs is left out of
-//! the image on both export paths, and the two paths reach that by
-//! different code: the scan applies `apply_scan_package_defaults` to its
+//! the image on both export paths, unless it owns a unit enabled on the
+//! source host, which both carry. The two paths reach that by different
+//! code: the scan applies `apply_scan_package_defaults` to its
 //! snapshot, while refine starts from its own tier defaults and the
 //! not-carried list is read from whatever dispositions result. Nothing
 //! but this test holds the two together, so it compares what each path
@@ -20,10 +21,12 @@
 //!   finding is an RPM-owned file the operator changed.
 //!
 //! Two tests reuse the fixture for the refine export's not-carried
-//! notice, which names the not-carried unit owners and no pulled-in one.
-//! Three more check refine's not-carried rows against the export's block
-//! and notice, and that including a listed package carries it on every
-//! surface and excluding it again restores the list.
+//! notice, which names the unit owners an operator excludes and no
+//! pulled-in one. Three more check refine's not-carried rows against the
+//! export's block and notice, and that excluding a unit owner lists it on
+//! every surface and including it again restores the default. One runs a
+//! fleet of two such hosts, whose export drops the unit owners and says
+//! so as a single host's export would.
 //!
 //! The last tests reuse the fixture for safety checks rather than parity
 //! claims: a config whose content the collector could not capture is
@@ -59,7 +62,9 @@ use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_collect::inspectors::units::UnitsInspector;
-use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
+use inspectah_core::baseline::{
+    BaselineData, BaselinePackageEntry, ResolutionStrategy, TargetImageIdentity,
+};
 use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::Inspector;
@@ -95,12 +100,26 @@ const BASE_PACKAGES: &[&str] = &["bash", "systemd"];
 /// `/var/lib/httpd`).
 const LEAF: &str = "httpd";
 
-/// The not-carried packages, in display order: the two owning an enabled
-/// unit first, then the rest, each part by name. `firewalld` owns the
-/// preset-enabled `firewalld.service` and `/var/lib/firewalld`; `rhc` owns
-/// `rhcd.service`, which the operator enabled against its preset; only
-/// `firewalld` needs `python3-firewall`.
-const EXPECTED_NOT_CARRIED: &[&str] = &["firewalld", "rhc", "python3-firewall"];
+/// The auto packages that own an enabled unit, which both paths carry by
+/// default: `firewalld` owns the preset-enabled `firewalld.service` and
+/// `/var/lib/firewalld`; `rhc` owns `rhcd.service`, which the operator
+/// enabled against its preset.
+const UNIT_OWNERS: &[(&str, &str)] = &[("firewalld", "noarch"), ("rhc", "x86_64")];
+
+/// The default not-carried list. Only `firewalld` needs
+/// `python3-firewall`, and dnf installs it with `firewalld`, but the
+/// dependency tree records leaf closures only, so it is listed: the known
+/// limit, pinned here so a change to it is deliberate.
+const EXPECTED_NOT_CARRIED: &[&str] = &["python3-firewall"];
+
+/// The not-carried list once an operator excludes both unit owners, in
+/// display order: the owners first, then the rest.
+const OWNERS_EXCLUDED_NOT_CARRIED: &[&str] = &["firewalld", "rhc", "python3-firewall"];
+
+/// The notice an export carries when both unit owners are left out.
+const OWNERS_NOTICE: &str = "2 packages that own a unit enabled on the source host are not \
+     carried: firewalld, rhc. See the Not carried table in audit-report.md and the \
+     # Not carried block in the Containerfile.";
 
 /// Auto packages outside the class: one installed at system install time,
 /// one installed from a local file. Each path handles these its own way by
@@ -625,30 +644,30 @@ fn the_fixture_is_baseline_backed_and_has_a_not_carried_list() {
         "{REPOLESS_PACKAGE} is annotated repo-less: {repoless:?}"
     );
 
-    // Each compared surface has content, or its equality is empty.
-    assert_eq!(scan.install_names(), vec![LEAF.to_string()]);
-    assert!(
-        scan.systemctl_lines()
-            .iter()
-            .any(|l| l.contains("httpd.service")),
-        "the pulled-in package's unit is enabled:\n{}",
+    // Each compared surface has content, or its equality is empty. The
+    // omitted lines and `/var` provisioning of a not-carried unit owner
+    // are compared under an operator's exclusion, in
+    // `excluding_a_unit_owner_lists_it_and_including_it_restores_the_default`.
+    let mut installed = scan.install_names();
+    installed.sort();
+    assert_eq!(
+        installed,
+        ["firewalld", LEAF, "rhc"],
+        "the leaf and both unit owners:\n{}",
         scan.containerfile
     );
+    for unit in ["httpd.service", "rhcd.service"] {
+        assert!(
+            scan.systemctl_lines().iter().any(|l| l.contains(unit)),
+            "{unit}, of a pulled-in package and a carried unit owner, is enabled:\n{}",
+            scan.containerfile
+        );
+    }
+    assert!(scan.omitted_lines().is_empty(), "{}", scan.containerfile);
+    let var_conf = scan.var_conf.as_deref().unwrap_or("");
     assert!(
-        scan.omitted_lines()
-            .iter()
-            .any(|l| l.contains("rhcd.service")),
-        "the not-carried package's user-enabled unit is omitted:\n{}",
-        scan.containerfile
-    );
-    let var_conf = scan
-        .var_conf
-        .as_deref()
-        .expect("the scan stages inspectah-var.conf");
-    assert!(
-        var_conf.contains("/var/lib/firewalld") && !var_conf.contains("/var/lib/httpd"),
-        "the not-carried package's directory is provisioned and the pulled-in \
-         one's is carried:\n{var_conf}"
+        !var_conf.contains("/var/lib/firewalld") && !var_conf.contains("/var/lib/httpd"),
+        "both directories' packages are installed and create them:\n{var_conf}"
     );
     assert_eq!(
         scan.not_carried_block().len(),
@@ -793,52 +812,53 @@ fn refine_snapshots() -> [(&'static str, InspectionSnapshot); 2] {
     [("collected", collected), ("scan tarball", scanned)]
 }
 
-/// One notice names the not-carried packages that own an enabled unit,
-/// in the `# Not carried` block's order. `httpd-core` owns the enabled
+/// A session on `snapshot` in which the operator excluded both unit
+/// owners.
+fn owners_excluded_session(snapshot: InspectionSnapshot) -> RefineSession {
+    let mut session = RefineSession::new(snapshot);
+    for (name, arch) in UNIT_OWNERS {
+        set_package(&mut session, name, arch, false);
+    }
+    session
+}
+
+/// The unit owners are carried by default, so an unchanged export has
+/// nothing to notice; refine's view lists them among the packages,
+/// included, although neither is a leaf.
+#[test]
+fn an_unchanged_export_carries_the_unit_owners_without_a_notice() {
+    for (label, snapshot) in refine_snapshots() {
+        let session = RefineSession::new(snapshot);
+        assert_eq!(export_warnings(&session), Vec::new(), "{label}");
+        assert_eq!(session.decisions().not_carried_notice, None, "{label}");
+        for (name, arch) in UNIT_OWNERS {
+            let shown = session
+                .view()
+                .packages
+                .iter()
+                .find(|p| p.entry.name == *name && p.entry.arch == *arch)
+                .unwrap_or_else(|| panic!("{label}: {name} is in the package list"));
+            assert!(shown.entry.disposition.is_included(), "{label}: {name}");
+        }
+    }
+}
+
+/// One notice names the unit owners the operator left out, in the
+/// `# Not carried` block's order. `httpd-core` owns the enabled
 /// `httpd.service` too, but the leaf pulls it in, so it is carried and
 /// not named; `python3-firewall` is not carried but owns no unit.
 #[test]
-fn the_export_notices_not_carried_packages_that_own_an_enabled_unit() {
+fn the_export_notices_unit_owners_the_operator_excludes() {
     for (label, snapshot) in refine_snapshots() {
-        let warnings = export_warnings(&RefineSession::new(snapshot));
+        let warnings = export_warnings(&owners_excluded_session(snapshot));
         assert_eq!(
             warnings,
-            vec![ExportWarning::notice(
-                "2 packages that own a unit enabled on the source host are not \
-                 carried: firewalld, rhc. See the Not carried table in \
-                 audit-report.md and the # Not carried block in the Containerfile."
-            )],
+            vec![ExportWarning::notice(OWNERS_NOTICE)],
             "{label}"
         );
         let text = warnings[0].text();
         assert!(!text.contains("httpd"), "{label}: {text}");
         assert!(!text.contains("python3-firewall"), "{label}: {text}");
-    }
-}
-
-/// Including the unit owners carries them, and the notice goes with them.
-#[test]
-fn no_notice_once_the_unit_owners_are_included() {
-    for (label, snapshot) in refine_snapshots() {
-        let mut session = RefineSession::new(snapshot);
-        for (name, arch) in [("firewalld", "noarch"), ("rhc", "x86_64")] {
-            session
-                .apply(RefinementOp::SetInclude {
-                    item_id: ItemId::Package {
-                        name: name.into(),
-                        arch: arch.into(),
-                    },
-                    include: true,
-                })
-                .unwrap_or_else(|e| panic!("{label}: include {name}: {e}"));
-        }
-        let warnings = export_warnings(&session);
-        assert!(
-            warnings
-                .iter()
-                .all(|w| w.kind() != ExportWarningKind::Notice),
-            "{label}: {warnings:?}"
-        );
     }
 }
 
@@ -849,7 +869,7 @@ fn no_notice_once_the_unit_owners_are_included() {
 #[test]
 fn the_notice_leads_a_failure_from_the_same_export() {
     for (label, snapshot) in refine_snapshots() {
-        let mut projected = RefineSession::new(snapshot).snapshot_projected();
+        let mut projected = owners_excluded_session(snapshot).snapshot_projected();
         let agent = projected
             .rpm
             .as_mut()
@@ -952,11 +972,24 @@ fn set_package(session: &mut RefineSession, name: &str, arch: &str, include: boo
 }
 
 /// The rows refine shows are the export's `# Not carried` block, in its
-/// order, each with the identity the include op takes.
+/// order, each with the identity the include op takes, by default and
+/// once the operator excludes the unit owners.
 #[test]
 fn the_projection_lists_the_block_in_its_order() {
     for (label, snapshot) in refine_snapshots() {
-        let session = RefineSession::new(snapshot);
+        let default = RefineSession::new(snapshot.clone());
+        assert_eq!(
+            projected_not_carried(&default),
+            surfaces_of(&default).not_carried_block_names(),
+            "{label}, by default"
+        );
+        assert_eq!(
+            projected_not_carried(&default),
+            EXPECTED_NOT_CARRIED,
+            "{label}"
+        );
+
+        let session = owners_excluded_session(snapshot);
         let export = surfaces_of(&session);
         assert_eq!(
             projected_not_carried(&session),
@@ -965,7 +998,7 @@ fn the_projection_lists_the_block_in_its_order() {
         );
         assert_eq!(
             projected_not_carried(&session),
-            EXPECTED_NOT_CARRIED,
+            OWNERS_EXCLUDED_NOT_CARRIED,
             "{label}"
         );
         let firewalld = &session.decisions().not_carried[0];
@@ -989,7 +1022,7 @@ fn the_projection_lists_the_block_in_its_order() {
 #[test]
 fn the_projections_unit_owners_are_the_ones_the_notice_names() {
     for (label, snapshot) in refine_snapshots() {
-        let session = RefineSession::new(snapshot);
+        let session = owners_excluded_session(snapshot);
         let decisions = session.decisions();
         let owners: Vec<&str> = decisions
             .not_carried
@@ -1025,77 +1058,70 @@ fn the_projections_unit_owners_are_the_ones_the_notice_names() {
     }
 }
 
-/// Including a listed package carries it on every surface, and excluding
-/// it again puts back exactly what was there. `rhc` owns the user-enabled
-/// `rhcd.service`, whose `systemctl` line the export restores;
-/// `firewalld` owns `/var/lib/firewalld`, which stops being provisioned
-/// once the package that creates it is installed.
+/// Excluding a unit owner lists it on every surface, and including it
+/// again puts back exactly the default. `rhc` owns the user-enabled
+/// `rhcd.service`, whose `systemctl` line the exclusion omits;
+/// `firewalld` owns `/var/lib/firewalld`, which is provisioned once the
+/// package that creates it is left out.
 ///
-/// `python3-firewall` stays listed after `firewalld` is included: the
-/// dependency tree records leaf closures only, so the dependency of an
-/// included auto package is not credited as pulled in. That is the known
-/// limit, pinned here so a change to it is deliberate.
+/// `python3-firewall` is listed throughout: the dependency tree records
+/// leaf closures only, so the dependency of a carried auto package is not
+/// credited as pulled in. That is the known limit, pinned here so a
+/// change to it is deliberate.
 #[test]
-fn including_a_listed_package_carries_it_and_excluding_it_restores_the_list() {
+fn excluding_a_unit_owner_lists_it_and_including_it_restores_the_default() {
     for (label, snapshot) in refine_snapshots() {
         let mut session = RefineSession::new(snapshot);
         let before = surfaces_of(&session);
         let notice_before = session.decisions().not_carried_notice.clone();
+        assert_eq!(notice_before, None, "{label}: every unit owner is carried");
 
-        for (name, arch) in [("rhc", "x86_64"), ("firewalld", "noarch")] {
-            set_package(&mut session, name, arch, true);
+        for (name, arch) in UNIT_OWNERS {
+            set_package(&mut session, name, arch, false);
             let after = surfaces_of(&session);
-            let ctx = format!("{label}, {name} included");
+            let ctx = format!("{label}, {name} excluded");
 
             assert!(
-                after.install_names().iter().any(|n| n == name),
+                !after.install_names().iter().any(|n| n == name),
                 "{ctx}: install list {:?}\n{}",
                 after.install_names(),
                 after.containerfile
             );
             assert!(
-                !after.not_carried_block_names().contains(&name),
+                after.not_carried_block_names().contains(name),
                 "{ctx}:\n{}",
                 after.containerfile
             );
             assert!(
-                !after.not_carried_table_names().contains(&name),
+                after.not_carried_table_names().contains(name),
                 "{ctx}:\n{}",
                 after.audit
             );
             assert!(
-                !projected_not_carried(&session).iter().any(|n| n == name),
+                projected_not_carried(&session).iter().any(|n| n == name),
                 "{ctx}: {:?}",
                 projected_not_carried(&session)
             );
-            assert!(
-                !session
-                    .decisions()
-                    .not_carried_notice
-                    .as_ref()
-                    .is_some_and(|n| n.text().contains(name)),
-                "{ctx}: {:?}",
-                session.decisions().not_carried_notice
-            );
-            assert!(
-                !export_warnings(&session)
-                    .iter()
-                    .any(|w| w.text().contains(name)),
-                "{ctx}"
-            );
+            let notice = session
+                .decisions()
+                .not_carried_notice
+                .clone()
+                .unwrap_or_else(|| panic!("{ctx}: an excluded owner gives a notice"));
+            assert!(notice.text().contains(name), "{ctx}: {notice:?}");
+            assert_eq!(export_warnings(&session), vec![notice], "{ctx}");
 
-            match name {
+            match *name {
                 "rhc" => {
                     assert!(
-                        after
+                        !after
                             .systemctl_lines()
                             .iter()
                             .any(|l| l.contains("rhcd.service")),
-                        "{ctx}: the unit is enabled again:\n{}",
+                        "{ctx}: the unit is no longer enabled:\n{}",
                         after.containerfile
                     );
                     assert!(
-                        !after
+                        after
                             .omitted_lines()
                             .iter()
                             .any(|l| l.contains("rhcd.service")),
@@ -1106,21 +1132,21 @@ fn including_a_listed_package_carries_it_and_excluding_it_restores_the_list() {
                 _ => {
                     let var_conf = after.var_conf.as_deref().unwrap_or("");
                     assert!(
-                        !var_conf.contains("/var/lib/firewalld"),
-                        "{ctx}: the installed package creates its own directory:\n{var_conf}"
-                    );
-                    assert!(
-                        projected_not_carried(&session)
-                            .iter()
-                            .any(|n| n == "python3-firewall"),
-                        "{ctx}: the known limit no longer holds; update the docs"
+                        var_conf.contains("/var/lib/firewalld"),
+                        "{ctx}: the left-out package's directory is provisioned:\n{var_conf}"
                     );
                 }
             }
+            assert!(
+                projected_not_carried(&session)
+                    .iter()
+                    .any(|n| n == "python3-firewall"),
+                "{ctx}: the known limit no longer holds; update the docs"
+            );
 
-            set_package(&mut session, name, arch, false);
+            set_package(&mut session, name, arch, true);
             let again = surfaces_of(&session);
-            let ctx = format!("{label}, {name} excluded again");
+            let ctx = format!("{label}, {name} included again");
             assert_eq!(again.containerfile, before.containerfile, "{ctx}");
             assert_eq!(
                 again.not_carried_table(),
@@ -1157,39 +1183,38 @@ fn scan_stderr_lines(snapshot: &InspectionSnapshot) -> Vec<String> {
         .collect()
 }
 
+/// The scan carries every unit owner, so on this host it has nothing to
+/// notice; the line it would print for an owner left out is the one
+/// `Display` gives the shared notice, shown here on the same snapshot with
+/// both owners excluded after the fact.
 #[test]
-fn the_scan_prints_a_notice_for_not_carried_unit_owners() {
+fn the_scan_prints_no_notice_when_it_carries_every_unit_owner() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let snapshot = scan_export(collected(&host_mock()), dir.path());
+    let mut snapshot = scan_export(collected(&host_mock()), dir.path());
+    assert_eq!(scan_stderr_lines(&snapshot), Vec::<String>::new());
+    assert_eq!(
+        not_carried_packages(&snapshot)
+            .iter()
+            .map(|p| p.display_name())
+            .collect::<Vec<_>>(),
+        EXPECTED_NOT_CARRIED,
+        "the list is not empty, or the absence proves nothing"
+    );
+
+    for pkg in &mut snapshot
+        .rpm
+        .as_mut()
+        .expect("the rpm section")
+        .packages_added
+    {
+        if UNIT_OWNERS.contains(&(pkg.name.as_str(), pkg.arch.as_str())) {
+            pkg.disposition = FindingKind::excluded();
+        }
+    }
     assert_eq!(
         scan_stderr_lines(&snapshot),
-        vec![
-            "Notice: 2 packages that own a unit enabled on the source host are not \
-             carried: firewalld, rhc. See the Not carried table in audit-report.md \
-             and the # Not carried block in the Containerfile."
-                .to_string()
-        ]
+        vec![format!("Notice: {OWNERS_NOTICE}")]
     );
-    // Both places the notice points at list the packages it names, first
-    // and in its order.
-    let scan = Surfaces::read(dir.path());
-    let named = ["firewalld", "rhc"];
-    let block_names: Vec<&str> = scan
-        .not_carried_block()
-        .iter()
-        .skip(1)
-        .filter_map(|l| l.strip_prefix("#   "))
-        .filter_map(|l| l.split(' ').next())
-        .collect();
-    assert_eq!(block_names[..named.len()], named, "{}", scan.containerfile);
-    let table_names: Vec<&str> = scan
-        .not_carried_table()
-        .iter()
-        .skip(4)
-        .filter_map(|row| row.split('|').nth(1))
-        .map(str::trim)
-        .collect();
-    assert_eq!(table_names[..named.len()], named, "{}", scan.audit);
 }
 
 /// No enabled units, so no not-carried package owns one: the not-carried
@@ -1210,6 +1235,94 @@ fn the_scan_prints_nothing_without_not_carried_unit_owners() {
         "the list is not empty, or the absence proves nothing"
     );
     assert_eq!(scan_stderr_lines(&snapshot), Vec::<String>::new());
+}
+
+// ── The fleet export's not-carried notice ────────────────────────────
+
+/// The image every fleet host's scan resolved.
+const FLEET_TARGET_IMAGE: &str = "registry.redhat.io/rhel9/rhel-bootc:9.4";
+
+/// A fleet of two hosts like [`host_mock`]. The merge keeps only packages
+/// that are a leaf on every host, so it drops both unit owners, and the
+/// fleet export cannot carry them. Both fleet exports list them in the
+/// `# Not carried` block and the audit table, `inspectah aggregate` prints
+/// the notice the scan would, and the refine export of the aggregate sends
+/// it in its warnings: the same notice a single host's export gives.
+#[test]
+fn the_fleet_export_notices_the_unit_owners_its_merge_drops() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut tarballs = Vec::new();
+    for hostname in ["host-a", "host-b"] {
+        let out = dir.path().join(hostname);
+        let mock = host_mock().with_file("/etc/hostname", &format!("{hostname}\n"));
+        // The scan records the image it resolved, and the merge takes the
+        // fleet's baseline from the host whose target matches; without one
+        // a fleet cannot tell a base-image package from a dropped one.
+        let mut snapshot = collected(&mock);
+        snapshot.target_image = Some(TargetImageIdentity {
+            image_ref: FLEET_TARGET_IMAGE.into(),
+            strategy: ResolutionStrategy::OsRelease,
+        });
+        scan_export(snapshot, &out);
+        let tarball = dir.path().join(format!("{hostname}.tar.gz"));
+        create_tarball(&out, &tarball, hostname).expect("the scan tarball packs");
+        tarballs.push(tarball);
+    }
+
+    let aggregate = dir.path().join("aggregate.tar.gz");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_inspectah"))
+        .arg("aggregate")
+        .args(&tarballs)
+        .arg("--output-file")
+        .arg(&aggregate)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("inspectah aggregate runs");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(
+        stderr.lines().last(),
+        Some(format!("Notice: {OWNERS_NOTICE}").as_str()),
+        "{stderr}"
+    );
+
+    let aggregate_root = unpack(&aggregate, &dir.path().join("aggregate"));
+    let session =
+        inspectah_refine::tarball::from_tarball(&aggregate).expect("refine opens the aggregate");
+    assert_eq!(
+        export_warnings(&session),
+        vec![ExportWarning::notice(OWNERS_NOTICE)],
+        "the refine export of the aggregate"
+    );
+    let refine_dir = dir.path().join("refine");
+    std::fs::create_dir_all(&refine_dir).expect("mkdir");
+    let refine_root = export_session(session, &refine_dir);
+
+    for (label, root) in [
+        ("inspectah aggregate", aggregate_root),
+        ("refine export of the aggregate", refine_root),
+    ] {
+        let fleet = Surfaces::read(&root);
+        assert_eq!(
+            fleet.not_carried_block_names(),
+            ["firewalld", "rhc"],
+            "{label}:\n{}",
+            fleet.containerfile
+        );
+        assert_eq!(
+            fleet.not_carried_table_names(),
+            ["firewalld", "rhc"],
+            "{label}:\n{}",
+            fleet.audit
+        );
+        for (name, _) in UNIT_OWNERS {
+            assert!(
+                !fleet.install_names().iter().any(|n| n == name),
+                "{label}: the fleet does not install {name}:\n{}",
+                fleet.containerfile
+            );
+        }
+    }
 }
 
 // ── A config the collector could not capture ─────────────────────────
