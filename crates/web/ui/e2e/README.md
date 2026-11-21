@@ -1,89 +1,50 @@
 # End-to-End Tests
 
-Playwright e2e tests for the inspectah refine web UI.
+Playwright e2e tests for the inspectah refine web UI. Run every command
+below from `crates/web/ui`.
 
-## Prerequisites
+## How the Suite Runs
 
-1. **Playwright browsers** must be installed:
+Playwright starts the Vite dev server on port 5174 itself
+(`playwright.config.ts`), so no server needs to be running for most specs.
 
-   ```bash
-   cd inspectah-web/ui
-   npx playwright install chromium
-   ```
-
-2. **A running `inspectah refine` server** with a valid scan tarball:
-
-   ```bash
-   # Build the binary first
-   cargo build -p inspectah-cli
-
-   # Start the server (uses port 8642 by default)
-   ./target/debug/inspectah refine --open=false <path-to-tarball.tar.gz>
-   ```
-
-   The tarball must be a valid inspectah scan output (`.tar.gz`) containing
-   an `inspection-snapshot.json` with package and config data.
-
-## Test Data
-
-For CI, place a minimal test tarball at `testdata/e2e-fixture.tar.gz`. This
-tarball should contain a valid `inspection-snapshot.json` with at least:
-
-- A few packages (some included, some excluded)
-- A few config file entries
-- Enough data to exercise toggle/undo/redo workflows
-
-To create a fixture tarball from a real scan:
-
-```bash
-# Run a scan on a RHEL system
-inspectah scan -o /tmp/scan-output.tar.gz
-
-# Copy it to testdata/
-cp /tmp/scan-output.tar.gz testdata/e2e-fixture.tar.gz
-```
-
-Alternatively, construct a minimal `inspection-snapshot.json` by hand and
-package it:
-
-```bash
-mkdir -p /tmp/e2e-fixture
-# Create a minimal snapshot JSON (see testdata/golden/ for schema examples)
-tar czf testdata/e2e-fixture.tar.gz -C /tmp/e2e-fixture .
-```
+- **Mocked specs** (every spec but one) answer `/api/*` from the JSON
+  fixtures under `e2e/fixtures/`, served by `e2e/helpers/mock-api.ts`
+  through `page.route()`. The fixtures are written by hand; see
+  `process-docs/skills/e2e-fixtures-are-hand-maintained.md` before
+  changing one.
+- **`smoke-integration.spec.ts`** talks to a real `inspectah refine`
+  server on `http://127.0.0.1:8642`, through the Vite proxy. Without one
+  its tests skip on a local run and fail with `CI` set.
 
 ## Running Tests
 
-Tests assume the server is already running on `http://127.0.0.1:8642`.
-
 ```bash
-# Run all e2e tests (headless)
-npm run test:e2e
+npx playwright install chromium   # once
 
-# Run with browser visible
-npm run test:e2e:headed
-
-# Run a specific test file
-npx playwright test e2e/smoke.spec.ts
-
-# Run with Playwright UI mode
+npm run test:e2e                  # whole suite, headless
+npm run test:e2e:headed           # with a browser window
+npx playwright test e2e/groups.spec.ts
 npx playwright test --ui
 ```
 
-## Test Files
+To include the real-server spec, start refine over the committed fixture
+from the repository root first:
 
-| File               | Coverage                                         |
-| ------------------ | ------------------------------------------------ |
-| `smoke.spec.ts`    | Page load, sidebar sections, stats bar rendering |
-| `triage.spec.ts`   | Toggle, undo, redo, export tarball download      |
-| `keyboard.spec.ts` | j/k nav, Space toggle, /, Ctrl+K, ?, Escape     |
-| `responsive.spec.ts` | Hamburger at 1024px, sidebar at 1280px, panel toggle |
-| `a11y.spec.ts`     | axe-core WCAG audit, keyboard accessibility      |
-| `aggregate.spec.ts`  | Aggregate zone rendering, banner/ack, diff, export, undo/redo, a11y |
+```bash
+cargo build -p inspectah-cli
+./target/debug/inspectah refine --open=false testdata/e2e-fixture.tar.gz < /dev/null &
+```
+
+Restart it between runs: the smoke spec changes its timeline, and refine
+saves a session file next to the tarball that the next start reads. The
+skill file above has the details.
 
 ## CI
 
-The GitHub Actions workflow installs Chromium, builds the binary, starts the
-server in the background with a test tarball, waits for `/api/health` to
-respond, runs the tests, and kills the server. See
-`.github/workflows/rust-ci.yml` for details.
+`.github/workflows/rust-ci.yml` installs Chromium, builds the binary,
+starts refine over `testdata/e2e-fixture.tar.gz`, waits for `/api/health`
+and runs the whole suite as a blocking step. With `CI` set the suite runs
+on one worker and retries a failed test once to record a trace; a test
+that passes only on its retry still fails the run (`failOnFlakyTests`).
+Run it the same way locally with `CI=1 npx playwright test`.
