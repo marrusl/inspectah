@@ -152,17 +152,35 @@ pub(crate) fn installs_on_its_own_route(
             ))
 }
 
+/// How far a package's recorded dependencies reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// What installing it certainly installs: its `dep_closures` entry.
+    /// A presence claim rests on this, since it is installed whatever
+    /// else the export leaves out.
+    Certain,
+    /// Everything installing it may install: its `dep_closures` and
+    /// `dep_alternatives` entries. An absence claim rests on this, since
+    /// a package outside it is never installed by it.
+    Possible,
+}
+
 /// The canonical `name.arch` ids of `packages_added` entries that a
-/// package the export installs pulls in as a dependency, whatever their
-/// own disposition.
+/// package the export installs certainly pulls in as a dependency,
+/// whatever their own disposition.
 ///
-/// A package something installed depends on is in the image: dnf installs
+/// A package something installed requires is in the image: dnf installs
 /// it with the package that needs it. That holds for refine's default
 /// exclusion of a non-leaf package and for an operator's explicit
 /// exclusion alike, so "excluded" never means "absent" for such a package.
-/// This is the one place that answers the question; the service tiers, the
-/// package selection, the disabled-repo install, the not-carried list and
-/// a fleet's drops all ask it.
+/// It does not hold for one of several providers of a capability: with
+/// the base image or another installed package providing it too, dnf
+/// installs none of them, and with only added ones it picks one. The
+/// recorded `dep_closures` hold real requirements only, and this answer
+/// reads nothing else (`Reach::Certain`). This is the one place that
+/// answers the question; the service tiers, the package selection, the
+/// disabled-repo install and the not-carried list all ask it. A fleet's
+/// drops ask [`possibly_pulled_in_by_included`].
 ///
 /// The roots are every entry [`installs_on_its_own_route`] holds for: a
 /// leaf, an auto package carried because it owns an enabled unit, and an
@@ -170,8 +188,8 @@ pub(crate) fn installs_on_its_own_route(
 /// export renders as a manual step (no repo serves it and no RPM is
 /// carried, or a repo-enabling package demoted for a dropped repo with no
 /// upload) is never installed by the image, so dnf never resolves its
-/// dependencies either. A root's closure is its `dep_closures` entry,
-/// which keeps leaves, joined with its `leaf_dep_tree` entry
+/// dependencies either. A root's closure is its `dep_closures` entry, or,
+/// in a snapshot without closures, its `leaf_dep_tree` entry
 /// (`closure_of`).
 ///
 /// The scan's defaults do not ask this: they run while every auto package
@@ -186,25 +204,47 @@ pub fn pulled_in_by_included(
     snap: &InspectionSnapshot,
     repos: &InstallRepos,
 ) -> std::collections::HashSet<String> {
+    pulled_in_by_included_reaching(snap, repos, Reach::Certain)
+}
+
+/// What a package the export installs may pull in: [`pulled_in_by_included`]
+/// plus every provider dnf may pick among several and what it brings
+/// (`Reach::Possible`). A package outside it is not in the image unless
+/// the export installs it itself, so a fleet's drops ask this.
+pub(crate) fn possibly_pulled_in_by_included(
+    snap: &InspectionSnapshot,
+    repos: &InstallRepos,
+) -> std::collections::HashSet<String> {
+    pulled_in_by_included_reaching(snap, repos, Reach::Possible)
+}
+
+fn pulled_in_by_included_reaching(
+    snap: &InspectionSnapshot,
+    repos: &InstallRepos,
+    reach: Reach,
+) -> std::collections::HashSet<String> {
     let Some(rpm) = snap.rpm.as_ref() else {
         return std::collections::HashSet::new();
     };
     rpm.packages_added
         .iter()
         .filter(|pkg| installs_on_its_own_route(rpm, repos, pkg))
-        .flat_map(|pkg| closure_of(rpm, &format!("{}.{}", pkg.name, pkg.arch)))
+        .flat_map(|pkg| closure_of(rpm, &format!("{}.{}", pkg.name, pkg.arch), reach))
         .collect()
 }
 
-/// The part of [`pulled_in_by_included`] the scan's defaults may count:
-/// what the installed leaves pull in ([`pulled_in_by_installed_leaves`])
-/// and what the installed auto packages carried because they own an
-/// enabled unit (`not_carried::default_carried_unit_owners`) pull in.
+/// What the scan's defaults may count as pulled in: what the installed
+/// leaves and the installed auto packages carried because they own an
+/// enabled unit (`not_carried::default_carried_unit_owners`) may pull in
+/// (`Reach::Possible`).
 ///
 /// The not-carried class is settled on this. It cannot count every
 /// included package: the scan decides the class while every auto package
 /// is still included, so counting them would pull in the dependencies of
-/// the packages it is about to exclude.
+/// the packages it is about to exclude. It counts a provider dnf may pick
+/// among several, as it always has, so such a package stays included by
+/// default and the image installs it as the source host had it; leaving
+/// it out is the operator's call.
 pub(crate) fn pulled_in_by_default_roots(
     snap: &InspectionSnapshot,
     repos: &InstallRepos,
@@ -212,26 +252,34 @@ pub(crate) fn pulled_in_by_default_roots(
     let Some(rpm) = snap.rpm.as_ref() else {
         return std::collections::HashSet::new();
     };
-    let mut pulled_in = pulled_in_by_installed_leaves(rpm, repos);
+    let mut pulled_in = pulled_in_by_installed_leaves_reaching(rpm, repos, Reach::Possible);
     let owners = default_carried_unit_owners(snap);
     for pkg in &rpm.packages_added {
         let id = format!("{}.{}", pkg.name, pkg.arch);
         if owners.contains(&id) && installs_on_its_own_route(rpm, repos, pkg) {
-            pulled_in.extend(closure_of(rpm, &id));
+            pulled_in.extend(closure_of(rpm, &id, Reach::Possible));
         }
     }
     pulled_in
 }
 
-/// The part of [`pulled_in_by_included`] the installed leaves pull in. A
-/// leaf is a key of `leaf_dep_tree`, which an aggregate keeps after refine
-/// clears its `leaf_packages`.
+/// The part of [`pulled_in_by_included`] the installed leaves certainly
+/// pull in. A leaf is a key of `leaf_dep_tree`, which an aggregate keeps
+/// after refine clears its `leaf_packages`.
 ///
 /// The Containerfile names a carried unit owner on its install line only
 /// when this does not hold for it: an installed leaf already brings it.
 pub(crate) fn pulled_in_by_installed_leaves(
     rpm: &RpmSection,
     repos: &InstallRepos,
+) -> std::collections::HashSet<String> {
+    pulled_in_by_installed_leaves_reaching(rpm, repos, Reach::Certain)
+}
+
+fn pulled_in_by_installed_leaves_reaching(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+    reach: Reach,
 ) -> std::collections::HashSet<String> {
     let Some(tree) = rpm.leaf_dep_tree.as_object() else {
         return std::collections::HashSet::new();
@@ -241,31 +289,38 @@ pub(crate) fn pulled_in_by_installed_leaves(
         .filter(|pkg| installs_on_its_own_route(rpm, repos, pkg))
         .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
         .filter(|id| tree.contains_key(id))
-        .flat_map(|id| closure_of(rpm, &id))
+        .flat_map(|id| closure_of(rpm, &id, reach))
         .collect()
 }
 
-/// Everything installing the added package `id` installs, as recorded:
-/// its `dep_closures` entry joined with its `leaf_dep_tree` entry. The
-/// leaf tree adds nothing to a collected snapshot's closures, but is all
-/// an older or hand-built one may have.
-fn closure_of(rpm: &RpmSection, id: &str) -> Vec<String> {
-    let closures = rpm
-        .dep_closures
-        .as_ref()
-        .and_then(|closures| closures.get(id))
-        .into_iter()
-        .flatten()
-        .cloned();
-    let leaf_tree = rpm
-        .leaf_dep_tree
+/// What installing the added package `id` installs, as recorded, as far
+/// as `reach`: its `dep_closures` entry, joined with its
+/// `dep_alternatives` entry for [`Reach::Possible`]. A snapshot without
+/// closures, an older or hand-built one, has only its `leaf_dep_tree`
+/// entry, read for either reach.
+fn closure_of(rpm: &RpmSection, id: &str, reach: Reach) -> Vec<String> {
+    let Some(closures) = rpm.dep_closures.as_ref() else {
+        return rpm
+            .leaf_dep_tree
+            .get(id)
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect();
+    };
+    let alternatives = match reach {
+        Reach::Certain => None,
+        Reach::Possible => rpm.dep_alternatives.as_ref().and_then(|alts| alts.get(id)),
+    };
+    closures
         .get(id)
-        .and_then(serde_json::Value::as_array)
         .into_iter()
+        .chain(alternatives)
         .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(str::to_string);
-    closures.chain(leaf_tree).collect()
+        .cloned()
+        .collect()
 }
 
 /// Whether every added package the export installs has a recorded

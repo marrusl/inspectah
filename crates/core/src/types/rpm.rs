@@ -298,20 +298,38 @@ pub struct RpmSection {
     #[serde(default)]
     pub leaf_dep_tree: serde_json::Value,
     /// Maps every authoritative leaf and auto `name.arch` identity to the
-    /// added identities installing it installs, leaves and auto packages
-    /// alike, the package itself left out. Whatever the export installs
-    /// brings these with it: a leaf, an auto package carried because it
-    /// owns an enabled unit, or one an operator included.
+    /// added identities installing it certainly installs, leaves and auto
+    /// packages alike, the package itself left out. Whatever the export
+    /// installs brings these with it: a leaf, an auto package carried
+    /// because it owns an enabled unit, or one an operator included.
     ///
-    /// `leaf_dep_tree` is the auto part of a leaf's entry. Unlike it, this
-    /// keeps a dependency the operator also installed, which is what lets
-    /// an absence claim rest on it.
+    /// Only real requirements count: a capability exactly one installed
+    /// package provides. A capability the base image or the package itself
+    /// also provides needs no added package, and one several added
+    /// packages provide is a choice dnf makes; those providers, and what
+    /// they bring, are in `dep_alternatives` instead. The collector's dnf
+    /// fallback cannot tell the two apart and records every entry empty.
     ///
     /// `None` whenever `auto_packages` is `None`. For an aggregate it maps
-    /// each package the merge kept to its closures on every host with leaf
-    /// data, joined, and is `None` when no host had leaf data.
+    /// each package the merge kept to what it certainly installs on every
+    /// host with leaf data that has it, and is `None` when no host had
+    /// leaf data.
     #[serde(default)]
     pub dep_closures: Option<BTreeMap<String, Vec<String>>>,
+    /// Maps the same identities as `dep_closures` to the added identities
+    /// installing it may install beyond its `dep_closures` entry: a
+    /// provider dnf picks among several, and what that provider brings.
+    /// A package in neither entry is never installed by it, which is what
+    /// lets an absence claim rest on the two together.
+    ///
+    /// `leaf_dep_tree` is the auto part of a leaf's two entries joined.
+    /// Unlike it, these keep a dependency the operator also installed.
+    ///
+    /// `None` whenever `dep_closures` is. For an aggregate, each kept
+    /// package's two entries joined across hosts, less its merged
+    /// `dep_closures` entry.
+    #[serde(default)]
+    pub dep_alternatives: Option<BTreeMap<String, Vec<String>>>,
     #[serde(default)]
     pub module_streams: Vec<EnabledModuleStream>,
     #[serde(default)]

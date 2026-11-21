@@ -2594,10 +2594,17 @@ fn test_aggregate_leaf_intersection_filters_packages_added() {
 }
 
 /// Every package the merge keeps gets its closures from every host with
-/// leaf data, joined: `git`, a leaf on both, and `app`, which only
+/// leaf data that has it: `git`, a leaf on both, and `app`, which only
 /// `host-a` has and the merge keeps left out. `app`'s closure keeps
 /// `helper`, user-installed on `host-a`, which the merge drops for being a
 /// dependency on `host-b`. A dropped package gets no entry.
+///
+/// What a package certainly installs is what it certainly installs on
+/// every such host: `git` requires `helper` on `host-b` only, so the fleet
+/// image may install it with `git` but need not, and it moves to the
+/// alternatives. Those join everything either map records on any host:
+/// `host-a`'s `git` may also install `ruby`, one of several providers
+/// there.
 #[test]
 fn test_aggregate_dep_closures_cover_every_kept_package() {
     let pkg = |name: &str| PackageEntry {
@@ -2632,6 +2639,12 @@ fn test_aggregate_dep_closures_cover_every_kept_package() {
             ("helper.x86_64", &[]),
             ("perl-libs.x86_64", &[]),
         ])),
+        dep_alternatives: Some(closures(&[
+            ("app.x86_64", &[]),
+            ("git.x86_64", &["ruby.x86_64"]),
+            ("helper.x86_64", &[]),
+            ("perl-libs.x86_64", &[]),
+        ])),
         ..Default::default()
     });
     let host_b = Some(RpmSection {
@@ -2660,7 +2673,14 @@ fn test_aggregate_dep_closures_cover_every_kept_package() {
         merged.dep_closures,
         Some(closures(&[
             ("app.x86_64", &["helper.x86_64"]),
-            ("git.x86_64", &["helper.x86_64", "perl-libs.x86_64"]),
+            ("git.x86_64", &["perl-libs.x86_64"]),
+        ]))
+    );
+    assert_eq!(
+        merged.dep_alternatives,
+        Some(closures(&[
+            ("app.x86_64", &[]),
+            ("git.x86_64", &["helper.x86_64", "ruby.x86_64"]),
         ]))
     );
 }

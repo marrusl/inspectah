@@ -2,7 +2,7 @@
 //! what that carries with it, on a host built from collector output.
 //!
 //! Each case is a [`UnitHost`] the real RPM, units and config inspectors
-//! scan, with the dependency answers dnf would give, so every field the
+//! scan, with the dependency answers `rpm` would give, so every field the
 //! decision reads comes from the collector. Each is exported both ways:
 //! the scan tarball and an unchanged refine export.
 //!
@@ -14,6 +14,9 @@
 //!   unit commands survive, and one a disabled repo serves installs from it.
 //! - An owner is carried when the collector could not tell leaves from
 //!   dependencies and fell back to the dependency graph.
+//! - Excluding one of several providers of a capability omits its unit,
+//!   on one host and on a fleet; excluding the only provider an included
+//!   package requires keeps it.
 //! - A fleet names an owner one host enabled whatever the hostname order,
 //!   and does not name one a kept leaf pulls in on some host. A package
 //!   only some hosts have, once included, keeps its dependency's unit
@@ -523,6 +526,97 @@ fn the_graph_fallback_still_carries_a_unit_owner() {
     }
 }
 
+// ── A capability several packages provide ───────────────────────────
+
+/// A host where the leaf `app` requires the capability `transport`, which
+/// the user-installed `alternate` provides, and `alternate` owns
+/// `alternate.service`, enabled against a preset that disables it. With
+/// `competitor`, a second package provides `transport` too: a base-image
+/// package, or another user-installed leaf.
+fn transport_host(competitor: Option<Competitor>) -> UnitHost {
+    let mut userinstalled = vec!["bash", "app", "alternate"];
+    let mut host = base_host()
+        .package("alternate")
+        .provides("alternate", "transport")
+        .requires("app", &["transport"])
+        .unit("alternate.service", "enabled")
+        .vendor_unit("alternate.service", WANTED_UNIT, Some("alternate"))
+        .preset("disable *");
+    match competitor {
+        Some(Competitor::BaseImage) => {
+            host = host
+                .base_package("base-provider")
+                .provides("base-provider", "transport");
+        }
+        Some(Competitor::Leaf) => {
+            host = host.package("other").provides("other", "transport");
+            userinstalled.push("other");
+        }
+        None => {}
+    }
+    host.userinstalled(&userinstalled)
+}
+
+/// Who else provides `transport` on a [`transport_host`].
+#[derive(Debug, Clone, Copy)]
+enum Competitor {
+    /// A base-image package, so the image has it whatever the export does.
+    BaseImage,
+    /// A user-installed leaf the export installs.
+    Leaf,
+}
+
+/// The operator excludes `alternate`. Another installed package already
+/// provides the `transport` that `app` requires, so dnf does not install
+/// `alternate`: its enable is omitted, as for any excluded package, and
+/// it is not named on the install line. Included, it is enabled.
+#[test]
+fn excluding_one_of_several_providers_omits_its_unit() {
+    for competitor in [Competitor::BaseImage, Competitor::Leaf] {
+        let ctx = format!("competitor: {competitor:?}");
+        let mut session = RefineSession::new(collected(transport_host(Some(competitor))));
+        let included = surfaces_of(&session);
+        assert!(
+            acts(&included.containerfile, "enable", "alternate.service"),
+            "{ctx}: included, its enable is written:\n{}",
+            included.containerfile
+        );
+
+        set_package(&mut session, "alternate", "x86_64", false);
+        let excluded = surfaces_of(&session);
+        assert!(
+            !acts(&excluded.containerfile, "enable", "alternate.service"),
+            "{ctx}: nothing installs alternate:\n{}",
+            excluded.containerfile
+        );
+        assert!(
+            !excluded.install_names().iter().any(|n| n == "alternate"),
+            "{ctx}:\n{}",
+            excluded.containerfile
+        );
+        assert!(
+            excluded.install_names().iter().any(|n| n == "app"),
+            "{ctx}:\n{}",
+            excluded.containerfile
+        );
+    }
+}
+
+/// The inverse: `alternate` is the only provider of the `transport` that
+/// the included `app` requires, so dnf installs it with `app` although the
+/// operator excluded it, and its enable survives.
+#[test]
+fn excluding_the_only_provider_keeps_its_unit() {
+    let mut session = RefineSession::new(collected(transport_host(None)));
+    set_package(&mut session, "alternate", "x86_64", false);
+    let excluded = surfaces_of(&session);
+    assert!(
+        acts(&excluded.containerfile, "enable", "alternate.service"),
+        "app requires it, so dnf installs it:\n{}",
+        excluded.containerfile
+    );
+}
+
 // ── Fleets ───────────────────────────────────────────────────────────
 
 /// What a fleet's two exports wrote, and what `inspectah aggregate`
@@ -789,4 +883,28 @@ fn including_a_partial_fleet_leaf_keeps_its_dependencys_unit_command() {
             );
         }
     }
+}
+
+/// Both hosts are a [`transport_host`] whose base image also provides
+/// `transport`. The merge keeps `app` and `alternate`, leaves on both;
+/// once the operator excludes `alternate` in refine, the fleet image does
+/// not install it, so its enable is omitted.
+#[test]
+fn a_fleet_omits_the_unit_of_an_excluded_alternate_provider() {
+    let host = || transport_host(Some(Competitor::BaseImage));
+    let fleet = fleet_with(vec![("host-a", host()), ("host-b", host())], |session| {
+        set_package(session, "alternate", "x86_64", false)
+    });
+    let (_, unchanged) = &fleet.paths[0];
+    assert!(
+        acts(&unchanged.containerfile, "enable", "alternate.service"),
+        "kept and included, its enable is written:\n{}",
+        unchanged.containerfile
+    );
+    let (label, excluded) = &fleet.paths[1];
+    assert!(
+        !acts(&excluded.containerfile, "enable", "alternate.service"),
+        "{label}: nothing installs alternate:\n{}",
+        excluded.containerfile
+    );
 }

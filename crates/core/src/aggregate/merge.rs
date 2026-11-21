@@ -1408,34 +1408,64 @@ pub fn merge_rpm_sections(
     };
 
     // Closures for every package the merge kept, the partial ones
-    // included: each one's closures on every authoritative host, joined.
-    // A kept package the operator includes installs its dependencies, so
-    // without its closure the fleet would read a dependency it drops as
-    // absent from an image that installs it. The closures keep a
-    // dependency a host also user-installed, which the leaf tree leaves
-    // out.
-    let dep_closures = (!authoritative_indices.is_empty()).then(|| {
+    // included, from every authoritative host that has it. A kept package
+    // the operator includes installs its dependencies, so without its
+    // closure the fleet would read a dependency it drops as absent from an
+    // image that installs it. The closures keep a dependency a host also
+    // user-installed, which the leaf tree leaves out.
+    //
+    // What it certainly installs is what it certainly installs on every
+    // such host: a host where another package, or the base image, also
+    // provides the capability shows the image need not install it. What it
+    // may install is everything either map records on any host, so an
+    // absence claim still rests on all of it.
+    let (dep_closures, dep_alternatives) = if authoritative_indices.is_empty() {
+        (None, None)
+    } else {
         let kept: HashSet<String> = packages_added
             .iter()
             .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
             .collect();
-        let mut joined: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+        let mut installs: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+        let mut may_install: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
         for &i in &authoritative_indices {
-            let host = sections[i].as_ref().and_then(|s| s.dep_closures.as_ref());
-            for (id, deps) in host.into_iter().flatten() {
-                if kept.contains(id) {
-                    joined
-                        .entry(id.clone())
-                        .or_default()
-                        .extend(deps.iter().map(String::as_str));
+            let Some(section) = sections[i].as_ref() else {
+                continue;
+            };
+            let alternatives = section.dep_alternatives.as_ref();
+            for (id, deps) in section.dep_closures.iter().flatten() {
+                if !kept.contains(id) {
+                    continue;
                 }
+                let host_installs: BTreeSet<&str> = deps.iter().map(String::as_str).collect();
+                installs
+                    .entry(id.clone())
+                    .and_modify(|joined| joined.retain(|dep| host_installs.contains(dep)))
+                    .or_insert_with(|| host_installs.clone());
+                let maybe = may_install.entry(id.clone()).or_default();
+                maybe.extend(host_installs);
+                maybe.extend(
+                    alternatives
+                        .and_then(|alts| alts.get(id))
+                        .into_iter()
+                        .flatten()
+                        .map(String::as_str),
+                );
             }
         }
-        joined
-            .into_iter()
-            .map(|(id, deps)| (id, deps.into_iter().map(str::to_string).collect()))
-            .collect::<BTreeMap<String, Vec<String>>>()
-    });
+        let to_vec = |deps: &BTreeSet<&str>| -> Vec<String> {
+            deps.iter().map(|dep| (*dep).to_string()).collect()
+        };
+        let alternatives = may_install
+            .iter()
+            .map(|(id, maybe)| (id.clone(), to_vec(&(maybe - &installs[id]))))
+            .collect::<BTreeMap<String, Vec<String>>>();
+        let installs = installs
+            .iter()
+            .map(|(id, deps)| (id.clone(), to_vec(deps)))
+            .collect::<BTreeMap<String, Vec<String>>>();
+        (Some(installs), Some(alternatives))
+    };
 
     // Force include=true for leaf intersection survivors.
     // Packages in the intersection are leaves on ALL authoritative hosts —
@@ -1538,6 +1568,7 @@ pub fn merge_rpm_sections(
             auto_packages,
             leaf_dep_tree,
             dep_closures,
+            dep_alternatives,
             module_streams,
             version_locks,
             module_stream_conflicts,

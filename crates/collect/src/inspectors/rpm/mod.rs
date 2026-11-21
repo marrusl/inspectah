@@ -20,7 +20,7 @@ use inspectah_core::types::rpm::{
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
 use rich_dep::{Atom, Constraint, DepExpr, Providers, SupplementTriggers};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// RPM query format string for NEVRA parsing.
 const RPM_QA_FORMAT: &str = "%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}";
@@ -68,6 +68,7 @@ struct LeafClassification {
     auto_packages: Option<Vec<String>>,
     leaf_dep_tree: serde_json::Value,
     dep_closures: Option<BTreeMap<String, Vec<String>>>,
+    dep_alternatives: Option<BTreeMap<String, Vec<String>>>,
 }
 
 impl LeafClassification {
@@ -76,12 +77,14 @@ impl LeafClassification {
         auto_packages: Vec<String>,
         leaf_dep_tree: serde_json::Value,
         dep_closures: BTreeMap<String, Vec<String>>,
+        dep_alternatives: BTreeMap<String, Vec<String>>,
     ) -> Self {
         Self {
             leaf_packages: Some(leaf_packages),
             auto_packages: Some(auto_packages),
             leaf_dep_tree,
             dep_closures: Some(dep_closures),
+            dep_alternatives: Some(dep_alternatives),
         }
     }
 
@@ -91,6 +94,7 @@ impl LeafClassification {
             auto_packages: None,
             leaf_dep_tree: empty_leaf_dep_tree(),
             dep_closures: None,
+            dep_alternatives: None,
         }
     }
 }
@@ -544,6 +548,7 @@ impl Inspector for RpmInspector {
             auto_packages: leaf_classification.auto_packages,
             leaf_dep_tree: leaf_classification.leaf_dep_tree,
             dep_closures: leaf_classification.dep_closures,
+            dep_alternatives: leaf_classification.dep_alternatives,
             baseline_suppressed,
             installed_groups,
             ..Default::default()
@@ -769,6 +774,10 @@ fn classify_deps_dnf(
 /// direct dependencies (rpm `-qR`).
 struct DepGraphResult {
     depends_on: HashMap<String, HashSet<String>>,
+    /// The part of `depends_on` a real requirement establishes
+    /// (`RpmDepGraph::requires`). Empty for the dnf graph, whose resolved
+    /// requires cannot tell one provider from several.
+    requires: HashMap<String, HashSet<String>>,
     /// Supplements that need several added packages at once. Always empty
     /// for the dnf graph, which does not follow Supplements.
     joint: Vec<JointSupplement>,
@@ -777,8 +786,16 @@ struct DepGraphResult {
 
 /// The direct dependency graph `classify_deps_rpm` builds.
 struct RpmDepGraph {
-    /// `a -> {b, ...}`: installing `a` installs each `b`.
+    /// `a -> {b, ...}`: installing `a` may install each `b`. A capability
+    /// several installed packages provide credits every one of them.
     depends_on: HashMap<String, HashSet<String>>,
+    /// The edges of `depends_on` that installing `a` certainly installs:
+    /// `b` is the only installed provider of something `a` requires or
+    /// recommends (`DepExpr::required`), or `b` supplements something `a`
+    /// provides. A capability a base-image package or `a` itself also
+    /// provides needs no added package, and one several added packages
+    /// provide is a choice dnf makes, not a requirement on any of them.
+    requires: HashMap<String, HashSet<String>>,
     /// Supplements no single edge can express (`JointSupplement`).
     joint: Vec<JointSupplement>,
 }
@@ -903,6 +920,7 @@ fn classify_deps_rpm(
     if added_ids.is_empty() {
         return Some(RpmDepGraph {
             depends_on: HashMap::new(),
+            requires: HashMap::new(),
             joint,
         });
     }
@@ -914,6 +932,7 @@ fn classify_deps_rpm(
     for package_id in added_ids {
         depends_on.insert(package_id.clone(), HashSet::new());
     }
+    let mut requires = depends_on.clone();
 
     // Build name→canonical-id map for sentinel header → package_id lookup.
     let name_to_ids: HashMap<&str, Vec<&String>> = {
@@ -953,10 +972,23 @@ fn classify_deps_rpm(
             for (relation, dep) in deps {
                 match relation {
                     Relation::Requires | Relation::Recommends => {
+                        let pulls = |prov_id: &str| {
+                            added_ids.contains(prov_id) && name_from_id(prov_id) != *pkg_name
+                        };
                         for prov_id in dep.pulled(&index) {
-                            if added_ids.contains(prov_id)
-                                && name_from_id(prov_id) != *pkg_name
+                            if pulls(prov_id)
                                 && let Some(set) = depends_on.get_mut(package_id.as_str())
+                            {
+                                set.insert(prov_id.to_string());
+                            }
+                        }
+                        // A base-image package, or this package itself,
+                        // is there whenever this package is installed.
+                        let assured =
+                            |id: &str| !added_ids.contains(id) || name_from_id(id) == *pkg_name;
+                        for prov_id in dep.required(&index, &assured) {
+                            if pulls(prov_id)
+                                && let Some(set) = requires.get_mut(package_id.as_str())
                             {
                                 set.insert(prov_id.to_string());
                             }
@@ -989,9 +1021,14 @@ fn classify_deps_rpm(
                                 continue;
                             };
                             if let [group] = groups.as_slice() {
+                                // Any member of the group triggers it, so
+                                // each one installing certainly pulls the
+                                // package in.
                                 for prov_id in group {
-                                    if let Some(set) = depends_on.get_mut(prov_id) {
-                                        set.insert((*package_id).clone());
+                                    for graph in [&mut depends_on, &mut requires] {
+                                        if let Some(set) = graph.get_mut(prov_id) {
+                                            set.insert((*package_id).clone());
+                                        }
                                     }
                                 }
                             } else {
@@ -1007,7 +1044,11 @@ fn classify_deps_rpm(
         }
     }
 
-    Some(RpmDepGraph { depends_on, joint })
+    Some(RpmDepGraph {
+        depends_on,
+        requires,
+        joint,
+    })
 }
 
 /// Parse batched `RPM_DEPS_FORMAT` output into per-package dependency
@@ -1247,12 +1288,14 @@ fn classify_leaf_auto(
     let graph = if let Some(rpm_graph) = classify_deps_rpm(exec, &added_ids, file_ownership) {
         DepGraphResult {
             depends_on: rpm_graph.depends_on,
+            requires: rpm_graph.requires,
             joint: rpm_graph.joint,
             transitive: false,
         }
     } else if let Some(dnf_deps) = classify_deps_dnf(exec, &added_ids) {
         DepGraphResult {
             depends_on: dnf_deps,
+            requires: HashMap::new(),
             joint: Vec::new(),
             transitive: true,
         }
@@ -1287,42 +1330,58 @@ fn classify_leaf_auto(
     auto.retain(|pkg| !baseline_names.contains(pkg));
     auto.sort();
 
-    // Per-root closures: for each leaf and each auto package, every
-    // classified package installing it installs. An auto package's closure
-    // is what installing it on its own brings, which an export that
-    // carries it (an enabled unit's owner, or one the operator includes)
-    // needs as much as a leaf's. The closures keep leaves too: a
+    // Per-root closures: for each leaf and each auto package, what
+    // installing it installs among the classified packages. An auto
+    // package's closure is what installing it on its own brings, which an
+    // export that carries it (an enabled unit's owner, or one the operator
+    // includes) needs as much as a leaf's. The closures keep leaves too: a
     // dependency the operator also installed is still installed by
     // whatever needs it, and a fleet whose other hosts have it as a
     // dependency drops it.
+    //
+    // Two closures per root. `dep_closures` follows only the edges a real
+    // requirement establishes (`DepGraphResult::requires`), so a package
+    // in it is installed whatever the export leaves out: only that can
+    // put back the unit command of a package the operator excluded.
+    // `dep_alternatives` holds the rest of what the root may install, a
+    // provider dnf may pick among several and what that brings, so a
+    // package in neither is never installed by it.
     let classified: HashSet<&str> = leaf.iter().chain(&auto).map(|s| s.as_str()).collect();
-    let closure = |root: &str| -> Vec<String> {
-        // DNF --recursive already gave the transitive closure; rpm gives
-        // only direct deps, so walk the graph.
-        let reachable: HashSet<String> = if graph.transitive {
-            depends_on.get(root).cloned().unwrap_or_default()
-        } else {
-            leaf_closure(root, depends_on, &graph.joint)
+    let closure =
+        |root: &str, graph_edges: &HashMap<String, HashSet<String>>| -> BTreeSet<String> {
+            // DNF --recursive already gave the transitive closure; rpm gives
+            // only direct deps, so walk the graph.
+            let reachable: HashSet<String> = if graph.transitive {
+                graph_edges.get(root).cloned().unwrap_or_default()
+            } else {
+                leaf_closure(root, graph_edges, &graph.joint)
+            };
+            reachable
+                .into_iter()
+                .filter(|d| d != root && classified.contains(d.as_str()))
+                .collect()
         };
-        let mut filtered: Vec<String> = reachable
-            .into_iter()
-            .filter(|d| d != root && classified.contains(d.as_str()))
-            .collect();
-        filtered.sort();
-        filtered
-    };
-    let dep_closures: BTreeMap<String, Vec<String>> = classified
-        .iter()
-        .map(|id| (id.to_string(), closure(id)))
-        .collect();
-    // The leaf tree keeps its auto-only meaning: refine reads a leaf in
-    // it as a dependency of another leaf.
+    let mut dep_closures: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut dep_alternatives: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for id in &classified {
+        let may_install = closure(id, depends_on);
+        let installs = closure(id, &graph.requires);
+        dep_alternatives.insert(
+            id.to_string(),
+            may_install.difference(&installs).cloned().collect(),
+        );
+        dep_closures.insert(id.to_string(), installs.into_iter().collect());
+    }
+    // The leaf tree keeps its meaning: every auto package installing the
+    // leaf may install. Refine reads a leaf in it as a dependency of
+    // another leaf.
     let auto_set: HashSet<&str> = auto.iter().map(|s| s.as_str()).collect();
     let dep_tree: serde_json::Map<String, serde_json::Value> = leaf
         .iter()
         .map(|lf| {
-            let auto_deps: Vec<&String> = dep_closures[lf]
+            let auto_deps: BTreeSet<&String> = dep_closures[lf]
                 .iter()
+                .chain(&dep_alternatives[lf])
                 .filter(|d| auto_set.contains(d.as_str()))
                 .collect();
             (lf.clone(), serde_json::json!(auto_deps))
@@ -1334,6 +1393,7 @@ fn classify_leaf_auto(
         auto,
         serde_json::Value::Object(dep_tree),
         dep_closures,
+        dep_alternatives,
     )
 }
 
@@ -2139,6 +2199,26 @@ mod tests {
             .unwrap();
         assert_eq!(vim_deps.len(), 1);
         assert_eq!(vim_deps[0].as_str().unwrap(), "glibc.x86_64");
+        // dnf's resolved requires list every installed provider, so the
+        // dnf route establishes no installation: `glibc` is one `vim` may
+        // install.
+        let one = |id: &str, deps: &[&str]| {
+            (id.to_string(), deps.iter().map(|d| d.to_string()).collect())
+        };
+        assert_eq!(
+            classification.dep_closures,
+            Some([one("glibc.x86_64", &[]), one("vim.x86_64", &[])].into())
+        );
+        assert_eq!(
+            classification.dep_alternatives,
+            Some(
+                [
+                    one("glibc.x86_64", &[]),
+                    one("vim.x86_64", &["glibc.x86_64"])
+                ]
+                .into()
+            )
+        );
     }
 
     #[test]
@@ -3314,6 +3394,96 @@ R\tlibssl.so.3()(64bit)
         assert_eq!(deps["tree.aarch64"], only("glibc.aarch64"));
         assert_eq!(deps["wget.aarch64"], only("openssl-libs.aarch64"));
         assert_eq!(deps["nginx-core.aarch64"], only("pcre2.aarch64"));
+    }
+
+    /// A capability several installed packages provide establishes no
+    /// installation: `app` requires `transport`, which the base image's
+    /// `base-provider` and the added `alternate` both provide, so dnf
+    /// installs no `alternate` for it; and `mta`, which the added `postfix`
+    /// and `sendmail` both provide, so dnf picks one. Those are
+    /// alternatives. `app` also requires `libsole.so`, which only the added
+    /// `sole` provides, so `sole` and the `helper` it requires are in its
+    /// closure. The leaf tree keeps every auto package of both.
+    #[test]
+    fn classify_leaf_auto_keeps_competing_providers_out_of_the_closure() {
+        let sentinel_output = "\
+@@alternate
+@@app
+R\ttransport
+R\tmta
+R\tlibsole.so
+@@helper
+@@postfix
+@@sendmail
+@@sole
+R\thelper
+";
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "alternate.x86_64\napp.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!(
+                    "rpm -q --queryformat {} alternate app helper postfix sendmail sole",
+                    RPM_DEPS_FORMAT
+                ),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: sentinel_output.into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "base-provider.x86_64\t0\t\ttransport\n\
+                             alternate.x86_64\t0\t\ttransport\n\
+                             postfix.x86_64\t0\t\tmta\n\
+                             sendmail.x86_64\t0\t\tmta\n\
+                             sole.x86_64\t0\t\tlibsole.so\n\
+                             helper.x86_64\t0\t\thelper\n"
+                        .into(),
+                    stderr: String::new(),
+                },
+            );
+        let added: Vec<PackageEntry> =
+            ["alternate", "app", "helper", "postfix", "sendmail", "sole"]
+                .iter()
+                .map(|name| make_test_entry(name, "x86_64"))
+                .collect();
+
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
+
+        let entry = |map: Option<&BTreeMap<String, Vec<String>>>, id: &str| -> Vec<String> {
+            map.and_then(|m| m.get(id))
+                .cloned()
+                .expect("an entry for every package")
+        };
+        let closures = classification.dep_closures.as_ref();
+        let alternatives = classification.dep_alternatives.as_ref();
+        assert_eq!(
+            entry(closures, "app.x86_64"),
+            ["helper.x86_64", "sole.x86_64"]
+        );
+        assert_eq!(
+            entry(alternatives, "app.x86_64"),
+            ["alternate.x86_64", "postfix.x86_64", "sendmail.x86_64"]
+        );
+        assert_eq!(entry(closures, "sole.x86_64"), ["helper.x86_64"]);
+        assert!(entry(alternatives, "sole.x86_64").is_empty());
+        assert_eq!(
+            classification.leaf_dep_tree,
+            serde_json::json!({
+                "alternate.x86_64": [],
+                "app.x86_64": ["helper.x86_64", "postfix.x86_64", "sendmail.x86_64", "sole.x86_64"],
+            })
+        );
     }
 
     #[test]

@@ -721,6 +721,7 @@ const RPM_SECTION_KEYS: &[&str] = &[
     "baseline_module_streams",
     "baseline_package_names",
     "baseline_suppressed",
+    "dep_alternatives",
     "dep_closures",
     "dnf_history_removed",
     "duplicate_packages",

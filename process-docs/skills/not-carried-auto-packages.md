@@ -44,22 +44,48 @@ export installs: a leaf, a carried owner, and an auto package an
 operator included by hand alike. That is the unit plan, the
 disabled-repo install (a pulled-in package from a repo the host disabled
 is named in the transaction that enables that repo), `/var`
-provisioning, the single-host list (`not_carried_packages` lists a class
-member only when nothing installed pulls it in) and `FleetDrops`. So
+provisioning and the single-host list (`not_carried_packages` lists a
+class member only when nothing installed pulls it in). So
 once an operator includes `tool`, which needs `helper`, `helper` leaves
 the list, its recorded `systemctl` commands are emitted, and a `helper`
 only a disabled repo serves installs from it, although the class still
 holds `helper` and its disposition still reads excluded.
 
-A root's closure is `unit_plan::closure_of`: its `dep_closures` entry
-joined with its `leaf_dep_tree` entry. `dep_closures` (schema 29) maps
-every leaf and auto package to everything installing it installs,
-**leaves included**. `leaf_dep_tree` keeps only the auto part of a
-leaf's closure, because refine's `normalize_package_defaults` reads a
-leaf listed in it as a dependency of another leaf; it adds nothing to a
-collected snapshot and is all a hand-built test snapshot may have.
-Pulled-in membership is transitive in the closures already, so a
-pulled-in package's own closure adds nothing.
+**Requirements, not choices.** The collector records two maps (schema
+29), both over every leaf and auto package, **leaves included**:
+
+- `dep_closures`: what installing it **certainly** installs. An edge
+  counts only when the dependency has exactly one installed provider
+  (`DepExpr::required`). A capability the base image, or the requiring
+  package itself, also provides needs no added package, and one several
+  added packages provide is a choice dnf makes. Excluding `alternate`,
+  which provides the `transport` that `app` requires while a base-image
+  package provides it too, must omit `alternate.service`: dnf installs
+  no `alternate`, so a `systemctl enable` for it fails the build.
+- `dep_alternatives`: what else it **may** install, those providers and
+  what they bring.
+
+A root's closure is `unit_plan::closure_of`, at a `Reach`:
+`pulled_in_by_included` reads `Reach::Certain`, the `dep_closures`
+entry, because a presence claim puts back the unit command of a package
+the operator excluded. `possibly_pulled_in_by_included` reads
+`Reach::Possible`, both entries, for an absence claim (`FleetDrops`). A
+snapshot without closures (hand-built) reads its `leaf_dep_tree` entry
+at either reach. `leaf_dep_tree` keeps only the auto part of a leaf's
+two entries joined, because refine's `normalize_package_defaults` reads
+a leaf listed in it as a dependency of another leaf. Pulled-in
+membership is transitive in the closures already, so a pulled-in
+package's own closure adds nothing.
+
+The class (`pulled_in_by_default_roots`) reads `Reach::Possible`, as it
+always counted every provider: an auto package a default root may pull
+in stays included by default, as the source host had it.
+
+The collector's dnf fallback cannot tell one provider from several, so
+it records every `dep_closures` entry empty and the whole closure in
+`dep_alternatives`: on that route an excluded dependency's unit is
+omitted. The rpm route is the one real hosts take; the CLI test hosts
+(`UnitHost`, the parity fixture) answer its queries.
 
 ## Unit owners are carried by default
 
@@ -156,7 +182,8 @@ fleet export cannot carry an auto package at all. It does not get the
 single-host default; it gets the notice. `FleetDrops` says which
 packages the merge provably dropped: in neither `baseline_package_names`
 nor `packages_added`, by name, and pulled in by nothing the fleet export
-installs (`pulled_in_by_included`), a partial package the operator
+installs, not even as one of several providers
+(`possibly_pulled_in_by_included`), a partial package the operator
 includes in refine as much as a universal leaf. It needs a baseline
 (else a base-image owner such as `openssh-server` would be named),
 `leaf_authority_hosts > 0`, not `leaf_packages`, which refine clears
@@ -172,17 +199,22 @@ are empty and the audit table prints `-`.
 Two pieces of per-host evidence survive the merge for this, and nothing
 else in it changed:
 
-- **`dep_closures` maps every package the merge kept, the partial ones
-  included, to its closures from every authoritative host, joined.** A
-  partial package (one some hosts lack) is kept as excluded, and once
-  the operator includes it, it installs what it needs; without its
-  closure a dependency the merge drops would read as absent and lose its
-  `systemctl` command. One host's closure cannot prove a package absent
-  either, and neither can an auto-only one: a host whose operator also
-  installed the dependency records it as a leaf, and the merge drops it
-  for not being a leaf on the hosts where it is a dependency.
-  `dep_closures` keeps it. `leaf_dep_tree` is joined the same way for
-  the universal leaves.
+- **`dep_closures` and `dep_alternatives` map every package the merge
+  kept, the partial ones included, from every authoritative host that
+  has it.** A partial package (one some hosts lack) is kept as excluded,
+  and once the operator includes it, it installs what it needs; without
+  its closure a dependency the merge drops would read as absent and lose
+  its `systemctl` command. One host's closure cannot prove a package
+  absent either, and neither can an auto-only one: a host whose operator
+  also installed the dependency records it as a leaf, and the merge
+  drops it for not being a leaf on the hosts where it is a dependency.
+  The closures keep it. The merged `dep_closures` entry is the
+  **intersection** of the hosts' entries: a host where something else
+  provides the capability shows the image need not install it. The
+  merged `dep_alternatives` entry is everything either map records on
+  any host, less that intersection, so the absence claim still rests on
+  the union. `leaf_dep_tree` is joined across hosts for the universal
+  leaves.
 - **`units.enabled_on_any_host`** lists every unit any host enabled. The
   merged inventory keeps the state most hosts have and breaks a tie by
   hostname order, so with the inventory alone an owner one host enabled
@@ -255,9 +287,23 @@ than one arch of that name. All reason wording comes from the one constant `NOT_
 - An auto package that only another not-carried package needs is in the
   class too, which is correct.
 - A closure is the source host's dependency graph, not the target's: the
-  image's dnf resolves against the target repos. A fleet joins each kept
-  package's closures across hosts, which only widens what counts as
-  installed.
+  image's dnf resolves against the target repos, which may offer a
+  provider the host lacked. A fleet cannot see a provider that only
+  another host's kept package brings: if `host-c`'s leaf provides the
+  capability `app` requires from `helper` on `host-a`, the fleet still
+  counts `helper` as certainly installed.
+- When several added packages provide a capability and the export
+  installs none of them itself, dnf installs one, and none is counted:
+  an excluded one's unit is omitted. The class counts every provider, so
+  an auto package that is only one choice stays included by default. One
+  that owns no enabled unit is not named on the install line, so if dnf
+  picks another provider, a recorded `systemctl disable` for it names a
+  missing unit. This predates the two maps; counting only requirements
+  in the class would close it, at the cost of excluding such packages by
+  default.
+- Providers of a capability are matched by name, as `--whatprovides`
+  matches a plain requirement: two arches of one package both count, so
+  neither is certain.
 - The units shown are for display and ordering. Whether a unit is emitted
   is the presence rules' decision, not this list's.
 - Both owners of a unit (a `state_changes` `owning_package` and the vendor
@@ -332,7 +378,7 @@ in `crates/cli/tests/not_carried_parity_test.rs` pins every surface;
 `crates/web/tests/api_test.rs` pins the payload and the header match.
 
 **Including a package clears its dependencies.** Any package the export
-installs credits what it needs, from `dep_closures` (schema 29): with
+installs credits what it requires, from `dep_closures` (schema 29): with
 `firewalld` carried, `python3-firewall` is not listed, and once an
 operator includes `tool`, the `helper` it needs leaves the rows too.
 
@@ -404,5 +450,5 @@ Measured at commit `af96710c` (2026-11-09), same hosts, drift and plants
 - `refine-export-warnings-header.md`: the header the export notice rides
   in, and its kinds.
 - `package-identity-is-name-dot-arch.md`: why the class keys on `name.arch`.
-- `rpm-output-field-parsing.md`: how `leaf_dep_tree` and
-  `dep_closures` are built.
+- `rpm-output-field-parsing.md`: how `leaf_dep_tree`, `dep_closures`
+  and `dep_alternatives` are built.

@@ -58,6 +58,22 @@ impl Providers for Excluding<'_> {
     }
 }
 
+/// An index of only the packages `assured` holds for, to ask whether an
+/// `if` or `unless` condition holds whatever else the export leaves out
+/// (`Node::collect_required`).
+struct AssuredOnly<'a> {
+    index: &'a dyn Providers,
+    assured: &'a dyn Fn(&str) -> bool,
+}
+
+impl Providers for AssuredOnly<'_> {
+    fn providers(&self, atom: &Atom) -> HashSet<&str> {
+        let mut out = self.index.providers(atom);
+        out.retain(|id| (self.assured)(id));
+        out
+    }
+}
+
 /// A capability as a dependency names it, with its version comparison if
 /// it has one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -338,6 +354,30 @@ impl DepExpr {
         out
     }
 
+    /// The installed packages every way of satisfying this expression
+    /// needs: the part of [`pulled`](Self::pulled) that is a requirement
+    /// rather than one choice among several.
+    ///
+    /// A capability counts only when exactly one installed package
+    /// provides it. With two providers, one of them a base-image package
+    /// or the requiring package itself, dnf needs neither added one; with
+    /// two added ones it picks one, and which is not known. An `or` counts
+    /// only when exactly one operand holds. `assured` names the packages
+    /// certainly present wherever the requiring package is installed (the
+    /// base image's and the requiring package itself): an `if` branch
+    /// counts when its condition holds through those alone, the `else`
+    /// when the condition holds through nothing, and otherwise only what
+    /// both branches need. `unless` mirrors it.
+    pub(super) fn required<'p>(
+        &self,
+        index: &'p dyn Providers,
+        assured: &dyn Fn(&str) -> bool,
+    ) -> HashSet<&'p str> {
+        let mut out = HashSet::new();
+        self.root.collect_required(index, assured, &mut out);
+        out
+    }
+
     /// Read the expression as a Supplements: which added packages, present
     /// together, pull the supplementing package in. `(a and b)` needs a
     /// provider of each, so it is one clause of two groups, never two
@@ -481,6 +521,60 @@ impl Node {
                     o.collect_pulled(index, out);
                 }
             }
+        }
+    }
+
+    /// This node's part of [`DepExpr::required`].
+    fn collect_required<'p>(
+        &self,
+        index: &'p dyn Providers,
+        assured: &dyn Fn(&str) -> bool,
+        out: &mut HashSet<&'p str>,
+    ) {
+        let required = |node: &Self| {
+            let mut set = HashSet::new();
+            node.collect_required(index, assured, &mut set);
+            set
+        };
+        // A conditional's branches: `chosen` when the condition holds
+        // through assured packages alone, `fallback` when it holds through
+        // nothing, else only what both need.
+        let branch = |cond: &Self, chosen: Option<&Self>, fallback: Option<&Self>| {
+            let need = |node: Option<&Self>| node.map(required).unwrap_or_default();
+            if cond.satisfied(&AssuredOnly { index, assured }) {
+                need(chosen)
+            } else if !cond.satisfied(index) {
+                need(fallback)
+            } else {
+                &need(chosen) & &need(fallback)
+            }
+        };
+        match self {
+            Self::Match(m) => {
+                let ids = m.matching(index);
+                if ids.len() == 1 {
+                    out.extend(ids);
+                }
+            }
+            Self::And(xs) => xs
+                .iter()
+                .for_each(|x| x.collect_required(index, assured, out)),
+            Self::Or(xs) => {
+                let mut held = xs.iter().filter(|x| x.satisfied(index));
+                if let (Some(only), None) = (held.next(), held.next()) {
+                    only.collect_required(index, assured, out);
+                }
+            }
+            Self::If {
+                then,
+                cond,
+                otherwise,
+            } => out.extend(branch(cond, Some(then), otherwise.as_deref())),
+            Self::Unless {
+                then,
+                cond,
+                otherwise,
+            } => out.extend(branch(cond, otherwise.as_deref(), Some(then))),
         }
     }
 
@@ -888,6 +982,68 @@ mod tests {
         for (input, expected) in cases {
             let expr = DepExpr::parse(input).expect("parses");
             assert_eq!(expr.pulled(&index), set(expected), "input: {input}");
+        }
+    }
+
+    #[test]
+    fn required_counts_only_what_every_way_of_satisfying_needs() {
+        // `base` is a base-image package and `root` the requiring one, so
+        // both are assured. `alt` and `other` are added providers of
+        // `transport`, which `base` also provides; only `alt` and `other`
+        // provide `added-only`. `feature` is provided by `base` alone,
+        // `optional` by the added `opt` alone.
+        let index = TestIndex(&[
+            ("base", "transport"),
+            ("base", "feature"),
+            ("alt", "transport"),
+            ("alt", "added-only"),
+            ("other", "added-only"),
+            ("opt", "optional"),
+            ("root", "self-cap"),
+            ("helper", "helper"),
+            ("plugin", "plugin"),
+            ("spare", "spare"),
+        ]);
+        let assured = |id: &str| matches!(id, "base" | "root");
+        let cases: &[(&str, &[&str])] = &[
+            // The only provider is required.
+            ("helper", &["helper"]),
+            // A base-image provider already satisfies it.
+            ("transport", &[]),
+            // Two added providers: dnf picks one.
+            ("added-only", &[]),
+            ("(helper and plugin)", &["helper", "plugin"]),
+            // Only one operand holds.
+            ("(missing or helper)", &["helper"]),
+            // Either operand does.
+            ("(helper or plugin)", &[]),
+            // The condition holds through the base image alone.
+            ("(plugin if feature)", &["plugin"]),
+            // The condition holds through the requiring package itself.
+            ("(plugin if self-cap)", &["plugin"]),
+            // The condition holds only while the added `opt` is installed,
+            // which the export may leave out.
+            ("(plugin if optional)", &[]),
+            ("(plugin if optional else spare)", &[]),
+            ("((plugin and helper) if optional else helper)", &["helper"]),
+            // Nothing provides the condition, so the `else` applies.
+            ("(plugin if missing else spare)", &["spare"]),
+            ("(plugin unless feature else spare)", &["spare"]),
+            ("(plugin unless missing)", &["plugin"]),
+            ("(plugin unless optional)", &[]),
+        ];
+        for (input, expected) in cases {
+            let expr = DepExpr::parse(input).expect("parses");
+            assert_eq!(
+                expr.required(&index, &assured),
+                set(expected),
+                "input: {input}"
+            );
+            assert!(
+                expr.required(&index, &assured)
+                    .is_subset(&expr.pulled(&index)),
+                "input: {input}"
+            );
         }
     }
 

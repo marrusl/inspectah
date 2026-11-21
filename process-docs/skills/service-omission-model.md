@@ -467,8 +467,9 @@ image does install. Aggregate rendering applies Tier 2
 (`aggregate_presence`), because an explicit exclusion on an entry that is
 present cannot be faked by leaf filtering. Then it omits the unit of a
 package the merge provably dropped (`not_carried::FleetDrops`: in
-neither the baseline nor `packages_added`, and pulled in by no kept
-leaf, from the leaves' closures joined across hosts): `NotCarried` when
+neither the baseline nor `packages_added`, and pulled in by nothing the
+export installs, not even as one of several providers, from the kept
+packages' closures and alternatives joined across hosts): `NotCarried` when
 the fleet's not-carried list names it, `NotInTargetImage` otherwise.
 Without a baseline or a host of leaf authority nothing is proved, and
 everything else emits, an unknown owner included. Before this, a fleet
@@ -485,16 +486,22 @@ left as is; no new surface was built for omissions.
 ## Excluded is not absent
 
 "Excluded" means the package will not be in the image. A package that an
-included package depends on is in the image whatever its disposition,
+included package requires is in the image whatever its disposition,
 because dnf installs it with the package that needs it, so Tier 2 must
-not omit its unit. That covers refine's default exclusion of a non-leaf
+not omit its unit. One of several providers of a capability is not: with
+the base image or another installed package providing it too, dnf
+installs none of them, so its unit is omitted. That covers refine's default exclusion of a non-leaf
 package (the scan tarball leaves the same package included) and an
 operator's explicit exclusion alike.
 
 `pulled_in_by_included` in `unit_plan.rs` is the one answer:
-every package the `dep_closures` (and `leaf_dep_tree`) entry of a
-package the export installs (`installs_on_its_own_route`) lists, a leaf,
-a carried unit owner and a package an operator included by hand alike.
+every package the `dep_closures` entry of a package the export installs
+(`installs_on_its_own_route`) lists, a leaf, a carried unit owner and a
+package an operator included by hand alike. `dep_closures` holds real
+requirements only, a dependency exactly one installed package provides;
+the providers dnf may pick among are in `dep_alternatives`, which only
+absence claims read (`possibly_pulled_in_by_included`). A snapshot with
+no closures reads its `leaf_dep_tree` instead.
 An included package that renders
 only as a manual step (a `# TODO`, the repo-less `# MANUAL` block with
 no cached or uploaded RPM, or the repo-enabling `# FIXME` after its
@@ -510,12 +517,16 @@ write a second copy.
 depends on counts once the operator excludes it, and so does a
 dependency of an auto package the operator includes by hand: its
 recorded `systemctl disable` survives. The not-carried class alone asks
-the narrower `pulled_in_by_default_roots` (leaves and carried owners),
-since it is decided while every auto package is still included.
+the narrower `pulled_in_by_default_roots` (leaves and carried owners,
+alternatives counted), since it is decided while every auto package is
+still included.
 
 Its one limit is the data's. With no leaf data the set is empty, so an
 excluded package's unit is still omitted although dnf may install it,
-which is the behavior from before the rule existed. A fleet does not
+which is the behavior from before the rule existed. The same holds for
+an excluded package that is one of several added providers dnf picks
+among, and for every dependency on the collector's dnf fallback, which
+cannot tell one provider from several. A fleet does not
 accept that: `FleetDrops` proves nothing unless every package the
 export installs has a `dep_closures` entry
 (`every_installed_package_has_a_closure`), and every unit emits.

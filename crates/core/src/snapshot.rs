@@ -113,7 +113,8 @@ impl InspectionSnapshot {
     /// can collect them.
     ///
     /// Schema 29 records the dependency closure of every leaf and auto
-    /// package (`rpm.dep_closures`), and for an aggregate the units
+    /// package (`rpm.dep_closures`, with the providers it may pick among
+    /// in `rpm.dep_alternatives`), and for an aggregate the units
     /// enabled on any host (`units.enabled_on_any_host`). A schema-28
     /// payload deserializes
     /// with neither, and a carried auto package's dependencies then read as

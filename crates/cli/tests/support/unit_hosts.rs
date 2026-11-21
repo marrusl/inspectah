@@ -65,10 +65,14 @@ const DNF_SOURCE_REPO: &str = "dnf repoquery --installed --queryformat";
 const PACKAGE_REPO: &str = "appstream";
 /// The query the RPM inspector lists user-installed packages with.
 const DNF_USERINSTALLED: &str = "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n";
-/// The query the RPM inspector reads one package's recursive requires
-/// with, before the package id. Every other form of the dependency query
-/// is unregistered, so the inspector takes this route.
-const DNF_RECURSIVE_REQUIRES: &str = "dnf repoquery --requires --resolve --recursive --installed";
+/// The query the RPM inspector reads the added packages' requires,
+/// recommends and supplements with, before the package names: a
+/// `@@<package>` line, then one tagged dependency per line.
+const RPM_DEPS: &str = "rpm -q --queryformat @@%{NAME}\\n[R\\t%{REQUIRENAME}\\n][W\\t%{RECOMMENDNAME}\\n][S\\t%{SUPPLEMENTNAME}\\n]";
+/// The query the RPM inspector resolves those dependencies with: one
+/// `name.arch<TAB>flags<TAB>version<TAB>capability` line per provide of
+/// every installed package.
+const RPM_PROVIDES_INDEX: &str = "rpm -qa --queryformat [%{=NAME}.%{=ARCH}\\t%{PROVIDEFLAGS}\\t%{PROVIDEVERSION}\\t%{PROVIDENAME}\\n]";
 /// The `bash` every host has installed, as `rpm -qa` lists it.
 const BASH_VERSION: &str = "5.2.26";
 const BASH_RELEASE: &str = "3.el9";
@@ -144,9 +148,10 @@ struct Classification {
     /// `dnf repoquery --userinstalled`, by package name; `None` when the
     /// query fails.
     userinstalled: Option<Vec<String>>,
-    /// The packages each package needs, transitively, by name: what
-    /// `dnf repoquery --requires --resolve --recursive` answers.
+    /// The capabilities each package requires, as `rpm -q` lists them.
     requires: BTreeMap<String, Vec<String>>,
+    /// The capabilities each package provides besides its own name.
+    provides: BTreeMap<String, Vec<String>>,
 }
 
 impl UnitHost {
@@ -206,13 +211,28 @@ impl UnitHost {
         self
     }
 
-    /// Installing `name` installs `needs`, transitively, as dnf's
-    /// recursive requires answer for it. Turns on leaf classification.
+    /// `name` requires the capabilities `needs`, as `rpm -q` lists its
+    /// requires. Every installed package provides its own name, so a
+    /// package name is a capability only it provides unless another one
+    /// [`provides`](UnitHost::provides) it too. Turns on leaf
+    /// classification.
     pub fn requires(mut self, name: &str, needs: &[&str]) -> Self {
         self.classification
             .get_or_insert_default()
             .requires
             .insert(name.into(), needs.iter().map(|n| (*n).to_owned()).collect());
+        self
+    }
+
+    /// The installed package `name` also provides the capability `cap`.
+    /// Turns on leaf classification.
+    pub fn provides(mut self, name: &str, cap: &str) -> Self {
+        self.classification
+            .get_or_insert_default()
+            .provides
+            .entry(name.into())
+            .or_default()
+            .push(cap.into());
         self
     }
 
@@ -416,18 +436,27 @@ impl UnitHost {
                     ..Default::default()
                 },
             };
+            let deps: String = classification
+                .requires
+                .iter()
+                .map(|(name, needs)| {
+                    let lines: String = needs.iter().map(|cap| format!("R\t{cap}\n")).collect();
+                    format!("@@{name}\n{lines}")
+                })
+                .collect();
+            let provides: String = std::iter::once("bash")
+                .chain(this.packages.iter().map(String::as_str))
+                .flat_map(|name| {
+                    let extra = classification.provides.get(name).into_iter().flatten();
+                    std::iter::once(name)
+                        .chain(extra.map(String::as_str))
+                        .map(move |cap| format!("{name}.x86_64\t0\t\t{cap}\n"))
+                })
+                .collect();
             mock = mock
                 .with_command(DNF_USERINSTALLED, userinstalled)
-                .with_command_prefix(DNF_RECURSIVE_REQUIRES, ok(""));
-            for (name, needs) in &classification.requires {
-                let answer: String = needs.iter().map(|n| format!("{n}.x86_64\n")).collect();
-                mock = mock.with_command(
-                    &format!(
-                        "{DNF_RECURSIVE_REQUIRES} --queryformat %{{name}}.%{{arch}}\n {name}.x86_64"
-                    ),
-                    ok(&answer),
-                );
-            }
+                .with_command_prefix(RPM_DEPS, ok(&deps))
+                .with_command(RPM_PROVIDES_INDEX, ok(&provides));
         }
         // One answer per vendor file: a batch query over several files is
         // unregistered, so the inspector falls back to these.

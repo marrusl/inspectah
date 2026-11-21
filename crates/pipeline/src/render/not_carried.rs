@@ -52,6 +52,15 @@
 //! installs with it is not listed. An auto package that only another
 //! not-carried package needs is in the class too, which is correct:
 //! nothing the export installs pulls either of them in.
+//!
+//! **Requirements, not choices.** Presence counts only what an installed
+//! package requires (`dep_closures`): a package that is one of several
+//! providers of a capability, the base image or another package
+//! providing it too, is not pulled in by it, so once excluded it is
+//! listed and its unit omitted. The class still counts every provider a
+//! default root may pull in (`dep_alternatives` too), so the scan keeps
+//! such a package included as the source host had it. A fleet's drops
+//! count them as well: a package dnf may install is never called dropped.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -64,7 +73,8 @@ use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::repoless::{InstallRepos, PackageRoute, route_for};
 use super::unit_plan::{
-    every_installed_package_has_a_closure, pulled_in_by_default_roots, pulled_in_by_included,
+    every_installed_package_has_a_closure, possibly_pulled_in_by_included,
+    pulled_in_by_default_roots, pulled_in_by_included,
 };
 use crate::export_warning::{ExportWarning, sanitize_bounded};
 
@@ -377,10 +387,11 @@ pub fn default_carried_unit_owners(snap: &InspectionSnapshot) -> HashSet<String>
 /// leaf on every host (or, for one not on every host, a leaf where it is),
 /// and drops the rest. A package is dropped when it is in neither
 /// `baseline_package_names` nor `packages_added`, by name, and nothing the
-/// fleet export installs pulls it in, as the kept packages' closures
-/// joined across every host with leaf data say ([`pulled_in_by_included`]):
-/// a partial package the operator includes counts as a universal leaf
-/// does. Without a baseline a base-image package cannot be told from a
+/// fleet export installs may pull it in, as the kept packages' closures
+/// and alternatives joined across every host with leaf data say
+/// ([`possibly_pulled_in_by_included`]): a partial package the operator
+/// includes counts as a universal leaf does, and a provider dnf may pick
+/// among several is not called dropped. Without a baseline a base-image package cannot be told from a
 /// dropped one, with no host of leaf authority the merge drops nothing,
 /// and with a package the export installs that has no recorded closure
 /// what it pulls in is unknown, so none of them proves anything.
@@ -412,7 +423,7 @@ impl<'a> FleetDrops<'a> {
             .map(String::as_str)
             .chain(rpm.packages_added.iter().map(|pkg| pkg.name.as_str()))
             .collect();
-        let pulled_in = pulled_in_by_included(snap, &repos)
+        let pulled_in = possibly_pulled_in_by_included(snap, &repos)
             .into_iter()
             .filter_map(|id| id.rsplit_once('.').map(|(name, _)| name.to_string()))
             .collect();
@@ -1401,8 +1412,9 @@ mod tests {
 
     /// `app`, a package only some hosts have, is kept but left out, so
     /// what it needs is not installed. Included, it installs `firewalld`,
-    /// which then is not named. An installed package with no recorded
-    /// closure could install anything, so the fleet names nothing.
+    /// which then is not named, nor when it is only one provider `app` may
+    /// install. An installed package with no recorded closure could
+    /// install anything, so the fleet names nothing.
     #[test]
     fn a_fleet_counts_every_package_its_export_installs() {
         let names = |snap: &InspectionSnapshot| -> Vec<String> {
@@ -1424,6 +1436,20 @@ mod tests {
         let mut included = fleet();
         include_app(&mut included);
         assert_eq!(names(&included), ["cronie"]);
+
+        // `firewalld` as one of several providers `app` may install: dnf
+        // may pick it, so it is not called dropped either.
+        let mut alternative = fleet();
+        include_app(&mut alternative);
+        let rpm = alternative.rpm.as_mut().expect("rpm section");
+        let firewalld = rpm
+            .dep_closures
+            .as_mut()
+            .and_then(|closures| closures.get_mut("app.x86_64"))
+            .map(std::mem::take)
+            .expect("app's closure");
+        rpm.dep_alternatives = Some([("app.x86_64".to_string(), firewalld)].into());
+        assert_eq!(names(&alternative), ["cronie"]);
 
         let mut no_closure = fleet();
         include_app(&mut no_closure);

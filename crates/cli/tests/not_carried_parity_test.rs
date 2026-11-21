@@ -149,18 +149,11 @@ const HOST_PACKAGES: &[(&str, &str, &str)] = &[
     ("vendor-agent", "x86_64", "@commandline"),
 ];
 
-/// What `dnf repoquery --requires --resolve --recursive --installed`
-/// answers per added package. Unlisted packages need nothing added.
-const RECURSIVE_REQUIRES: &[(&str, &str)] = &[
-    (
-        "httpd.x86_64",
-        "httpd-core.x86_64\nhttpd-filesystem.noarch\nbash.x86_64\nsystemd.x86_64\n",
-    ),
-    (
-        "firewalld.noarch",
-        "python3-firewall.noarch\nsystemd.x86_64\n",
-    ),
-];
+/// What the batched `rpm -q` dependency query answers for the added
+/// packages: each one's requires, by package name, which every package
+/// provides. Unlisted packages require nothing.
+const RPM_REQUIRES: &str = "@@httpd\nR\thttpd-core\nR\thttpd-filesystem\nR\tbash\nR\tsystemd\n\
+    @@firewalld\nR\tpython3-firewall\nR\tsystemd\n";
 
 /// `rpm -qa` file lists, in the sentinel format the RPM inspector reads.
 const FILE_OWNERSHIP: &str = "@@bash\n/usr/bin/bash\n\
@@ -251,6 +244,10 @@ fn host_mock() -> MockExecutor {
         .map(|(path, _)| format!("{path}\n"))
         .collect();
     let find_var_lib: String = rpm_owned.clone();
+    let provides: String = HOST_PACKAGES
+        .iter()
+        .map(|(name, arch, _)| format!("{name}.{arch}\t0\t\t{name}\n"))
+        .collect();
 
     let mut mock = MockExecutor::new()
         // -- packages --------------------------------------------------
@@ -267,16 +264,19 @@ fn host_mock() -> MockExecutor {
             ok(FILE_OWNERSHIP),
         )
         // -- leaf versus auto ------------------------------------------
-        // The batched `rpm -q` dependency query is left unanswered, so
-        // the inspector takes the dnf route, which is the simpler one to
-        // describe here.
         .with_command(
             "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
             ok(&format!("{LEAF}.x86_64\nbash.x86_64\n")),
         )
         .with_command_prefix(
-            "dnf repoquery --requires --resolve --recursive --installed",
-            ok(""),
+            "rpm -q --queryformat @@%{NAME}\\n[R\\t%{REQUIRENAME}\\n]\
+             [W\\t%{RECOMMENDNAME}\\n][S\\t%{SUPPLEMENTNAME}\\n]",
+            ok(RPM_REQUIRES),
+        )
+        .with_command(
+            "rpm -qa --queryformat \
+             [%{=NAME}.%{=ARCH}\\t%{PROVIDEFLAGS}\\t%{PROVIDEVERSION}\\t%{PROVIDENAME}\\n]",
+            ok(&provides),
         )
         // -- repo-less scan --------------------------------------------
         .with_command(
@@ -326,15 +326,6 @@ fn host_mock() -> MockExecutor {
                 &format!("{wants}/{unit}"),
                 &format!("/usr/lib/systemd/system/{unit}"),
             );
-    }
-    for (id, requires) in RECURSIVE_REQUIRES {
-        mock = mock.with_command(
-            &format!(
-                "dnf repoquery --requires --resolve --recursive --installed \
-                 --queryformat %{{name}}.%{{arch}}\n {id}"
-            ),
-            ok(requires),
-        );
     }
     for (path, owner) in VAR_DIRS {
         mock = mock

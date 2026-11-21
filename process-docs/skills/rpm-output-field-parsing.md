@@ -105,19 +105,30 @@ back to dnf, rather than reading as a graph with no edges.
 
 A plain requirement matches by name, as `--whatprovides <name>` matches
 it: `%{REQUIRENAME}` carries no version and `%{REQUIREVERSION}` is not
-queried. A capability with several providers credits all of them, which
-over-counts where only one of a set of alternatives is needed. A
-capability inside a rich dependency keeps its comparison; see below.
+queried. A capability with several providers credits all of them in
+`depends_on` and `dep_alternatives`, which over-counts where only one of
+a set of alternatives is needed, and none of them in `dep_closures`; see
+below. A capability inside a rich dependency keeps its comparison.
 
 ## What the dependency tree counts as pulled in
 
-`dep_closures` (every leaf's and auto package's closure over the
-classified packages, leaves included) and `leaf_dep_tree` (the auto part
-of each leaf's, built from the same walk) feed `pulled_in_by_included`,
-which decides which excluded packages are still in the image. It has to count everything dnf
-installs alongside a leaf, not only hard requirements, or packages dnf
-does install read as not carried. An edge `a -> b` in the graph means
-installing `a` with dnf defaults installs `b`. The requires query asks for
+The collector walks two graphs over the same edges. `depends_on` holds
+every edge: `a -> b` means installing `a` with dnf defaults may install
+`b`. `requires` holds the edges a real requirement establishes:
+`DepExpr::required` keeps a provider only when it is the sole installed
+provider of what `a` requires or recommends, an `or` only when one
+operand holds, and an `if` branch only when its condition holds through
+the base image and `a` alone (else what both branches need); a
+Supplements edge always counts, since any trigger pulls the package in.
+`dep_closures` is each leaf's and auto package's walk of `requires` over
+the classified packages, leaves included; `dep_alternatives` is the rest
+of its `depends_on` walk; `leaf_dep_tree` is the auto part of each
+leaf's two joined. `pulled_in_by_included`, which decides which excluded
+packages are still in the image, reads `dep_closures`: a base-image or
+second added provider means dnf installs no particular one. The
+not-carried class and a fleet's drops read both. Both graphs count
+everything dnf installs alongside a leaf, not only hard requirements, or
+packages dnf does install read as not carried. The requires query asks for
 three tags, each in its own `[...]` group with a one-letter tag first:
 
 ```rust
