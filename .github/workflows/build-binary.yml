@@ -12,11 +12,16 @@ on:
     paths:
       - 'crates/*/src/**'
       - 'crates/*/Cargo.toml'
+      # build.rs in web embeds the UI and in cli stamps the version.
+      - 'crates/*/build.rs'
       - 'crates/web/ui/src/**'
       - 'crates/web/ui/package.json'
+      - 'crates/web/ui/package-lock.json'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      # The release recipe itself.
+      - '.github/workflows/build-binary.yml'
 
 permissions:
   contents: read
