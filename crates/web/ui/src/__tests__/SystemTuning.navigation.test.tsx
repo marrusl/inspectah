@@ -138,19 +138,13 @@ function stubLocalStorage() {
   });
 }
 
-const originalScrollIntoView = Element.prototype.scrollIntoView;
-
 beforeEach(() => {
   mutatingRequests = [];
   stubLocalStorage();
-  // jsdom does not implement scrollIntoView, which the app calls when it
-  // reveals a row it navigated to.
-  Element.prototype.scrollIntoView = vi.fn();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  Element.prototype.scrollIntoView = originalScrollIntoView;
   expect(mutatingRequests).toEqual([]);
 });
 

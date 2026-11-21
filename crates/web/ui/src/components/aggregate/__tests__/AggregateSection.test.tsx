@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import { AggregateSectionContent } from "../AggregateSection";
 import type {
   AggregateSection,
@@ -339,10 +339,8 @@ describe("AggregateSectionContent", () => {
       vi.restoreAllMocks();
     });
 
-    it("does not run the reveal after the section unmounts", () => {
-      // Hold animation frames so the reveal is still pending at unmount, the
-      // way a slow test runner leaves it when a test ends straight after a
-      // navigate.
+    /** Hold animation frames so the reveal runs only when the test says. */
+    function holdAnimationFrames() {
       const held = new Map<number, FrameRequestCallback>();
       let nextId = 1;
       vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
@@ -353,7 +351,10 @@ describe("AggregateSectionContent", () => {
       vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
         held.delete(id);
       });
+      return held;
+    }
 
+    function renderWithTarget(onNavTargetConsumed: () => void) {
       const target = cfgItem("/etc/httpd/conf/httpd.conf");
       const section: AggregateSection = {
         id: "config_files",
@@ -361,9 +362,7 @@ describe("AggregateSectionContent", () => {
         is_decision_section: true,
         items: [target],
       };
-      const onNavTargetConsumed = vi.fn();
-
-      const { unmount } = render(
+      const result = render(
         <AggregateSectionContent
           section={section}
           filterText=""
@@ -374,6 +373,39 @@ describe("AggregateSectionContent", () => {
           onNavTargetConsumed={onNavTargetConsumed}
         />,
       );
+      const row = document.querySelector(
+        `[data-item-id='${JSON.stringify(target.item_id)}']`,
+      );
+      return { ...result, row };
+    }
+
+    it("reveals the target and consumes it exactly once while mounted", () => {
+      const held = holdAnimationFrames();
+      const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+      const onNavTargetConsumed = vi.fn();
+
+      const { row } = renderWithTarget(onNavTargetConsumed);
+      expect(held.size).toBeGreaterThan(0);
+
+      act(() => {
+        for (const cb of held.values()) cb(0);
+      });
+
+      expect(row).not.toBeNull();
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect(scroll.mock.contexts[0]).toBe(row);
+      expect(row).toHaveClass("inspectah-highlight");
+      expect(onNavTargetConsumed).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not run the reveal after the section unmounts", () => {
+      // Hold animation frames so the reveal is still pending at unmount, the
+      // way a slow test runner leaves it when a test ends straight after a
+      // navigate.
+      const held = holdAnimationFrames();
+      const onNavTargetConsumed = vi.fn();
+
+      const { unmount } = renderWithTarget(onNavTargetConsumed);
       expect(held.size).toBeGreaterThan(0);
 
       unmount();

@@ -181,24 +181,21 @@ function makeAggregateViewWithVariants(): AggregateViewResponse {
 // Tests
 // ---------------------------------------------------------------------------
 
-const originalScrollIntoView = Element.prototype.scrollIntoView;
-
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
   mockFetchAggregateView.mockReset();
   localStorage.clear();
-  // jsdom does not implement scrollIntoView, which the portal reveal calls.
-  Element.prototype.scrollIntoView = vi.fn();
-});
-
-afterEach(() => {
-  Element.prototype.scrollIntoView = originalScrollIntoView;
 });
 
 describe("portal idempotency", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("calling banner navigate twice with same target keeps variant view open", async () => {
     const view = makeAggregateViewWithVariants();
     mockFetchAggregateView.mockResolvedValue(view);
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
 
     render(<AggregateApp aggregate={MOCK_AGGREGATE} health={MOCK_HEALTH} />);
 
@@ -226,9 +223,12 @@ describe("portal idempotency", () => {
       navButton.click();
     });
 
-    // Wait for variant view to appear
+    // Wait for variant view to appear and the first reveal to finish
     await waitFor(() => {
       expect(screen.getByTestId("variant-view")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(scroll).toHaveBeenCalledTimes(1);
     });
 
     // Second click — same target, should keep variant view open (not toggle shut)
@@ -236,15 +236,14 @@ describe("portal idempotency", () => {
       navButton.click();
     });
 
+    // Wait for the second click's own reveal frame, so it runs while the
+    // tree is still mounted rather than racing teardown.
+    await waitFor(() => {
+      expect(scroll).toHaveBeenCalledTimes(2);
+    });
+
     // Variant view must still be visible — NOT toggled shut
     expect(screen.getByTestId("variant-view")).toBeInTheDocument();
-
-    // Let the reveal frame run while the tree is still mounted. On a slow
-    // runner it fires before teardown anyway; waiting for it makes that
-    // deterministic.
-    await waitFor(() => {
-      expect(document.querySelector(".inspectah-highlight")).not.toBeNull();
-    });
   });
 });
 

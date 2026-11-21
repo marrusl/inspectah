@@ -71,8 +71,6 @@ const SECTIONS: ReferenceSection[] = [
 /** Requests the app sent that would change the session. */
 let mutatingRequests: string[] = [];
 
-const originalScrollIntoView = Element.prototype.scrollIntoView;
-
 function serve(view: ViewResponse) {
   const routes: Record<string, unknown> = {
     "/api/health": HEALTH,
@@ -99,13 +97,10 @@ function serve(view: ViewResponse) {
 
 beforeEach(() => {
   mutatingRequests = [];
-  // jsdom does not implement scrollIntoView, which the reveal calls.
-  Element.prototype.scrollIntoView = vi.fn();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  Element.prototype.scrollIntoView = originalScrollIntoView;
   expect(mutatingRequests).toEqual([]);
 });
 

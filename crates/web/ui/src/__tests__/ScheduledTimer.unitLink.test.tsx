@@ -115,13 +115,8 @@ const GROUPS = [
 /** Requests the app sent that would change the session. */
 let mutatingRequests: string[] = [];
 
-const originalScrollIntoView = Element.prototype.scrollIntoView;
-
 beforeEach(() => {
   mutatingRequests = [];
-  // jsdom does not implement scrollIntoView, which the app calls when it
-  // reveals a row it navigated to.
-  Element.prototype.scrollIntoView = vi.fn();
   const routes: Record<string, unknown> = {
     "/api/health": HEALTH,
     "/api/groups": GROUPS,
@@ -147,7 +142,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  Element.prototype.scrollIntoView = originalScrollIntoView;
   expect(mutatingRequests).toEqual([]);
 });
 

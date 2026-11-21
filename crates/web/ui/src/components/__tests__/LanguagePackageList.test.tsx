@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import type {
   LanguagePackageEnv,
   LanguagePackageDto,
@@ -642,6 +642,10 @@ describe("LanguagePackageList keyboard navigation", () => {
 // --- Search integration tests ---
 
 describe("LanguagePackageList search integration", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   const npmGlobalEnv = makeLangEnv(
     "npm",
     "/usr/lib/node_modules",
@@ -652,7 +656,8 @@ describe("LanguagePackageList search integration", () => {
     { method: "npm global" },
   );
 
-  it("auto-expands environments when searchQuery matches a package name", () => {
+  it("auto-expands environments when searchQuery matches a package name", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
     const { rerender } = render(
       <LanguagePackageList
         environments={[npmGlobalEnv]}
@@ -679,9 +684,17 @@ describe("LanguagePackageList search integration", () => {
     expect(
       screen.getByTestId("lang-env-sublist-npm:/usr/lib/node_modules"),
     ).toBeInTheDocument();
+
+    // The search reveal runs in the next frame; wait for it so it runs while
+    // mounted, not after teardown.
+    const tsRow = screen.getByTestId("lang-pkg-typescript");
+    await waitFor(() => expect(tsRow).toHaveFocus());
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll.mock.contexts[0]).toBe(tsRow);
   });
 
-  it("highlights matching packages with data-search-match attribute", () => {
+  it("highlights matching packages with data-search-match attribute", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
     render(
       <LanguagePackageList
         environments={[npmGlobalEnv]}
@@ -697,6 +710,12 @@ describe("LanguagePackageList search integration", () => {
 
     const eslintRow = screen.getByTestId("lang-pkg-eslint");
     expect(eslintRow).not.toHaveAttribute("data-search-match");
+
+    // The search reveal scrolls to and focuses the first match in the next
+    // frame; wait for it so it runs while mounted, not after teardown.
+    await waitFor(() => expect(tsRow).toHaveFocus());
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll.mock.contexts[0]).toBe(tsRow);
   });
 
   it("does not auto-expand when searchQuery has no package matches", () => {

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NotCarriedGroup } from "../NotCarriedGroup";
 import type { NotCarriedRow } from "../../api/types";
@@ -37,6 +37,10 @@ async function renderExpanded(rows: NotCarriedRow[], onInclude = vi.fn()) {
 }
 
 describe("NotCarriedGroup", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("renders nothing when the list is empty", () => {
     const { container } = render(
       <NotCarriedGroup rows={[]} onInclude={vi.fn()} />,
@@ -140,7 +144,8 @@ describe("NotCarriedGroup", () => {
     );
   });
 
-  it("expands on reveal and reports it was revealed", () => {
+  it("expands on reveal and reports it was revealed", async () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
     const onRevealed = vi.fn();
     render(
       <NotCarriedGroup
@@ -154,5 +159,11 @@ describe("NotCarriedGroup", () => {
       screen.getByRole("button", { name: /not carried/i }),
     ).toHaveAttribute("aria-expanded", "true");
     expect(onRevealed).toHaveBeenCalledTimes(1);
+
+    // The reveal scrolls the group into view and focuses its toggle two
+    // frames later; wait for it so it runs while mounted, not after teardown.
+    const toggle = screen.getByRole("button", { name: /not carried/i });
+    await waitFor(() => expect(toggle).toHaveFocus());
+    expect(scroll).toHaveBeenCalledTimes(1);
   });
 });

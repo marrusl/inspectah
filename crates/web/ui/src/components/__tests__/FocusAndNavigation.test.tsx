@@ -141,9 +141,6 @@ const MOCK_GROUPS = [
 ];
 
 beforeEach(() => {
-  // jsdom does not implement scrollIntoView — stub it globally
-  Element.prototype.scrollIntoView = vi.fn();
-
   mockFetch.mockReset();
   vi.stubGlobal("fetch", mockFetch);
   mockFetch.mockImplementation((url: string, opts?: RequestInit) => {

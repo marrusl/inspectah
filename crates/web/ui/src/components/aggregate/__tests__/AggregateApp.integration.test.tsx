@@ -718,15 +718,6 @@ describe("AggregateApp integration", () => {
   // -------------------------------------------------------------------------
   describe("fleet units search (§ 6.15)", () => {
     const UNIT = "chronyd.service";
-    const originalScrollIntoView = Element.prototype.scrollIntoView;
-    beforeEach(() => {
-      // jsdom does not implement scrollIntoView, which the fleet reveal calls.
-      Element.prototype.scrollIntoView = vi.fn();
-    });
-    afterEach(() => {
-      Element.prototype.scrollIntoView = originalScrollIntoView;
-    });
-
     function viewWithUnit(): AggregateViewResponse {
       const view = mockAggregateViewResponse();
       view.sections = view.sections.map((s) =>
