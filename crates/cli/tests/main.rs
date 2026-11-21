@@ -18,6 +18,7 @@ mod aggregate_host_labels_test;
 mod baseline_requirement_test;
 mod copy_source_exists_test;
 mod fleet_repo_precedence_test;
+mod ghost_config_scan_test;
 mod not_carried_parity_test;
 mod refine_e2e_test;
 mod selinux_scan_test;

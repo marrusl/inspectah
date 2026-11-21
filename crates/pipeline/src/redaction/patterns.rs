@@ -79,7 +79,8 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // Generic password/credential in key=value config.
         // Covers password=, passwd=, db_password=, secret=, api_key=, token=,
         // credential=, private_key=, access_key=, secret_key=, *_key= (compound
-        // forms only — bare "key=" is too broad for config files).
+        // forms only — bare "key=" is too broad for config files), and
+        // SSSD's *_authtok= bind passwords.
         // Uses (?:^|\b|_) instead of bare \b so compound forms like
         // iscsi_password= or db_password= are caught (underscore is a word
         // character, so \b alone misses mid-identifier boundaries).
@@ -92,7 +93,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // `Environment=API_TOKEN=x` is still a valid assignment.
         SecretPattern {
             regex: Regex::new(
-                r"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)[ \t]*[=:][ \t]*(?P<secret>\S+)",
+                r"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key|authtok)[ \t]*[=:][ \t]*(?P<secret>\S+)",
             )
             .unwrap(),
             finding_kind: FindingKind::Password,
@@ -207,7 +208,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // or its tie order.
         SecretPattern {
             regex: Regex::new(
-                r#"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)"[ \t]*:[ \t]*(?P<secret>"(?:[^"\\\r\n]|\\[^\r\n]?)+"?\S*)"#,
+                r#"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key|authtok)"[ \t]*:[ \t]*(?P<secret>"(?:[^"\\\r\n]|\\[^\r\n]?)+"?\S*)"#,
             )
             .unwrap(),
             finding_kind: FindingKind::Password,
@@ -234,7 +235,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // its tie order.
         SecretPattern {
             regex: Regex::new(
-                r#"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)[ \t]*[=:][ \t]*(?P<secret>"(?:[^"\\\r\n]|\\[^\r\n]?)+"?\S*|'(?:[^'\r\n]|'')+'?\S*)"#,
+                r#"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key|authtok)[ \t]*[=:][ \t]*(?P<secret>"(?:[^"\\\r\n]|\\[^\r\n]?)+"?\S*|'(?:[^'\r\n]|'')+'?\S*)"#,
             )
             .unwrap(),
             finding_kind: FindingKind::Password,
@@ -444,6 +445,16 @@ mod tests {
         assert!(
             pat.regex.is_match("api_secret = secretval"),
             "api_secret must match"
+        );
+        // SSSD's LDAP bind password; its `_type` setting names no secret.
+        let caps = pat
+            .regex
+            .captures("ldap_default_authtok = BindPass123")
+            .expect("ldap_default_authtok must match");
+        assert_eq!(&caps[SECRET_GROUP], "BindPass123");
+        assert!(
+            !pat.regex.is_match("ldap_default_authtok_type = password"),
+            "the authtok type is not a secret"
         );
     }
 

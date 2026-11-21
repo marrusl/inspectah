@@ -47,6 +47,9 @@ const RPM_QA: &str = "rpm -qa --queryformat %{EPOCH}:%{NAME}-%{VERSION}-%{RELEAS
 /// The `rpm -qa` query the RPM inspector lists owned paths with: a
 /// `@@<package>` line, then one owned path per line.
 const RPM_FILE_OWNERSHIP: &str = "rpm -qa --queryformat @@%{NAME}\\n[%{FILENAMES}\\n]";
+/// The `rpm -qa` query the config inspector lists `%ghost` files with:
+/// package, `fflags`, path, one file per line.
+const RPM_FILE_FLAGS: &str = "rpm -qa --queryformat [%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES}\\n]";
 const CMDLINE: &str = "BOOT_IMAGE=/vmlinuz root=/dev/mapper/rhel-root ro quiet\n";
 const LSMOD: &str = "Module                  Size  Used by\nbridge                307200  0\n";
 /// The path a `/dev/null` mask resolves to, and what reading it returns.
@@ -78,6 +81,10 @@ pub struct SysctlHost {
     rpm_owned: BTreeMap<String, Vec<String>>,
     /// `(flags, path)` rows of `rpm -Va`.
     rpm_va: Vec<(String, String)>,
+    /// `(package, fflags, path)` rows of the file-flags query.
+    file_flags: Vec<(String, String, String)>,
+    /// Other commands and their results, by the mock's command key.
+    commands: BTreeMap<String, ExecResult>,
     sysctl_a: Option<ExecResult>,
     tuned_active: Option<String>,
     /// `hostnamectl --json=short` stdout.
@@ -129,6 +136,28 @@ impl SysctlHost {
     /// `rpm -Va` reports `path` with `flags` (`S.5....T.`) as a config file.
     pub fn rpm_va(mut self, flags: &str, path: &str) -> Self {
         self.rpm_va.push((flags.into(), path.into()));
+        self
+    }
+
+    /// `package` lists `path` as a `%ghost` file with rpm `fflags`
+    /// `flags` (`cng`, `g`), so it is owned and rpm never verifies it.
+    pub fn ghost(mut self, package: &str, flags: &str, path: &str) -> Self {
+        self.file_flags
+            .push((package.into(), flags.into(), path.into()));
+        self.rpm_owned(path, package)
+    }
+
+    /// `command` (the mock's key: the program and its arguments joined
+    /// by spaces) exits `exit_code` printing `stdout` and `stderr`.
+    pub fn command(mut self, command: &str, exit_code: i32, stdout: &str, stderr: &str) -> Self {
+        self.commands.insert(
+            command.into(),
+            ExecResult {
+                stdout: stdout.into(),
+                stderr: stderr.into(),
+                exit_code,
+            },
+        );
         self
     }
 
@@ -197,11 +226,20 @@ impl SysctlHost {
             .map(|(flags, path)| format!("{flags}  c {path}\n"))
             .collect();
 
+        let mut file_flags = String::from("bash  /usr/bin/bash\n");
+        for (package, flags, path) in &self.file_flags {
+            file_flags.push_str(&format!("{package} {flags} {path}\n"));
+        }
+
         let mut mock = MockExecutor::new()
+            .with_command(RPM_FILE_FLAGS, ok(&file_flags))
             .with_command(RPM_QA, ok("0:bash-5.2.26-3.el9.x86_64\n"))
             .with_command("rpm -Va", ok(&rpm_va))
             .with_command(RPM_FILE_OWNERSHIP, ok(&ownership))
             .with_command("lsmod", ok(LSMOD));
+        for (command, result) in self.commands {
+            mock = mock.with_command(&command, result);
+        }
         if let Some(result) = self.sysctl_a {
             mock = mock.with_command("sysctl -a", result);
         }

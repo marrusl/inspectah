@@ -30,8 +30,8 @@ use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::comment::escape_comment_text;
 use super::configtree::{
-    Destination, ETC_UNIT_DIR, KARGS_PATH, StagedFileKind, UnstagedWhy, is_staged, staged_count,
-    staged_unit_file, staged_writes, unstaged_files, validate_path,
+    Destination, ETC_UNIT_DIR, KARGS_PATH, StagedFileKind, StagedWrites, UnstagedWhy, is_staged,
+    staged_count, staged_unit_file, staged_writes, unstaged_files, validate_path,
 };
 use super::language_packages;
 use super::not_carried::{
@@ -1649,6 +1649,7 @@ fn config_section_lines(
                 )),
             }
         }
+        cfg_body.extend(sssd_mode_lines(&staged_writes(snap)));
         lines.extend(section("Configuration Files", cfg_body));
     }
 
@@ -1672,6 +1673,47 @@ fn config_section_lines(
     // Crypto policy
     lines.extend(crypto_policy_lines(snap));
 
+    lines
+}
+
+/// SSSD's main configuration file.
+const SSSD_CONF_PATH: &str = "/etc/sssd/sssd.conf";
+
+/// The directory SSSD reads `*.conf` snippets from after `sssd.conf`.
+const SSSD_CONF_D: &str = "/etc/sssd/conf.d/";
+
+/// What SSSD reads from [`SSSD_CONF_D`].
+const SSSD_SNIPPET_SUFFIX: &str = ".conf";
+
+/// Why the SSSD `chmod` lines are there.
+const SSSD_MODE_COMMENT: &str =
+    "# sssd reads its configuration only from root-owned files of mode 0600";
+
+/// `chmod` lines that give the staged SSSD configuration the mode SSSD
+/// requires. `COPY` gives a file the build context's mode, and SSSD
+/// refuses to start on a `sssd.conf` or `conf.d` snippet that is not
+/// `0600`, which on an identity-joined host means no one can log in.
+/// The host's mode is not recorded per file, and SSSD accepts only this
+/// one, so it is written as a constant. No host value reaches the lines.
+fn sssd_mode_lines(staged: &StagedWrites<'_>) -> Vec<String> {
+    let mut run = Vec::new();
+    if is_staged(staged, SSSD_CONF_PATH) {
+        run.push(format!("RUN chmod 0600 {SSSD_CONF_PATH}"));
+    }
+    if staged.writes.keys().any(|dest| {
+        dest.as_str()
+            .strip_prefix(SSSD_CONF_D)
+            .is_some_and(|name| name.ends_with(SSSD_SNIPPET_SUFFIX) && !name.contains('/'))
+    }) {
+        run.push(format!(
+            "RUN chmod 0600 {SSSD_CONF_D}*{SSSD_SNIPPET_SUFFIX}"
+        ));
+    }
+    if run.is_empty() {
+        return run;
+    }
+    let mut lines = vec![String::new(), SSSD_MODE_COMMENT.to_string()];
+    lines.extend(run);
     lines
 }
 
