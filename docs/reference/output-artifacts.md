@@ -120,10 +120,28 @@ command that would fail or do something the source host did not:
 - a `mask` where a unit file is copied in at the same name, since
   `systemctl mask` fails on a regular file;
 - any command for a vendor unit, or a package-owned mount, automount or swap
-  unit, whose owning package is excluded or not carried. A unit stays when the
-  base image ships its package or a package you kept depends on it. A local
-  unit has no owning package, and a shadowed unit follows its staged file, as
-  below.
+  unit, whose owning package is excluded or not carried and that nothing the
+  image installs may need. A local unit has no owning package, and a shadowed
+  unit follows its staged file, as below.
+
+**Commands that wait for their unit file.** A command for a vendor unit is
+written plain when the image certainly has its package: the base image ships
+it, the Containerfile installs it, or a package it installs requires it. When
+dnf may or may not install the package, the command runs only if the unit
+file is in the image. That happens for one of several packages that provide
+something an installed package needs, a package only a conditional dependency
+brings, a package you include by hand in refine and the packages it needs,
+and, on a fleet, the packages a package only some hosts have needs. These
+commands follow the others in one `RUN`, under one comment:
+
+```dockerfile
+# dnf may or may not install the packages these units come from, so each
+# command runs only if the unit file is in the image.
+RUN if [ -e /usr/lib/systemd/system/alt.service ]; then systemctl disable -- alt.service; fi
+```
+
+A `mask` is always plain, since `systemctl mask` succeeds whether or not the
+unit exists.
 
 **Units the image needs.** A `disable` or `mask` of `bootc-*`, `ostree-*` or
 `systemd-remount-fs.service`, and a `mask` of `tmp.mount`, are never carried;

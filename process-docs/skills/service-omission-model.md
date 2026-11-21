@@ -74,7 +74,7 @@ each included state change. The first that fails declines the command.
 | 3 | Rule 4: `systemctl mask` makes a link at `/etc/systemd/system/<name>` after every `COPY` and exits 1 on a regular file there, so the path must be free of any staged file. | `mask` | `MaskPathOccupied` |
 | 4 | Rule 5, the row's own file (`rule_5_file`): `Local` needs its unit file staged; `Shadowed` needs its shadow staged; `Vendor` and `PackagedStorage` need no unit file staged at the unit's name, nor, for an instance recorded from its vendor template, at the template's. An instance recorded from a template under `/etc` needs that file staged and none at its own name. On a fleet aggregate, a staged `Local` or `Shadowed` file whose path holds more than one content variant fails too. | `enable`, `disable` | `UnitFileNotStaged` (`Local`), `InstallEvidenceChanged` (the rest) |
 | 5 | Rule 5, the install drop-ins (`rule_5_drop_ins`): the install drop-ins the export stages for the unit are exactly the row's `install_drop_ins`, none missing and none added. The list includes a drop-in ranked above `/etc` that hides one of them, and, for an enabled instance, a runtime drop-in whose reset, replacement or hiding changed what the instance reads. | `enable`, `disable` | `InstallEvidenceChanged`; `InstanceNeedsEvidenceChanged` for a missing runtime drop-in of the second kind |
-| 6 | Rule 5, the package (`needs_its_package`): the presence tiers below, for `Vendor` and `PackagedStorage` only. | all, `mask` included | `PackageExcluded`, `NotCarried`, `NotInTargetImage` |
+| 6 | Rule 5, the package (`needs_its_package`): the presence tiers below, for `Vendor` and `PackagedStorage` only. A package that may or may not be installed guards the command instead ([Guarded commands](#guarded-commands)). | all, `mask` included | `PackageExcluded`, `NotCarried`, `NotInTargetImage` |
 | 7 | Rule 5 asked of a timer's trigger (`timer_trigger_check`), below. | `enable` of a timer | the three `TimerTrigger` reasons |
 | 8 | Rule 6, an instance's configuration (`rule_6_instance_config`), below. A row whose `needs_unknown` is set declines first, since what it reads was never read. | `enable` of a template instance | `InstanceNeedsUnknown`; `InstanceConfigNotStaged` |
 | 9 | Rule 7, `Also=` members (`rule_7_also`), once every row has passed or failed the rules above. | `enable`, `disable` with a non-empty `also` | `AlsoMember`, an advisory |
@@ -139,15 +139,17 @@ for an `Enabled` instance anyway.
 
 **A mask follows the package check.** `mask` reads no `[Install]`, so
 rule 5's file and drop-in halves (orders 4 and 5) do not apply to it, but
-the package half (order 6) does, through the same presence tiers, unchanged: a mask of a
-`Vendor` or `PackagedStorage` unit whose package is not in the image is
-omitted with the tiers' reason, so the host's mask stays visible as an
-`# Omitted:` line. Rules 3 and 4 run first, so a protected unit or
-`tmp.mount` keeps its FIXME and an occupied path keeps
-`MaskPathOccupied` whatever the package. An `Absent` mask (no unit file)
-and a mask with no known owner are carried (Tier 1). On a fleet, Tier 2
-reads the representative host's owner, so a mask of a package the merge
-excludes by prevalence is omitted until the package is included.
+the package half (order 6) does, through the same presence tiers: a mask of a
+`Vendor` or `PackagedStorage` unit whose package is certainly not in the
+image is omitted with the tiers' reason, so the host's mask stays visible
+as an `# Omitted:` line. A mask is never guarded: `systemctl mask` makes
+its link whether or not the unit exists (measured on systemd 252 and 257),
+so a mask whose package may be missing stays plain. Rules 3 and 4 run
+first, so a protected unit or `tmp.mount` keeps its FIXME and an occupied
+path keeps `MaskPathOccupied` whatever the package. An `Absent` mask (no
+unit file) and a mask with no known owner are carried (tier 1). On a
+fleet, a mask of a package the merge excludes by prevalence is omitted
+until the package is included.
 
 The presence tiers run only for `Vendor` and `PackagedStorage`, whose
 image file comes from the package. A `Shadowed` unit's one condition is
@@ -322,20 +324,26 @@ section names it in an `# Omitted:` line from `excluded_updater_line`.
 
 A unit whose owning package is not in the image cannot be acted on:
 `systemctl enable` on a missing unit fails the build with
-`Failed to enable unit, unit <name> does not exist`. So the plan has two
-outcomes, and they are not interchangeable:
+`Failed to enable unit, unit <name> does not exist` (systemd 252 and
+257), and so does `disable` on 252 (RHEL 9); 257 (RHEL 10) prints the
+error and exits 0. So the plan has these outcomes, and they are not
+interchangeable:
 
 - **Declined** (`UnitPlan.declined`): the unit is left out of every
   `systemctl` line and recorded with its `OmissionReason`. It renders as
   a `# Omitted: <unit> (<reason>)` comment, or for `TargetNeedsUnit` as a
   `# FIXME:` with § 10.3's sentence, and refine's unit row shows it in
   `declined`.
-- **Advisory** (`ServiceAdvisory`): the unit is emitted, with context
-  saying its presence could not be proved. An advisory is supplemental;
-  it never removes the unit.
+- **Guarded** (`PlannedUnit::guard`): the command is planned, and runs
+  only if the unit's vendor file is in the image
+  ([Guarded commands](#guarded-commands)).
+- **Advisory** (`ServiceAdvisory`): the unit is emitted, plain or
+  guarded, with context saying its presence could not be proved. An
+  advisory is supplemental; it never removes the unit.
 
-Choose omission only when the package is known to be absent, or the
-export cannot reproduce the command. An advisory on a unit that will fail
+Choose omission only when the package is certainly absent, or the export
+cannot reproduce the command. Choose a guard whenever the package may or
+may not be installed. An advisory on a unit that will fail
 the build is not a mitigation: until 2026-11-08, an excluded package's
 unit was emitted with a `PackageExcluded` advisory that no surface
 showed, and the build failed with no warning anywhere.
@@ -345,7 +353,8 @@ showed, and the build failed with no warning anywhere.
 `OmissionReason` holds every reason the plan declines a command:
 
 - `PackageExcluded`: every `packages_added` entry for the owner is
-  excluded and the baseline does not ship it (Tier 2).
+  excluded, the baseline does not ship it, and nothing installed may pull
+  it in (tier 4).
 - `NotCarried`: the owner is in the not-carried class
   (`not_carried.rs`): an auto package nothing included pulls in, which
   the scan excluded. It is chosen over `PackageExcluded` only when every
@@ -354,10 +363,11 @@ showed, and the build failed with no warning anywhere.
   keeps it `PackageExcluded`. It
   never creates an omission by itself: the unit is omitted only when the
   presence rules already prove the owner absent, which is why a mixed-arch
-  owner with one carried arch keeps its unit. Wording is
+  owner with one carried arch keeps its unit. The list holds only
+  packages certainly left out, so the two agree. Wording is
   `describe(NotCarried)`: `package 'rhc' is not carried: <NOT_CARRIED_REASON>`.
 - `NotInTargetImage`: a baseline is available and the owner is in
-  neither it nor `packages_added` (Tier 7).
+  neither it nor `packages_added` (tier 6).
 - `UnitFileNotStaged`, `InstallEvidenceChanged { path }`,
   `StorageFileStaged { path }`, `TargetNeedsUnit` and
   `MaskPathOccupied { path }`: the rules above.
@@ -446,99 +456,173 @@ the variant, which refine's view sends as the reason.
 
 ## The presence tiers
 
+The plan does not predict dnf's solver (Mark Russell, 2026-11-21). It
+reads two sets of package names, built once per plan by `Presence::new`
+from `export_installs`:
+
+- **certain**: the baseline's packages, every package the Containerfile
+  names on an install line, and what one of those certainly pulls in;
+- **possible**: `certain`, every included `packages_added` entry, and
+  everything an included package may pull in.
+
 `classify_service_presence`, evaluated in order:
 
-1. No owning package: emit.
-2. Every `packages_added` entry for the owner excluded, not in the
-   baseline, and not pulled in by an included package: decline with
-   `NotCarried` or `PackageExcluded`.
-3. An entry included but not installable: emit with `PackageUnreachable`
-   (and `BaselineUnavailable` with no baseline).
-4. An entry included and installable: emit.
-5. The owner in the effective target set (baseline or included): emit.
-6. Not found, no baseline: emit with `BaselineUnavailable`.
-7. Not found, baseline available: decline with `NotInTargetImage`.
+1. No owning package: plain.
+2. The owner certain: plain.
+3. The owner possible: guarded. This covers an excluded provider of a
+   capability another package provides too, an included auto package the
+   Containerfile does not name (kept as one provider a leaf may pull in),
+   a dependency only a conditional requirement brings, an auto package an
+   operator included by hand and its dependencies, and an included entry
+   rendered only as a manual step. When in doubt a package is possible,
+   never absent.
+4. The owner in `packages_added`, every entry excluded, and nothing
+   installed may pull it in: decline with `NotCarried` or
+   `PackageExcluded`.
+5. Not found, no baseline: guarded, with `BaselineUnavailable`. A scan
+   always records a baseline now, so only an older or hand-built snapshot
+   gets here.
+6. Not found, baseline available: decline with `NotInTargetImage`.
+
+An included entry the export cannot install, with no included entry it
+can, adds `PackageUnreachable` (and `BaselineUnavailable` with no
+baseline) to whatever command is written.
+
+### What counts as certain
+
+`export_installs` in `unit_plan.rs` is the one answer. A package is
+certain when:
+
+- the Containerfile names it (`named_on_install_line`): an included
+  package installed on its own route (`installs_on_its_own_route`) that
+  is installed from its carried RPM, or is locked, anaconda-sourced, a
+  carried unit owner no installed leaf brings, or a leaf (every included
+  package when the host has no leaf data). This mirrors
+  `packages_section_lines`' selection less refine's `original_includes`,
+  which the plan does not see, so **an auto package an operator includes
+  by hand reads as not named**: its commands and its dependencies' are
+  guarded, though the Containerfile installs it. The guard then passes;
+- the disabled-repo transaction names it: a package every included
+  package may pull in (`possibly_pulled_in_by_included`) that only a
+  host-disabled repo serves;
+- a named package's `dep_closures` entry lists it and a repo the image
+  enables serves it, or the disabled-repo transaction names it. A
+  recommended package no repo serves is skipped by dnf, so it is not
+  counted. A snapshot without `dep_closures` (older than schema 29, or
+  hand-built) has only `leaf_dep_tree`, which holds everything a leaf may
+  install, so it makes nothing certain.
+
+**On a fleet** a closure counts only through a package every host has, on
+a fleet whose every host gave leaf data (`closure_is_certain`). The
+merged `dep_closures` entry is the intersection over the hosts that have
+the package, so it accounts for every provider installed beside it on
+those hosts. A package only some hosts have cannot see a provider another
+host's kept package brings: if `host-b`'s `other` provides the
+`transport` that `app`, only on `host-a`, requires from `helper`, the
+fleet image that installs both need not install `helper`. So `helper`'s
+commands are guarded. A package every host has meets every possible
+provider on some host, whose closure then leaves the dependency out.
+
+### Guarded commands
+
+A planned unit with a guard (`PlannedUnit::guard`, and
+`PlannedTarget::guard` for `set-default`) carries the vendor file the
+command waits for: a `Vendor` fragment's file (the unit's own name, or
+its template's for an instance) or a package-owned storage unit's name.
+`systemctl_lines` writes the plain commands as before, then every guarded
+one in one `RUN`, under `GUARDED_COMMANDS_COMMENT`, in the same order
+(`set-default`, then enable, disable, mask; by kind, then name):
+
+```dockerfile
+# dnf may or may not install the packages these units come from, so each
+# command runs only if the unit file is in the image.
+RUN if [ -e /usr/lib/systemd/system/alt.service ]; then systemctl disable -- alt.service; fi && \
+    if [ -e /usr/lib/systemd/system/worker@.service ]; then systemctl enable -- worker@blue.service; fi
+```
+
+- **The test is a file test, not `systemctl`.** No service manager runs
+  in an image build: `systemctl cat` exits 1 there even for a unit that
+  exists, and `systemctl is-enabled` exits nonzero for a disabled unit and
+  a missing one alike (measured in `rhel-bootc:10.3`, systemd 257, and
+  `ubi9`, systemd 252, 2026-11-21). The vendor directory is where the
+  package puts the file, and rule 5 already requires that nothing is
+  staged at the unit's name under `/etc`.
+- **`&&` joins them**, so a command that runs and fails still fails the
+  build; an `if` whose test fails exits 0.
+- **A mask is never guarded** (above).
+- `t21_every_systemctl_command_in_the_containerfile_is_planned` reads the
+  guarded commands too (`guarded_commands` in the CLI test support) and
+  compares each one's file with the plan's guard.
 
 ## Aggregate snapshots
 
-An aggregate's `packages_added` is leaf-only, so the tiers that read
-absence from it (3, 6, 7) would omit the unit of an auto dependency the
-image does install. Aggregate rendering applies Tier 2
-(`aggregate_presence`), because an explicit exclusion on an entry that is
-present cannot be faked by leaf filtering. Then it omits the unit of a
-package the merge provably dropped (`not_carried::FleetDrops`: in
-neither the baseline nor `packages_added`, and pulled in by nothing the
-export installs, not even as one of several providers, from the kept
-packages' closures and alternatives joined across hosts): `NotCarried` when
-the fleet's not-carried list names it, `NotInTargetImage` otherwise.
-Without a baseline or a host of leaf authority nothing is proved, and
-everything else emits, an unknown owner included. Before this, a fleet
-whose hosts enabled `rhcd.service` against its preset carried
+An aggregate's `packages_added` is leaf-only, so absence is never read
+from a name missing there. `aggregate_presence`: an owner certain is
+plain; an owner with entries, every one excluded and none possibly
+installed, is omitted, since an explicit exclusion on an entry that is
+present cannot be faked by leaf filtering; then a package the merge
+provably dropped (`not_carried::FleetDrops`: in neither the baseline nor
+`packages_added`, and pulled in by nothing the export installs, not even
+as one of several providers, from the kept packages' closures and
+alternatives joined across hosts) is omitted, `NotCarried` when the
+fleet's not-carried list names it, `NotInTargetImage` otherwise. Every
+other owner, an unknown one included, is guarded. Before 2026-11-10, a
+fleet whose hosts enabled `rhcd.service` against its preset carried
 `systemctl enable rhcd.service` although the merge had dropped `rhc`,
 and the build failed.
 
 ## What does not show omissions
 
 The audit report (`audit-report.md` and `.html`) lists a unit's row
-without saying it was omitted. That is true of Tier 7 as well and was
-left as is; no new surface was built for omissions.
+without saying it was omitted or guarded. That is true of tier 6 as well
+and was left as is; no new surface was built for omissions. Refine's
+view shows a guarded command as planned: it does not say it is guarded.
 
 ## Excluded is not absent
 
-"Excluded" means the package will not be in the image. A package that an
-included package requires is in the image whatever its disposition,
-because dnf installs it with the package that needs it, so Tier 2 must
-not omit its unit. One of several providers of a capability is not: with
-the base image or another installed package providing it too, dnf
-installs none of them, so its unit is omitted. That covers refine's default exclusion of a non-leaf
-package (the scan tarball leaves the same package included) and an
-operator's explicit exclusion alike.
+"Excluded" means the export does not name the package. A package that an
+installed package requires is in the image whatever its disposition,
+because dnf installs it with the package that needs it, so its unit
+command stays plain. One of several providers of a capability may or may
+not be installed: with the base image or another installed package
+providing it too, dnf need not install it, and with only added ones it
+picks one. Its command is guarded. That covers refine's default exclusion
+of a non-leaf package (the scan tarball leaves the same package included,
+and unnamed) and an operator's explicit exclusion alike.
 
-`pulled_in_by_included` in `unit_plan.rs` is the one answer:
-every package the `dep_closures` entry of a package the export installs
-(`installs_on_its_own_route`) lists, a leaf, a carried unit owner and a
-package an operator included by hand alike. `dep_closures` holds real
-requirements only, a dependency exactly one installed package provides;
-the providers dnf may pick among are in `dep_alternatives`, which only
-absence claims read (`possibly_pulled_in_by_included`). A snapshot with
-no closures reads its `leaf_dep_tree` instead.
-An included package that renders
-only as a manual step (a `# TODO`, the repo-less `# MANUAL` block with
-no cached or uploaded RPM, or the repo-enabling `# FIXME` after its
+The collector's `dep_closures` hold real requirements only, a dependency
+exactly one installed package provides; the providers dnf may pick among
+are in `dep_alternatives`. The evaluator behind them only has to be right
+in one direction: a dependency it leaves out of `dep_closures` is guarded,
+never lost (see `rpm-output-field-parsing.md`). An included package that
+renders only as a manual step (a `# TODO`, the repo-less `# MANUAL` block
+with no cached or uploaded RPM, or the repo-enabling `# FIXME` after its
 serving repo was dropped and with no upload) is never installed, so it
 pulls nothing in. A demoted repo-enabling package that was uploaded
 installs from the upload in the repo-less block, so it still counts.
-`effective_target_packages` adds those names, so Tier 2 falls through to
-Tier 5 for them, in single-host and aggregate mode. The disabled-repo
-package selection in `containerfile.rs` asks the same function; do not
-write a second copy.
 
-`dep_closures` keeps leaves, so a leaf that another included package
-depends on counts once the operator excludes it, and so does a
-dependency of an auto package the operator includes by hand: its
-recorded `systemctl disable` survives. The not-carried class alone asks
-the narrower `pulled_in_by_default_roots` (leaves and carried owners,
-alternatives counted), since it is decided while every auto package is
-still included.
+`dep_closures` keeps leaves, so a leaf that another installed package
+depends on counts once the operator excludes it. The not-carried class
+alone asks the narrower `pulled_in_by_default_roots` (leaves and carried
+owners, alternatives counted), since it is decided while every auto
+package is still included. `pulled_in_by_included` (the certain closure
+of every included root, named or not) is now read only by the `/var`
+evidence in `var_dirs.rs`.
 
-Its one limit is the data's. With no leaf data the set is empty, so an
-excluded package's unit is still omitted although dnf may install it,
-which is the behavior from before the rule existed. The same holds for
-an excluded package that is one of several added providers dnf picks
-among, and for every dependency on the collector's dnf fallback, which
-cannot tell one provider from several. A fleet does not
-accept that: `FleetDrops` proves nothing unless every package the
-export installs has a `dep_closures` entry
-(`every_installed_package_has_a_closure`), and every unit emits.
+With no leaf data both sets hold only the baseline and the included
+entries, so an excluded package is omitted although dnf may install it:
+the behavior from before the rule existed. The collector's dnf fallback
+cannot tell one provider from several, so it records every dependency in
+`dep_alternatives`: on that route every dependency's command is guarded.
 
 ### The not-carried class is this rule applied to auto packages
 
-An auto package that no included package pulls in is excluded by default
-on the scan path, so Tier 2 would omit its unit. `classify_auto_carriage`
-in `not_carried.rs` decides the class and calls `pulled_in_by_included`
-rather than reimplementing it; see `not-carried-auto-packages.md`. The
-`/var` evidence in `var_dirs.rs` asks the same predicate, so a package a
-leaf the export installs pulls in counts as carried there whatever its
-disposition, subject to the repo-enabling demotion filter. Its own
-install set uses `installs_on_its_own_route` too, so the two cannot
-disagree about which leaves are installed.
+An auto package that no included package may pull in is excluded by
+default on the scan path, so tier 4 omits its unit. `classify_auto_carriage`
+in `not_carried.rs` decides the class from `pulled_in_by_default_roots`;
+see `not-carried-auto-packages.md`. The `/var` evidence in `var_dirs.rs`
+asks `pulled_in_by_included`, so a package a leaf the export installs
+pulls in counts as carried there whatever its disposition, subject to the
+repo-enabling demotion filter. Its own install set uses
+`installs_on_its_own_route` too, so the two cannot disagree about which
+leaves are installed.

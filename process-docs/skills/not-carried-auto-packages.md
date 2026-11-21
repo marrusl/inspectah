@@ -39,53 +39,73 @@ dependencies of the packages it is about to exclude, and the class would
 change when they were.
 
 Everything that asks whether a package is in the image asks
-`unit_plan::pulled_in_by_included`, whose roots are **every** entry the
-export installs: a leaf, a carried owner, and an auto package an
-operator included by hand alike. That is the unit plan, the
-disabled-repo install (a pulled-in package from a repo the host disabled
-is named in the transaction that enables that repo), `/var`
-provisioning and the single-host list (`not_carried_packages` lists a
-class member only when nothing installed pulls it in). So
-once an operator includes `tool`, which needs `helper`, `helper` leaves
-the list, its recorded `systemctl` commands are emitted, and a `helper`
-only a disabled repo serves installs from it, although the class still
-holds `helper` and its disposition still reads excluded.
+`unit_plan::export_installs`, which keeps two sets (Mark Russell,
+2026-11-21):
+
+- **certain**: every package the Containerfile names on an install line
+  (a leaf, a carried owner no installed leaf brings, a locked or
+  anaconda package, one installed from its carried RPM, and a dependency
+  the disabled-repo transaction names), and what one of those certainly
+  pulls in;
+- **possible**: that, every included package, and everything an included
+  package may pull in.
+
+The unit plan writes a package's commands plain when it is certain,
+guarded by its unit file when it is only possible, and omits them only
+when it is outside both. The not-carried list names a class member only
+when nothing included may pull it in (`possibly_pulled_in_by_included`):
+**a package is listed as not carried only when the export certainly
+leaves it out**. One dnf may install is neither listed nor called
+carried; its commands wait for its unit file. The disabled-repo install
+names every package any included one may pull in that only a disabled
+repo serves, so dnf can resolve the requirement whichever provider it
+picks.
+
+So once an operator includes `tool`, which needs `helper`, `helper`
+leaves the list, its recorded `systemctl` commands are emitted, guarded,
+and a `helper` only a disabled repo serves installs from it, although
+the class still holds `helper` and its disposition still reads excluded.
+The commands are guarded because the plan does not see refine's
+`original_includes`, so it cannot tell `tool` from an included auto
+package the Containerfile does not name; the guard passes, since dnf
+installs `helper`.
 
 **Requirements, not choices.** The collector records two maps (schema
 29), both over every leaf and auto package, **leaves included**:
 
 - `dep_closures`: what installing it **certainly** installs. An edge
   counts only when the dependency has exactly one installed provider
-  (`DepExpr::required`). A capability the base image, or the requiring
-  package itself, also provides needs no added package, and one several
-  added packages provide is a choice dnf makes. Excluding `alternate`,
-  which provides the `transport` that `app` requires while a base-image
-  package provides it too, must omit `alternate.service`: dnf installs
-  no `alternate`, so a `systemctl enable` for it fails the build.
+  (`DepExpr::required`), and the evaluator only has to be right in that
+  direction: anything it is unsure of, such as a condition that holds a
+  condition, is left out and guarded downstream. A capability the base
+  image, or the requiring package itself, also provides needs no added
+  package, and one several added packages provide is a choice dnf makes.
 - `dep_alternatives`: what else it **may** install, those providers and
   what they bring.
 
-A root's closure is `unit_plan::closure_of`, at a `Reach`:
-`pulled_in_by_included` reads `Reach::Certain`, the `dep_closures`
-entry, because a presence claim puts back the unit command of a package
-the operator excluded. `possibly_pulled_in_by_included` reads
-`Reach::Possible`, both entries, for an absence claim (`FleetDrops`). A
-snapshot without closures (hand-built) reads its `leaf_dep_tree` entry
-at either reach. `leaf_dep_tree` keeps only the auto part of a leaf's
-two entries joined, because refine's `normalize_package_defaults` reads
-a leaf listed in it as a dependency of another leaf. Pulled-in
-membership is transitive in the closures already, so a pulled-in
-package's own closure adds nothing.
+A root's closure is `unit_plan::closure_of`, at a `Reach`: `Certain`
+reads the `dep_closures` entry, `Possible` both. `export_installs` counts
+a certain closure only for a named root, only when `dep_closures` is
+recorded (a snapshot with only `leaf_dep_tree` makes nothing certain,
+since the tree is what a leaf may install), and only for a dependency a
+repo the image enables serves. `leaf_dep_tree` keeps only the auto part
+of a leaf's two entries joined, because refine's
+`normalize_package_defaults` reads a leaf listed in it as a dependency of
+another leaf. Pulled-in membership is transitive in the closures
+already, so a pulled-in package's own closure adds nothing.
 
 The class (`pulled_in_by_default_roots`) reads `Reach::Possible`, as it
 always counted every provider: an auto package a default root may pull
-in stays included by default, as the source host had it.
+in stays included by default, as the source host had it. It is not
+named on an install line, so its commands are guarded.
 
 The collector's dnf fallback cannot tell one provider from several, so
 it records every `dep_closures` entry empty and the whole closure in
-`dep_alternatives`: on that route an excluded dependency's unit is
-omitted. The rpm route is the one real hosts take; the CLI test hosts
-(`UnitHost`, the parity fixture) answer its queries.
+`dep_alternatives`: on that route every dependency's command is guarded,
+and a dependency a disabled repo serves still installs from it. The rpm
+route is the one real hosts take; the CLI test hosts (`UnitHost`, the
+parity fixture) answer its queries, and `UnitHost::rpm_deps_unavailable`
+answers the fallback's.
 
 ## Unit owners are carried by default
 
@@ -193,6 +213,9 @@ one, what that package pulls in is unknown, so `FleetDrops::of` is
 `None` and every unit emits. A `leaf_dep_tree` entry does not count: it
 leaves out a dependency the host also user-installed.
 `fleet_not_carried_packages` names the dropped owners of enabled units.
+A closure counts as certain on a fleet only through a package every host
+has, on a fleet whose every host gave leaf data
+(`unit_plan::closure_is_certain`); see `service-omission-model.md`.
 The merge keeps only names, so a fleet entry's `arch` and `source_repo`
 are empty and the audit table prints `-`.
 
@@ -224,8 +247,8 @@ The fleet unit plan reads `FleetDrops` too: a unit whose owner the merge
 dropped is omitted (`NotCarried` when the fleet list names the owner,
 `NotInTargetImage` otherwise), where it used to fall through to
 `aggregate_presence`'s conservative `Emit` and `systemctl enable` a unit
-the image does not have, which fails the build. An unknown owner still
-emits.
+the image does not have, which fails the build. An owner neither certain
+nor dropped, an unknown one included, is guarded.
 
 `export_not_carried_packages` is what the export's block, table and
 notice read: the fleet list for an aggregate, `not_carried_packages`
@@ -288,19 +311,20 @@ than one arch of that name. All reason wording comes from the one constant `NOT_
   class too, which is correct.
 - A closure is the source host's dependency graph, not the target's: the
   image's dnf resolves against the target repos, which may offer a
-  provider the host lacked. A fleet cannot see a provider that only
-  another host's kept package brings: if `host-c`'s leaf provides the
-  capability `app` requires from `helper` on `host-a`, the fleet still
-  counts `helper` as certainly installed.
+  provider the host lacked.
+- The possible side is less careful than the certain one. `DepExpr::pulled`
+  takes an `or`'s first satisfied operand, and an `if` whose condition
+  holds on the host pulls in only its `then` branch, though a condition
+  an excluded package satisfied can fail in the image. A package missed
+  that way reads as certainly absent: its commands are omitted although
+  dnf may install it, which leaves a unit in its preset state rather
+  than failing the build. A condition that holds a condition pulls in
+  both branches.
 - When several added packages provide a capability and the export
-  installs none of them itself, dnf installs one, and none is counted:
-  an excluded one's unit is omitted. The class counts every provider, so
-  an auto package that is only one choice stays included by default. One
-  that owns no enabled unit is not named on the install line, so if dnf
-  picks another provider, a recorded `systemctl disable` for it names a
-  missing unit. This predates the two maps; counting only requirements
-  in the class would close it, at the cost of excluding such packages by
-  default.
+  installs none of them itself, dnf installs one: each one's commands
+  are guarded, so whichever dnf picks keeps its own. The class counts
+  every provider, so an auto package that is only one choice stays
+  included by default.
 - Providers of a capability are matched by name, as `--whatprovides`
   matches a plain requirement: two arches of one package both count, so
   neither is certain.
@@ -378,9 +402,10 @@ in `crates/cli/tests/not_carried_parity_test.rs` pins every surface;
 `crates/web/tests/api_test.rs` pins the payload and the header match.
 
 **Including a package clears its dependencies.** Any package the export
-installs credits what it requires, from `dep_closures` (schema 29): with
-`firewalld` carried, `python3-firewall` is not listed, and once an
-operator includes `tool`, the `helper` it needs leaves the rows too.
+installs credits what it may pull in, from `dep_closures` and
+`dep_alternatives` (schema 29): with `firewalld` carried,
+`python3-firewall` is not listed, and once an operator includes `tool`,
+the `helper` it needs leaves the rows too.
 
 **The UI.** `NotCarriedGroup.tsx` renders the rows in the packages view,
 below the package list, in array order, with the owners marked by the
@@ -393,10 +418,11 @@ notice and its dedupe are in `refine-export-warnings-header.md`.
 
 ## Rule for new code
 
-A new consumer that needs "is this package in the image" asks the
-disposition plus `pulled_in_by_included`, never the leaf filter. The leaf
-filter says which packages the operator named, not which ones dnf installs.
-`pulled_in_by_included` takes the whole snapshot, as
+A new consumer that needs "is this package in the image" asks
+`export_installs`, and decides what it does with a package that is only
+possible, never the leaf filter. The leaf filter says which packages the
+operator named, not which ones dnf installs. An absence claim asks
+`possibly_pulled_in_by_included`. Both take the whole snapshot, as
 `pulled_in_by_default_roots` does, whose carried owners come from the
 units section. Only the class may ask `pulled_in_by_default_roots`.
 

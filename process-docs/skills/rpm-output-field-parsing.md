@@ -117,16 +117,37 @@ every edge: `a -> b` means installing `a` with dnf defaults may install
 `b`. `requires` holds the edges a real requirement establishes:
 `DepExpr::required` keeps a provider only when it is the sole installed
 provider of what `a` requires or recommends, an `or` only when one
-operand holds, and an `if` branch only when its condition holds through
-the base image and `a` alone (else what both branches need); a
-Supplements edge always counts, since any trigger pulls the package in.
+operand holds and no operand holds an `if` or `unless`, and an `if`
+branch only when its condition holds through the base image and `a`
+alone, or the `else` when the condition holds through nothing (else what
+both branches need); a Supplements edge always counts, since any trigger
+pulls the package in.
+
+**`required` only has to be right in one direction.** What it keeps is
+counted as certainly installed, and a unit command for it is written
+plain; what it leaves out is at worst guarded by its unit file
+(Mark Russell, 2026-11-21). So it leaves out whatever it is unsure of.
+Its two tests on a condition are sound only for a condition that holds
+no `if` or `unless` (`Node::monotone`): leaving packages out can only
+make such a condition fail. A nested one can flip the other way:
+`(missing-cap if switch)`, with nothing providing `missing-cap`, fails
+while `switch` is installed and holds once it is left out, so
+`(alternate if (missing-cap if switch))` must not credit `alternate`
+because the condition holds through the base image alone. A non-monotone
+condition always takes what both branches need, and `pulled` pulls in
+both branches of it, since either may apply. A requirement that another
+requirement makes hold, such as `(plugin if helper)` beside `helper`, is
+not settled either: `helper` is not assured, so `plugin` is only
+possible.
+
 `dep_closures` is each leaf's and auto package's walk of `requires` over
 the classified packages, leaves included; `dep_alternatives` is the rest
 of its `depends_on` walk; `leaf_dep_tree` is the auto part of each
-leaf's two joined. `pulled_in_by_included`, which decides which excluded
-packages are still in the image, reads `dep_closures`: a base-image or
-second added provider means dnf installs no particular one. The
-not-carried class and a fleet's drops read both. Both graphs count
+leaf's two joined. `unit_plan::export_installs`, which decides which
+packages are certainly in the image, reads `dep_closures` for the
+packages the Containerfile names: a base-image or second added provider
+means dnf installs no particular one. The not-carried list, the
+disabled-repo install and a fleet's drops read both. Both graphs count
 everything dnf installs alongside a leaf, not only hard requirements, or
 packages dnf does install read as not carried. The requires query asks for
 three tags, each in its own `[...]` group with a one-letter tag first:

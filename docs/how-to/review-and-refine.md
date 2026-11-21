@@ -273,7 +273,10 @@ A package that owns a unit enabled on the source host, such as
 such as `python3-firewall`. If you exclude it, it is listed here with
 those packages, and including it again takes them all out of the group.
 Including any other package takes the packages it needs out of the group
-too, since dnf installs them with it.
+too, since dnf installs them with it. Their unit commands, and the included
+package's own, run only if the unit file is in the image. A package that
+dnf may or may not install, such as one of several that provide the same
+thing, is not listed here either.
 
 The group is not shown when nothing is listed, and also when the scan
 has no leaf data to decide what is needed.
