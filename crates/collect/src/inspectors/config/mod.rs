@@ -1,6 +1,7 @@
 use inspectah_core::types::symlink_allowlist::{crosses_tree_boundary, is_allowlisted};
 use inspectah_core::types::{AdvisoryType, FindingKind};
 pub mod classify;
+mod ghost;
 pub mod rpmva;
 pub mod walk;
 
@@ -173,6 +174,17 @@ impl Inspector for ConfigInspector {
             step: StepId::ApplyingRpmVerification,
             outcome: StepOutcome::Complete,
         });
+
+        // 1b) `%ghost` files: owned, so the walk below skips them, and
+        //     never verified, so rpm -Va above never reports them.
+        collect_ghost_configs(
+            exec,
+            rpm_state,
+            &rpm_va_paths,
+            &dhcp_paths,
+            &mut section,
+            &mut degraded_reasons,
+        );
 
         // 2) Unowned files: in /etc but not RPM-owned
         progress.emit(ProgressEvent::StepStarted {
@@ -353,6 +365,88 @@ impl Inspector for ConfigInspector {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Why the ghost-file query was not answered, for the degraded reason.
+const GHOST_QUERY_FAILED: &str =
+    "rpm file-flags query failed, so edits to %ghost files under /etc were not checked";
+
+/// The `%ghost` branch (`ghost.rs`): every ghost file under `/etc` that
+/// exists on the host as a regular file is collected as a modified owned
+/// config, with its content, unless a skip below names it.
+///
+/// A ghost file's package ships no content, so whatever the file holds
+/// was written on the host: by an admin, or by a tool such as authselect.
+/// The kind is `RpmOwnedModified` with no `rpm_va_flags`, since rpm did
+/// not verify it.
+///
+/// Skipped, in order: a path rpm -Va already reported; a path that does
+/// not exist, is a symlink (its state is the link, not content) or is a
+/// directory (`%ghost %dir`); every skip the unowned walk applies
+/// (`is_excluded_unowned`, dev artifacts, DHCP connections, the SELinux
+/// fcontext store); a machine-state member
+/// (`ghost::is_machine_state_member`); and `ghost::is_ghost_skip`.
+///
+/// When the machine-state class lands, the member skip goes and each
+/// surviving candidate goes through `ConfigCollector::admit` with
+/// `kind: RpmOwnedModified`, `package: Some(..)` and `rpm_va_flags: None`
+/// in place of the `section.files.push` here, so this branch and every
+/// other one share the class's single admission point.
+///
+/// No `/etc` path is RPM-owned when `owned_paths` is empty, so the query
+/// is not run then.
+fn collect_ghost_configs(
+    exec: &dyn Executor,
+    rpm_state: &RpmState,
+    rpm_va_paths: &HashSet<String>,
+    dhcp_paths: &HashSet<String>,
+    section: &mut ConfigSection,
+    degraded_reasons: &mut Vec<String>,
+) {
+    if rpm_state.owned_paths().is_empty() {
+        return;
+    }
+    let result = exec.run(
+        "rpm",
+        &["-qa", "--queryformat", ghost::RPM_FILE_FLAGS_FORMAT],
+    );
+    if !result.success() {
+        degraded_reasons.push(GHOST_QUERY_FAILED.to_string());
+        return;
+    }
+    for ghost in ghost::parse_ghost_files(&result.stdout) {
+        let path = ghost.path.as_str();
+        let on_host = Path::new(path);
+        if rpm_va_paths.contains(path)
+            || !exec.file_exists(on_host)
+            || exec.read_link(on_host).is_ok()
+            || exec.read_dir(on_host).is_ok()
+        {
+            continue;
+        }
+        if is_excluded_unowned(exec, path)
+            || is_dev_artifact(path)
+            || dhcp_paths.contains(path)
+            || is_selinux_fcontext_store_file(path)
+            || ghost::is_machine_state_member(path)
+            || ghost::is_ghost_skip(path)
+        {
+            continue;
+        }
+
+        let (content, disposition) = capture_config(exec, path, degraded_reasons);
+        section.files.push(ConfigFileEntry {
+            path: ghost.path.clone(),
+            kind: ConfigFileKind::RpmOwnedModified,
+            category: classify_config_path(path),
+            content,
+            rpm_va_flags: None,
+            package: Some(ghost.package),
+            diff_against_rpm: None,
+            disposition,
+            ..Default::default()
+        });
+    }
+}
 
 /// `file_contexts.local`/`file_contexts.subs` under the SELinux policy
 /// store are derived policy-store state collected as typed `FcontextRule`s
@@ -899,21 +993,41 @@ mod tests {
         }
     }
 
-    fn base_mock_with_etc() -> MockExecutor {
-        MockExecutor::new().with_dir("/etc", vec![]).with_command(
-            "dnf history list --reverse",
+    /// The mock command key of the ghost-file query.
+    fn ghost_query_key() -> String {
+        format!("rpm -qa --queryformat {}", ghost::RPM_FILE_FLAGS_FORMAT)
+    }
+
+    /// `mock` answering the ghost-file query with `stdout`, lines as rpm
+    /// prints them for [`ghost::RPM_FILE_FLAGS_FORMAT`].
+    fn with_ghost_query(mock: MockExecutor, stdout: &str) -> MockExecutor {
+        mock.with_command(
+            &ghost_query_key(),
             ExecResult {
-                exit_code: 1, // no dnf history available
+                stdout: stdout.into(),
+                exit_code: 0,
                 ..Default::default()
             },
         )
+    }
+
+    fn base_mock_with_etc() -> MockExecutor {
+        with_ghost_query(MockExecutor::new(), "")
+            .with_dir("/etc", vec![])
+            .with_command(
+                "dnf history list --reverse",
+                ExecResult {
+                    exit_code: 1, // no dnf history available
+                    ..Default::default()
+                },
+            )
     }
 
     // ---- Test 15: test_config_rpm_owned_modified ----
 
     #[test]
     fn test_config_rpm_owned_modified() {
-        let exec = MockExecutor::new()
+        let exec = with_ghost_query(MockExecutor::new(), "")
             .with_dir("/etc", vec!["httpd"])
             .with_dir("/etc/httpd", vec!["conf"])
             .with_dir("/etc/httpd/conf", vec!["httpd.conf"])
@@ -1151,7 +1265,7 @@ mod tests {
         // file that the unowned walk finds AND verifying dnf history parsing works.
         // A file found in step 2 as Unowned is the normal behavior; orphan
         // detection (step 3) only catches files missed by step 2.
-        let exec = MockExecutor::new()
+        let exec = with_ghost_query(MockExecutor::new(), "")
             .with_dir("/etc", vec!["oldpkg.conf", "active.conf"])
             .with_file("/etc/oldpkg.conf", "leftover config\n")
             .with_file("/etc/active.conf", "active config\n")
@@ -1514,7 +1628,7 @@ mod tests {
 
     #[test]
     fn test_config_diff_against_rpm_always_none() {
-        let exec = MockExecutor::new()
+        let exec = with_ghost_query(MockExecutor::new(), "")
             .with_dir("/etc", vec!["custom.conf"])
             .with_file("/etc/custom.conf", "content\n")
             .with_file("/etc/httpd/conf/httpd.conf", "modified\n")

@@ -27,6 +27,22 @@ const CRYPTO_POLICIES: &str = include_str!("../../../testdata/fixtures/config/cr
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
+/// The `rpm -qa` query the config inspector lists `%ghost` files with:
+/// package, `fflags`, path.
+const GHOST_QUERY: &str = "rpm -qa --queryformat [%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES}\\n]";
+
+/// `mock` answering [`GHOST_QUERY`] with `stdout`.
+fn with_ghosts(mock: MockExecutor, stdout: &str) -> MockExecutor {
+    mock.with_command(
+        GHOST_QUERY,
+        inspectah_core::traits::executor::ExecResult {
+            stdout: stdout.into(),
+            exit_code: 0,
+            ..Default::default()
+        },
+    )
+}
+
 fn pkg_source() -> SourceSystem {
     SourceSystem::PackageBased {
         os_release: OsRelease {
@@ -110,7 +126,7 @@ fn mock_rpm_state() -> RpmState {
 }
 
 fn full_mock() -> MockExecutor {
-    MockExecutor::new()
+    with_ghosts(MockExecutor::new(), "")
         // /etc directory tree -- walk_etc_recursive uses read_dir recursively
         .with_dir(
             "/etc",
@@ -674,7 +690,7 @@ fn test_config_inspector_json_roundtrip() {
 /// check would otherwise pass unnoticed.
 #[test]
 fn pam_audit_and_tuned_are_config_entries() {
-    let exec = MockExecutor::new()
+    let exec = with_ghosts(MockExecutor::new(), "")
         .with_dir("/etc", vec!["pam.d", "audit", "tuned"])
         .with_dir("/etc/pam.d", vec!["custom-sshd", "su-l"])
         .with_dir("/etc/audit", vec!["rules.d"])
@@ -1126,4 +1142,171 @@ fn a_zero_length_unit_file_under_etc_systemd_system_is_no_config_entry() {
             "/etc/systemd/system/notes.txt",
         ]
     );
+}
+
+// ---------------------------------------------------------------------------
+// The `%ghost` branch
+// ---------------------------------------------------------------------------
+
+/// Ghost-file query output for [`ghost_host`], as rpm prints it: package,
+/// `fflags` (`cng` is config, noreplace, ghost; measured on RHEL 9.8 and
+/// 10.2 for `sssd.conf` and `/etc/machine-id`), path.
+const GHOST_ROWS: &str = "\
+sssd-common cng /etc/sssd/sssd.conf
+sssd-common  /usr/sbin/sssd
+systemd cng /etc/machine-id
+systemd cng /etc/hostname
+systemd cng /etc/locale.conf
+systemd cng /etc/localtime
+grub2-pc g /etc/grub2.cfg
+myapp g /etc/myapp/state.d
+myapp cng /etc/myapp/absent.conf
+myapp cng /etc/myapp/edited.conf
+openssh-server g /etc/ssh/ssh_host_ed25519_key
+mod_ssl g /etc/pki/tls/private/localhost.key
+glibc g /usr/lib64/gconv/gconv-modules.cache
+";
+
+/// A host whose ghost files exist as the rows above describe: regular
+/// files, one symlink, one directory, one absent. `myapp/edited.conf` is
+/// also reported by `rpm -Va`, so it belongs to that branch.
+fn ghost_host(ghost_query: inspectah_core::traits::executor::ExecResult) -> MockExecutor {
+    MockExecutor::new()
+        .with_command(GHOST_QUERY, ghost_query)
+        .with_dir(
+            "/etc",
+            vec![
+                "sssd",
+                "machine-id",
+                "hostname",
+                "locale.conf",
+                "localtime",
+                "grub2.cfg",
+                "myapp",
+                "ssh",
+                "pki",
+            ],
+        )
+        .with_dir("/etc/sssd", vec!["sssd.conf"])
+        .with_file(
+            "/etc/sssd/sssd.conf",
+            "[sssd]\ndomains = example.com\n\n[domain/example.com]\nid_provider = ad\n",
+        )
+        .with_file("/etc/machine-id", "0123456789abcdef0123456789abcdef\n")
+        .with_file("/etc/hostname", "host1.example.com\n")
+        .with_file("/etc/locale.conf", "LANG=en_GB.UTF-8\n")
+        .with_link("/etc/localtime", "../usr/share/zoneinfo/Europe/London")
+        .with_link("/etc/grub2.cfg", "../boot/grub2/grub.cfg")
+        .with_dir("/etc/myapp", vec!["state.d", "edited.conf"])
+        .with_dir("/etc/myapp/state.d", vec![])
+        .with_file("/etc/myapp/edited.conf", "edited=1\n")
+        .with_dir("/etc/ssh", vec!["ssh_host_ed25519_key"])
+        .with_file("/etc/ssh/ssh_host_ed25519_key", "host key\n")
+        .with_dir("/etc/pki", vec!["tls"])
+        .with_dir("/etc/pki/tls", vec!["private"])
+        .with_dir("/etc/pki/tls/private", vec!["localhost.key"])
+        .with_file("/etc/pki/tls/private/localhost.key", "key\n")
+}
+
+/// Every `/etc` path the ghost rows list is RPM-owned, as the ownership
+/// query reports it; `myapp/edited.conf` is also an `rpm -Va` row.
+fn ghost_rpm_state() -> RpmState {
+    let owned = [
+        "/etc/sssd/sssd.conf",
+        "/etc/machine-id",
+        "/etc/hostname",
+        "/etc/locale.conf",
+        "/etc/localtime",
+        "/etc/grub2.cfg",
+        "/etc/myapp/state.d",
+        "/etc/myapp/absent.conf",
+        "/etc/myapp/edited.conf",
+        "/etc/ssh/ssh_host_ed25519_key",
+        "/etc/pki/tls/private/localhost.key",
+    ];
+    RpmState {
+        owned_paths: owned.iter().map(PathBuf::from).collect(),
+        verification_results: vec![RpmVaEntry {
+            path: "/etc/myapp/edited.conf".into(),
+            flags: "S.5....T.".into(),
+            package: Some("myapp".into()),
+        }],
+        ..Default::default()
+    }
+}
+
+fn ok_stdout(stdout: &str) -> inspectah_core::traits::executor::ExecResult {
+    inspectah_core::traits::executor::ExecResult {
+        stdout: stdout.into(),
+        exit_code: 0,
+        ..Default::default()
+    }
+}
+
+/// A ghost file that exists as a regular file is collected as a modified
+/// owned config with its content and its package; the machine-id, the
+/// hostname, SSH host keys and TLS private keys (machine-state members),
+/// the locale file, a ghost symlink, a ghost directory and a ghost file
+/// that is absent are not; a path `rpm -Va` reported is collected once,
+/// by that branch.
+#[test]
+fn a_ghost_config_on_the_host_is_collected_and_host_identity_is_not() {
+    let exec = ghost_host(ok_stdout(GHOST_ROWS));
+    let rpm_state = ghost_rpm_state();
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("the inspector succeeds");
+    let SectionData::Config(section) = &output.section else {
+        panic!("expected a config section");
+    };
+    let paths: Vec<&str> = section.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec!["/etc/myapp/edited.conf", "/etc/sssd/sssd.conf"],
+        "only the ghost sssd.conf and the rpm -Va row"
+    );
+
+    let sssd = &section.files[1];
+    assert_eq!(sssd.kind, ConfigFileKind::RpmOwnedModified);
+    assert_eq!(sssd.package.as_deref(), Some("sssd-common"));
+    assert_eq!(sssd.rpm_va_flags, None, "rpm never verified a ghost file");
+    assert!(sssd.content.contains("id_provider = ad"));
+    assert!(sssd.disposition.is_included());
+
+    let edited = &section.files[0];
+    assert_eq!(edited.rpm_va_flags.as_deref(), Some("S.5....T."));
+}
+
+/// A ghost-file query that fails leaves the section degraded and says
+/// which files went unchecked.
+#[test]
+fn a_failed_ghost_query_degrades_the_section() {
+    let exec = ghost_host(inspectah_core::traits::executor::ExecResult {
+        exit_code: 1,
+        stderr: "error: rpmdb open failed\n".into(),
+        ..Default::default()
+    });
+    let rpm_state = ghost_rpm_state();
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    match ConfigInspector::new().inspect(&ctx, &NullProgress) {
+        Err(InspectorError::Degraded { reason, .. }) => {
+            assert!(reason.contains("%ghost"), "{reason}");
+        }
+        other => panic!("expected a degraded section, got {other:?}"),
+    }
 }

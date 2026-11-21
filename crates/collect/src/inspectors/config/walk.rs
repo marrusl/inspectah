@@ -299,7 +299,7 @@ fn is_systemd_unit_symlink(exec: &dyn Executor, path: &str) -> bool {
 /// Unlike standard filepath matching, patterns ending in `/*` match any depth
 /// below the directory. For patterns with wildcards in intermediate segments
 /// (e.g., `/etc/selinux/*/contexts/*`), matches segment-by-segment.
-fn match_unowned_glob(pattern: &str, path: &str) -> bool {
+pub(super) fn match_unowned_glob(pattern: &str, path: &str) -> bool {
     // Fast path: try standard single-level glob first
     if glob_match_simple(pattern, path) {
         return true;
