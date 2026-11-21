@@ -164,6 +164,45 @@ test.describe("Group rendering", () => {
     const checkbox = customAgentRow.locator("input[type=checkbox]");
     await expect(checkbox).toBeVisible();
     await expect(checkbox).toBeChecked();
+
+    // Toggling it sends one op, for that package alone, so the excluded
+    // members are untouched; the group stays rendered around them.
+    await mockSequence(
+      page,
+      "/api/view",
+      [
+        "sequences/group-exclude/01-after-group-exclude.json",
+        "sequences/group-exclude/02-after-optional-exclude.json",
+      ],
+      { triggerOn: "/api/op" },
+    );
+    const opBodies: unknown[] = [];
+    page.on("request", (r) => {
+      if (r.method() === "POST" && new URL(r.url()).pathname === "/api/op") {
+        opBodies.push(r.postDataJSON());
+      }
+    });
+    await checkbox.click();
+    await expect(checkbox).not.toBeChecked();
+    expect(opBodies).toHaveLength(1);
+    expect(opBodies[0]).toEqual({
+      kind: "Op",
+      op: "SetInclude",
+      target: {
+        item_id: {
+          kind: "Package",
+          key: { name: "custom-agent", arch: "x86_64" },
+        },
+        include: false,
+      },
+    });
+
+    const statsBar = page.locator(".inspectah-statsbar");
+    await expect(statsBar.getByText(/Packages:\s*2 included/)).toBeVisible();
+    await groupRow.locator(".inspectah-group-row__chevron").click();
+    for (const member of ["httpd", "mod_ssl"]) {
+      await expect(page.getByTestId(`group-member-${member}`)).toBeVisible();
+    }
   });
 
   // ── 6. Native tab traversal follows chevron → ungroup ─────────────
