@@ -26,20 +26,6 @@ export function sidebarLink(sidebar: Locator, label: string): Locator {
   });
 }
 
-export async function expectSidebarSection(
-  page: Page,
-  name: string,
-  visible = true,
-): Promise<void> {
-  const sidebar = page.locator(".inspectah-layout__sidebar");
-  const section = sidebar.getByText(name);
-  if (visible) {
-    await expect(section).toBeVisible();
-  } else {
-    await expect(section).not.toBeVisible();
-  }
-}
-
 export async function expectDecisionItem(
   page: Page,
   testId: string,
