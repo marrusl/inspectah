@@ -15,8 +15,8 @@ use inspectah_pipeline::render::not_carried::not_carried_packages;
 use inspectah_pipeline::render::repoless::InstallRepos;
 use inspectah_pipeline::render::safety::shell_word;
 use inspectah_pipeline::render::unit_plan::{
-    AdvisoryReason, AlsoWhy, DeclinedMarker, OmissionReason, ServiceAdvisory, UnitPlan,
-    declined_line, effective_target_packages, is_package_installable, mount_advisory_lines,
+    AdvisoryReason, AlsoWhy, DeclinedMarker, GUARDED_COMMANDS_COMMENT, OmissionReason,
+    ServiceAdvisory, UnitPlan, declined_line, is_package_installable, mount_advisory_lines,
     plan_units, pulled_in_by_included, unit_state_lines,
 };
 
@@ -80,45 +80,6 @@ fn state_change(
 // ---------------------------------------------------------------------------
 // Prior task tests (unchanged)
 // ---------------------------------------------------------------------------
-
-#[test]
-fn test_effective_target_packages_uses_plain_names_and_include_true() {
-    let rpm = RpmSection {
-        baseline_package_names: Some(vec!["firewalld".into(), "systemd".into()]),
-        packages_added: vec![
-            PackageEntry {
-                name: "custom-app".into(),
-                arch: "x86_64".into(),
-                state: PackageState::Added,
-                disposition: FindingKind::included(),
-                locked: false,
-                source_repo: "appstream".into(),
-                ..Default::default()
-            },
-            PackageEntry {
-                name: "excluded-app".into(),
-                arch: "x86_64".into(),
-                state: PackageState::Added,
-                disposition: FindingKind::excluded(),
-                locked: false,
-                source_repo: "appstream".into(),
-                ..Default::default()
-            },
-        ],
-        ..Default::default()
-    };
-
-    let snap = InspectionSnapshot {
-        rpm: Some(rpm),
-        ..Default::default()
-    };
-    let names = effective_target_packages(&snap, &InstallRepos::default());
-
-    assert!(names.contains("firewalld"));
-    assert!(names.contains("systemd"));
-    assert!(names.contains("custom-app"));
-    assert!(!names.contains("excluded-app"));
-}
 
 #[test]
 fn test_is_package_installable_matches_manual_follow_up_contract() {
@@ -998,6 +959,23 @@ fn leaf_snapshot(
     tree: serde_json::Value,
     changes: Vec<UnitStateChange>,
 ) -> InspectionSnapshot {
+    // Each tree entry is a requirement with one provider, as the
+    // collector records it in `dep_closures`.
+    let closures = tree
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(leaf, deps)| {
+            let deps = deps
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect();
+            (leaf.clone(), deps)
+        })
+        .collect();
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         baseline_package_names: Some(vec!["bash".into()]),
@@ -1005,6 +983,8 @@ fn leaf_snapshot(
         leaf_packages: Some(leaves.iter().map(|s| s.to_string()).collect()),
         auto_packages: Some(autos.iter().map(|s| s.to_string()).collect()),
         leaf_dep_tree: tree,
+        dep_closures: Some(closures),
+        dep_alternatives: Some(Default::default()),
         ..Default::default()
     });
     snap.units = Some(UnitSection {
@@ -1359,6 +1339,132 @@ fn a_pulled_in_auto_package_keeps_its_unit() {
         );
         assert!(acted_on(&plan.lines, "cockpit.socket"), "{:?}", plan.lines);
     }
+}
+
+/// Whether the plan runs `systemctl <verb> -- <unit>` only if `file` is in
+/// the vendor unit directory, under the guard comment.
+fn guarded(lines: &[String], verb: &str, unit: &str, file: &str) -> bool {
+    let segment =
+        format!("if [ -e /usr/lib/systemd/system/{file} ]; then systemctl {verb} -- {unit}; fi");
+    lines.iter().any(|l| l.contains(&segment))
+        && lines.iter().any(|l| l == GUARDED_COMMANDS_COMMENT[0])
+}
+
+/// A snapshot from before the collector recorded `dep_closures` has only
+/// the leaf tree, which holds every package a leaf may install, so a
+/// package it pulls in is possible, not certain: its unit's command runs
+/// only if the unit file is in the image. With the closures it is plain.
+#[test]
+fn a_tree_only_snapshot_guards_a_pulled_in_packages_unit() {
+    let mut snap = leaf_snapshot(
+        vec![
+            added("cockpit", "x86_64", FindingKind::included()),
+            added("cockpit-ws", "x86_64", FindingKind::excluded()),
+        ],
+        &["cockpit.x86_64"],
+        &["cockpit-ws.x86_64"],
+        serde_json::json!({ "cockpit.x86_64": ["cockpit-ws.x86_64"] }),
+        vec![state_change(
+            "cockpit.socket",
+            UnitState::Disabled,
+            Some(PresetDefault::Enable),
+            Some("cockpit-ws"),
+        )],
+    );
+    assert!(acted_on(&render(&snap).lines, "cockpit.socket"));
+    let rpm = snap.rpm.as_mut().expect("rpm");
+    rpm.dep_closures = None;
+    rpm.dep_alternatives = None;
+    let plan = render(&snap);
+    assert!(plan.omissions.is_empty(), "{:?}", plan.lines);
+    assert!(!acted_on(&plan.lines, "cockpit.socket"), "{:?}", plan.lines);
+    assert!(
+        guarded(&plan.lines, "disable", "cockpit.socket", "cockpit.socket"),
+        "{:?}",
+        plan.lines
+    );
+}
+
+/// The guarded block: one comment, one `RUN`, each command in the plain
+/// block's order (enable, disable, mask; by kind, then name), joined by
+/// `&&` so a command that runs and fails still fails the build. A
+/// template instance waits for its template's file, and a name that needs
+/// quoting is quoted in both places.
+#[test]
+fn the_guarded_commands_are_one_run_under_one_comment() {
+    let instance = change_with(
+        "worker@blue.service",
+        UnitFragment::Vendor {
+            file: "worker@.service".to_owned().try_into().unwrap(),
+            owning_package: Some("worker".into()),
+        },
+        UnitState::Enabled,
+    );
+    let mut snap = leaf_snapshot(
+        vec![
+            added("app", "x86_64", FindingKind::included()),
+            added("worker", "x86_64", FindingKind::excluded()),
+            added("plugin", "x86_64", FindingKind::excluded()),
+            added("a-b", "x86_64", FindingKind::excluded()),
+        ],
+        &["app.x86_64"],
+        &["worker.x86_64", "plugin.x86_64", "a-b.x86_64"],
+        serde_json::json!({ "app.x86_64": [] }),
+        vec![
+            instance,
+            state_change(
+                "plugin.service",
+                UnitState::Disabled,
+                Some(PresetDefault::Enable),
+                Some("plugin"),
+            ),
+            state_change(
+                "a\\x2db.service",
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+                Some("a-b"),
+            ),
+            state_change(
+                "sshd.service",
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+                Some("bash"),
+            ),
+        ],
+    );
+    // `app` may pull in all three, so dnf may or may not install them.
+    snap.rpm.as_mut().expect("rpm").dep_alternatives = Some(
+        [(
+            "app.x86_64".to_owned(),
+            vec![
+                "a-b.x86_64".to_owned(),
+                "plugin.x86_64".to_owned(),
+                "worker.x86_64".to_owned(),
+            ],
+        )]
+        .into_iter()
+        .collect(),
+    );
+    let lines = render(&snap).lines;
+    let at = lines
+        .iter()
+        .position(|l| l == GUARDED_COMMANDS_COMMENT[0])
+        .unwrap_or_else(|| panic!("{lines:?}"));
+    assert_eq!(
+        lines[at..],
+        [
+            GUARDED_COMMANDS_COMMENT[0],
+            GUARDED_COMMANDS_COMMENT[1],
+            "RUN if [ -e '/usr/lib/systemd/system/a\\x2db.service' ]; then systemctl enable -- \
+             'a\\x2db.service'; fi && \\",
+            "    if [ -e /usr/lib/systemd/system/worker@.service ]; then systemctl enable -- \
+             worker@blue.service; fi && \\",
+            "    if [ -e /usr/lib/systemd/system/plugin.service ]; then systemctl disable -- \
+             plugin.service; fi",
+        ],
+        "{lines:?}"
+    );
+    assert!(acted_on(&lines, "sshd.service"), "a certain unit is plain");
 }
 
 // ---------------------------------------------------------------------------
@@ -1974,7 +2080,14 @@ fn planned_unit_has_no_public_field_or_constructor() {
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with("//"))
         .collect();
-    assert_eq!(fields, ["name: UnitName,", "action: UnitAction,"]);
+    assert_eq!(
+        fields,
+        [
+            "name: UnitName,",
+            "action: UnitAction,",
+            "guard: Option<UnitName>,"
+        ]
+    );
 
     let impls: Vec<usize> = lines
         .iter()

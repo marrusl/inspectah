@@ -47,20 +47,23 @@
 //! the scan's default exclusion, counts the closures of the installed
 //! leaves and carried unit owners only: the scan decides it while every
 //! auto package is still included. What is listed as not carried counts
-//! every package the export installs ([`pulled_in_by_included`]), an auto
-//! package an operator includes by hand among them, so a dependency dnf
-//! installs with it is not listed. An auto package that only another
-//! not-carried package needs is in the class too, which is correct:
-//! nothing the export installs pulls either of them in.
+//! everything a package the export installs may pull in
+//! ([`possibly_pulled_in_by_included`]), an auto package an operator
+//! includes by hand among them, so a dependency dnf may install with it is
+//! not listed. An auto package that only another not-carried package
+//! needs is in the class too, which is correct: nothing the export
+//! installs pulls either of them in.
 //!
-//! **Requirements, not choices.** Presence counts only what an installed
-//! package requires (`dep_closures`): a package that is one of several
-//! providers of a capability, the base image or another package
-//! providing it too, is not pulled in by it, so once excluded it is
-//! listed and its unit omitted. The class still counts every provider a
-//! default root may pull in (`dep_alternatives` too), so the scan keeps
-//! such a package included as the source host had it. A fleet's drops
-//! count them as well: a package dnf may install is never called dropped.
+//! **Only certain absence is listed.** A package is listed only when the
+//! export certainly leaves it out: excluded, and outside both maps of
+//! every package the export installs or may install (`dep_closures` and
+//! `dep_alternatives`). One dnf may install, such as an excluded provider
+//! of a capability another package provides too, is not listed, and its
+//! unit commands run only if the unit file is in the image
+//! (`unit_plan::export_installs`). The class counts every provider a
+//! default root may pull in as well, so the scan keeps such a package
+//! included as the source host had it. A fleet's drops count them too: a
+//! package dnf may install is never called dropped.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -74,7 +77,7 @@ use inspectah_core::types::verified_upload::VerifiedUploads;
 use super::repoless::{InstallRepos, PackageRoute, route_for};
 use super::unit_plan::{
     every_installed_package_has_a_closure, possibly_pulled_in_by_included,
-    pulled_in_by_default_roots, pulled_in_by_included,
+    pulled_in_by_default_roots,
 };
 use crate::export_warning::{ExportWarning, sanitize_bounded};
 
@@ -265,11 +268,12 @@ impl NotCarriedPackage {
 }
 
 /// Directory holding the vendor unit files packages ship.
-const VENDOR_UNIT_DIR: &str = "/usr/lib/systemd/system";
+pub(crate) const VENDOR_UNIT_DIR: &str = "/usr/lib/systemd/system";
 
 /// The single-host list: the excluded [`AutoCarriage::Unneeded`] and
 /// [`AutoCarriage::UnitOwner`] packages that nothing the export installs
-/// pulls in ([`pulled_in_by_included`]), in display order. An auto
+/// may pull in ([`possibly_pulled_in_by_included`]), in display order: a
+/// package is listed only when it is certainly not carried. An auto
 /// package an operator included by hand brings its dependencies, so they
 /// are not listed although the class still holds them. Refine's view
 /// rows and the unit plan read this list; the export's block, table and
@@ -292,7 +296,7 @@ pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage>
         return Vec::new();
     };
     let units_by_owner = enabled_units_by_owner(snap);
-    let pulled_in = pulled_in_by_included(snap, &InstallRepos::of(snap));
+    let may_pull = possibly_pulled_in_by_included(snap, &InstallRepos::of(snap));
 
     let mut list: Vec<NotCarriedPackage> = rpm
         .packages_added
@@ -304,7 +308,7 @@ pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage>
                     classes.get(&id),
                     Some(AutoCarriage::Unneeded | AutoCarriage::UnitOwner)
                 )
-                && !pulled_in.contains(&id)
+                && !may_pull.contains(&id)
         })
         .map(|pkg| NotCarriedPackage {
             name: pkg.name.clone(),
@@ -356,7 +360,7 @@ fn sort_for_display(list: &mut [NotCarriedPackage]) {
 /// Refine includes one by default and shows it in its package list; the
 /// Containerfile installs an included one that no installed leaf pulls in,
 /// and its recorded closure counts as pulled in
-/// ([`pulled_in_by_included`], `pulled_in_by_default_roots`).
+/// (`unit_plan::export_installs`, `pulled_in_by_default_roots`).
 pub fn default_carried_unit_owners(snap: &InspectionSnapshot) -> HashSet<String> {
     if snap.aggregate_meta.is_some() {
         return HashSet::new();

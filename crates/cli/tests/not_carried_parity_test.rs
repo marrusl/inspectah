@@ -693,6 +693,33 @@ fn the_fixture_is_baseline_backed_and_has_a_not_carried_list() {
     assert_eq!(scan.config_count_lines().len(), 1, "{}", scan.containerfile);
 }
 
+/// The common path writes no guarded command. Every unit this host
+/// carries belongs to a package the export certainly installs: a leaf, a
+/// carried unit owner, or one an installed leaf requires, as `httpd`
+/// requires `httpd-core`. So each command is a plain `RUN systemctl`, on
+/// the scan and both refine exports, and no guard comment is written.
+#[test]
+fn the_fixture_writes_no_guarded_command() {
+    let run = run();
+    let surfaces =
+        std::iter::once(("scan", &run.scan)).chain(run.refine.iter().map(|(l, s)| (*l, s)));
+    for (label, surfaces) in surfaces {
+        let cf = &surfaces.containerfile;
+        assert_eq!(
+            crate::unit_hosts::guarded_commands(cf),
+            [],
+            "{label}:\n{cf}"
+        );
+        assert!(!cf.contains("RUN if "), "{label}:\n{cf}");
+        for unit in ["httpd.service", "rhcd.service"] {
+            assert!(
+                crate::unit_hosts::acts(cf, "enable", unit),
+                "{label}: {unit} is enabled plainly:\n{cf}"
+            );
+        }
+    }
+}
+
 // ── Parity ───────────────────────────────────────────────────────────
 
 #[test]

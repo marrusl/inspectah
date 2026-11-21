@@ -54,6 +54,20 @@ fn snapshot() -> InspectionSnapshot {
         leaf_packages: Some(vec!["cockpit.x86_64".into()]),
         auto_packages: Some(vec!["cockpit-ws.x86_64".into()]),
         leaf_dep_tree: serde_json::json!({ "cockpit.x86_64": ["cockpit-ws.x86_64"] }),
+        // `cockpit` requires `cockpit-ws`, its one provider, as the
+        // collector records it.
+        dep_closures: Some(
+            [
+                (
+                    "cockpit.x86_64".to_owned(),
+                    vec!["cockpit-ws.x86_64".to_owned()],
+                ),
+                ("cockpit-ws.x86_64".to_owned(), Vec::new()),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        dep_alternatives: Some(Default::default()),
         ..Default::default()
     });
     snap.baseline = Some(BaselineData {

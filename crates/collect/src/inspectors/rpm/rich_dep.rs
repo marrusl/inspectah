@@ -347,7 +347,10 @@ impl DepExpr {
     /// `feature` does in `(plugin if feature)`, the branch is pulled in
     /// whether or not it provides the condition too. An `or` takes its
     /// first satisfied operand: a requirement needs only one, and on an
-    /// installed host the first one present satisfies it.
+    /// installed host the first one present satisfies it. A condition that
+    /// holds a condition is the exception: it can flip once the export
+    /// leaves a package out (`(missing if switch)` holds without `switch`),
+    /// so both of its branches are pulled in.
     pub(super) fn pulled<'p>(&self, index: &'p dyn Providers) -> HashSet<&'p str> {
         let mut out = HashSet::new();
         self.root.collect_pulled(index, &mut out);
@@ -358,16 +361,25 @@ impl DepExpr {
     /// needs: the part of [`pulled`](Self::pulled) that is a requirement
     /// rather than one choice among several.
     ///
+    /// It only has to be right in one direction. A package it names is
+    /// treated as certainly installed, and a unit command for it is
+    /// written plain; one it leaves out is at worst guarded by its unit
+    /// file. So anything it is unsure of is left out.
+    ///
     /// A capability counts only when exactly one installed package
     /// provides it. With two providers, one of them a base-image package
     /// or the requiring package itself, dnf needs neither added one; with
     /// two added ones it picks one, and which is not known. An `or` counts
-    /// only when exactly one operand holds. `assured` names the packages
-    /// certainly present wherever the requiring package is installed (the
-    /// base image's and the requiring package itself): an `if` branch
-    /// counts when its condition holds through those alone, the `else`
-    /// when the condition holds through nothing, and otherwise only what
-    /// both branches need. `unless` mirrors it.
+    /// only when exactly one operand holds and no operand holds a
+    /// condition. `assured` names the packages certainly present wherever
+    /// the requiring package is installed (the base image's and the
+    /// requiring package itself): an `if` branch counts when its condition
+    /// holds through those alone, the `else` when the condition holds
+    /// through nothing, and otherwise only what both branches need.
+    /// `unless` mirrors it. A condition that itself holds a condition
+    /// always takes the last of those: it can hold with fewer packages
+    /// installed (`(missing if switch)` fails with `switch` and holds
+    /// without it), so neither test above settles it.
     pub(super) fn required<'p>(
         &self,
         index: &'p dyn Providers,
@@ -485,6 +497,23 @@ impl Node {
                     x.collect_pulled(index, out);
                 }
             }
+            // A condition that is not monotone can flip once the export
+            // leaves a package out, so either branch may apply.
+            Self::If {
+                then,
+                cond,
+                otherwise,
+            }
+            | Self::Unless {
+                then,
+                cond,
+                otherwise,
+            } if !cond.monotone() => {
+                then.collect_pulled(index, out);
+                if let Some(o) = otherwise {
+                    o.collect_pulled(index, out);
+                }
+            }
             Self::If {
                 then,
                 cond,
@@ -524,6 +553,21 @@ impl Node {
         }
     }
 
+    /// Whether the node can only go from failing to holding as packages
+    /// are added, never the other way: it holds no `if` or `unless`.
+    /// Leaving a package out of the image can only make such a node fail,
+    /// so one that fails on the host fails in the image too, and one that
+    /// holds through packages the image certainly has holds there. A
+    /// conditional is not: `(missing if switch)` fails with `switch`
+    /// installed and holds without it.
+    fn monotone(&self) -> bool {
+        match self {
+            Self::Match(_) => true,
+            Self::And(xs) | Self::Or(xs) => xs.iter().all(Self::monotone),
+            Self::If { .. } | Self::Unless { .. } => false,
+        }
+    }
+
     /// This node's part of [`DepExpr::required`].
     fn collect_required<'p>(
         &self,
@@ -538,10 +582,13 @@ impl Node {
         };
         // A conditional's branches: `chosen` when the condition holds
         // through assured packages alone, `fallback` when it holds through
-        // nothing, else only what both need.
+        // nothing, else only what both need. A condition that is not
+        // monotone is settled by neither test.
         let branch = |cond: &Self, chosen: Option<&Self>, fallback: Option<&Self>| {
             let need = |node: Option<&Self>| node.map(required).unwrap_or_default();
-            if cond.satisfied(&AssuredOnly { index, assured }) {
+            if !cond.monotone() {
+                &need(chosen) & &need(fallback)
+            } else if cond.satisfied(&AssuredOnly { index, assured }) {
                 need(chosen)
             } else if !cond.satisfied(index) {
                 need(fallback)
@@ -559,12 +606,15 @@ impl Node {
             Self::And(xs) => xs
                 .iter()
                 .for_each(|x| x.collect_required(index, assured, out)),
-            Self::Or(xs) => {
+            // An operand that fails on the host and holds a condition can
+            // hold in the image and satisfy the `or` alone.
+            Self::Or(xs) if xs.iter().all(Self::monotone) => {
                 let mut held = xs.iter().filter(|x| x.satisfied(index));
                 if let (Some(only), None) = (held.next(), held.next()) {
                     only.collect_required(index, assured, out);
                 }
             }
+            Self::Or(_) => {}
             Self::If {
                 then,
                 cond,
@@ -986,6 +1036,31 @@ mod tests {
     }
 
     #[test]
+    fn a_condition_that_can_flip_pulls_in_both_branches() {
+        // `(missing if switch)` fails while `switch` is installed, as on
+        // this host, and holds once it is left out, so whether `alternate`
+        // or `spare` is needed depends on what the export carries. Both
+        // may be installed.
+        let index = TestIndex(&[
+            ("switch", "switch"),
+            ("alternate", "alternate"),
+            ("spare", "spare"),
+        ]);
+        let cases: &[(&str, &[&str])] = &[
+            ("(alternate if (missing if switch))", &["alternate"]),
+            (
+                "(alternate if (missing if switch) else spare)",
+                &["alternate", "spare"],
+            ),
+            ("(alternate unless (missing if switch))", &["alternate"]),
+        ];
+        for (input, expected) in cases {
+            let expr = DepExpr::parse(input).expect("parses");
+            assert_eq!(expr.pulled(&index), set(expected), "input: {input}");
+        }
+    }
+
+    #[test]
     fn required_counts_only_what_every_way_of_satisfying_needs() {
         // `base` is a base-image package and `root` the requiring one, so
         // both are assured. `alt` and `other` are added providers of
@@ -1031,6 +1106,15 @@ mod tests {
             ("(plugin unless feature else spare)", &["spare"]),
             ("(plugin unless missing)", &["plugin"]),
             ("(plugin unless optional)", &[]),
+            // A condition with a condition inside can hold once a package
+            // is left out: `(missing if optional)` fails while `opt` is
+            // installed and holds without it. Neither branch is certain.
+            ("(plugin if (missing if optional))", &[]),
+            ("(plugin if (missing if optional) else spare)", &[]),
+            ("(plugin unless (missing if optional) else spare)", &[]),
+            // So can an `or` operand: without `opt`, the second one holds
+            // and `helper` is not needed.
+            ("(helper or (missing if optional))", &[]),
         ];
         for (input, expected) in cases {
             let expr = DepExpr::parse(input).expect("parses");

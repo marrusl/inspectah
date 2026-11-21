@@ -916,7 +916,7 @@ fn packages_section_lines(
 
     let no_uploads = inspectah_core::types::verified_upload::VerifiedUploads::new();
     let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
-    let pulled_in = super::unit_plan::pulled_in_by_included(snap, &install_repos);
+    let may_pull = super::unit_plan::possibly_pulled_in_by_included(snap, &install_repos);
     let leaf_pulled_in = super::unit_plan::pulled_in_by_installed_leaves(rpm, &install_repos);
     let unit_owners = default_carried_unit_owners(snap);
 
@@ -929,13 +929,15 @@ fn packages_section_lines(
         })
         .filter(|pkg| {
             // A package from a disabled repo that an included package
-            // depends on is named in the combined install, whatever its
-            // own disposition and leaf status. A plain or group
-            // transaction does not enable that repo, so dnf cannot pull it
-            // in there.
+            // may depend on is named in the combined install, whatever its
+            // own disposition and leaf status: one it certainly needs, and
+            // each of several providers dnf could pick among, since dnf
+            // cannot pick one from a repo no transaction enables. A plain
+            // or group transaction does not enable that repo, so dnf
+            // cannot pull it in there.
             // The disposition is left as it is: refine's non-leaf default
             // and an operator's exclusion both still read as excluded.
-            if pulled_in.contains(&canonical_package_id(&pkg.name, &pkg.arch))
+            if may_pull.contains(&canonical_package_id(&pkg.name, &pkg.arch))
                 && matches!(
                     super::repoless::route_for(rpm, &install_repos, pkg, verified),
                     PackageRoute::DisabledRepo(_)

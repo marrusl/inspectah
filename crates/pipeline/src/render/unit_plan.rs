@@ -29,8 +29,8 @@ use super::configtree::{
     staged_unit_file,
 };
 use super::not_carried::{
-    FleetDrops, NOT_CARRIED_REASON, default_carried_unit_owners, fleet_not_carried_packages,
-    not_carried_packages,
+    FleetDrops, NOT_CARRIED_REASON, VENDOR_UNIT_DIR, default_carried_unit_owners,
+    fleet_not_carried_packages, not_carried_packages,
 };
 use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
 use super::repoless::{InstallRepos, PackageRoute, route_for};
@@ -177,10 +177,10 @@ enum Reach {
 /// the base image or another installed package providing it too, dnf
 /// installs none of them, and with only added ones it picks one. The
 /// recorded `dep_closures` hold real requirements only, and this answer
-/// reads nothing else (`Reach::Certain`). This is the one place that
-/// answers the question; the service tiers, the package selection, the
-/// disabled-repo install and the not-carried list all ask it. A fleet's
-/// drops ask [`possibly_pulled_in_by_included`].
+/// reads nothing else (`Reach::Certain`). The `/var` evidence asks it.
+/// The unit plan asks [`export_installs`], which counts only the roots the
+/// Containerfile names; the disabled-repo install, the not-carried list
+/// and a fleet's drops ask [`possibly_pulled_in_by_included`].
 ///
 /// The roots are every entry [`installs_on_its_own_route`] holds for: a
 /// leaf, an auto package carried because it owns an enabled unit, and an
@@ -210,7 +210,11 @@ pub fn pulled_in_by_included(
 /// What a package the export installs may pull in: [`pulled_in_by_included`]
 /// plus every provider dnf may pick among several and what it brings
 /// (`Reach::Possible`). A package outside it is not in the image unless
-/// the export installs it itself, so a fleet's drops ask this.
+/// the export installs it itself, so every absence claim asks this: a
+/// fleet's drops and the not-carried list. So does the disabled-repo
+/// install, which names each of these its repo serves in the transaction
+/// that enables it, since dnf cannot pick a provider from a repo no
+/// transaction enables.
 pub(crate) fn possibly_pulled_in_by_included(
     snap: &InspectionSnapshot,
     repos: &InstallRepos,
@@ -341,32 +345,179 @@ pub(crate) fn every_installed_package_has_a_closure(
         .all(|pkg| closures.contains_key(&format!("{}.{}", pkg.name, pkg.arch)))
 }
 
-/// Compute the set of package *names* (not `name.arch`) that the target
-/// image is expected to contain. This merges baseline package names with
-/// user-included added packages and the added packages an included one
-/// pulls in ([`pulled_in_by_included`]).
-pub fn effective_target_packages(
-    snap: &InspectionSnapshot,
-    repos: &InstallRepos,
-) -> std::collections::BTreeSet<String> {
-    let mut names = std::collections::BTreeSet::new();
+/// What the export puts in the image from `packages_added`, by
+/// `name.arch` id, as far as the recorded dependencies show.
+///
+/// The unit plan writes a package's unit commands plain only when it is
+/// in `certain`, and omits them only when it is outside `possible`;
+/// between the two, each command runs only if the unit file is there
+/// (Mark Russell, 2026-11-21). So `certain` has to be right in one
+/// direction only: a package it leaves out is guarded, never lost.
+#[derive(Debug, Default)]
+pub(crate) struct ExportInstalls {
+    /// Certainly installed: every package the Containerfile names on an
+    /// install line ([`named_on_install_line`], and the disabled-repo
+    /// transaction), and what one of those certainly pulls in
+    /// (`Reach::Certain`) that a repo can serve. On a fleet, only a
+    /// package every host has brings its closure in
+    /// ([`closure_is_certain`]).
+    pub(crate) certain: std::collections::HashSet<String>,
+    /// Possibly installed: `certain`, every included package, and
+    /// everything one of them may pull in
+    /// ([`possibly_pulled_in_by_included`]). A package outside it is
+    /// certainly absent.
+    pub(crate) possible: std::collections::HashSet<String>,
+}
+
+/// [`ExportInstalls`] for `snap`. Without a package section both sets are
+/// empty.
+pub(crate) fn export_installs(snap: &InspectionSnapshot, repos: &InstallRepos) -> ExportInstalls {
     let Some(rpm) = snap.rpm.as_ref() else {
-        return names;
+        return ExportInstalls::default();
     };
-    if let Some(baseline) = &rpm.baseline_package_names {
-        names.extend(baseline.iter().cloned());
-    }
-    let pulled_in = pulled_in_by_included(snap, repos);
-    names.extend(
-        rpm.packages_added
-            .iter()
-            .filter(|pkg| {
-                pkg.disposition.is_included()
-                    || pulled_in.contains(&format!("{}.{}", pkg.name, pkg.arch))
+    let id_of = |pkg: &PackageEntry| format!("{}.{}", pkg.name, pkg.arch);
+    let mut possible = possibly_pulled_in_by_included(snap, repos);
+    let from_disabled_repo: std::collections::HashSet<String> = rpm
+        .packages_added
+        .iter()
+        .filter(|pkg| {
+            possible.contains(&id_of(pkg))
+                && is_package_installable(pkg)
+                && matches!(
+                    route_for(rpm, repos, pkg, &VerifiedUploads::new()),
+                    PackageRoute::DisabledRepo(_)
+                )
+        })
+        .map(id_of)
+        .collect();
+    let entries: BTreeMap<String, &PackageEntry> = rpm
+        .packages_added
+        .iter()
+        .map(|pkg| (id_of(pkg), pkg))
+        .collect();
+    // A dependency dnf can fetch: one a repo the image enables serves, or
+    // one the disabled-repo transaction names. A fleet keeps no entry for
+    // a dependency its merge dropped, so nothing says otherwise of it.
+    let fetchable = |dep: &String| {
+        from_disabled_repo.contains(dep)
+            || entries.get(dep).is_none_or(|pkg| {
+                is_package_installable(pkg)
+                    && matches!(
+                        route_for(rpm, repos, pkg, &VerifiedUploads::new()),
+                        PackageRoute::ByName
+                    )
             })
-            .map(|pkg| pkg.name.clone()),
+    };
+    let selection = InstallLineSelection::of(snap, rpm, repos);
+    let mut certain = std::collections::HashSet::new();
+    for pkg in &rpm.packages_added {
+        let id = id_of(pkg);
+        if pkg.disposition.is_included() {
+            possible.insert(id.clone());
+        }
+        let named = from_disabled_repo.contains(&id)
+            || (installs_on_its_own_route(rpm, repos, pkg)
+                && named_on_install_line(rpm, repos, pkg, &id, &selection));
+        if !named {
+            continue;
+        }
+        if rpm.dep_closures.is_some() && closure_is_certain(snap, rpm, pkg) {
+            certain.extend(
+                closure_of(rpm, &id, Reach::Certain)
+                    .into_iter()
+                    .filter(|dep| fetchable(dep)),
+            );
+        }
+        certain.insert(id);
+    }
+    possible.extend(certain.iter().cloned());
+    ExportInstalls { certain, possible }
+}
+
+/// What the Containerfile's package selection reads beyond the package
+/// itself ([`named_on_install_line`]).
+struct InstallLineSelection {
+    /// `leaf_packages`; `None` when the host has no leaf data, and then
+    /// every included package is named.
+    leaves: Option<std::collections::HashSet<String>>,
+    /// The auto packages carried because they own an enabled unit.
+    owners: std::collections::HashSet<String>,
+    /// What the installed leaves certainly pull in: an owner among them is
+    /// not named, since a leaf already brings it.
+    leaf_pulled_in: std::collections::HashSet<String>,
+}
+
+impl InstallLineSelection {
+    fn of(snap: &InspectionSnapshot, rpm: &RpmSection, repos: &InstallRepos) -> Self {
+        Self {
+            leaves: rpm
+                .leaf_packages
+                .as_ref()
+                .map(|leaves| leaves.iter().cloned().collect()),
+            owners: default_carried_unit_owners(snap),
+            leaf_pulled_in: pulled_in_by_installed_leaves(rpm, repos),
+        }
+    }
+}
+
+/// Whether the Containerfile names `pkg`, an included package it installs
+/// on its own route ([`installs_on_its_own_route`]), on an install line:
+/// a package installed from its carried RPM always; one installed by name
+/// or from its disabled repo when it is locked, anaconda-sourced, a
+/// carried unit owner no installed leaf brings, or a leaf (every package,
+/// with no leaf data). That is `packages_section_lines`' selection less
+/// refine's `original_includes`, which the plan does not see: an auto
+/// package an operator includes by hand is named there but not here, so
+/// its unit commands, and its dependencies', are guarded rather than
+/// plain. The disabled-repo transaction's dependencies are counted by
+/// [`export_installs`].
+fn named_on_install_line(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+    pkg: &PackageEntry,
+    id: &str,
+    selection: &InstallLineSelection,
+) -> bool {
+    match route_for(rpm, repos, pkg, &VerifiedUploads::new()) {
+        PackageRoute::Upload(_) | PackageRoute::Repoless => true,
+        PackageRoute::ByName | PackageRoute::DisabledRepo(_) => {
+            pkg.locked
+                || pkg.source_repo == "anaconda"
+                || (selection.owners.contains(id) && !selection.leaf_pulled_in.contains(id))
+                || selection
+                    .leaves
+                    .as_ref()
+                    .is_none_or(|leaves| leaves.contains(id))
+        }
+    }
+}
+
+/// Whether what `pkg` certainly pulls in is certainly in the image beside
+/// everything else the export installs.
+///
+/// On one host it is: the collector counts a dependency as certain only
+/// when nothing else installed there provides what it is needed for, and
+/// the export installs nothing the host lacked. A fleet's `dep_closures`
+/// entry is what the package certainly pulls in on every host that has
+/// it, so it holds beside every package the fleet image may install only
+/// when every host has the package and gave leaf data: then any package
+/// that could take a dependency's place was installed beside it on some
+/// host, and that host's closure already left the dependency out. A
+/// package only some hosts have cannot see a provider another host's
+/// package brings, so its closure is possible only.
+fn closure_is_certain(snap: &InspectionSnapshot, rpm: &RpmSection, pkg: &PackageEntry) -> bool {
+    if snap.aggregate_meta.is_none() {
+        return true;
+    }
+    let every_host = pkg
+        .aggregate
+        .as_ref()
+        .is_some_and(|prevalence| prevalence.total > 0 && prevalence.count >= prevalence.total);
+    let every_host_classified = matches!(
+        (rpm.leaf_authority_hosts, rpm.leaf_total_hosts),
+        (Some(authority), Some(total)) if total > 0 && authority == total
     );
-    names
+    every_host && every_host_classified
 }
 
 // ---------------------------------------------------------------------------
@@ -746,6 +897,7 @@ pub enum AdvisoryReason {
 pub struct PlannedUnit {
     name: UnitName,
     action: UnitAction,
+    guard: Option<UnitName>,
 }
 
 impl PlannedUnit {
@@ -758,6 +910,14 @@ impl PlannedUnit {
     pub fn action(&self) -> UnitAction {
         self.action
     }
+
+    /// The vendor unit file the command waits for, when dnf may or may
+    /// not install the unit's package: the command runs only if that file
+    /// is in the image ([`systemctl_lines`]). `None` for a command that
+    /// always runs.
+    pub fn guard(&self) -> Option<&UnitName> {
+        self.guard.as_ref()
+    }
 }
 
 /// The default target the plan sets (§ 10.5). Built only by
@@ -766,12 +926,19 @@ impl PlannedUnit {
 #[derive(Debug, PartialEq, Eq)]
 pub struct PlannedTarget {
     name: TargetUnitName,
+    guard: Option<UnitName>,
 }
 
 impl PlannedTarget {
     /// The target `set-default` names.
     pub fn name(&self) -> &TargetUnitName {
         &self.name
+    }
+
+    /// The vendor unit file `set-default` waits for, as
+    /// [`PlannedUnit::guard`].
+    pub fn guard(&self) -> Option<&UnitName> {
+        self.guard.as_ref()
     }
 }
 
@@ -932,6 +1099,7 @@ fn plan_generated(snap: &InspectionSnapshot, staged: &StagedWrites<'_>, plan: &m
                 Ok(()) => plan.scheduled.push(PlannedUnit {
                     name: unit,
                     action: UnitAction::Enable,
+                    guard: None,
                 }),
                 Err(reason) => plan.generated_declined.push(GeneratedDecline {
                     source: GeneratedSource::Cron {
@@ -955,6 +1123,7 @@ fn plan_generated(snap: &InspectionSnapshot, staged: &StagedWrites<'_>, plan: &m
             Ok(()) => plan.workloads.push(PlannedUnit {
                 name: unit,
                 action: UnitAction::Enable,
+                guard: None,
             }),
             Err(reason) => plan.generated_declined.push(GeneratedDecline {
                 source: GeneratedSource::FlatpakProvisioning,
@@ -967,12 +1136,74 @@ fn plan_generated(snap: &InspectionSnapshot, staged: &StagedWrites<'_>, plan: &m
 
 /// Internal classification of whether a unit's package is in the image.
 enum PresenceDecision {
-    /// Decline: the owning package is absent from the target image.
+    /// Decline: the owning package is certainly absent from the image.
     Omit(OmissionReason),
-    /// Keep the unit; optionally attach advisory reasons.
+    /// Keep the unit; optionally attach advisory reasons. `guard` is the
+    /// vendor file the command waits for when the package may or may not
+    /// be installed ([`PlannedUnit::guard`]), `None` when it certainly is.
     Emit {
         advisory_reasons: Option<(String, Vec<AdvisoryReason>)>,
+        guard: Option<UnitName>,
     },
+}
+
+impl PresenceDecision {
+    /// Keep the unit's command plain: its package is certainly installed,
+    /// or it has none.
+    fn certain(advisory_reasons: Option<(String, Vec<AdvisoryReason>)>) -> Self {
+        Self::Emit {
+            advisory_reasons,
+            guard: None,
+        }
+    }
+
+    /// Keep the unit's command, run only if its vendor file is in the
+    /// image ([`vendor_file`]).
+    fn uncertain(
+        unit: &CarriedUnit,
+        advisory_reasons: Option<(String, Vec<AdvisoryReason>)>,
+    ) -> Self {
+        Self::Emit {
+            advisory_reasons,
+            guard: vendor_file(unit),
+        }
+    }
+}
+
+/// The file under `/usr/lib/systemd/system` a unit's package ships for it:
+/// a `Vendor` fragment's file (the unit's own name, or its template's) or
+/// a package-owned storage unit's name. `None` for every other unit, whose
+/// command does not depend on a package ([`needs_its_package`]), so the
+/// presence tiers never ask.
+fn vendor_file(unit: &CarriedUnit) -> Option<UnitName> {
+    match unit {
+        CarriedUnit::PackagedStorage(storage) => Some(storage.name().as_unit_name().clone()),
+        CarriedUnit::Ordinary(ordinary) => match ordinary.fragment() {
+            UnitFragment::Vendor { file, .. } => Some(file.clone()),
+            UnitFragment::Shadowed { .. } | UnitFragment::Local { .. } | UnitFragment::Absent => {
+                None
+            }
+        },
+    }
+}
+
+/// The comment written once above the guarded commands.
+pub const GUARDED_COMMANDS_COMMENT: [&str; 2] = [
+    "# dnf may or may not install the packages these units come from, so each",
+    "# command runs only if the unit file is in the image.",
+];
+
+/// One guarded command: `systemctl <verb> -- <unit>`, run only if `file`
+/// is in the vendor unit directory. A plain file test, not `systemctl
+/// cat` or `is-enabled`: no service manager runs during an image build,
+/// where `systemctl cat` fails for a unit that is there, and `is-enabled`
+/// exits nonzero for a disabled unit and a missing one alike.
+fn guarded_command(verb: &str, unit: &UnitName, file: &UnitName) -> String {
+    format!(
+        "if [ -e {} ]; then systemctl {verb} -- {}; fi",
+        shell_word(&format!("{VENDOR_UNIT_DIR}/{}", file.as_str())),
+        shell_word(unit.as_str())
+    )
 }
 
 /// `RUN systemctl set-default --` for `default_target` on one line, then
@@ -980,6 +1211,11 @@ enum PresenceDecision {
 /// each unit on its own continuation line, ordered by kind
 /// and then by name (§ 10.1). Takes only a [`PlannedTarget`] and
 /// [`PlannedUnit`]s, which only [`plan_units`] builds.
+///
+/// The commands with a guard follow, under [`GUARDED_COMMANDS_COMMENT`],
+/// in one `RUN`: one `if [ -e <file> ]; then systemctl <verb> -- <unit>;
+/// fi` each, in the same order, joined by `&&` so a command that runs and
+/// fails still fails the build.
 ///
 /// Each name goes through [`shell_word`], which leaves it bare unless it
 /// holds a byte the shell would read, in practice the `\` of an escaped
@@ -991,6 +1227,7 @@ pub fn systemctl_lines(
     units: &[PlannedUnit],
 ) -> Vec<String> {
     let mut lines: Vec<String> = default_target
+        .filter(|target| target.guard.is_none())
         .map(|target| {
             format!(
                 "RUN systemctl set-default -- {}",
@@ -999,16 +1236,34 @@ pub fn systemctl_lines(
         })
         .into_iter()
         .collect();
+    let mut guarded: Vec<String> = default_target
+        .and_then(|target| {
+            let file = target.guard.as_ref()?;
+            Some(guarded_command(
+                "set-default",
+                target.name.as_unit_name(),
+                file,
+            ))
+        })
+        .into_iter()
+        .collect();
     for action in [UnitAction::Enable, UnitAction::Disable, UnitAction::Mask] {
-        let mut names: Vec<&UnitName> = units
+        let mut of_verb: Vec<&PlannedUnit> = units.iter().filter(|u| u.action == action).collect();
+        of_verb.sort_by(|a, b| (a.name.kind(), &a.name).cmp(&(b.name.kind(), &b.name)));
+        let verb = action.to_string();
+        guarded.extend(of_verb.iter().filter_map(|u| {
+            u.guard
+                .as_ref()
+                .map(|file| guarded_command(&verb, &u.name, file))
+        }));
+        let names: Vec<&UnitName> = of_verb
             .iter()
-            .filter(|u| u.action == action)
+            .filter(|u| u.guard.is_none())
             .map(|u| &u.name)
             .collect();
         if names.is_empty() {
             continue;
         }
-        names.sort_by(|a, b| (a.kind(), a).cmp(&(b.kind(), b)));
         lines.push(format!("RUN systemctl {action} -- \\"));
         let last = names.len() - 1;
         for (i, name) in names.into_iter().enumerate() {
@@ -1017,6 +1272,18 @@ pub fn systemctl_lines(
                 format!("    {operand} \\")
             } else {
                 format!("    {operand}")
+            });
+        }
+    }
+    if !guarded.is_empty() {
+        lines.extend(GUARDED_COMMANDS_COMMENT.iter().map(|l| (*l).to_owned()));
+        let last = guarded.len() - 1;
+        for (i, command) in guarded.into_iter().enumerate() {
+            let lead = if i == 0 { "RUN" } else { "   " };
+            lines.push(if i < last {
+                format!("{lead} {command} && \\")
+            } else {
+                format!("{lead} {command}")
             });
         }
     }
@@ -2235,7 +2502,7 @@ fn local_trigger_missing(
         .collect();
     let packaged = entries.iter().any(|f| {
         f.package.as_deref().is_some_and(|package| {
-            presence.is_none_or(|p| p.baseline_unavailable || p.target_packages.contains(package))
+            presence.is_none_or(|p| p.baseline_unavailable || p.possible.contains(package))
         })
     });
     if packaged {
@@ -2725,182 +2992,140 @@ fn lexically_under(path: &str, at: &Destination) -> bool {
 // classify_service_presence: the tiered suppression model
 // ---------------------------------------------------------------------------
 
-/// Determine whether a unit should be omitted or emitted, and if emitted,
-/// whether it needs advisory annotations.
+/// Determine whether a unit's command is written plain, written so it runs
+/// only if the unit file is in the image, or omitted, and whether it
+/// carries advisory annotations (Mark Russell, 2026-11-21).
 ///
-/// Tier logic (evaluated in order):
-/// 1. `owning_package: None` → always Emit (conservative: unknown owner)
-/// 2. Package in `packages_added` with every entry `include: false`, not
-///    in the baseline, and not pulled in by an included package
-///    ([`pulled_in_by_included`]) → Omit with `OmissionReason::NotCarried`
+/// The plan does not predict dnf's solver. It reads two sets
+/// ([`Presence`]): the packages certainly in the image and those that may
+/// be. Evaluated in order:
+///
+/// 1. `owning_package: None` → plain (an unknown owner).
+/// 2. The owner certainly in the image: the baseline ships it, the
+///    Containerfile names it, or a package it names certainly pulls it in
+///    ([`export_installs`]) → plain.
+/// 3. The owner possibly in the image: an entry is included but not
+///    named (an auto package kept as one provider dnf may pick, one an
+///    operator included by hand, one rendered only as a manual step), or
+///    an installed package may pull it in → guarded. When in doubt, a
+///    package is possible, never absent.
+/// 4. The owner in `packages_added`, every entry excluded and nothing
+///    installed may pull it in → Omit with `OmissionReason::NotCarried`
 ///    when every entry of the name is in `not_carried`, else
 ///    `OmissionReason::PackageExcluded`.
-///    A pulled-in package is in the image, so it falls through to Tier 5.
-///    An exclusion is the strongest absence signal the model has, and
-///    `systemctl enable` on a unit whose package is not installed fails the
-///    build. The one known edge is dnf pulling the excluded package back in
-///    as a dependency of something still included (the renderer passes no
-///    `--exclude`); the recorded omission is what tells the operator to
-///    enable the unit by hand in that case.
-/// 3. Package in `packages_added` with `include: true` but not installable
-///    → Emit with `PackageUnreachable` (+ `BaselineUnavailable`)
-/// 4. Package in `packages_added` with `include: true` and installable → Emit clean
-/// 5. Package in `target_packages` (baseline) → Emit clean
-/// 6. Package not found anywhere + baseline unavailable → Emit with `BaselineUnavailable`
-/// 7. Package not found anywhere + baseline available → Omit with
-///    `OmissionReason::NotInTargetImage`
-fn classify_service_presence(
-    unit: &CarriedUnit,
-    rpm: &RpmSection,
-    target_packages: &std::collections::BTreeSet<String>,
-    not_carried: &std::collections::HashSet<String>,
-    baseline_unavailable: bool,
-) -> PresenceDecision {
-    let pkg_name = match unit.owning_package() {
-        Some(name) => name,
-        // Tier 1: unknown owner: always emit conservatively
-        None => {
-            return PresenceDecision::Emit {
-                advisory_reasons: None,
-            };
-        }
+/// 5. Not found anywhere, no baseline → guarded, with
+///    `BaselineUnavailable`.
+/// 6. Not found anywhere, baseline available → Omit with
+///    `OmissionReason::NotInTargetImage`.
+///
+/// An included entry the export cannot install, with no included entry it
+/// can, adds `PackageUnreachable` (and `BaselineUnavailable` with no
+/// baseline) to whatever command is written.
+fn classify_service_presence(unit: &CarriedUnit, presence: &Presence<'_>) -> PresenceDecision {
+    let Some(owner) = unit.owning_package() else {
+        return PresenceDecision::certain(None);
     };
-
-    // Check all entries with this package name: duplicates may differ in
-    // include/installability state.  Best-case wins: any included+installable
-    // entry means the package is present.
-    let matching_packages: Vec<&PackageEntry> = rpm
+    let entries: Vec<&PackageEntry> = presence
+        .rpm
         .packages_added
         .iter()
-        .filter(|p| p.name == *pkg_name)
+        .filter(|p| p.name == owner)
         .collect();
-
-    if !matching_packages.is_empty() {
-        // Tier 4: if ANY entry is included AND installable → proven present
-        let any_installable = matching_packages
-            .iter()
-            .any(|pkg| pkg.disposition.is_included() && is_package_installable(pkg));
-        if any_installable {
-            return PresenceDecision::Emit {
-                advisory_reasons: None,
-            };
-        }
-
-        // Tier 3: if ANY entry is included but not installable → PackageUnreachable
-        let any_included_not_installable = matching_packages
+    let unreachable = !entries
+        .iter()
+        .any(|pkg| pkg.disposition.is_included() && is_package_installable(pkg))
+        && entries
             .iter()
             .any(|pkg| pkg.disposition.is_included() && !is_package_installable(pkg));
-        if any_included_not_installable {
-            let mut reasons = vec![AdvisoryReason::PackageUnreachable];
-            if baseline_unavailable {
-                reasons.push(AdvisoryReason::BaselineUnavailable);
-            }
-            return PresenceDecision::Emit {
-                advisory_reasons: Some((pkg_name.to_owned(), reasons)),
-            };
+    let advisory = unreachable.then(|| {
+        let mut reasons = vec![AdvisoryReason::PackageUnreachable];
+        if presence.baseline_unavailable {
+            reasons.push(AdvisoryReason::BaselineUnavailable);
         }
-
-        // Tier 2: all entries are excluded. A baseline that still ships the
-        // package (another arch excluded, say) keeps the unit present, so
-        // fall through to Tier 5 in that case.
-        if let Some(omit) = excluded_owner(unit, rpm, target_packages, not_carried) {
-            return omit;
-        }
+        (owner.to_owned(), reasons)
+    });
+    if presence.certain.contains(owner) {
+        return PresenceDecision::certain(advisory);
     }
-
-    // Check if the package is in the effective target set (baseline or included-added)
-    if target_packages.contains(pkg_name) {
-        // Tier 5: baseline package: emit clean
-        return PresenceDecision::Emit {
-            advisory_reasons: None,
-        };
+    if presence.possible.contains(owner) {
+        return PresenceDecision::uncertain(unit, advisory);
     }
-
-    // Package not found anywhere
-    if baseline_unavailable {
-        // Tier 6: can't prove absence without baseline
-        PresenceDecision::Emit {
-            advisory_reasons: Some((
-                pkg_name.to_owned(),
-                vec![AdvisoryReason::BaselineUnavailable],
-            )),
-        }
+    if !entries.is_empty() {
+        return PresenceDecision::Omit(excluded_reason(owner, &entries, &presence.not_carried));
+    }
+    if presence.baseline_unavailable {
+        PresenceDecision::uncertain(
+            unit,
+            Some((owner.to_owned(), vec![AdvisoryReason::BaselineUnavailable])),
+        )
     } else {
-        // Tier 7: baseline available and package not in it: proven absent
         PresenceDecision::Omit(OmissionReason::NotInTargetImage {
-            package: pkg_name.to_owned(),
+            package: owner.to_owned(),
         })
     }
 }
 
-/// Tier 2 on its own: the owning package has `packages_added` entries, and
-/// none of them is included, pulled in by an included package, or shipped
-/// by the baseline.
-///
-/// `target_packages` holds every included or pulled-in entry's name, so
-/// "not in it" already says no entry for the name is either.
-///
-/// The presence check alone decides the omission; `not_carried` (the
-/// `name.arch` ids of the not-carried list) only names the reason:
+/// Why a unit whose owner has `packages_added` entries, every one excluded
+/// and none possibly installed, is omitted. `not_carried` (the `name.arch`
+/// ids of the not-carried list) only names the reason:
 /// [`OmissionReason::NotCarried`] when every entry of the name is listed,
 /// [`OmissionReason::PackageExcluded`] otherwise.
-fn excluded_owner(
-    unit: &CarriedUnit,
-    rpm: &RpmSection,
-    target_packages: &std::collections::BTreeSet<String>,
+fn excluded_reason(
+    owner: &str,
+    entries: &[&PackageEntry],
     not_carried: &std::collections::HashSet<String>,
-) -> Option<PresenceDecision> {
-    let pkg_name = unit.owning_package()?;
-    let mut entries = rpm
-        .packages_added
+) -> OmissionReason {
+    let package = owner.to_owned();
+    if entries
         .iter()
-        .filter(|p| p.name == *pkg_name)
-        .peekable();
-    if entries.peek().is_none() || target_packages.contains(pkg_name) {
-        return None;
-    }
-    let package = pkg_name.to_owned();
-    let reason = if entries.all(|p| not_carried.contains(&format!("{}.{}", p.name, p.arch))) {
+        .all(|p| not_carried.contains(&format!("{}.{}", p.name, p.arch)))
+    {
         OmissionReason::NotCarried { package }
     } else {
         OmissionReason::PackageExcluded { package }
-    };
-    Some(PresenceDecision::Omit(reason))
+    }
 }
 
 /// The presence decision for an aggregate snapshot.
 ///
-/// An aggregate's `packages_added` is leaf-only, so the tiers that read
-/// absence from it (3, 6 and 7) would omit the unit of an auto dependency
-/// that the image does install. Tier 2 reads an explicit exclusion on an
-/// entry that is present, which leaf filtering cannot fake, so it applies
-/// here as it does to a single host. Then a package the merge provably
-/// dropped ([`FleetDrops`]) omits the unit: `NotCarried` when the fleet's
-/// not-carried list names it, `NotInTargetImage` otherwise. Every other
-/// unit emits, an unknown owner among them.
+/// An aggregate's `packages_added` is leaf-only, so absence is never read
+/// from a name missing there. A certain owner is plain, as on one host.
+/// An owner with entries, every one excluded and none possibly installed,
+/// is omitted, since an explicit exclusion on an entry that is present
+/// cannot be faked by leaf filtering. So is one the merge provably dropped
+/// ([`FleetDrops`]): `NotCarried` when the fleet's not-carried list names
+/// it, `NotInTargetImage` otherwise. Every other owner is possible, and
+/// its command is guarded: a package only some hosts have cannot show
+/// that another host's package will not take its dependency's place.
 fn aggregate_presence(
     unit: &CarriedUnit,
-    rpm: &RpmSection,
-    target_packages: &std::collections::BTreeSet<String>,
-    not_carried: &std::collections::HashSet<String>,
+    presence: &Presence<'_>,
     fleet: &FleetPresence<'_>,
 ) -> PresenceDecision {
-    if let Some(omit) = excluded_owner(unit, rpm, target_packages, not_carried) {
-        return omit;
+    let Some(owner) = unit.owning_package() else {
+        return PresenceDecision::certain(None);
+    };
+    if presence.certain.contains(owner) {
+        return PresenceDecision::certain(None);
     }
-    match unit.owning_package() {
-        Some(owner) if fleet.drops.as_ref().is_some_and(|d| d.dropped(owner)) => {
-            let package = owner.to_owned();
-            PresenceDecision::Omit(if fleet.not_carried.contains(owner) {
-                OmissionReason::NotCarried { package }
-            } else {
-                OmissionReason::NotInTargetImage { package }
-            })
-        }
-        _ => PresenceDecision::Emit {
-            advisory_reasons: None,
-        },
+    let entries: Vec<&PackageEntry> = presence
+        .rpm
+        .packages_added
+        .iter()
+        .filter(|p| p.name == owner)
+        .collect();
+    if !entries.is_empty() && !presence.possible.contains(owner) {
+        return PresenceDecision::Omit(excluded_reason(owner, &entries, &presence.not_carried));
     }
+    if fleet.drops.as_ref().is_some_and(|d| d.dropped(owner)) {
+        let package = owner.to_owned();
+        return PresenceDecision::Omit(if fleet.not_carried.contains(owner) {
+            OmissionReason::NotCarried { package }
+        } else {
+            OmissionReason::NotInTargetImage { package }
+        });
+    }
+    PresenceDecision::uncertain(unit, None)
 }
 
 /// What an aggregate's presence decision reads beyond the single-host
@@ -2914,22 +3139,37 @@ struct FleetPresence<'a> {
 /// What the presence tiers read, computed once per plan.
 struct Presence<'a> {
     rpm: &'a RpmSection,
-    target_packages: std::collections::BTreeSet<String>,
+    /// The names of the packages certainly in the image: the baseline's,
+    /// and every package [`ExportInstalls::certain`] holds.
+    certain: std::collections::HashSet<String>,
+    /// The names of the packages that may be in the image: `certain`, and
+    /// every package [`ExportInstalls::possible`] holds.
+    possible: std::collections::HashSet<String>,
     not_carried: std::collections::HashSet<String>,
     baseline_unavailable: bool,
     /// `Some` for an aggregate snapshot, whose `packages_added` is
-    /// leaf-only, so the tiers that read absence from it would omit units
-    /// whose owning package is an auto (non-leaf) dependency. Aggregate
-    /// applies Tier 2 and the merge's proven drops alone; see
-    /// `aggregate_presence`.
+    /// leaf-only; see `aggregate_presence`.
     fleet: Option<FleetPresence<'a>>,
 }
 
 impl<'a> Presence<'a> {
     fn new(snap: &'a InspectionSnapshot, rpm: &'a RpmSection) -> Self {
+        let installs = export_installs(snap, &InstallRepos::of(snap));
+        // An id is `name.arch`, and an arch holds no `.`.
+        let names = |ids: &std::collections::HashSet<String>| {
+            ids.iter()
+                .map(|id| id.rsplit_once('.').map_or(id.as_str(), |(name, _)| name))
+                .map(str::to_owned)
+                .collect::<std::collections::HashSet<String>>()
+        };
+        let mut certain = names(&installs.certain);
+        certain.extend(rpm.baseline_package_names.iter().flatten().cloned());
+        let mut possible = names(&installs.possible);
+        possible.extend(certain.iter().cloned());
         Self {
             rpm,
-            target_packages: effective_target_packages(snap, &InstallRepos::of(snap)),
+            certain,
+            possible,
             baseline_unavailable: rpm.baseline_package_names.is_none(),
             // Empty for an aggregate, which `not_carried` never classifies.
             not_carried: not_carried_packages(snap)
@@ -2947,22 +3187,9 @@ impl<'a> Presence<'a> {
     }
 
     fn decide(&self, unit: &CarriedUnit) -> PresenceDecision {
-        if let Some(fleet) = &self.fleet {
-            aggregate_presence(
-                unit,
-                self.rpm,
-                &self.target_packages,
-                &self.not_carried,
-                fleet,
-            )
-        } else {
-            classify_service_presence(
-                unit,
-                self.rpm,
-                &self.target_packages,
-                &self.not_carried,
-                self.baseline_unavailable,
-            )
+        match &self.fleet {
+            Some(fleet) => aggregate_presence(unit, self, fleet),
+            None => classify_service_presence(unit, self),
         }
     }
 }
@@ -2991,10 +3218,13 @@ impl<'a> Presence<'a> {
 ///    it.
 /// 5. Rule 5, the package, every verb, `mask` included, for a `Vendor` or
 ///    package-owned storage unit only ([`needs_its_package`]): the presence
-///    tiers
-///    ([`classify_service_presence`], unchanged; an aggregate applies Tier 2
-///    alone). With no package section there is nothing to read and the unit
-///    is emitted: there is no separate path without one.
+///    tiers ([`classify_service_presence`]; an aggregate's are
+///    [`aggregate_presence`]). A package certainly absent declines the
+///    command; one dnf may or may not install guards an `enable`,
+///    `disable` or `set-default` by its unit file ([`PlannedUnit::guard`]),
+///    while a `mask` stays plain, since it succeeds for a missing unit.
+///    With no package section there is nothing to read and the unit is
+///    emitted: there is no separate path without one.
 /// 6. Rule 6 ([`rule_6_instance_config`]), `enable` on a template
 ///    instance: its configuration is in the export as the host had it.
 ///    Its attention notes go to `instance_notes` once the enable is
@@ -3065,23 +3295,29 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
             .as_ref()
             .filter(|_| needs_its_package(sc.unit()))
             .map(|p| p.decide(sc.unit()));
-        let advisory = match decision {
+        let (advisory, guard) = match decision {
             Some(PresenceDecision::Omit(reason)) => {
                 plan.declined.push((name, action, reason));
                 continue;
             }
             Some(PresenceDecision::Emit {
-                advisory_reasons: Some((owning_package, reasons)),
-            }) => Some(ServiceAdvisory {
-                unit: name.clone(),
-                owning_package,
-                reasons,
-            }),
-            Some(PresenceDecision::Emit {
-                advisory_reasons: None,
-            })
-            | None => None,
+                advisory_reasons,
+                guard,
+            }) => (
+                advisory_reasons.map(|(owning_package, reasons)| ServiceAdvisory {
+                    unit: name.clone(),
+                    owning_package,
+                    reasons,
+                }),
+                guard,
+            ),
+            None => (None, None),
         };
+        // `systemctl mask` makes its link whether or not the unit exists
+        // (measured on systemd 252 and 257), so a mask never fails the
+        // build and needs no guard. `enable` fails for a missing unit on
+        // both, and `disable` on 252.
+        let guard = guard.filter(|_| action != UnitAction::Mask);
         if action == UnitAction::Enable
             && let Err(reason) = timer_trigger_check(snap, &name, presence.as_ref(), staged)
         {
@@ -3099,7 +3335,16 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         } else {
             Vec::new()
         };
-        passed.push((sc, PlannedUnit { name, action }, advisory, notes));
+        passed.push((
+            sc,
+            PlannedUnit {
+                name,
+                action,
+                guard,
+            },
+            advisory,
+            notes,
+        ));
     }
     let rows: BTreeMap<&UnitName, &UnitStateChange> = units
         .state_changes
@@ -3141,6 +3386,7 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
                 plan.planned.push(PlannedUnit {
                     name: planned.name.clone(),
                     action: planned.action,
+                    guard: planned.guard.clone(),
                 });
             }
             Err(reason) => also_declined.push((planned.name.clone(), planned.action, reason)),
@@ -3250,7 +3496,7 @@ fn plan_default_target(
         plan.default_target_declined = Some((name, reason));
         return;
     }
-    match presence
+    let guard = match presence
         .filter(|_| needs_its_package(&unit))
         .map(|p| p.decide(&unit))
     {
@@ -3259,18 +3505,22 @@ fn plan_default_target(
             return;
         }
         Some(PresenceDecision::Emit {
-            advisory_reasons: Some((owning_package, reasons)),
-        }) => plan.advisories.push(ServiceAdvisory {
-            unit: name.as_unit_name().clone(),
-            owning_package,
-            reasons,
-        }),
-        Some(PresenceDecision::Emit {
-            advisory_reasons: None,
-        })
-        | None => {}
-    }
-    plan.default_target = Some(PlannedTarget { name });
+            advisory_reasons,
+            guard,
+        }) => {
+            plan.advisories
+                .extend(
+                    advisory_reasons.map(|(owning_package, reasons)| ServiceAdvisory {
+                        unit: name.as_unit_name().clone(),
+                        owning_package,
+                        reasons,
+                    }),
+                );
+            guard
+        }
+        None => None,
+    };
+    plan.default_target = Some(PlannedTarget { name, guard });
 }
 
 // ---------------------------------------------------------------------------

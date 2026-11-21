@@ -25,8 +25,8 @@ use inspectah_pipeline::render::safety::shell_word;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
 use unit_hosts::{
-    CONTINUED_MOUNT_TOKEN, UnitHost, continued_mount_host, export_session, reload, render_export,
-    scan, scan_unredacted, session,
+    CONTINUED_MOUNT_TOKEN, UnitHost, carries, continued_mount_host, export_session, guards, reload,
+    render_export, scan, scan_unredacted, session,
 };
 
 // ---------------------------------------------------------------------
@@ -1374,7 +1374,7 @@ fn a_drop_in_for_a_name_that_does_not_parse_reaches_no_command() {
         );
     }
     assert!(
-        acts(&containerfile, "enable", "real.service"),
+        carries(&containerfile, "enable", "real.service"),
         "{containerfile}"
     );
 }
@@ -1808,7 +1808,7 @@ fn t12_protected_units_through_the_scan() {
                 }
                 None => {
                     assert!(
-                        acts(containerfile, "enable", unit),
+                        carries(containerfile, "enable", unit),
                         "{route}:\n{containerfile}"
                     );
                     assert!(fixme_for(containerfile, unit).is_none(), "{route}");
@@ -1980,7 +1980,7 @@ fn t12_a_masked_tmp_mount_through_the_scan() {
         assert_eq!(change(&snap, "tmp.mount").attention_reason, None, "{verb}");
         let containerfile = containerfile_in(&render_export(&snap));
         assert!(
-            acts(&containerfile, verb, "tmp.mount"),
+            carries(&containerfile, verb, "tmp.mount"),
             "{verb}:\n{containerfile}"
         );
         assert!(fixme_for(&containerfile, "tmp.mount").is_none(), "{verb}");
@@ -5112,10 +5112,15 @@ fn a_carried_disable_or_mask_of_tuned_is_not_undone() {
 
 /// Every `systemctl` instruction of `containerfile` as a person reads it:
 /// comment lines skipped, `\` continuations joined, and each operand of
-/// each instruction paired with its verb.
-fn systemctl_commands(containerfile: &str) -> Vec<(String, String)> {
+/// each instruction paired with its verb and, for a guarded command, the
+/// file its guard tests ([`unit_hosts::guarded_commands`]).
+fn systemctl_commands(containerfile: &str) -> Vec<(String, String, Option<String>)> {
+    let guarded = unit_hosts::guarded_commands(containerfile)
+        .into_iter()
+        .map(|(verb, unit, file)| (verb, unit, Some(file)));
     systemctl_instructions(containerfile)
         .iter()
+        .filter(|instruction| !instruction.starts_with("RUN if "))
         .flat_map(|instruction| {
             let (head, operands) = instruction
                 .split_once(" -- ")
@@ -5136,10 +5141,11 @@ fn systemctl_commands(containerfile: &str) -> Vec<(String, String)> {
                         operand,
                         "an operand not quoted as it needs: {operand:?}"
                     );
-                    (verb.clone(), unit.to_owned())
+                    (verb.clone(), unit.to_owned(), None)
                 })
                 .collect::<Vec<_>>()
         })
+        .chain(guarded)
         .collect()
 }
 
@@ -5172,12 +5178,19 @@ fn t21_every_systemctl_command_in_the_containerfile_is_planned() {
     let snap = with_flatpak_app(with_tuned_activation(scan(host)));
 
     let plan = plan_units(&snap, &staged_writes(&snap));
-    let mut planned: Vec<(String, String)> = plan
+    let mut planned: Vec<(String, String, Option<String>)> = plan
         .planned
         .iter()
         .chain(&plan.scheduled)
         .chain(&plan.workloads)
-        .map(|p| (p.action().to_string(), p.name().as_str().to_owned()))
+        .map(|p| {
+            (
+                p.action().to_string(),
+                p.name().as_str().to_owned(),
+                p.guard()
+                    .map(|file| format!("/usr/lib/systemd/system/{}", file.as_str())),
+            )
+        })
         .collect();
     planned.sort();
     for unit in [
@@ -5188,7 +5201,9 @@ fn t21_every_systemctl_command_in_the_containerfile_is_planned() {
         FLATPAK_PROVISION,
     ] {
         assert!(
-            planned.contains(&("enable".to_owned(), unit.to_owned())),
+            planned
+                .iter()
+                .any(|(verb, name, _)| verb == "enable" && name == unit),
             "presence: {unit} is planned: {planned:?}"
         );
     }
@@ -9975,7 +9990,7 @@ fn assert_instance_carried(snap: &InspectionSnapshot, unit: &str, label: &str) {
     );
     for (route, containerfile) in both_routes(snap) {
         assert!(
-            acts(&containerfile, &verb, unit),
+            carries(&containerfile, &verb, unit),
             "{label}, {route}:\n{containerfile}"
         );
         assert!(
@@ -14289,7 +14304,8 @@ fn t26_a_vendor_default_target_with_a_file_staged_at_its_name_names_it() {
         assert!(
             containerfile
                 .lines()
-                .any(|l| l == set_default_line("graphical.target")),
+                .any(|l| l == set_default_line("graphical.target"))
+                || guards(&containerfile, "set-default", "graphical.target"),
             "{route}:\n{containerfile}"
         );
     }

@@ -72,6 +72,10 @@ const RPM_DEPS: &str = "rpm -q --queryformat @@%{NAME}\\n[R\\t%{REQUIRENAME}\\n]
 /// The query the RPM inspector resolves those dependencies with: one
 /// `name.arch<TAB>flags<TAB>version<TAB>capability` line per provide of
 /// every installed package.
+/// The dnf fallback's dependency query, before the package id.
+const DNF_REQUIRES: &str =
+    "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n";
+
 const RPM_PROVIDES_INDEX: &str = "rpm -qa --queryformat [%{=NAME}.%{=ARCH}\\t%{PROVIDEFLAGS}\\t%{PROVIDEVERSION}\\t%{PROVIDENAME}\\n]";
 /// The `bash` every host has installed, as `rpm -qa` lists it.
 const BASH_VERSION: &str = "5.2.26";
@@ -152,6 +156,38 @@ struct Classification {
     requires: BTreeMap<String, Vec<String>>,
     /// The capabilities each package provides besides its own name.
     provides: BTreeMap<String, Vec<String>>,
+    /// rpm's dependency query fails, so the scan falls back to
+    /// `dnf repoquery --requires --resolve --recursive`.
+    dnf_deps: bool,
+}
+
+impl Classification {
+    /// Every installed package `name` needs, directly or through what it
+    /// needs, as `dnf repoquery --requires --resolve --recursive` lists
+    /// them: each capability resolved to every installed package that
+    /// provides it (its own name, or one [`UnitHost::provides`] adds), the
+    /// package itself left out.
+    fn recursive_needs(&self, name: &str, packages: &[String]) -> BTreeSet<String> {
+        let provides = |pkg: &str, cap: &str| {
+            pkg == cap
+                || self
+                    .provides
+                    .get(pkg)
+                    .is_some_and(|caps| caps.iter().any(|c| c == cap))
+        };
+        let mut found: BTreeSet<String> = BTreeSet::new();
+        let mut stack = vec![name.to_owned()];
+        while let Some(pkg) = stack.pop() {
+            for cap in self.requires.get(&pkg).into_iter().flatten() {
+                for provider in packages.iter().filter(|p| provides(p, cap)) {
+                    if provider != name && found.insert(provider.clone()) {
+                        stack.push(provider.clone());
+                    }
+                }
+            }
+        }
+        found
+    }
 }
 
 impl UnitHost {
@@ -221,6 +257,17 @@ impl UnitHost {
             .get_or_insert_default()
             .requires
             .insert(name.into(), needs.iter().map(|n| (*n).to_owned()).collect());
+        self
+    }
+
+    /// rpm's dependency query fails, so the scan resolves dependencies with
+    /// `dnf repoquery --requires --resolve --recursive --installed`, which
+    /// answers every installed package a package needs, transitively, from
+    /// the plain capabilities [`requires`](UnitHost::requires) names. That
+    /// route cannot tell one provider from several. Turns on leaf
+    /// classification.
+    pub fn rpm_deps_unavailable(mut self) -> Self {
+        self.classification.get_or_insert_default().dnf_deps = true;
         self
     }
 
@@ -455,8 +502,24 @@ impl UnitHost {
                 .collect();
             mock = mock
                 .with_command(DNF_USERINSTALLED, userinstalled)
-                .with_command_prefix(RPM_DEPS, ok(&deps))
                 .with_command(RPM_PROVIDES_INDEX, ok(&provides));
+            if classification.dnf_deps {
+                let failed = ExecResult {
+                    exit_code: 1,
+                    ..Default::default()
+                };
+                mock = mock.with_command_prefix(RPM_DEPS, failed);
+                for name in &this.packages {
+                    let needs: String = classification
+                        .recursive_needs(name, &this.packages)
+                        .iter()
+                        .map(|dep| format!("{dep}.x86_64\n"))
+                        .collect();
+                    mock = mock.with_command(&format!("{DNF_REQUIRES} {name}.x86_64"), ok(&needs));
+                }
+            } else {
+                mock = mock.with_command_prefix(RPM_DEPS, ok(&deps));
+            }
         }
         // One answer per vendor file: a batch query over several files is
         // unregistered, so the inspector falls back to these.
@@ -833,6 +896,56 @@ pub fn acts(containerfile: &str, verb: &str, unit: &str) -> bool {
         i.strip_prefix(&prefix)
             .is_some_and(|operands| operands.split_whitespace().any(|w| w == operand))
     })
+}
+
+/// Every guarded `systemctl` command in `containerfile`, as
+/// `(verb, unit, file)`: each `if [ -e <file> ]; then systemctl <verb> --
+/// <unit>; fi` of a `RUN if` instruction, the operands unquoted.
+pub fn guarded_commands(containerfile: &str) -> Vec<(String, String, String)> {
+    let unquote = |w: &str| {
+        w.strip_prefix('\'')
+            .and_then(|w| w.strip_suffix('\''))
+            .unwrap_or(w)
+            .to_owned()
+    };
+    systemctl_instructions(containerfile)
+        .iter()
+        .filter_map(|i| i.trim().strip_prefix("RUN if "))
+        .flat_map(|body| {
+            format!("if {body}")
+                .split(" && ")
+                .map(|segment| {
+                    let segment = segment.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let (file, command) = segment
+                        .strip_prefix("if [ -e ")
+                        .and_then(|s| s.split_once(" ]; then systemctl "))
+                        .unwrap_or_else(|| panic!("not a guarded command: {segment:?}"));
+                    let (verb, unit) = command
+                        .strip_suffix("; fi")
+                        .and_then(|c| c.split_once(" -- "))
+                        .unwrap_or_else(|| panic!("not a guarded command: {segment:?}"));
+                    (verb.to_owned(), unquote(unit), unquote(file))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Whether `containerfile` runs `systemctl <verb> -- <unit>` only if the
+/// unit's vendor file is in the image ([`guarded_commands`]).
+pub fn guards(containerfile: &str, verb: &str, unit: &str) -> bool {
+    guarded_commands(containerfile)
+        .iter()
+        .any(|(v, u, _)| v == verb && u == unit)
+}
+
+/// Whether `containerfile` carries `systemctl <verb> -- <unit>`, plain
+/// ([`acts`]) or guarded by its unit file ([`guards`]). For a test about
+/// whether a command is carried at all: which form it takes is the
+/// presence tiers' call, and a host with no baseline cannot show that the
+/// base image ships a unit's package, so its command is guarded.
+pub fn carries(containerfile: &str, verb: &str, unit: &str) -> bool {
+    acts(containerfile, verb, unit) || guards(containerfile, verb, unit)
 }
 
 /// Whether `unit`'s name appears in no `systemctl` instruction of

@@ -11,16 +11,22 @@
 //!   that repo, and a carried owner's dependency keeps its recorded
 //!   `systemctl disable`.
 //! - An auto package the operator includes brings its dependencies: their
-//!   unit commands survive, and one a disabled repo serves installs from it.
+//!   unit commands survive, guarded, and one a disabled repo serves
+//!   installs from it.
+//! - Every provider an installed package may need from a disabled repo
+//!   installs from it: competing providers, and the dnf fallback's.
 //! - An owner is carried when the collector could not tell leaves from
 //!   dependencies and fell back to the dependency graph.
-//! - Excluding one of several providers of a capability omits its unit,
-//!   on one host and on a fleet; excluding the only provider an included
-//!   package requires keeps it.
+//! - A unit whose package dnf may or may not install keeps its command,
+//!   run only if the unit file is in the image: an excluded or included
+//!   one of several providers, a dependency a conditional requirement
+//!   brings, on one host and on a fleet. Excluding the only provider an
+//!   included package requires keeps it plain.
 //! - A fleet names an owner one host enabled whatever the hostname order,
 //!   and does not name one a kept leaf pulls in on some host. A package
 //!   only some hosts have, once included, keeps its dependency's unit
-//!   command, whether that dependency is auto or user-installed there.
+//!   command, guarded, whether that dependency is auto or user-installed
+//!   there.
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -50,7 +56,7 @@ use crate::not_carried_parity_test::{
     Surfaces, export_session, export_warnings, ok, projected_not_carried, scan_export, set_package,
     surfaces_of, unpack,
 };
-use crate::unit_hosts::{UnitHost, acts};
+use crate::unit_hosts::{UnitHost, acts, guarded_commands, guards};
 
 /// The repos the hosts enable.
 const ENABLED_REPOS: &str = "repo id    repo name\nappstream  AppStream\nbaseos     BaseOS\n";
@@ -372,6 +378,254 @@ fn a_carried_owners_dependency_keeps_its_disable() {
     }
 }
 
+/// The names the transaction that enables `partner` installs, or `None`
+/// when no transaction enables it.
+fn partner_install(containerfile: &str) -> Option<Vec<String>> {
+    containerfile
+        .split("\n\n")
+        .find(|block| block.contains("--enablerepo=partner"))
+        .map(|block| {
+            block
+                .lines()
+                .skip(1)
+                .map(|l| l.trim().trim_end_matches('\\').trim().to_owned())
+                .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("&&"))
+                .collect()
+        })
+}
+
+/// `app` requires `transport`, which two added packages provide and only
+/// the host's disabled `partner` repo serves. Neither is certain to
+/// install, but one has to: both paths name both in the transaction that
+/// enables `partner`, as the source host had them, or the build cannot
+/// resolve `app`.
+#[test]
+fn competing_providers_from_a_disabled_repo_install_from_it() {
+    let host = base_host()
+        .package_from("provider-a", "partner")
+        .package_from("provider-b", "partner")
+        .provides("provider-a", "transport")
+        .provides("provider-b", "transport")
+        .requires("app", &["transport"])
+        .file("/etc/yum.repos.d/partner.repo", PARTNER_REPO)
+        .preset("disable *");
+    let run = exports(host);
+    let rpm = run.snapshot.rpm.as_ref().expect("the rpm section");
+    assert_eq!(
+        rpm.dep_closures.as_ref().expect("closures")["app.x86_64"],
+        Vec::<String>::new(),
+        "two providers: neither is certain"
+    );
+
+    for (label, surfaces) in &run.paths {
+        let install = partner_install(&surfaces.containerfile).unwrap_or_else(|| {
+            panic!(
+                "{label}: a transaction enables partner:\n{}",
+                surfaces.containerfile
+            )
+        });
+        for provider in ["provider-a", "provider-b"] {
+            assert!(
+                install.iter().any(|n| n == provider),
+                "{label}: {provider} installs from partner: {install:?}\n{}",
+                surfaces.containerfile
+            );
+        }
+    }
+}
+
+/// The collector's dnf fallback cannot tell one provider from several, so
+/// it records every dependency as one dnf may pick. `helper`, which only
+/// the disabled `partner` repo serves, is still the one `app` needs: both
+/// paths install it from that repo.
+#[test]
+fn the_dnf_fallbacks_disabled_repo_dependency_installs_from_it() {
+    let host = base_host()
+        .package_from("helper", "partner")
+        .requires("app", &["helper"])
+        .rpm_deps_unavailable()
+        .file("/etc/yum.repos.d/partner.repo", PARTNER_REPO)
+        .preset("disable *");
+    let run = exports(host);
+    let rpm = run.snapshot.rpm.as_ref().expect("the rpm section");
+    assert_eq!(
+        rpm.dep_closures.as_ref().expect("closures")["app.x86_64"],
+        Vec::<String>::new(),
+        "the dnf route records no certain dependency"
+    );
+    assert_eq!(
+        rpm.dep_alternatives.as_ref().expect("alternatives")["app.x86_64"],
+        ["helper.x86_64"],
+        "the dnf route answered"
+    );
+
+    for (label, surfaces) in &run.paths {
+        let install = partner_install(&surfaces.containerfile).unwrap_or_else(|| {
+            panic!(
+                "{label}: a transaction enables partner:\n{}",
+                surfaces.containerfile
+            )
+        });
+        assert!(
+            install.iter().any(|n| n == "helper"),
+            "{label}: helper installs from partner: {install:?}\n{}",
+            surfaces.containerfile
+        );
+    }
+}
+
+// ── Commands whose package dnf may or may not install ───────────────
+
+/// `app` requires `helper` and `(plugin if helper)`, so installing it
+/// installs both, and `plugin.service` was disabled against a preset that
+/// enables it. The collector does not settle a condition through another
+/// requirement, so `plugin` is not certain; the recorded `disable` is
+/// carried, guarded by the unit file, on both paths, never lost and never
+/// written plain.
+#[test]
+fn a_requirement_another_requirement_makes_hold_keeps_its_disable() {
+    let host = base_host()
+        .package("helper")
+        .package("plugin")
+        .requires("app", &["helper", "(plugin if helper)"])
+        .unit("plugin.service", "disabled")
+        .vendor_unit("plugin.service", WANTED_UNIT, Some("plugin"))
+        .preset("enable plugin.service")
+        .preset("disable *");
+    let run = exports(host);
+
+    for (label, surfaces) in &run.paths {
+        assert!(
+            guards(&surfaces.containerfile, "disable", "plugin.service"),
+            "{label}: the recorded disable is kept, guarded:\n{}",
+            surfaces.containerfile
+        );
+        assert!(
+            !acts(&surfaces.containerfile, "disable", "plugin.service"),
+            "{label}:\n{}",
+            surfaces.containerfile
+        );
+    }
+}
+
+/// The same requirements on `tool`, an auto package nothing needs. Once
+/// the operator includes it, dnf installs `helper` and `plugin` with it,
+/// so `plugin.service`'s recorded `disable` is carried, guarded.
+#[test]
+fn including_an_auto_package_by_hand_keeps_a_conditional_dependencys_disable() {
+    let host = base_host()
+        .package("tool")
+        .package("helper")
+        .package("plugin")
+        .requires("tool", &["helper", "(plugin if helper)"])
+        .unit("plugin.service", "disabled")
+        .vendor_unit("plugin.service", WANTED_UNIT, Some("plugin"))
+        .preset("enable plugin.service")
+        .preset("disable *");
+    let mut session = RefineSession::new(collected(host));
+    set_package(&mut session, "tool", "x86_64", true);
+    let surfaces = surfaces_of(&session);
+    assert!(
+        surfaces.install_names().iter().any(|n| n == "tool"),
+        "{}",
+        surfaces.containerfile
+    );
+    assert!(
+        guards(&surfaces.containerfile, "disable", "plugin.service"),
+        "the recorded disable is kept, guarded:\n{}",
+        surfaces.containerfile
+    );
+}
+
+/// `app` requires `transport`, which the base image provides and the auto
+/// package `alt` provides too, and `alt.service` was disabled against a
+/// preset that enables it. The scan keeps `alt` included, as one provider
+/// `app` may pull in, but names it on no install line, and dnf need not
+/// install it: a plain `systemctl disable` would fail the build on RHEL 9
+/// whenever dnf leaves it out. Both paths guard the command by the unit
+/// file.
+#[test]
+fn an_included_alternatives_disable_is_guarded() {
+    let host = base_host()
+        .base_package("base-provider")
+        .provides("base-provider", "transport")
+        .package("alt")
+        .provides("alt", "transport")
+        .requires("app", &["transport"])
+        .unit("alt.service", "disabled")
+        .vendor_unit("alt.service", WANTED_UNIT, Some("alt"))
+        .preset("enable alt.service")
+        .preset("disable *");
+    let run = exports(host);
+
+    for (label, surfaces) in &run.paths {
+        assert!(
+            !surfaces.install_names().iter().any(|n| n == "alt"),
+            "{label}: alt is not named:\n{}",
+            surfaces.containerfile
+        );
+        assert!(
+            !acts(&surfaces.containerfile, "disable", "alt.service"),
+            "{label}: not plain:\n{}",
+            surfaces.containerfile
+        );
+        assert_eq!(
+            guarded_commands(&surfaces.containerfile),
+            [(
+                "disable".to_owned(),
+                "alt.service".to_owned(),
+                "/usr/lib/systemd/system/alt.service".to_owned()
+            )],
+            "{label}:\n{}",
+            surfaces.containerfile
+        );
+    }
+}
+
+/// `app` requires `(alternate if (missing-cap if switch))` and nothing
+/// provides `missing-cap`. With `switch` installed the inner condition
+/// fails, so `app` needs no `alternate`; with `switch` left out it holds.
+/// The operator keeps `app` and `switch` and excludes `alternate`: nothing
+/// certainly installs it, so its enable is never a plain command.
+#[test]
+fn a_nested_condition_never_makes_an_excluded_package_certain() {
+    let host = base_host()
+        .package("switch")
+        .package("alternate")
+        .requires("app", &["(alternate if (missing-cap if switch))"])
+        .unit("alternate.service", "enabled")
+        .vendor_unit("alternate.service", WANTED_UNIT, Some("alternate"))
+        .preset("disable *")
+        .userinstalled(&["bash", "app", "switch", "alternate"]);
+    let snapshot = collected(host);
+    let rpm = snapshot.rpm.as_ref().expect("the rpm section");
+    assert!(
+        !rpm.dep_closures.as_ref().expect("closures")["app.x86_64"]
+            .contains(&"alternate.x86_64".to_owned()),
+        "{:?}",
+        rpm.dep_closures
+    );
+
+    let mut session = RefineSession::new(snapshot);
+    set_package(&mut session, "alternate", "x86_64", false);
+    let surfaces = surfaces_of(&session);
+    assert!(
+        !acts(&surfaces.containerfile, "enable", "alternate.service"),
+        "not plain:\n{}",
+        surfaces.containerfile
+    );
+    assert!(
+        guards(&surfaces.containerfile, "enable", "alternate.service"),
+        "with switch left out dnf would install it, so the enable is guarded:\n{}",
+        surfaces.containerfile
+    );
+    assert!(
+        !surfaces.install_names().iter().any(|n| n == "alternate"),
+        "{}",
+        surfaces.containerfile
+    );
+}
+
 // ── An auto package the operator includes ───────────────────────────
 
 /// The unit command `helper.service` was recorded with, and the preset
@@ -386,7 +640,10 @@ const HELPER_STATES: [(&str, &str, &str); 2] = [
 /// so refine leaves it out, and its dependency `helper` with it, and
 /// omits `helper.service`'s recorded command. The operator includes
 /// `tool`: dnf installs `helper` with it, so the export keeps the command
-/// and no longer lists `helper` as not carried.
+/// and no longer lists `helper` as not carried. The unit plan does not see
+/// which packages an operator included by hand, so it cannot tell `tool`
+/// from an unnamed one, and the command runs only if the unit file is in
+/// the image.
 #[test]
 fn including_an_auto_package_by_hand_carries_its_dependencies() {
     for (state, preset, verb) in HELPER_STATES {
@@ -421,8 +678,8 @@ fn including_an_auto_package_by_hand_carries_its_dependencies() {
             after.containerfile
         );
         assert!(
-            acts(&after.containerfile, verb, "helper.service"),
-            "{ctx}: the recorded {verb} survives:\n{}",
+            guards(&after.containerfile, verb, "helper.service"),
+            "{ctx}: the recorded {verb} survives, guarded:\n{}",
             after.containerfile
         );
         assert!(
@@ -566,12 +823,12 @@ enum Competitor {
     Leaf,
 }
 
-/// The operator excludes `alternate`. Another installed package already
-/// provides the `transport` that `app` requires, so dnf does not install
-/// `alternate`: its enable is omitted, as for any excluded package, and
-/// it is not named on the install line. Included, it is enabled.
+/// The operator excludes `alternate`. Another installed package also
+/// provides the `transport` that `app` requires, so dnf need not install
+/// `alternate`, and it is not named on the install line: its enable runs
+/// only if the unit file is in the image. Included, it is enabled plainly.
 #[test]
-fn excluding_one_of_several_providers_omits_its_unit() {
+fn excluding_one_of_several_providers_guards_its_unit() {
     for competitor in [Competitor::BaseImage, Competitor::Leaf] {
         let ctx = format!("competitor: {competitor:?}");
         let mut session = RefineSession::new(collected(transport_host(Some(competitor))));
@@ -586,7 +843,12 @@ fn excluding_one_of_several_providers_omits_its_unit() {
         let excluded = surfaces_of(&session);
         assert!(
             !acts(&excluded.containerfile, "enable", "alternate.service"),
-            "{ctx}: nothing installs alternate:\n{}",
+            "{ctx}: nothing certainly installs alternate:\n{}",
+            excluded.containerfile
+        );
+        assert!(
+            guards(&excluded.containerfile, "enable", "alternate.service"),
+            "{ctx}: dnf may install it:\n{}",
             excluded.containerfile
         );
         assert!(
@@ -839,6 +1101,9 @@ fn helper_host(app: bool, helper_leaf: bool, state: &str, preset: &str) -> UnitH
 /// out, `app` installs nothing, so `helper.service`'s recorded command is
 /// omitted. Once the operator includes `app` in refine, dnf installs
 /// `helper` with it, so the command survives and `helper` is not listed.
+/// A package only some hosts have cannot show that another host's
+/// package will not take its dependency's place, so the command runs
+/// only if the unit file is in the image.
 ///
 /// Both ways `helper` can be dropped: auto on both hosts, and
 /// user-installed on `host-a`, where `app` needs it, but auto on `host-b`.
@@ -867,8 +1132,8 @@ fn including_a_partial_fleet_leaf_keeps_its_dependencys_unit_command() {
                 included.containerfile
             );
             assert!(
-                acts(&included.containerfile, verb, "helper.service"),
-                "{ctx}, {label}: the recorded {verb} survives:\n{}",
+                guards(&included.containerfile, verb, "helper.service"),
+                "{ctx}, {label}: the recorded {verb} survives, guarded:\n{}",
                 included.containerfile
             );
             assert!(
@@ -887,10 +1152,10 @@ fn including_a_partial_fleet_leaf_keeps_its_dependencys_unit_command() {
 
 /// Both hosts are a [`transport_host`] whose base image also provides
 /// `transport`. The merge keeps `app` and `alternate`, leaves on both;
-/// once the operator excludes `alternate` in refine, the fleet image does
-/// not install it, so its enable is omitted.
+/// once the operator excludes `alternate` in refine, the fleet image need
+/// not install it, so its enable runs only if the unit file is there.
 #[test]
-fn a_fleet_omits_the_unit_of_an_excluded_alternate_provider() {
+fn a_fleet_guards_the_unit_of_an_excluded_alternate_provider() {
     let host = || transport_host(Some(Competitor::BaseImage));
     let fleet = fleet_with(vec![("host-a", host()), ("host-b", host())], |session| {
         set_package(session, "alternate", "x86_64", false)
@@ -904,7 +1169,77 @@ fn a_fleet_omits_the_unit_of_an_excluded_alternate_provider() {
     let (label, excluded) = &fleet.paths[1];
     assert!(
         !acts(&excluded.containerfile, "enable", "alternate.service"),
-        "{label}: nothing installs alternate:\n{}",
+        "{label}: nothing certainly installs alternate:\n{}",
         excluded.containerfile
+    );
+    assert!(
+        guards(&excluded.containerfile, "enable", "alternate.service"),
+        "{label}: dnf may install it:\n{}",
+        excluded.containerfile
+    );
+}
+
+/// A fleet host with the leaf `anchor`, the base image, and the auto
+/// package `helper`, which provides `transport` and owns `helper.service`,
+/// enabled against a preset that disables it. With `app`, the host has the
+/// leaf `app`, which requires `transport`, so `helper` is its one provider
+/// there. With `other`, the host has the leaf `other`, which provides
+/// `transport` itself.
+fn transport_fleet_host(app: bool, other: bool) -> UnitHost {
+    let mut userinstalled = vec!["bash", "anchor"];
+    let mut host = UnitHost::new()
+        .base_package("bash")
+        .base_package("glibc")
+        .package("anchor")
+        .package("helper")
+        .provides("helper", "transport")
+        .unit("helper.service", "enabled")
+        .vendor_unit("helper.service", WANTED_UNIT, Some("helper"))
+        .preset("disable *");
+    if app {
+        host = host.package("app").requires("app", &["transport"]);
+        userinstalled.push("app");
+    }
+    if other {
+        host = host.package("other").provides("other", "transport");
+        userinstalled.push("other");
+    }
+    host.userinstalled(&userinstalled)
+}
+
+/// `app` is only on `host-a`, where `helper` is the one provider of the
+/// `transport` it requires; `other`, only on `host-b`, provides
+/// `transport` itself. Once the operator includes both, dnf installing
+/// `app` beside `other` need not install `helper`, which no host's
+/// closure can show, so `helper.service`'s enable is guarded, not plain.
+#[test]
+fn a_fleet_guards_a_dependency_another_hosts_package_may_replace() {
+    let fleet = fleet_with(
+        vec![
+            ("host-a", transport_fleet_host(true, false)),
+            ("host-b", transport_fleet_host(false, true)),
+        ],
+        |session| {
+            set_package(session, "app", "x86_64", true);
+            set_package(session, "other", "x86_64", true);
+        },
+    );
+    let (label, included) = &fleet.paths[1];
+    for name in ["app", "other"] {
+        assert!(
+            included.install_names().iter().any(|n| n == name),
+            "{label}: {name} is installed:\n{}",
+            included.containerfile
+        );
+    }
+    assert!(
+        !acts(&included.containerfile, "enable", "helper.service"),
+        "{label}: not plain:\n{}",
+        included.containerfile
+    );
+    assert!(
+        guards(&included.containerfile, "enable", "helper.service"),
+        "{label}: guarded:\n{}",
+        included.containerfile
     );
 }
