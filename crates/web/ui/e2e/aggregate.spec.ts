@@ -13,8 +13,12 @@ test.describe("Aggregate mode", () => {
   test.beforeEach(async ({ page }) => {
     await applyMockApi(page, "aggregate-3");
     await page.goto("/");
-    // Aggregate app renders with data-testid="aggregate-app"
-    await expect(page.getByTestId("aggregate-app")).toBeVisible({ timeout: 10_000 });
+    // The loading placeholder carries data-testid="aggregate-app" too, so
+    // wait for the stats bar: it renders inside AppShell, which owns the
+    // keyboard shortcuts, once the aggregate view has loaded.
+    await expect(
+      page.getByTestId("aggregate-app").locator(".inspectah-statsbar"),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test.afterEach(async ({ page }) => {
@@ -214,14 +218,12 @@ test.describe("Aggregate mode", () => {
   // -----------------------------------------------------------------------
   test("? opens shortcut overlay with aggregate shortcuts", async ({ page }) => {
     const overlay = page.locator('[data-testid="shortcut-overlay"]');
-    // Shortcuts are ignored while any role="dialog" is in the document, so a
-    // press in the first moments after load can be dropped (seen once in
-    // four CI-mode runs). Press again until the overlay opens; once it is
-    // open, a further press is ignored for the same reason.
-    await expect(async () => {
-      await page.keyboard.press("?");
-      await expect(overlay).toBeVisible({ timeout: 500 });
-    }).toPass({ timeout: 5_000 });
+    // Shortcuts are ignored while any role="dialog" is in the document.
+    await expect(page.locator('[role="dialog"]')).toHaveCount(0);
+
+    // One press must open the overlay.
+    await page.keyboard.press("?");
+    await expect(overlay).toBeVisible({ timeout: 2_000 });
 
     // Aggregate mode adds the "c" shortcut for "Compare variants"
     await expect(overlay).toContainText("Compare variants");
