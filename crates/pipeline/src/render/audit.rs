@@ -632,7 +632,9 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
     if let Some(sel) = &snap.selinux {
         let has_content = !sel.mode.is_empty()
             || !sel.custom_modules.is_empty()
+            || !sel.disabled_modules.is_empty()
             || !sel.boolean_overrides.is_empty()
+            || !sel.boolean_conflicts.is_empty()
             || !sel.fcontext_rules.is_empty();
 
         if has_content {
@@ -645,10 +647,22 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
                     sel.custom_modules.len()
                 ));
             }
+            if !sel.disabled_modules.is_empty() {
+                lines.push(format!(
+                    "- **Modules disabled with semodule -d:** {}",
+                    sel.disabled_modules.len()
+                ));
+            }
             let persistent_booleans = sel.boolean_overrides.len();
             if persistent_booleans > 0 {
                 lines.push(format!(
                     "- **Booleans set persistently:** {persistent_booleans}"
+                ));
+            }
+            if !sel.boolean_conflicts.is_empty() {
+                lines.push(format!(
+                    "- **Booleans set differently across hosts (not carried):** {}",
+                    sel.boolean_conflicts.len()
                 ));
             }
             // § 4: decision-bearing rules only. This will not match the

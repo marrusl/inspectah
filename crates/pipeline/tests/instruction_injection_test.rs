@@ -924,6 +924,41 @@ fn unit_state_operands_are_quoted_only_when_needed_after_the_end_of_options() {
     }
 }
 
+/// A boolean name outside the policy's name grammar renders no command,
+/// only a FIXME: an empty name, and glob patterns the shell would expand
+/// against the build's working directory. Names in the grammar render
+/// `setsebool -P` with the value, on or off.
+#[test]
+fn setsebool_names_outside_the_boolean_grammar_are_refused() {
+    for name in ["", "*", "?", "[ab]", "httpd_*", "httpd_?", "httpd_[ab]"] {
+        let output = selinux((name, "on"), ("http_port_t", "tcp", "8080"));
+        assert!(
+            !output.lines().any(|l| l.starts_with("RUN setsebool")),
+            "{name:?} reached a command\n{output}"
+        );
+        assert!(
+            output.lines().any(|l| l
+                == format!(
+                    "# FIXME: boolean name is not an SELinux boolean name, skipped: {name:?}=on"
+                )),
+            "{name:?}: no FIXME\n{output}"
+        );
+    }
+    for (name, value) in [
+        ("httpd_can_network_connect", "on"),
+        ("virt_use_nfs", "off"),
+        ("secure-mode", "on"),
+    ] {
+        let output = selinux((name, value), ("http_port_t", "tcp", "8080"));
+        assert!(
+            output
+                .lines()
+                .any(|l| l == format!("RUN setsebool -P {name} {value}")),
+            "{name}\n{output}"
+        );
+    }
+}
+
 /// The benign value of each operand row still renders its command.
 #[test]
 fn operands_render_benign_values() {

@@ -6,8 +6,8 @@ use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::selinux::{
-    FcontextFileType, FcontextRule, FcontextSource, SelinuxBoolean, SelinuxContext,
-    SelinuxPortLabel, SelinuxSection,
+    DisabledModule, FcontextFileType, FcontextRule, FcontextSource, ModuleOrigin, SelinuxBoolean,
+    SelinuxContext, SelinuxPortLabel, SelinuxSection, is_boolean_name,
 };
 use inspectah_core::types::warnings::Warning;
 use regex::Regex;
@@ -193,20 +193,56 @@ const STORE_ROOT_KEY: &str = "store-root";
 
 /// The active policy store for `policy_type`:
 /// `<store-root>/<policy_type>/active`, with `store-root` read from
-/// `semanage.conf` as libsemanage reads it.
+/// `semanage.conf` by [`store_root_from_conf`].
 fn active_store(exec: &dyn Executor, policy_type: &str) -> String {
     let root = exec
         .read_file(Path::new(SEMANAGE_CONF))
         .ok()
-        .and_then(|content| {
-            content.lines().find_map(|line| {
-                let (key, value) = line.trim().split_once('=')?;
-                (key.trim() == STORE_ROOT_KEY && !value.trim().is_empty())
-                    .then(|| value.trim().trim_end_matches('/').to_string())
-            })
-        })
+        .and_then(|content| store_root_from_conf(&content))
         .unwrap_or_else(|| DEFAULT_STORE_ROOT.to_string());
-    format!("{root}/{policy_type}/active")
+    format!("{}/{policy_type}/active", root.trim_end_matches('/'))
+}
+
+/// The `store-root` that `semanage.conf` sets, read as libsemanage's
+/// lexer and parser read it (`libsemanage/src/conf-scan.l` and
+/// `conf-parse.y`, SELinux 3.6), or `None` when it sets none.
+///
+/// - `#` starts a comment only where a keyword could start; inside a value
+///   it is literal.
+/// - Spaces and tabs around `=` are dropped. The value runs to the end of
+///   its line: `<arg>.*[^"\n]` takes it unquoted, with surrounding
+///   whitespace trimmed (`my_strdup`); `<arg>\".+\"` takes it quoted, from
+///   the first `"` to the last on the line, with the two quotes stripped
+///   (`my_qstrdup`). Flex picks the longer match, so a quoted value with
+///   anything after its closing quote, a trailing space included, is read
+///   unquoted and keeps its quotes.
+/// - `""`, nothing after `=`, or an unquoted value whose last character
+///   is a `"` is no value (neither argument rule matches it whole).
+///   libsemanage refuses such a file outright; here it sets nothing.
+/// - Each assignment replaces the one before (`parse_store_root_path`
+///   frees the previous path), so the last one wins.
+fn store_root_from_conf(text: &str) -> Option<String> {
+    let mut root = None;
+    for line in text.lines() {
+        let line = line.trim_start_matches([' ', '\t']);
+        let Some(rest) = line.strip_prefix(STORE_ROOT_KEY) else {
+            continue;
+        };
+        let Some(arg) = rest.trim_start_matches([' ', '\t']).strip_prefix('=') else {
+            continue;
+        };
+        let arg = arg.trim_start_matches([' ', '\t']);
+        let value = match arg.strip_prefix('"').and_then(|a| a.strip_suffix('"')) {
+            Some(inner) if !inner.is_empty() => inner,
+            Some(_) => continue,
+            None if arg.ends_with('"') => continue,
+            None => arg.trim(),
+        };
+        if !value.is_empty() {
+            root = Some(value.to_string());
+        }
+    }
+    root
 }
 
 // ---------------------------------------------------------------------------
@@ -220,30 +256,53 @@ const BASE_POLICY_PRIORITY: u16 = 100;
 /// at. The package that ships the module carries it into the image.
 const PACKAGED_MODULE_PRIORITY: u16 = 200;
 
-/// Modules selinux-policy generates itself at the default local priority,
-/// 400: `/usr/libexec/selinux/varrun-convert.sh` and `binsbin-convert.sh`
+/// The priority `semodule -i` installs at when given none.
+const DEFAULT_LOCAL_PRIORITY: u16 = 400;
+
+/// Modules selinux-policy generates itself at [`DEFAULT_LOCAL_PRIORITY`]:
+/// `/usr/libexec/selinux/varrun-convert.sh` and `binsbin-convert.sh`
 /// build them from the installed packages' file contexts, and the policy's
 /// RPM macros rebuild them in every transaction, so an image has its own
-/// (`rhel-bootc:10.3` carries `extra_varrun` at 400).
+/// (`rhel-bootc:10.3` carries `extra_varrun` at 400). At any other
+/// priority the name is the administrator's module.
 const POLICY_GENERATED_MODULES: [&str; 2] = ["extra_varrun", "extra_binsbin"];
 
-/// Whether a `modules/<priority>` directory holds locally installed
-/// modules: any numeric priority except the base policy's and the one
-/// packages install at. `semodule -i` uses 400; `semodule -X <n> -i` can
-/// put a local module at any other. `disabled/` is not a priority.
-fn is_local_module_priority(dir: &str) -> bool {
+/// The `modules/` entry where libsemanage records the modules turned off
+/// with `semodule -d`: one empty file per module name, whatever its
+/// priority.
+const DISABLED_DIR: &str = "disabled";
+
+/// The local priority a `modules/<priority>` directory is, or `None` for
+/// the base policy's and the one packages install at, and for `disabled/`.
+/// `semodule -i` uses 400; `semodule -X <n> -i` can put a local module at
+/// any other.
+fn local_module_priority(dir: &str) -> Option<u16> {
     dir.parse::<u16>()
-        .is_ok_and(|p| p != BASE_POLICY_PRIORITY && p != PACKAGED_MODULE_PRIORITY)
+        .ok()
+        .filter(|&p| p != BASE_POLICY_PRIORITY && p != PACKAGED_MODULE_PRIORITY)
 }
 
-/// Discovers locally installed SELinux policy modules in the active policy
-/// store: every module at a local priority (see
-/// [`is_local_module_priority`]) except the ones selinux-policy generates.
-/// A module installed at two local priorities is listed once; `semodule
-/// -E` extracts the highest.
+/// Whether the module `name` at `priority` is one selinux-policy
+/// generates, not the administrator's.
+fn is_policy_generated(priority: u16, name: &str) -> bool {
+    priority == DEFAULT_LOCAL_PRIORITY && POLICY_GENERATED_MODULES.contains(&name)
+}
+
+/// Discovers the locally installed SELinux policy modules in the active
+/// policy store and the modules turned off with `semodule -d`.
 ///
-/// A missing store is no finding on a host without SELinux; on a host with
+/// A local module is one at a local priority (see
+/// [`local_module_priority`]) and not generated by selinux-policy. A
+/// module installed at two local priorities is listed once; `semodule -E`
+/// extracts the highest. A module named in `modules/disabled/` goes to
+/// `disabled_modules` with its origin, and a local one is then not listed
+/// in `custom_modules`, since the host builds its policy without it.
+///
+/// Every directory is read in full or reported: a listing cut short by an
+/// entry error would look like a complete one with modules missing. A
+/// missing store is no finding on a host without SELinux; on a host with
 /// an SELinux config it is reported, since the modules could not be read.
+/// A store with no `disabled/` has nothing disabled.
 fn collect_custom_modules(
     exec: &dyn Executor,
     section: &mut SelinuxSection,
@@ -251,7 +310,7 @@ fn collect_custom_modules(
     store: &str,
 ) {
     let modules_dir = format!("{store}/modules");
-    let priorities = match exec.read_dir(Path::new(&modules_dir)) {
+    let entries = match exec.read_dir_strict(Path::new(&modules_dir)) {
         Ok(entries) => entries,
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound
@@ -265,21 +324,51 @@ fn collect_custom_modules(
         }
     };
 
-    let mut names = std::collections::BTreeSet::new();
-    for priority in priorities.iter().filter(|p| is_local_module_priority(p)) {
-        let dir = format!("{modules_dir}/{priority}");
-        match exec.read_dir(Path::new(&dir)) {
-            Ok(entries) => names.extend(
-                entries
+    let mut local = std::collections::BTreeSet::new();
+    for (priority, dir) in entries
+        .iter()
+        .filter_map(|e| local_module_priority(e).map(|p| (p, e)))
+    {
+        let dir = format!("{modules_dir}/{dir}");
+        match exec.read_dir_strict(Path::new(&dir)) {
+            Ok(names) => local.extend(
+                names
                     .into_iter()
-                    .filter(|name| !POLICY_GENERATED_MODULES.contains(&name.as_str())),
+                    .filter(|name| !is_policy_generated(priority, name)),
             ),
             Err(e) => warnings.push(selinux_warning(format!(
                 "SELinux custom policy modules not read: {dir}: {e}"
             ))),
         }
     }
-    section.custom_modules = names.into_iter().collect();
+
+    let disabled_dir = format!("{modules_dir}/{DISABLED_DIR}");
+    let disabled = match exec.read_dir_strict(Path::new(&disabled_dir)) {
+        Ok(names) => names,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            warnings.push(selinux_warning(format!(
+                "SELinux disabled policy modules not read: {disabled_dir}: {e}; the modules \
+                 listed as custom may include disabled ones"
+            )));
+            Vec::new()
+        }
+    };
+    let mut disabled_modules: Vec<DisabledModule> = disabled
+        .into_iter()
+        .map(|name| {
+            let origin = if local.remove(&name) {
+                ModuleOrigin::Local
+            } else {
+                ModuleOrigin::Packaged
+            };
+            DisabledModule { name, origin }
+        })
+        .collect();
+    disabled_modules.sort();
+
+    section.custom_modules = local.into_iter().collect();
+    section.disabled_modules = disabled_modules;
 }
 
 /// A warning from this inspector.
@@ -301,35 +390,65 @@ fn selinux_warning(message: String) -> Warning {
 /// checked in a `rhel-bootc:10.3` container).
 const BOOLEANS_LOCAL: &str = "booleans.local";
 
-/// Parses `booleans.local` into the booleans it sets and the lines it
-/// could not read. libsemanage writes `name=0|1` and also reads
-/// `true`/`false`; comment and blank lines are skipped.
-fn parse_booleans_local(text: &str) -> (Vec<SelinuxBoolean>, Vec<String>) {
+/// Why a `booleans.local` line was not read. A warning names the line by
+/// its number and this reason, never by its text: warnings are not
+/// redacted, and a line that is not what libsemanage writes can hold
+/// anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BooleanLineFault {
+    /// No `=`.
+    NoAssignment,
+    /// The name before `=` is not an SELinux boolean name.
+    Name,
+    /// The value after `=` is not one libsemanage reads.
+    Value,
+}
+
+impl BooleanLineFault {
+    fn describe(self) -> &'static str {
+        match self {
+            Self::NoAssignment => "no name=value assignment",
+            Self::Name => "the name is not an SELinux boolean name",
+            Self::Value => "the value is not 0, 1, true or false",
+        }
+    }
+}
+
+/// Parses one `booleans.local` assignment.
+fn parse_boolean_line(line: &str) -> Result<SelinuxBoolean, BooleanLineFault> {
+    let (name, value) = line.split_once('=').ok_or(BooleanLineFault::NoAssignment)?;
+    let name = name.trim();
+    if !is_boolean_name(name) {
+        return Err(BooleanLineFault::Name);
+    }
+    let value = match value.trim() {
+        "1" | "true" | "TRUE" => true,
+        "0" | "false" | "FALSE" => false,
+        _ => return Err(BooleanLineFault::Value),
+    };
+    Ok(SelinuxBoolean {
+        name: name.to_string(),
+        value,
+    })
+}
+
+/// Parses `booleans.local` into the booleans it sets and, by 1-based line
+/// number, the lines it could not read. libsemanage writes `name=0|1` and
+/// also reads `true`/`false`; comment and blank lines are skipped.
+fn parse_booleans_local(text: &str) -> (Vec<SelinuxBoolean>, Vec<(usize, BooleanLineFault)>) {
     let mut booleans = Vec::new();
-    let mut unparsed = Vec::new();
-    for line in text.lines() {
+    let mut faults = Vec::new();
+    for (index, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        let parsed = trimmed.split_once('=').and_then(|(name, value)| {
-            let value = match value.trim() {
-                "1" | "true" | "TRUE" => true,
-                "0" | "false" | "FALSE" => false,
-                _ => return None,
-            };
-            let name = name.trim();
-            (!name.is_empty()).then(|| SelinuxBoolean {
-                name: name.to_string(),
-                value,
-            })
-        });
-        match parsed {
-            Some(boolean) => booleans.push(boolean),
-            None => unparsed.push(trimmed.to_string()),
+        match parse_boolean_line(trimmed) {
+            Ok(boolean) => booleans.push(boolean),
+            Err(fault) => faults.push((index + 1, fault)),
         }
     }
-    (booleans, unparsed)
+    (booleans, faults)
 }
 
 /// Parses `semanage boolean -l -C`, which lists only the booleans set
@@ -367,12 +486,16 @@ fn collect_boolean_overrides(
     let local = format!("{store}/{BOOLEANS_LOCAL}");
     match exec.read_file(Path::new(&local)) {
         Ok(content) => {
-            let (booleans, unparsed) = parse_booleans_local(&content);
+            let (booleans, faults) = parse_booleans_local(&content);
             section.boolean_overrides = booleans;
-            if !unparsed.is_empty() {
+            if !faults.is_empty() {
+                let lines: Vec<String> = faults
+                    .iter()
+                    .map(|(line, fault)| format!("line {line} ({})", fault.describe()))
+                    .collect();
                 warnings.push(selinux_warning(format!(
-                    "SELinux booleans not read from {local}, lines not understood: {}",
-                    unparsed.join("; ")
+                    "SELinux booleans.local lines not read in {local}: {}",
+                    lines.join(", ")
                 )));
             }
             return;
@@ -941,11 +1064,22 @@ mod tests {
                 &["lowprio", "myapp", "override"],
             ),
             (
-                "modules selinux-policy generates are not local",
+                "modules selinux-policy generates at 400 are not local",
                 "targeted",
                 None,
                 vec![(var, "400", &["extra_varrun", "extra_binsbin", "myapp"])],
                 &["myapp"],
+            ),
+            (
+                "a generated module's name at another priority is the administrator's",
+                "targeted",
+                None,
+                vec![
+                    (var, "400", &["extra_varrun"]),
+                    (var, "500", &["extra_varrun"]),
+                    (var, "300", &["extra_binsbin"]),
+                ],
+                &["extra_binsbin", "extra_varrun"],
             ),
             (
                 "the policy type comes from the SELinux config",
@@ -958,6 +1092,41 @@ mod tests {
                 "semanage.conf relocates the store",
                 "targeted",
                 Some("module-store = direct\nstore-root=/etc/selinux\n"),
+                vec![(etc, "400", &["myapp"]), (var, "400", &["stale"])],
+                &["myapp"],
+            ),
+            (
+                "a quoted store-root is the path inside the quotes",
+                "targeted",
+                Some("store-root = \"/etc/selinux\"\n"),
+                vec![(etc, "400", &["myapp"]), (var, "400", &["stale"])],
+                &["myapp"],
+            ),
+            (
+                "the last store-root assignment wins",
+                "targeted",
+                Some("store-root=/var/lib/selinux\nstore-root =\t/etc/selinux\n"),
+                vec![(etc, "400", &["myapp"]), (var, "400", &["stale"])],
+                &["myapp"],
+            ),
+            (
+                "a commented-out store-root is no assignment",
+                "targeted",
+                Some("store-root=/etc/selinux\n# store-root=/var/lib/selinux\n"),
+                vec![(etc, "400", &["myapp"]), (var, "400", &["stale"])],
+                &["myapp"],
+            ),
+            (
+                "an unquoted value runs to the end of the line, # included",
+                "targeted",
+                Some("store-root=/etc/selinux # bootc\n"),
+                vec![(etc, "400", &["myapp"]), (var, "400", &["stale"])],
+                &[],
+            ),
+            (
+                "an empty value sets nothing",
+                "targeted",
+                Some("store-root=/etc/selinux\nstore-root = \"\"\n"),
                 vec![(etc, "400", &["myapp"]), (var, "400", &["stale"])],
                 &["myapp"],
             ),
@@ -996,6 +1165,112 @@ mod tests {
             !warnings
                 .iter()
                 .any(|w| w.message.contains("modules not read")),
+            "{warnings:?}"
+        );
+    }
+
+    // ---- Test 7b: modules turned off with semodule -d ----
+
+    #[test]
+    fn disabled_modules_are_kept_apart_from_active_ones() {
+        let var = "/var/lib/selinux";
+        let exec = module_host(
+            "targeted",
+            None,
+            &[
+                (var, "100", &["apache", "base"]),
+                (var, "200", &["container"]),
+                (var, "400", &["myapp", "other"]),
+                (var, "500", &["override"]),
+                (
+                    var,
+                    "disabled",
+                    &["apache", "container", "myapp", "override"],
+                ),
+            ],
+        );
+        let (section, warnings) = inspect_with(&exec);
+        // A disabled local module is not listed as active.
+        assert_eq!(section.custom_modules, ["other"]);
+        assert_eq!(
+            section.disabled_modules,
+            [
+                DisabledModule {
+                    name: "apache".into(),
+                    origin: ModuleOrigin::Packaged,
+                },
+                DisabledModule {
+                    name: "container".into(),
+                    origin: ModuleOrigin::Packaged,
+                },
+                DisabledModule {
+                    name: "myapp".into(),
+                    origin: ModuleOrigin::Local,
+                },
+                DisabledModule {
+                    name: "override".into(),
+                    origin: ModuleOrigin::Local,
+                },
+            ]
+        );
+        assert!(
+            !warnings.iter().any(|w| w.message.contains("modules")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn a_store_without_a_disabled_directory_has_no_disabled_modules() {
+        let exec = module_host("targeted", None, &[("/var/lib/selinux", "400", &["myapp"])]);
+        let (section, warnings) = inspect_with(&exec);
+        assert_eq!(section.custom_modules, ["myapp"]);
+        assert!(section.disabled_modules.is_empty());
+        assert!(
+            !warnings.iter().any(|w| w.message.contains("modules")),
+            "{warnings:?}"
+        );
+    }
+
+    // ---- Test 7c: module directories read in full or reported ----
+
+    #[test]
+    fn a_module_directory_read_part_way_is_reported() {
+        let modules = "/var/lib/selinux/targeted/active/modules";
+        let layout: &[(&str, &str, &[&str])] = &[
+            ("/var/lib/selinux", "400", &["myapp"]),
+            ("/var/lib/selinux", "disabled", &["apache"]),
+        ];
+        // (directory that fails part way, what is still listed)
+        let cases: &[(String, &[&str])] = &[
+            (modules.to_string(), &[]),
+            (format!("{modules}/400"), &[]),
+            (format!("{modules}/disabled"), &["myapp"]),
+        ];
+        for (dir, custom) in cases {
+            let exec = module_host("targeted", None, layout)
+                .with_dir_iteration_error(dir, std::io::ErrorKind::PermissionDenied);
+            let (section, warnings) = inspect_with(&exec);
+            assert_eq!(section.custom_modules, *custom, "{dir}");
+            assert!(
+                warnings
+                    .iter()
+                    .any(|w| w.message.contains("not read") && w.message.contains(dir.as_str())),
+                "{dir}: {warnings:?}"
+            );
+        }
+
+        // A disabled/ that cannot be opened at all is reported too.
+        let exec = module_host("targeted", None, layout).with_dir_error(
+            &format!("{modules}/disabled"),
+            std::io::ErrorKind::PermissionDenied,
+        );
+        let (section, warnings) = inspect_with(&exec);
+        assert_eq!(section.custom_modules, ["myapp"]);
+        assert!(section.disabled_modules.is_empty());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains(&format!("{modules}/disabled"))),
             "{warnings:?}"
         );
     }
@@ -1093,6 +1368,31 @@ virt_use_nfs                   (on   ,   on)  Allow virt to use nfs\n";
         );
     }
 
+    /// Two populated stores that set different booleans: the one
+    /// `semanage.conf` names last is read, quoted or not.
+    #[test]
+    fn booleans_local_follows_the_last_store_root_assignment() {
+        let confs = [
+            "store-root=\"/etc/selinux\"\n",
+            "store-root=/var/lib/selinux\nstore-root=/etc/selinux\n",
+        ];
+        for conf in confs {
+            let exec = boolean_host(Some(VAR_STORE), Some("stale_boolean=1\n"))
+                .with_dir("/etc/selinux/targeted/active", vec!["modules"])
+                .with_file(
+                    "/etc/selinux/targeted/active/booleans.local",
+                    "httpd_can_network_relay=0\n",
+                )
+                .with_file("/etc/selinux/semanage.conf", conf);
+            let (section, _) = inspect_with(&exec);
+            assert_eq!(
+                section.boolean_overrides,
+                [boolean("httpd_can_network_relay", false)],
+                "{conf:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_store_without_booleans_local_has_no_persistent_booleans() {
         let (section, warnings) = inspect_with(&boolean_host(Some(VAR_STORE), None));
@@ -1105,8 +1405,8 @@ virt_use_nfs                   (on   ,   on)  Allow virt to use nfs\n";
 
     #[test]
     fn parse_booleans_local_accepts_what_libsemanage_reads() {
-        let (booleans, unparsed) = parse_booleans_local(
-            "# header\n a = 1 \nb=true\nc=FALSE\nd=0\ne=2\n=1\nnot a boolean\n",
+        let (booleans, faults) = parse_booleans_local(
+            "# header\n a = 1 \nb=true\nc=FALSE\nd=0\ne=2\n=1\nnot a boolean\n*=1\n",
         );
         assert_eq!(
             booleans,
@@ -1117,22 +1417,48 @@ virt_use_nfs                   (on   ,   on)  Allow virt to use nfs\n";
                 boolean("d", false),
             ]
         );
-        assert_eq!(unparsed, ["e=2", "=1", "not a boolean"]);
+        assert_eq!(
+            faults,
+            [
+                (6, BooleanLineFault::Value),
+                (7, BooleanLineFault::Name),
+                (8, BooleanLineFault::NoAssignment),
+                (9, BooleanLineFault::Name),
+            ]
+        );
     }
 
+    /// A line the parser cannot read is reported by its number and why,
+    /// never by its text: a warning is not redacted, and the line can
+    /// hold anything.
     #[test]
-    fn an_unreadable_booleans_local_line_is_reported() {
+    fn an_unreadable_booleans_local_line_is_reported_without_its_text() {
+        const SENTINEL: &str = "inspectah-sentinel-credential-7c2d";
         let (section, warnings) = inspect_with(&boolean_host(
             Some(VAR_STORE),
-            Some("virt_use_nfs=1\nvirt_use_samba=maybe\n"),
+            Some(&format!(
+                "virt_use_nfs=1\nvirt_use_samba=maybe\napi_token={SENTINEL}\n{SENTINEL}\n"
+            )),
         ));
         assert_eq!(section.boolean_overrides, [boolean("virt_use_nfs", true)]);
-        assert!(
-            warnings
-                .iter()
-                .any(|w| w.message.contains("virt_use_samba=maybe")),
-            "{warnings:?}"
+        let messages: Vec<&str> = warnings
+            .iter()
+            .map(|w| w.message.as_str())
+            .filter(|m| m.contains("booleans"))
+            .collect();
+        assert_eq!(
+            messages,
+            [format!(
+                "SELinux booleans.local lines not read in {VAR_STORE}/booleans.local: \
+                 line 2 (the value is not 0, 1, true or false), \
+                 line 3 (the value is not 0, 1, true or false), \
+                 line 4 (no name=value assignment)"
+            )
+            .as_str()]
         );
+        let json = serde_json::to_string(&warnings).expect("the warnings serialize");
+        assert!(!json.contains(SENTINEL), "{json}");
+        assert!(!json.contains("maybe"), "{json}");
     }
 
     // ---- Test 9: without a readable store ----

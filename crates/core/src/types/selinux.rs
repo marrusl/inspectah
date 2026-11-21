@@ -140,6 +140,63 @@ impl SelinuxBoolean {
     }
 }
 
+/// Whether `name` can be an SELinux boolean's name: a letter, then
+/// letters, digits, `_` and `-`, with single `.`s between them for a name
+/// declared inside a CIL block.
+///
+/// This is libsepol's CIL name rule (`cil_verify_name` in
+/// `libsepol/cil/src/cil_verify.c`: a letter first, then alphanumerics, `_`
+/// and `-`, and `.` where names are qualified), which also matches
+/// checkpolicy's identifier token. A name that fails it is no boolean any
+/// policy defines, and it is never a shell glob or an option word.
+pub fn is_boolean_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && !name.ends_with('.')
+        && !name.contains("..")
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+/// A boolean the hosts of a fleet set persistently to different values.
+///
+/// Only a fleet aggregate has these. The merge moves a boolean here, out
+/// of [`SelinuxSection::boolean_overrides`], when one host sets it on and
+/// another off, so no export runs both `setsebool` commands and lets host
+/// order pick the image's value. Both host lists are nonempty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelinuxBooleanConflict {
+    pub name: String,
+    /// The hosts that set it on, sorted.
+    pub on_hosts: Vec<String>,
+    /// The hosts that set it off, sorted.
+    pub off_hosts: Vec<String>,
+}
+
+/// Where a module turned off with `semodule -d` is installed in the
+/// policy store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModuleOrigin {
+    /// At a local priority: a custom module, which the image does not have
+    /// unless it is carried.
+    Local,
+    /// Only at the base policy's or a package's priority, so the image's
+    /// own policy packages provide it.
+    Packaged,
+}
+
+/// A policy module turned off on the host with `semodule -d`, which
+/// libsemanage records in the store's `modules/disabled/`. The module
+/// stays installed; the policy is built without it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct DisabledModule {
+    pub name: String,
+    pub origin: ModuleOrigin,
+}
+
 /// Security & access control section (SELinux and FIPS).
 ///
 /// PAM configs and audit rules are not here: they are `config.files`
@@ -152,11 +209,22 @@ impl SelinuxBoolean {
 pub struct SelinuxSection {
     #[serde(default)]
     pub mode: String,
+    /// The modules installed at a local priority and not disabled.
     #[serde(default)]
     pub custom_modules: Vec<String>,
+    /// The modules turned off with `semodule -d`, by name, local ones
+    /// included. A disabled local module is here and not in
+    /// `custom_modules`.
+    #[serde(default)]
+    pub disabled_modules: Vec<DisabledModule>,
     /// The booleans set persistently on the host, in the store's order.
+    /// In a fleet aggregate, only the ones no two hosts disagree on.
     #[serde(default)]
     pub boolean_overrides: Vec<SelinuxBoolean>,
+    /// The booleans a fleet's hosts set to different values. Empty for a
+    /// single host.
+    #[serde(default)]
+    pub boolean_conflicts: Vec<SelinuxBooleanConflict>,
     #[serde(default)]
     pub fcontext_rules: Vec<FcontextRule>,
     #[serde(default)]
@@ -211,9 +279,18 @@ mod tests {
         let section = SelinuxSection {
             mode: "enforcing".to_string(),
             custom_modules: vec!["myapp".to_string()],
+            disabled_modules: vec![DisabledModule {
+                name: "apache".to_string(),
+                origin: ModuleOrigin::Packaged,
+            }],
             boolean_overrides: vec![SelinuxBoolean {
                 name: "httpd_can_network_connect".to_string(),
                 value: true,
+            }],
+            boolean_conflicts: vec![SelinuxBooleanConflict {
+                name: "virt_use_nfs".to_string(),
+                on_hosts: vec!["host-a".to_string()],
+                off_hosts: vec!["host-b".to_string()],
             }],
             fcontext_rules: vec![FcontextRule::Label {
                 spec: "/opt/app(/.*)?".to_string(),
@@ -242,5 +319,36 @@ mod tests {
         let json = serde_json::to_string(&section).unwrap();
         let parsed: SelinuxSection = serde_json::from_str(&json).unwrap();
         assert_eq!(section, parsed);
+    }
+
+    /// The boolean name grammar: libsepol's CIL name rule.
+    #[test]
+    fn boolean_names_follow_the_policy_name_grammar() {
+        let cases: &[(&str, bool)] = &[
+            ("httpd_can_network_connect", true),
+            ("virt_use_nfs", true),
+            ("a", true),
+            ("secure-mode", true),
+            ("block.inner_bool", true),
+            ("", false),
+            ("*", false),
+            ("?", false),
+            ("[ab]", false),
+            ("httpd_*", false),
+            ("httpd_?", false),
+            ("httpd_[ab]", false),
+            ("-P", false),
+            ("#foo", false),
+            ("_leading", false),
+            ("9lives", false),
+            ("trailing.", false),
+            ("double..dot", false),
+            ("has space", false),
+            ("semi;colon", false),
+            ("dollar$", false),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(is_boolean_name(name), *expected, "{name:?}");
+        }
     }
 }

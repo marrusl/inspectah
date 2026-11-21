@@ -18,6 +18,15 @@
 </ul>
 {% endif %}
 
+{% if selinux_disabled_modules | length > 0 %}
+<h4>Modules Disabled with semodule -d</h4>
+<ul>
+  {% for m in selinux_disabled_modules %}
+  <li>{{ m.name }}{% if m.origin == "local" %} (custom module){% endif %}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
 {% if selinux_booleans | length > 0 %}
 <h4>Booleans Set Persistently</h4>
 <table class="report-table">
@@ -32,6 +41,28 @@
     <tr>
       <td><code>{{ b.name }}</code></td>
       <td>{% if b.value %}on{% else %}off{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if selinux_boolean_conflicts | length > 0 %}
+<h4>Booleans Set Differently Across Hosts (not carried)</h4>
+<table class="report-table">
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>On</th>
+      <th>Off</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in selinux_boolean_conflicts %}
+    <tr>
+      <td><code>{{ c.name }}</code></td>
+      <td>{{ c.on_hosts | join(", ") }}</td>
+      <td>{{ c.off_hosts | join(", ") }}</td>
     </tr>
     {% endfor %}
   </tbody>

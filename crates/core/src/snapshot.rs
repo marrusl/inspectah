@@ -127,7 +127,9 @@ impl InspectionSnapshot {
     /// store. An older payload holds free-form objects for the booleans
     /// whose running value differed from the stored one: runtime-only
     /// changes, the inverse of what an image should carry, with every
-    /// persistent change missing. Only a re-scan reads the store.
+    /// persistent change missing. Only a re-scan reads the store. Schema
+    /// 30 also adds `selinux.disabled_modules` and, for a fleet aggregate,
+    /// `selinux.boolean_conflicts`.
     const MIN_SCHEMA: u32 = 30;
 
     /// Loads a snapshot of exactly this schema version.

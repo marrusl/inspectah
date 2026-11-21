@@ -23,6 +23,7 @@ use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 use inspectah_core::types::repo::parse_repo_sections;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+use inspectah_core::types::selinux::{ModuleOrigin, is_boolean_name};
 use inspectah_core::types::units::UnitAction;
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
@@ -2114,24 +2115,72 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         body.push("# RUN semodule -i /tmp/selinux/*.cil && rm -rf /tmp/selinux/".into());
     }
 
+    // Modules turned off with `semodule -d`. Named, with the command
+    // commented out rather than run: a module the target's policy does not
+    // ship fails the build, disabling a base module changes confinement
+    // for everything it covers, and a fleet aggregate does not record
+    // which hosts disabled it. A custom one is not in the image at all
+    // until it is carried, so it has to be installed first.
+    if !sel.disabled_modules.is_empty() {
+        let names: Vec<&str> = sel
+            .disabled_modules
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        body.push(format!(
+            "# FIXME: {} SELinux policy module(s) disabled on the host with `semodule -d`, \
+             not carried: {}",
+            names.len(),
+            names.join(", ")
+        ));
+        let local: Vec<&str> = sel
+            .disabled_modules
+            .iter()
+            .filter(|m| m.origin == ModuleOrigin::Local)
+            .map(|m| m.name.as_str())
+            .collect();
+        if !local.is_empty() {
+            body.push(format!(
+                "# Custom, so install it first (`semodule -c -E <name>` on the host writes \
+                 <name>.cil): {}",
+                local.join(", ")
+            ));
+        }
+        let flags: Vec<String> = names.iter().map(|n| format!("-d {n}")).collect();
+        body.push(format!("# RUN semodule {}", flags.join(" ")));
+    }
+
     // Booleans set persistently on the host. `setsebool -P` writes the
     // image's policy store at build time (it succeeds in a container
-    // build), so each one is carried as the command that set it.
-    if !sel.boolean_overrides.is_empty() {
+    // build), so each one is carried as the command that set it. A name
+    // outside the policy's boolean grammar is never a boolean the target
+    // defines and could be a shell glob, so it is named instead. A boolean
+    // a fleet's hosts set differently is named with the hosts on each
+    // side and not set: running both values would let host order choose.
+    let booleans = sel.boolean_overrides.len() + sel.boolean_conflicts.len();
+    if booleans > 0 {
         body.push(format!(
-            "# {} SELinux boolean(s) set persistently on the host",
-            sel.boolean_overrides.len()
+            "# {booleans} SELinux boolean(s) set persistently on the host"
         ));
         for b in &sel.boolean_overrides {
-            if is_shell_operand(&b.name) {
+            if is_boolean_name(&b.name) {
                 body.push(format!("RUN setsebool -P {} {}", b.name, b.value_word()));
             } else {
                 body.push(format!(
-                    "# FIXME: boolean name contains unsafe characters, skipped: {:?}={}",
+                    "# FIXME: boolean name is not an SELinux boolean name, skipped: {:?}={}",
                     b.name,
                     b.value_word()
                 ));
             }
+        }
+        for c in &sel.boolean_conflicts {
+            body.push(format!(
+                "# FIXME: boolean {} is set differently across hosts, not carried: \
+                 on on {}; off on {}",
+                c.name,
+                c.on_hosts.join(", "),
+                c.off_hosts.join(", ")
+            ));
         }
     }
 

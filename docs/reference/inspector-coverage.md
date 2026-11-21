@@ -465,8 +465,9 @@ The audit report, the HTML report and the System Tuning section in `refine` expl
 |:------------|:--------|
 | `getenforce`, then `/sys/fs/selinux/enforce` | SELinux mode (enforcing/permissive/disabled) |
 | `/etc/selinux/config` | Policy type (`SELINUXTYPE`, default `targeted`) |
-| `/etc/selinux/semanage.conf` | Policy store root (`store-root`, default `/var/lib/selinux`) |
-| `<store-root>/<type>/active/modules/<priority>` | Locally installed policy modules: every priority except 100 (base policy) and 200 (installed by packages), less `extra_varrun` and `extra_binsbin`, which selinux-policy generates |
+| `/etc/selinux/semanage.conf` | Policy store root (`store-root`, default `/var/lib/selinux`), read as libsemanage reads it: a quoted value loses its quotes, and the last assignment wins |
+| `<store-root>/<type>/active/modules/<priority>` | Locally installed policy modules: every priority except 100 (base policy) and 200 (installed by packages), less `extra_varrun` and `extra_binsbin` at 400, which selinux-policy generates there |
+| `<store-root>/<type>/active/modules/disabled` | Modules turned off with `semodule -d`, base and custom alike; a disabled custom module is not listed as an active one |
 | `<store-root>/<type>/active/booleans.local`, then `semanage boolean -l -C` | Booleans set persistently (`setsebool -P`); a runtime-only change is not collected, because the host itself loses it at reboot |
 | `/etc/selinux/<type>/contexts/files/file_contexts.local` and `file_contexts.subs` | Custom file context rules, in the order the policy resolves them |
 | `semanage fcontext -l -C` | File context rules, only when neither file above is readable |
@@ -475,7 +476,9 @@ The audit report, the HTML report and the System Tuning section in `refine` expl
 
 The `semanage` commands run through `chroot` into the host root.
 
-Each boolean set persistently is carried as `RUN setsebool -P <name> on|off`. The scan records module names, not their content, so the Containerfile cannot carry a custom module. It names each one in a `FIXME` with commented-out `COPY` and `semodule -i` lines; `semodule -c -E <name>` on the source host writes the `<name>.cil` file they install.
+Each boolean set persistently is carried as `RUN setsebool -P <name> on|off`. A name that is not an SELinux boolean name (a letter, then letters, digits, `_`, `-` and single `.`s) gets a `FIXME` instead. In a fleet aggregate, a boolean that one host sets on and another off is not set: a `FIXME` names it and the hosts on each side. A `booleans.local` line the scan cannot read is reported in a scan warning by its line number and the reason, never by its text.
+
+The scan records module names, not their content, so the Containerfile cannot carry a custom module. It names each one in a `FIXME` with commented-out `COPY` and `semodule -i` lines; `semodule -c -E <name>` on the source host writes the `<name>.cil` file they install. Modules turned off with `semodule -d` get their own `FIXME`, with a commented-out `semodule -d` line, and a custom one among them is marked as needing to be installed first. The line stays commented because a module the target's policy does not ship fails the build, and disabling a base module changes confinement for everything it covers. A store directory the scan cannot read in full is reported in a scan warning.
 
 PAM files and audit rules are not read here. They are Configuration Files entries (see [ConfigInspector](#configinspector)).
 

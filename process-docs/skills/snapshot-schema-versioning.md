@@ -97,8 +97,9 @@ Seven bumps, two different arguments, all landing on "reject":
   objects to `SelinuxBoolean { name, value }`, the booleans set with
   `setsebool -P` as the policy store records them. The old objects were
   the booleans whose running value differed from the stored one, which is
-  every runtime-only change and no persistent one. **Unreadable and
-  semantically stale.** It is the first bump whose old payload fails to
+  every runtime-only change and no persistent one. The same bump adds
+  `selinux.disabled_modules` and `selinux.boolean_conflicts` (aggregate
+  only). **Unreadable and semantically stale.** It is the first bump whose old payload fails to
   deserialize, so `load()` now reads `schema_version` alone before the
   rest, and the refusal is the version message rather than a field error.
   The refusal tests read

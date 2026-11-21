@@ -1,6 +1,6 @@
 ---
 name: selinux-policy-store
-description: Where an SELinux host keeps its local modules and persistent booleans, and why the collector reads the policy store rather than /etc/selinux/<type> or semanage boolean -l.
+description: Where an SELinux host keeps its local modules, disabled modules and persistent booleans, how semanage.conf's store-root is lexed, and why the collector reads the policy store rather than /etc/selinux/<type> or semanage boolean -l.
 ---
 
 # The SELinux policy store
@@ -18,7 +18,20 @@ writes out on every commit. The **policy store** that `semodule` and
 The active store is `<store-root>/<type>/active`. `active_store()` in
 `crates/collect/src/inspectors/selinux.rs` reads `store-root` from
 `semanage.conf` and falls back to `/var/lib/selinux`, so read anything
-else in the store through it. Until 2026-11-21 the module collector read
+else in the store through it.
+
+`store_root_from_conf()` follows libsemanage's own lexer and parser
+(`libsemanage/src/conf-scan.l` and `conf-parse.y`, SELinux 3.6), not a
+generic `key=value` reading, because the two differ where it matters:
+
+- `"..."` around the value is stripped, so `store-root = "/etc/selinux"`
+  is `/etc/selinux`. Flex takes the longer of the quoted and unquoted
+  rules, so a quoted value followed by anything, even a trailing space,
+  is read unquoted and keeps its quotes.
+- An unquoted value runs to the end of the line. `#` there is literal:
+  the lexer has no inline comments, so do not add shell-style stripping.
+- Every assignment replaces the last (`parse_store_root_path` frees the
+  old path). Taking the first one read a stale store silently. Until 2026-11-21 the module collector read
 `/etc/selinux/<type>/active/modules/400`, which does not exist on a
 package-mode host, and its unit test mocked that same path, so the suite
 passed while every module on RHEL 9.8 and 10.2 went unreported.
@@ -38,6 +51,26 @@ named by number, beside `disabled/`.
   transaction; the bootc base image already carries `extra_varrun` at 400.
 - **Any other number**: local, put there with `semodule -X <n> -i`.
 
+The generated-module exception holds at 400 only (the CentOS Stream
+`selinux-policy.spec` generates them there); a module with either name at
+any other priority is the administrator's and is reported.
+
+`disabled/` holds one empty file per module turned off with `semodule
+-d`, by name and whatever its priority; the module stays installed and
+the policy is built without it. The collector puts every name there in
+`disabled_modules`, with origin `local` when the module is at a local
+priority and `packaged` otherwise, and removes a disabled local module
+from `custom_modules`: offering it for installation as active would
+switch on policy the host turned off. A store with no `disabled/` has
+nothing disabled; one that cannot be read is a scan warning. The
+Containerfile names disabled modules in a FIXME with a commented
+`semodule -d` line rather than running it: a module the target policy
+lacks fails the build, disabling a base module changes confinement
+broadly, and an aggregate does not record which hosts disabled it.
+
+Every module directory is read with `read_dir_strict`: `read_dir` drops
+entries it fails to read, and a partial listing looks complete.
+
 A name at two local priorities is listed once. The snapshot holds names,
 not module content, so the Containerfile cannot carry a module: it names
 each one and comments out the lines that would. `semodule -c -E <name>`
@@ -45,9 +78,6 @@ on the host writes `<name>.cil` from the highest priority, and `semodule
 -i /tmp/selinux/*.cil` installs it in a build (both checked in a
 `rhel-bootc:10.3` container, 2026-11-21). An RPM that runs plain
 `semodule -i` in its scriptlet lands at 400 and is reported as local.
-
-Not collected: `disabled/`, which records modules turned off with
-`semodule -d`, including base modules.
 
 ## Booleans
 
@@ -59,7 +89,11 @@ host needs no `semanage`) and falls back to `chroot <root> semanage
 boolean -l -C` only when the store cannot be read; that command prints
 `(running, persistent)` and the second column is the one kept. A readable
 store with no `booleans.local` means none are set. A line the parser does
-not understand is named in a scan warning.
+not read (no `=`, a name outside the boolean grammar, a value other than
+0, 1, true or false) is reported in a scan warning by **line number and
+reason only**. Warnings are not redacted, and a line that is not what
+libsemanage writes can hold anything; the end-to-end test puts a sentinel
+credential in one and checks both exports and refine for it.
 
 Not collected:
 
@@ -71,6 +105,18 @@ Not collected:
   under `/sys/fs/selinux/booleans/`, which hold running and pending values
   only): the host loses them at its next boot, so the image matches the
   host as it boots.
+
+The boolean name grammar is `is_boolean_name()` in
+`crates/core/src/types/selinux.rs`: libsepol's CIL name rule (a letter,
+then letters, digits, `_` and `-`, with `.` for names qualified by a
+block). The renderer refuses any other name with a FIXME, which also
+keeps shell globs (`*`, `?`, `[...]`) and empty names out of `RUN`.
+
+In a fleet aggregate, `merge_selinux_booleans()` moves a boolean that one
+host sets on and another off into `boolean_conflicts`, with the hosts on
+each side, and the renderer names it in a FIXME instead of emitting both
+commands (host order would pick the value). Agreed booleans stay in
+`boolean_overrides`. A host that names one twice holds the last value.
 
 The renderer emits `RUN setsebool -P <name> on|off` per boolean;
 `setsebool -P` succeeds in a `rhel-bootc:10.3` container (2026-11-21).

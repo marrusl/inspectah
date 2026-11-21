@@ -1780,6 +1780,7 @@ fn test_merge_selinux_sections_dedup_and_merge() {
             value: true,
         }],
         fips_mode: false,
+        ..Default::default()
     };
     let s2 = SelinuxSection {
         mode: "enforcing".into(),
@@ -1796,6 +1797,7 @@ fn test_merge_selinux_sections_dedup_and_merge() {
             value: true,
         }],
         fips_mode: false,
+        ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
     let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
@@ -1836,6 +1838,115 @@ fn test_merge_selinux_sections_dedup_and_merge() {
 
     // Most-prevalent scalar (both hosts agree here)
     assert_eq!(result.mode, "enforcing");
+}
+
+/// A boolean the hosts set to different values is a conflict naming the
+/// hosts on each side, not two agreed entries; one they agree on stays
+/// agreed, and one only some hosts set is still carried. A host that
+/// names a boolean twice holds the value it names last.
+#[test]
+fn test_merge_selinux_boolean_conflicts() {
+    use inspectah_core::types::selinux::{SelinuxBoolean, SelinuxBooleanConflict};
+    let section = |booleans: &[(&str, bool)]| SelinuxSection {
+        boolean_overrides: booleans
+            .iter()
+            .map(|(name, value)| SelinuxBoolean {
+                name: (*name).into(),
+                value: *value,
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
+    let result = merge_selinux_sections(
+        vec![
+            Some(section(&[
+                ("httpd_can_network_connect", true),
+                ("virt_use_nfs", true),
+            ])),
+            Some(section(&[
+                ("virt_use_nfs", true),
+                ("httpd_can_network_connect", true),
+                ("httpd_can_network_connect", false),
+            ])),
+            Some(section(&[
+                ("ftpd_full_access", false),
+                ("httpd_can_network_connect", false),
+            ])),
+        ],
+        3,
+        &hostnames,
+    )
+    .unwrap();
+    assert_eq!(
+        result.boolean_overrides,
+        [
+            SelinuxBoolean {
+                name: "virt_use_nfs".into(),
+                value: true,
+            },
+            SelinuxBoolean {
+                name: "ftpd_full_access".into(),
+                value: false,
+            },
+        ]
+    );
+    assert_eq!(
+        result.boolean_conflicts,
+        [SelinuxBooleanConflict {
+            name: "httpd_can_network_connect".into(),
+            on_hosts: vec!["h1".into()],
+            off_hosts: vec!["h2".into(), "h3".into()],
+        }]
+    );
+}
+
+/// Disabled modules are unioned by name; a name local on any host is local.
+#[test]
+fn test_merge_selinux_disabled_modules() {
+    use inspectah_core::types::selinux::{DisabledModule, ModuleOrigin};
+    let disabled = |modules: &[(&str, ModuleOrigin)]| SelinuxSection {
+        disabled_modules: modules
+            .iter()
+            .map(|(name, origin)| DisabledModule {
+                name: (*name).into(),
+                origin: *origin,
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let result = merge_selinux_sections(
+        vec![
+            Some(disabled(&[
+                ("myapp", ModuleOrigin::Packaged),
+                ("zebra", ModuleOrigin::Packaged),
+            ])),
+            Some(disabled(&[
+                ("apache", ModuleOrigin::Packaged),
+                ("myapp", ModuleOrigin::Local),
+            ])),
+        ],
+        2,
+        &["h1".into(), "h2".into()],
+    )
+    .unwrap();
+    assert_eq!(
+        result.disabled_modules,
+        [
+            DisabledModule {
+                name: "apache".into(),
+                origin: ModuleOrigin::Packaged,
+            },
+            DisabledModule {
+                name: "myapp".into(),
+                origin: ModuleOrigin::Local,
+            },
+            DisabledModule {
+                name: "zebra".into(),
+                origin: ModuleOrigin::Packaged,
+            },
+        ]
+    );
 }
 
 #[test]

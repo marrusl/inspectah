@@ -4,7 +4,7 @@ use std::path::Path;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigCategory;
 use inspectah_core::types::rpm::VersionChangeDirection;
-use inspectah_core::types::selinux::FcontextRule;
+use inspectah_core::types::selinux::{FcontextRule, ModuleOrigin};
 use inspectah_core::types::units::{UnitName, UnitState};
 use inspectah_pipeline::render::configtree::staged_writes;
 use inspectah_pipeline::render::unit_plan::plan_units;
@@ -823,7 +823,11 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
 /// - **FIPS mode**: always emitted, summary = `"enabled"` / `"disabled"`
 /// - **SelinuxPortLabel**: key = `protocol/port`, summary = label type, tags = `["port-label"]`
 /// - **boolean_overrides**: key = boolean name, summary = `on` / `off`, tags = `["boolean"]`
+/// - **boolean_conflicts**: key = boolean name, summary = each value and the
+///   hosts that set it, tags = `["boolean", "conflict"]`
 /// - **custom_modules**: key = module name, tags = `["module"]`
+/// - **disabled_modules**: id = `disabled:<name>`, key = module name,
+///   summary says whether it is a custom one, tags = `["module", "disabled"]`
 /// - **fcontext_rules**: key = rule identity (spec, or `subject = labeled_like`
 ///   for an equivalence, or the raw text for an unparsed line), tags = `["fcontext"]`
 /// - **PAM and audit files**: one pointer row per `config.files` entry with
@@ -892,6 +896,24 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
         });
     }
 
+    // Booleans a fleet's hosts set differently: one row each, never two
+    // rows with one name.
+    for conflict in &se.boolean_conflicts {
+        items.push(GenericRefItem {
+            id: conflict.name.clone(),
+            key: conflict.name.clone(),
+            summary: Some(format!(
+                "set differently: on on {}; off on {}",
+                conflict.on_hosts.join(", "),
+                conflict.off_hosts.join(", ")
+            )),
+            content: None,
+            tags: vec!["boolean".into(), "conflict".into()],
+            unit_link: None,
+            scheduled: None,
+        });
+    }
+
     // Custom modules
     for module in &se.custom_modules {
         items.push(GenericRefItem {
@@ -900,6 +922,23 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some("custom module".into()),
             content: None,
             tags: vec!["module".into()],
+            unit_link: None,
+            scheduled: None,
+        });
+    }
+
+    // Modules turned off with `semodule -d`.
+    for module in &se.disabled_modules {
+        let summary = match module.origin {
+            ModuleOrigin::Local => "custom module, disabled",
+            ModuleOrigin::Packaged => "disabled",
+        };
+        items.push(GenericRefItem {
+            id: format!("disabled:{}", module.name),
+            key: module.name.clone(),
+            summary: Some(summary.into()),
+            content: None,
+            tags: vec!["module".into(), "disabled".into()],
             unit_link: None,
             scheduled: None,
         });
@@ -2843,6 +2882,70 @@ mod tests {
         assert_eq!(port.key, "tcp/8080");
         assert_eq!(port.summary, Some("http_port_t".into()));
         assert_eq!(port.tags, vec!["port-label"]);
+    }
+
+    /// A fleet boolean set differently is one row naming both sides, and
+    /// a disabled module is its own row, apart from the active ones.
+    #[test]
+    fn test_selinux_conflicts_and_disabled_modules() {
+        use inspectah_core::types::selinux::{DisabledModule, SelinuxBooleanConflict};
+        let snap = InspectionSnapshot {
+            selinux: Some(SelinuxSection {
+                custom_modules: vec!["other".into()],
+                disabled_modules: vec![
+                    DisabledModule {
+                        name: "apache".into(),
+                        origin: ModuleOrigin::Packaged,
+                    },
+                    DisabledModule {
+                        name: "myapp".into(),
+                        origin: ModuleOrigin::Local,
+                    },
+                ],
+                boolean_conflicts: vec![SelinuxBooleanConflict {
+                    name: "httpd_can_network_connect".into(),
+                    on_hosts: vec!["host-a".into()],
+                    off_hosts: vec!["host-b".into(), "host-c".into()],
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_selinux(&snap);
+
+        let rows: Vec<(&str, Option<&str>, Vec<&str>)> = result
+            .iter()
+            .filter(|i| i.tags.iter().any(|t| t == "module" || t == "boolean"))
+            .map(|i| {
+                (
+                    i.id.as_str(),
+                    i.summary.as_deref(),
+                    i.tags.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "httpd_can_network_connect",
+                    Some("set differently: on on host-a; off on host-b, host-c"),
+                    vec!["boolean", "conflict"],
+                ),
+                ("other", Some("custom module"), vec!["module"]),
+                (
+                    "disabled:apache",
+                    Some("disabled"),
+                    vec!["module", "disabled"]
+                ),
+                (
+                    "disabled:myapp",
+                    Some("custom module, disabled"),
+                    vec!["module", "disabled"],
+                ),
+            ]
+        );
     }
 
     #[test]

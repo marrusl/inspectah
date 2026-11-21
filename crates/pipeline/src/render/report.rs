@@ -880,6 +880,26 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 .collect()
         })
         .unwrap_or_default();
+    let selinux_disabled_modules: Vec<Value> = snap
+        .selinux
+        .as_ref()
+        .map(|s| {
+            s.disabled_modules
+                .iter()
+                .map(Value::from_serialize)
+                .collect()
+        })
+        .unwrap_or_default();
+    let selinux_boolean_conflicts: Vec<Value> = snap
+        .selinux
+        .as_ref()
+        .map(|s| {
+            s.boolean_conflicts
+                .iter()
+                .map(Value::from_serialize)
+                .collect()
+        })
+        .unwrap_or_default();
     let selinux_booleans: Vec<Value> = snap
         .selinux
         .as_ref()
@@ -905,7 +925,11 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
             }))
         })
         .collect();
-    let security_count = selinux_modules.len() + selinux_booleans.len() + selinux_fcontexts.len();
+    let security_count = selinux_modules.len()
+        + selinux_disabled_modules.len()
+        + selinux_booleans.len()
+        + selinux_boolean_conflicts.len()
+        + selinux_fcontexts.len();
     let security_state = section_state(InspectorId::Selinux, &snap.completeness);
     let security_state_str = match security_state {
         SectionState::Normal => "normal",
@@ -1203,6 +1227,8 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let unbacked_var_dirs_val = Value::from(unbacked_var_dirs);
     let selinux_modules_val = Value::from(selinux_modules);
     let selinux_booleans_val = Value::from(selinux_booleans);
+    let selinux_disabled_modules_val = Value::from(selinux_disabled_modules);
+    let selinux_boolean_conflicts_val = Value::from(selinux_boolean_conflicts);
     let selinux_fcontexts_val = Value::from(selinux_fcontexts);
     let cron_jobs_val = Value::from(cron_jobs);
     let systemd_timers_val = Value::from(systemd_timers);
@@ -1293,6 +1319,8 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         fips_enabled,
         selinux_modules => selinux_modules_val,
         selinux_booleans => selinux_booleans_val,
+        selinux_disabled_modules => selinux_disabled_modules_val,
+        selinux_boolean_conflicts => selinux_boolean_conflicts_val,
         selinux_fcontexts => selinux_fcontexts_val,
         security_count,
         security_state => security_state_str,
@@ -2781,6 +2809,37 @@ mod tests {
             html.contains("httpd_can_network_connect"),
             "security section must show boolean override"
         );
+    }
+
+    /// Disabled modules and fleet boolean conflicts are listed, apart
+    /// from the active modules and the agreed booleans.
+    #[test]
+    fn test_report_security_disabled_modules_and_conflicts() {
+        use inspectah_core::types::selinux::{
+            DisabledModule, ModuleOrigin, SelinuxBooleanConflict, SelinuxSection,
+        };
+        let mut snap = test_snapshot();
+        snap.selinux = Some(SelinuxSection {
+            mode: "enforcing".into(),
+            disabled_modules: vec![DisabledModule {
+                name: "oldapp".into(),
+                origin: ModuleOrigin::Local,
+            }],
+            boolean_conflicts: vec![SelinuxBooleanConflict {
+                name: "httpd_can_network_connect".into(),
+                on_hosts: vec!["host-a".into()],
+                off_hosts: vec!["host-b".into()],
+            }],
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(html.contains("Modules Disabled with semodule -d"), "{html}");
+        assert!(html.contains("oldapp (custom module)"), "{html}");
+        assert!(
+            html.contains("Booleans Set Differently Across Hosts (not carried)"),
+            "{html}"
+        );
+        assert!(html.contains("host-a") && html.contains("host-b"), "{html}");
     }
 
     #[test]

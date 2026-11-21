@@ -1102,7 +1102,10 @@ use crate::types::network::NetworkSection;
 use crate::types::nonrpm::NonRpmSoftwareSection;
 use crate::types::rpm::RpmSection;
 use crate::types::scheduled::ScheduledTaskSection;
-use crate::types::selinux::{FcontextRule, FcontextSource, SelinuxSection};
+use crate::types::selinux::{
+    DisabledModule, FcontextRule, FcontextSource, ModuleOrigin, SelinuxBoolean,
+    SelinuxBooleanConflict, SelinuxSection,
+};
 use crate::types::storage::StorageSection;
 use crate::types::units::{
     AlsoMember, DefaultTarget, MemberLinks, UnitInventoryEntry, UnitName, UnitSection, UnitState,
@@ -2169,13 +2172,8 @@ pub fn merge_selinux_sections(
         FcontextSource::SemanageList
     };
 
-    // Dedup boolean_overrides by equality, first host's order first
-    let mut boolean_overrides = Vec::new();
-    for boolean in sections.iter().flatten().flat_map(|s| &s.boolean_overrides) {
-        if !boolean_overrides.contains(boolean) {
-            boolean_overrides.push(boolean.clone());
-        }
-    }
+    let disabled_modules = merge_disabled_modules(&sections);
+    let (boolean_overrides, boolean_conflicts) = merge_selinux_booleans(&sections, hostnames);
 
     // Most-prevalent scalar fields
     let mode = most_prevalent_scalar(&sections, |s| &s.mode);
@@ -2184,12 +2182,92 @@ pub fn merge_selinux_sections(
     Some(SelinuxSection {
         mode,
         custom_modules,
+        disabled_modules,
         boolean_overrides,
+        boolean_conflicts,
         fcontext_rules,
         fcontext_source,
         fips_mode,
         port_labels,
     })
+}
+
+/// The modules any host turned off with `semodule -d`, once per name and
+/// sorted. A name local on one host and packaged on another is local:
+/// some host needs it carried before it can be disabled.
+fn merge_disabled_modules(sections: &[Option<SelinuxSection>]) -> Vec<DisabledModule> {
+    let mut by_name: BTreeMap<&str, ModuleOrigin> = BTreeMap::new();
+    for module in sections.iter().flatten().flat_map(|s| &s.disabled_modules) {
+        let origin = by_name.entry(&module.name).or_insert(module.origin);
+        *origin = (*origin).min(module.origin);
+    }
+    by_name
+        .into_iter()
+        .map(|(name, origin)| DisabledModule {
+            name: name.to_string(),
+            origin,
+        })
+        .collect()
+}
+
+/// The fleet's persistent booleans, split into the ones every host that
+/// sets them agrees on and the ones hosts set to different values.
+///
+/// An agreed boolean is listed once, in the order hosts first name it. A
+/// boolean one host sets on and another off becomes a
+/// [`SelinuxBooleanConflict`] naming the hosts on each side, and is not in
+/// the agreed list: replaying both values would let host order choose the
+/// image's. A host that names a boolean twice holds the value it names
+/// last, as `booleans.local` does when libsemanage applies it in order.
+fn merge_selinux_booleans(
+    sections: &[Option<SelinuxSection>],
+    hostnames: &[String],
+) -> (Vec<SelinuxBoolean>, Vec<SelinuxBooleanConflict>) {
+    // name -> (hosts that set it on, hosts that set it off)
+    let mut hosts: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> = BTreeMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for (idx, section) in sections.iter().enumerate() {
+        let Some(section) = section else { continue };
+        let host = hostnames.get(idx).cloned().unwrap_or_default();
+        let mut values: HashMap<&str, bool> = HashMap::new();
+        for boolean in &section.boolean_overrides {
+            values.insert(&boolean.name, boolean.value);
+            if !order.contains(&boolean.name) {
+                order.push(boolean.name.clone());
+            }
+        }
+        for (name, value) in values {
+            let (on, off) = hosts.entry(name.to_string()).or_default();
+            if value { on } else { off }.insert(host.clone());
+        }
+        // An aggregate merged again keeps the conflicts it already found.
+        for conflict in &section.boolean_conflicts {
+            let (on, off) = hosts.entry(conflict.name.clone()).or_default();
+            on.extend(conflict.on_hosts.iter().cloned());
+            off.extend(conflict.off_hosts.iter().cloned());
+            if !order.contains(&conflict.name) {
+                order.push(conflict.name.clone());
+            }
+        }
+    }
+
+    let mut agreed = Vec::new();
+    let mut conflicts = Vec::new();
+    for name in order {
+        let (on, off) = hosts.remove(&name).unwrap_or_default();
+        match (on.is_empty(), off.is_empty()) {
+            (false, false) => conflicts.push(SelinuxBooleanConflict {
+                name,
+                on_hosts: on.into_iter().collect(),
+                off_hosts: off.into_iter().collect(),
+            }),
+            (false, true) => agreed.push(SelinuxBoolean { name, value: true }),
+            (true, false) => agreed.push(SelinuxBoolean { name, value: false }),
+            (true, true) => {}
+        }
+    }
+    conflicts.sort_by(|a, b| a.name.cmp(&b.name));
+    (agreed, conflicts)
 }
 
 /// Merge kernel/boot sections from multiple hosts.
