@@ -720,6 +720,26 @@ fn the_fixture_writes_no_guarded_command() {
     }
 }
 
+/// The fixture's host enables every repo its packages came from, so no
+/// export enables a disabled one, and the scan and both refine exports
+/// name the same packages they always did: the leaf and the two carried
+/// unit owners, with nothing moved into a disabled-repo transaction.
+#[test]
+fn the_fixture_enables_no_disabled_repo() {
+    let run = run();
+    let surfaces =
+        std::iter::once(("scan", &run.scan)).chain(run.refine.iter().map(|(l, s)| (*l, s)));
+    for (label, surfaces) in surfaces {
+        let cf = &surfaces.containerfile;
+        assert!(!cf.contains("--enablerepo"), "{label}:\n{cf}");
+        assert_eq!(
+            surfaces.install_names(),
+            ["firewalld", "httpd", "rhc"],
+            "{label}:\n{cf}"
+        );
+    }
+}
+
 // ── Parity ───────────────────────────────────────────────────────────
 
 #[test]

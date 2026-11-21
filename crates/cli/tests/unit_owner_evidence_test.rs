@@ -13,8 +13,10 @@
 //! - An auto package the operator includes brings its dependencies: their
 //!   unit commands survive, guarded, and one a disabled repo serves
 //!   installs from it.
-//! - Every provider an installed package may need from a disabled repo
-//!   installs from it: competing providers, and the dnf fallback's.
+//! - A package that may need one only a disabled repo serves installs in
+//!   the transaction that enables that repo, which names no provider dnf
+//!   may skip: competing providers, the dnf fallback's, and one the image
+//!   cannot install.
 //! - An owner is carried when the collector could not tell leaves from
 //!   dependencies and fell back to the dependency graph, and that fallback
 //!   keeps the roots the host had: a dependency cycle nothing installs,
@@ -392,18 +394,19 @@ fn partner_install(containerfile: &str) -> Option<Vec<String>> {
         .map(|block| {
             block
                 .lines()
+                .skip_while(|l| !l.starts_with("RUN dnf install"))
                 .skip(1)
                 .map(|l| l.trim().trim_end_matches('\\').trim().to_owned())
-                .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("&&"))
+                .take_while(|l| !l.starts_with("&&"))
                 .collect()
         })
 }
 
 /// `app` requires `transport`, which two added packages provide and only
 /// the host's disabled `partner` repo serves. Neither is certain to
-/// install, but one has to: both paths name both in the transaction that
-/// enables `partner`, as the source host had them, or the build cannot
-/// resolve `app`.
+/// install, but one has to, and dnf can take it only with `partner`
+/// enabled: both paths install `app` in the transaction that enables
+/// `partner` and leave the choice to dnf, naming neither provider.
 #[test]
 fn competing_providers_from_a_disabled_repo_install_from_it() {
     let host = base_host()
@@ -429,10 +432,11 @@ fn competing_providers_from_a_disabled_repo_install_from_it() {
                 surfaces.containerfile
             )
         });
+        assert_eq!(install, ["app"], "{label}:\n{}", surfaces.containerfile);
         for provider in ["provider-a", "provider-b"] {
             assert!(
-                install.iter().any(|n| n == provider),
-                "{label}: {provider} installs from partner: {install:?}\n{}",
+                !surfaces.install_names().iter().any(|n| n == provider),
+                "{label}: {provider} is not named:\n{}",
                 surfaces.containerfile
             );
         }
@@ -442,7 +446,8 @@ fn competing_providers_from_a_disabled_repo_install_from_it() {
 /// The collector's dnf fallback cannot tell one provider from several, so
 /// it records every dependency as one dnf may pick. `helper`, which only
 /// the disabled `partner` repo serves, is still the one `app` needs: both
-/// paths install it from that repo.
+/// paths install `app` in the transaction that enables `partner`, where
+/// dnf pulls `helper` in.
 #[test]
 fn the_dnf_fallbacks_disabled_repo_dependency_installs_from_it() {
     let host = base_host()
@@ -471,11 +476,56 @@ fn the_dnf_fallbacks_disabled_repo_dependency_installs_from_it() {
                 surfaces.containerfile
             )
         });
-        assert!(
-            install.iter().any(|n| n == "helper"),
-            "{label}: helper installs from partner: {install:?}\n{}",
-            surfaces.containerfile
-        );
+        assert_eq!(install, ["app"], "{label}:\n{}", surfaces.containerfile);
+    }
+}
+
+/// `helper` comes only from the host's disabled `partner` repo and
+/// requires `vendor-runtime`, installed from a local RPM path the export
+/// carries nothing for, so the image can never install `helper`. `app`
+/// requires `(primary or helper)`, or `(bash or helper)` with `bash` in
+/// the base image, so the image needs no `helper`. Naming `helper` in an
+/// install would fail the build on its missing requirement. No install
+/// line names it, by default or once the operator excludes it: `app`
+/// installs alone in the transaction that enables `partner`, where dnf
+/// picks the provider it can install.
+#[test]
+fn a_provider_the_image_may_skip_is_never_named() {
+    for requirement in ["(primary or helper)", "(bash or helper)"] {
+        let host = base_host()
+            .package("primary")
+            .package_from("helper", "partner")
+            .package_from("vendor-runtime", "@commandline")
+            .requires("app", &[requirement])
+            .requires("helper", &["vendor-runtime"])
+            .file("/etc/yum.repos.d/partner.repo", PARTNER_REPO)
+            .preset("disable *");
+        let run = exports(host);
+        let mut session = RefineSession::new(run.snapshot.clone());
+        set_package(&mut session, "helper", "x86_64", false);
+        set_package(&mut session, "vendor-runtime", "x86_64", false);
+        let excluded = surfaces_of(&session);
+        let paths = run
+            .paths
+            .iter()
+            .map(|(label, surfaces)| (*label, surfaces))
+            .chain(std::iter::once(("refine, helper excluded", &excluded)));
+        for (label, surfaces) in paths {
+            let ctx = format!("{requirement}, {label}");
+            for name in ["helper", "vendor-runtime"] {
+                assert!(
+                    !surfaces.install_names().iter().any(|n| n == name),
+                    "{ctx}: {name} is named:\n{}",
+                    surfaces.containerfile
+                );
+            }
+            assert_eq!(
+                partner_install(&surfaces.containerfile),
+                Some(vec!["app".to_owned()]),
+                "{ctx}: app installs with partner enabled:\n{}",
+                surfaces.containerfile
+            );
+        }
     }
 }
 

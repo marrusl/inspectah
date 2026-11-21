@@ -179,8 +179,9 @@ enum Reach {
 /// recorded `dep_closures` hold real requirements only, and this answer
 /// reads nothing else (`Reach::Certain`). The `/var` evidence asks it.
 /// The unit plan asks [`export_installs`], which counts only the roots the
-/// Containerfile names; the disabled-repo install, the not-carried list
-/// and a fleet's drops ask [`possibly_pulled_in_by_included`].
+/// Containerfile names. The disabled-repo install names each package this
+/// holds that a host-disabled repo serves; the not-carried list and a
+/// fleet's drops ask [`possibly_pulled_in_by_included`].
 ///
 /// The roots are every entry [`installs_on_its_own_route`] holds for: a
 /// leaf, an auto package carried because it owns an enabled unit, and an
@@ -211,10 +212,10 @@ pub fn pulled_in_by_included(
 /// plus every provider dnf may pick among several and what it brings
 /// (`Reach::Possible`). A package outside it is not in the image unless
 /// the export installs it itself, so every absence claim asks this: a
-/// fleet's drops and the not-carried list. So does the disabled-repo
-/// install, which names each of these its repo serves in the transaction
-/// that enables it, since dnf cannot pick a provider from a repo no
-/// transaction enables.
+/// fleet's drops and the not-carried list. The disabled-repo install
+/// names none of these for being here: naming a provider dnf may skip
+/// makes it mandatory, and fails the build when it cannot be installed.
+/// It reads [`possible_closure`] only to choose the repos it enables.
 pub(crate) fn possibly_pulled_in_by_included(
     snap: &InspectionSnapshot,
     repos: &InstallRepos,
@@ -297,6 +298,16 @@ fn pulled_in_by_installed_leaves_reaching(
         .collect()
 }
 
+/// What installing the added package `id` may install, as recorded: its
+/// `dep_closures` and `dep_alternatives` entries (`Reach::Possible`).
+///
+/// The Containerfile reads it to choose the host-disabled repos the
+/// transaction installing `id` enables, so dnf can pick a provider one of
+/// them serves without the export naming that provider.
+pub(crate) fn possible_closure(rpm: &RpmSection, id: &str) -> Vec<String> {
+    closure_of(rpm, id, Reach::Possible)
+}
+
 /// What installing the added package `id` installs, as recorded, as far
 /// as `reach`: its `dep_closures` entry, joined with its
 /// `dep_alternatives` entry for [`Reach::Possible`]. A snapshot without
@@ -377,11 +388,12 @@ pub(crate) fn export_installs(snap: &InspectionSnapshot, repos: &InstallRepos) -
     };
     let id_of = |pkg: &PackageEntry| format!("{}.{}", pkg.name, pkg.arch);
     let mut possible = possibly_pulled_in_by_included(snap, repos);
+    let surely_pulled = pulled_in_by_included(snap, repos);
     let from_disabled_repo: std::collections::HashSet<String> = rpm
         .packages_added
         .iter()
         .filter(|pkg| {
-            possible.contains(&id_of(pkg))
+            surely_pulled.contains(&id_of(pkg))
                 && is_package_installable(pkg)
                 && matches!(
                     route_for(rpm, repos, pkg, &VerifiedUploads::new()),
