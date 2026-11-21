@@ -164,10 +164,12 @@ of its `depends_on` walk; `leaf_dep_tree` is the auto part of each
 leaf's two joined. `unit_plan::export_installs`, which decides which
 packages are certainly in the image, reads `dep_closures` for the
 packages the Containerfile names: a base-image or second added provider
-means dnf installs no particular one. The not-carried list, the
-disabled-repo install and a fleet's drops read both. Both graphs count
-everything dnf installs alongside a leaf, not only hard requirements, or
-packages dnf does install read as not carried. The requires query asks for
+means dnf installs no particular one. The not-carried list and a
+fleet's drops read both, and so does the disabled-repo install, but only
+to choose which disabled repos a package's transaction enables: it names
+a package only when an installed one certainly pulls it in. Both graphs
+count everything dnf installs alongside a leaf, not only hard
+requirements, or packages dnf does install read as not carried. The requires query asks for
 three tags, each in its own `[...]` group with a one-letter tag first:
 
 ```rust
@@ -269,10 +271,23 @@ dependencies: mod_http2, mod_lua` on both. So:
   `(` cannot exhaust the stack.
 
 **Still excluded:** Suggests and Enhances (dnf does not install them by
-default). A rich expression that mixes operators in one group, which rpm
-rejects as well, is dropped. So is a Supplements that expands past
-`MAX_SUPPLEMENT_CLAUSES` (64). The tree is reachability only: it does not
-record which kind of edge put a package there.
+default). A Supplements the parser cannot read is dropped, and so is one
+that expands past `MAX_SUPPLEMENT_CLAUSES` (64). The tree is
+reachability only: it does not record which kind of edge put a package
+there.
+
+**A Requires or Recommends the parser cannot read is not dropped.** Not
+everything it refuses is invalid to rpm: rpm's own parser (`rpmds.c`,
+4.16 and 4.19) recurses with no depth limit, so a valid expression nested
+past `MAX_RICH_DEP_DEPTH` reaches the collector. `parse_sentinel_deps`
+marks such a package `unread`, and `classify_deps_rpm` gives it a
+`depends_on` edge to every other added package, but no `held` or
+`requires` edge. So nothing is called absent because of it, its
+dependencies' commands are guarded, and the Containerfile installs it in
+the transaction that enables every disabled repo an added package comes
+from. Dropping the line once read as an authoritative graph with the
+edge missing, and the plain `dnf install` failed on a dependency only a
+disabled repo served.
 
 **Judged on the source host, not the target, where that is safe.** dnf
 evaluates `or` alternatives and `if` conditions against the base image

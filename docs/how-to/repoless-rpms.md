@@ -338,9 +338,13 @@ RUN dnf install -y --enablerepo=epel-cisco-openh264 \
 When CodeReady Builder is carried, its `--enablerepo` flags are on this
 step too. The package does not appear in the main `dnf install` list,
 the repo-less block or the manual follow-up. A package that another
-package you kept depends on is named in this step even when refine
-starts it excluded or you exclude it, because the step that installs the
-package needing it does not enable this repository. The step runs before
+package you kept requires, with nothing else able to stand in for it, is
+named in this step even when refine starts it excluded or you exclude
+it, because the step that installs the package needing it does not
+enable this repository. When the package you kept could use this one or
+another, or the scan could not read its requirements, the package you
+kept installs in this step instead, by name, and dnf picks what it
+needs. The step runs before
 the `dnf group install` and the main `dnf install` list, so a package in
 either can depend on it. Refine treats it the same
 way: it is not pre-excluded, so an untouched export installs it exactly

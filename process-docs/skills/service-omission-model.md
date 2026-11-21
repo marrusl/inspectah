@@ -511,9 +511,10 @@ certain when:
   which the plan does not see, so **an auto package an operator includes
   by hand reads as not named**: its commands and its dependencies' are
   guarded, though the Containerfile installs it. The guard then passes;
-- the disabled-repo transaction names it: a package every included
-  package may pull in (`possibly_pulled_in_by_included`) that only a
-  host-disabled repo serves;
+- the disabled-repo transaction names it: a package an installed one
+  certainly pulls in (`pulled_in_by_included`) that only a host-disabled
+  repo serves. One that is only possible is never named; the package
+  that may need it installs in that transaction instead;
 - a named package's `dep_closures` entry lists it and a repo the image
   enables serves it, or the disabled-repo transaction names it.
   `dep_closures` follows Requires only: a Recommends or Supplements, and

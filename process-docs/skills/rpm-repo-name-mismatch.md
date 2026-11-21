@@ -154,8 +154,12 @@ of a package that needs it, ahead of the install itself.
 
 All selected disabled-repo packages and every active local RPM (verified
 upload or included cached RPM) install in **one** transaction that
-enables every one of the disabled repos. An upload takes its package off
-the disabled-repo route, so a local RPM can be the dependency of a
+enables every one of the disabled repos. A package an enabled repo
+serves joins it when it may pull in a package only a disabled repo
+serves that the transaction does not name (`disabled_repos_reached` in
+`containerfile.rs`), so dnf can take or skip that provider there. An
+upload takes its package off the disabled-repo route, so a local RPM can
+be the dependency of a
 disabled-repo package or depend on one; installing the two sets in
 separate steps fails in one direction or the other, which is why they
 share the step. A transaction per repo, in `RepoId`

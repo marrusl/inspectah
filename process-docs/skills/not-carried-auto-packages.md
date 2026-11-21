@@ -60,9 +60,11 @@ when nothing included may pull it in (`possibly_pulled_in_by_included`):
 **a package is listed as not carried only when the export certainly
 leaves it out**. One dnf may install is neither listed nor called
 carried; its commands wait for its unit file. The disabled-repo install
-names every package any included one may pull in that only a disabled
-repo serves, so dnf can resolve the requirement whichever provider it
-picks.
+names a package only a disabled repo serves only when an installed one
+certainly pulls it in. A package that only may pull one in installs in
+that transaction itself, which enables the repo, and dnf picks or skips
+the provider: naming a provider dnf may skip makes it mandatory, and one
+whose own requirement cannot be met then fails the build.
 
 So once an operator includes `tool`, which needs `helper`, `helper`
 leaves the list, its recorded `systemctl` commands are emitted, guarded,
@@ -105,7 +107,8 @@ named on an install line, so its commands are guarded.
 The collector's dnf fallback cannot tell one provider from several, so
 it records every `dep_closures` entry empty and the whole closure in
 `dep_alternatives`: on that route every dependency's command is guarded,
-and a dependency a disabled repo serves still installs from it. The rpm
+and a package needing one a disabled repo serves installs with that repo
+enabled. The rpm
 route is the one real hosts take; the CLI test hosts (`UnitHost`, the
 parity fixture) answer its queries, and `UnitHost::rpm_deps_unavailable`
 answers the fallback's.
@@ -323,8 +326,10 @@ than one arch of that name. All reason wording comes from the one constant `NOT_
   default and keep a guarded command; that is the price of never calling
   an installed package absent. A Supplements is the exception: it is
   still judged on the host, so one whose condition fails there pulls
-  nothing in. A rich expression the parser cannot read (one rpm itself
-  rejects) is dropped.
+  nothing in, and so does one the parser cannot read. A Requires or
+  Recommends it cannot read, such as one nested past its bound, which
+  rpm accepts, makes the package possibly need every other added
+  package.
 - When several added packages provide a capability and the export
   installs none of them itself, dnf installs one: each one's commands
   are guarded, so whichever dnf picks keeps its own. The class counts
