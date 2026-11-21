@@ -3,6 +3,7 @@ import {
   Nav,
   NavExpandable,
   NavItem,
+  NavList,
   Badge,
   Content,
   Skeleton,
@@ -156,6 +157,59 @@ function decisionCount(
   });
   if (section) return String(section.total);
   return "0";
+}
+
+/**
+ * A section link with its batch-action kebab beside it, as one list item.
+ *
+ * PatternFly's NavItem renders its own `<li>` and puts its children inside
+ * the link, so it has no room for a second control. Wrapping a NavItem and
+ * the kebab in a `<div>` put a non-list-item straight inside the nav list
+ * (axe aria-required-children and listitem). This renders the `<li>` and
+ * link NavItem would, with PatternFly's nav classes, and the kebab inside
+ * the same item.
+ *
+ * The `data-group-*` attributes are what Ctrl+Shift+A/X looks up from the
+ * focused link.
+ */
+function NavItemWithKebab({
+  sectionId,
+  isActive,
+  onSelect,
+  groupSlug,
+  groupLabel,
+  kebab,
+  children,
+}: {
+  sectionId: string;
+  isActive: boolean;
+  onSelect: (sectionId: string) => void;
+  groupSlug: string;
+  groupLabel: string;
+  kebab: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <li
+      className="pf-v6-c-nav__item inspectah-sidebar__group-wrapper inspectah-sidebar__group-wrapper--singleton"
+      data-group-slug={groupSlug}
+      data-group-actionable="true"
+      data-group-label={groupLabel}
+    >
+      <a
+        href={sectionHref(sectionId)}
+        className={isActive ? "pf-v6-c-nav__link pf-m-current" : "pf-v6-c-nav__link"}
+        aria-current={isActive ? "page" : undefined}
+        onClick={(e) => {
+          e.preventDefault();
+          onSelect(sectionId);
+        }}
+      >
+        <span className="pf-v6-c-nav__link-text">{children}</span>
+      </a>
+      {kebab}
+    </li>
+  );
 }
 
 function getInitialExpanded(): Record<string, boolean> {
@@ -465,7 +519,7 @@ export function Sidebar({
       );
     }
 
-    return groups.map((group) => {
+    const items = groups.map((group) => {
       // Identity batch-toggle deferred — handler only covers groups, not individual users
       const hasKebab = group.has_actionable_sections && !!onBatchToggle && group.slug !== "identity";
       const isPending = batchPending.has(group.slug);
@@ -539,17 +593,10 @@ export function Sidebar({
         const badgeText = badge(sec.id, sec.is_triage);
         const isCleared = sec.is_triage && clearedState[sec.id];
 
-        const navItem = (
-          <NavItem
-            key={hasKebab ? undefined : sec.id}
-            itemId={sec.id}
-            to={sectionHref(sec.id)}
-            preventDefault
-            isActive={activeSection === sec.id}
-            aria-current={activeSection === sec.id ? "page" : undefined}
-            onClick={() => onSelect(sec.id)}
-          >
-            {sec.label}{" "}
+        // Badge and announcement after the label. NavItem treats a single
+        // element child as its link, so the label stays a separate child.
+        const linkExtras = (
+          <>
             {sec.is_triage ? (
               <Badge aria-label={`${badgeText} decisions`}>{badgeText}</Badge>
             ) : (
@@ -560,25 +607,40 @@ export function Sidebar({
                 {sec.label}: 0 decisions remaining
               </span>
             )}
-          </NavItem>
+          </>
         );
 
         if (hasKebab) {
           return (
-            <div
+            <NavItemWithKebab
               key={sec.id}
-              className="inspectah-sidebar__group-wrapper inspectah-sidebar__group-wrapper--singleton"
-              data-group-slug={group.slug}
-              data-group-actionable="true"
-              data-group-label={group.label}
+              sectionId={sec.id}
+              isActive={activeSection === sec.id}
+              onSelect={onSelect}
+              groupSlug={group.slug}
+              groupLabel={group.label}
+              kebab={kebabMenu}
             >
-              {navItem}
-              {kebabMenu}
-            </div>
+              {sec.label}{" "}
+              {linkExtras}
+            </NavItemWithKebab>
           );
         }
 
-        return navItem;
+        return (
+          <NavItem
+            key={sec.id}
+            itemId={sec.id}
+            to={sectionHref(sec.id)}
+            preventDefault
+            isActive={activeSection === sec.id}
+            aria-current={activeSection === sec.id ? "page" : undefined}
+            onClick={() => onSelect(sec.id)}
+          >
+            {sec.label}{" "}
+            {linkExtras}
+          </NavItem>
+        );
       }
 
       // Multi-section group — NavExpandable with child NavItems.
@@ -670,17 +732,10 @@ export function Sidebar({
             const isCleared = sec.is_triage && clearedState[sec.id];
             const secKebab = hasKebab ? sectionKebab(sec) : null;
 
-            const navItem = (
-              <NavItem
-                key={secKebab ? undefined : sec.id}
-                itemId={sec.id}
-                to={sectionHref(sec.id)}
-                preventDefault
-                isActive={activeSection === sec.id}
-                aria-current={activeSection === sec.id ? "page" : undefined}
-                onClick={() => onSelect(sec.id)}
-              >
-                {sec.label}{" "}
+            // Badge and announcement after the label. NavItem treats a single
+            // element child as its link, so the label stays a separate child.
+            const linkExtras = (
+              <>
                 {sec.is_triage ? (
                   <Badge aria-label={`${badgeText} decisions`}>{badgeText}</Badge>
                 ) : (
@@ -691,39 +746,61 @@ export function Sidebar({
                     {sec.label}: 0 decisions remaining
                   </span>
                 )}
-              </NavItem>
+              </>
             );
 
             if (secKebab) {
               return (
-                <div
+                <NavItemWithKebab
                   key={sec.id}
-                  className="inspectah-sidebar__group-wrapper inspectah-sidebar__group-wrapper--singleton"
-                  data-group-slug={sec.id}
-                  data-group-actionable="true"
-                  data-group-label={sec.label}
+                  sectionId={sec.id}
+                  isActive={activeSection === sec.id}
+                  onSelect={onSelect}
+                  groupSlug={sec.id}
+                  groupLabel={sec.label}
+                  kebab={secKebab}
                 >
-                  {navItem}
-                  {secKebab}
-                </div>
+                  {sec.label}{" "}
+                  {linkExtras}
+                </NavItemWithKebab>
               );
             }
 
-            return navItem;
+            return (
+              <NavItem
+                key={sec.id}
+                itemId={sec.id}
+                to={sectionHref(sec.id)}
+                preventDefault
+                isActive={activeSection === sec.id}
+                aria-current={activeSection === sec.id ? "page" : undefined}
+                onClick={() => onSelect(sec.id)}
+              >
+                {sec.label}{" "}
+                {linkExtras}
+              </NavItem>
+            );
           })}
+          {/* Its own list item: NavExpandable's children sit in a <ul>. */}
           {group.slug === "software" && !hasUnmanagedScan && (
-            <Content
-              component="small"
-              className="inspectah-sidebar__hint"
-              data-testid="unmanaged-hint"
-            >
-              Unmanaged files not scanned. Re-run with{" "}
-              <code>--include-unmanaged</code> to review.
-            </Content>
+            <li>
+              <Content
+                component="small"
+                className="inspectah-sidebar__hint"
+                data-testid="unmanaged-hint"
+              >
+                Unmanaged files not scanned. Re-run with{" "}
+                <code>--include-unmanaged</code> to review.
+              </Content>
+            </li>
           )}
         </NavExpandable>
       );
     });
+
+    // NavList supplies the <ul> the top-level items belong in; Nav alone
+    // renders only the <nav>.
+    return <NavList>{items}</NavList>;
   };
 
   const sidebarContent = (

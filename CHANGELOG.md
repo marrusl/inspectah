@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Fleet view no longer jumps to an item you left**: after opening an item from the fleet banner or search, switching to Packages straight away and then returning to its section scrolled to, highlighted and focused that old item. Choosing a section yourself now cancels the pending jump.
 - **Keys typed into refine's search boxes stay there after a section change**: pressing Ctrl+K or `/` right after opening a section, from the keyboard or the mobile navigation menu, could lose the query, because the section then moved focus into its own content and the rest of what you typed went there. A search box you have just focused now keeps focus.
+- **Screen readers read refine's section navigation as one list**: the sidebar's sections, including those with an Include all and Exclude all menu, are now list items of a single navigation list, so assistive technology announces each entry and the number of entries correctly.
 - **The `/srv` note gives the symlink target as `/var/srv`**: the Containerfile comment and the audit report note for unmanaged files under `/srv` said `/srv` is a symlink to `var/srv`, the raw relative link text, which reads as a path missing its leading slash. Both now name the absolute target, `/var/srv`.
 
 ## [0.9.0-beta.6] - 2026-11-20

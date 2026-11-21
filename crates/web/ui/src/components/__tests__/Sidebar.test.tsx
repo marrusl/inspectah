@@ -1660,6 +1660,63 @@ describe("Sidebar", () => {
         screen.queryByLabelText("Actions for Users & Identity"),
       ).not.toBeInTheDocument();
     });
+
+    // axe aria-required-children and listitem: a list may hold only list
+    // items, so a row with a kebab is one <li> holding both controls.
+    it("keeps every nav list made of list items when kebabs are shown", () => {
+      const { container } = render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      const lists = container.querySelectorAll("nav ul");
+      expect(lists.length).toBeGreaterThan(0);
+      for (const list of lists) {
+        for (const child of list.children) {
+          expect(child.tagName).toBe("LI");
+        }
+      }
+
+      for (const [label, kebabId] of [
+        ["Packages", "kebab-packages-group"],
+        ["Configuration Files", "kebab-config"],
+      ]) {
+        const row = screen.getByTestId(kebabId).closest("li");
+        expect(row?.parentElement?.tagName).toBe("UL");
+        expect(
+          within(row as HTMLElement).getByRole("link", { name: new RegExp(label) }),
+        ).toBeInTheDocument();
+      }
+    });
+
+    it("tabs from a section link to its kebab, then to the next section", async () => {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      screen.getByRole("link", { name: /^Configuration Files/ }).focus();
+      await userEvent.tab();
+      expect(screen.getByTestId("kebab-config")).toHaveFocus();
+      await userEvent.tab();
+      expect(screen.getByRole("link", { name: /^Kernel & Boot/ })).toHaveFocus();
+    });
   });
 
   describe("Ctrl+Shift+A/X target filtering", () => {

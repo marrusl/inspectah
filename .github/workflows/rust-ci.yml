@@ -166,11 +166,6 @@ jobs:
       # Blocking. Every spec but smoke-integration answers from the mock
       # API in e2e/helpers/mock-api.ts; smoke-integration talks to the
       # refine server started above.
-      #
-      # One test is marked test.fixme and reported as skipped, with its
-      # reason beside it: the single-host axe scan in a11y.spec.ts, which
-      # finds a real defect in the sidebar's list markup. Fix the sidebar,
-      # then delete the fixme line so the scan gates again.
       - name: Playwright e2e tests
         id: playwright
         if: ${{ !cancelled() && steps.e2e_server.outcome == 'success' }}
