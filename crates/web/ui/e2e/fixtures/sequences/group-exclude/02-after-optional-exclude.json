@@ -185,7 +185,7 @@
     "can_redo": false,
     "baseline_available": true
   },
-  "generation": 2,
+  "generation": 3,
   "baseline_summary": {
     "image_ref": "registry.redhat.io/rhel9/rhel-bootc:9.4",
     "image_digest": "sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
