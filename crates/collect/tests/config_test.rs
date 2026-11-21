@@ -1453,3 +1453,49 @@ fn unreadable_ghost_query_output_degrades_the_section() {
         other => panic!("expected a degraded section, got {other:?}"),
     }
 }
+
+/// `rpm -V` checks a ghost file's mode, owner and group, never its
+/// content. With the mode changed too (`.M.......`, the line `rpm -Va`
+/// printed for a `chmod`ed ghost file on RHEL 9.8 and 10.2), the
+/// `rpm -Va` branch drops the row as metadata-only; the ghost branch
+/// still collects the file, with its content.
+#[test]
+fn a_ghost_file_rpm_reports_for_metadata_only_is_still_collected() {
+    let exec = with_ghosts(
+        MockExecutor::new(),
+        "sssd-common cng '/etc/sssd/sssd.conf'\n",
+    )
+    .with_dir("/etc", vec![])
+    .with_file(
+        "/etc/sssd/sssd.conf",
+        "[sssd]\ndomains = example.com\n\n[domain/example.com]\nid_provider = ad\n",
+    );
+    let rpm_state = RpmState {
+        owned_paths: [PathBuf::from("/etc/sssd/sssd.conf")].into_iter().collect(),
+        verification_results: parse_rpm_va(".M.......  c /etc/sssd/sssd.conf\n"),
+        ..Default::default()
+    };
+    assert_eq!(rpm_state.verification_results.len(), 1);
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("the inspector succeeds");
+    let SectionData::Config(section) = &output.section else {
+        panic!("expected a config section");
+    };
+    assert_eq!(section.files.len(), 1, "{:?}", section.files);
+    let sssd = &section.files[0];
+    assert_eq!(sssd.path, "/etc/sssd/sssd.conf");
+    assert_eq!(sssd.kind, ConfigFileKind::RpmOwnedModified);
+    assert_eq!(sssd.package.as_deref(), Some("sssd-common"));
+    assert_eq!(sssd.rpm_va_flags, None);
+    assert!(sssd.content.contains("id_provider = ad"));
+    assert!(sssd.disposition.is_included());
+}

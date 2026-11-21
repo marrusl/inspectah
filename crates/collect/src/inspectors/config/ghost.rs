@@ -1,10 +1,14 @@
-//! The `%ghost` branch of the config inspector: owned files rpm never
-//! verifies.
+//! The `%ghost` branch of the config inspector: owned files whose content
+//! rpm never verifies.
 //!
 //! A package lists a `%ghost` file without shipping its content, so rpm
-//! has nothing to compare it with and `rpm -V` skips it, and the unowned
-//! walk skips it because a package owns it. Before this branch an admin's
-//! edit to a ghost file under `/etc` reached no collector. Measured on
+//! has nothing to compare it with: `rpm -V` checks a ghost file's mode,
+//! owner and group but never its digest or size, and the unowned walk
+//! skips it because a package owns it. Before this branch an admin's
+//! edit to a ghost file under `/etc` reached no collector, and a ghost
+//! file whose mode had also changed (`.M.......  g`, measured with
+//! `chmod` on RHEL 9.8 and 10.2) was read by the `rpm -Va` branch as
+//! metadata-only and dropped. Measured on
 //! RHEL 9.8 and 10.2: `/etc/sssd/sssd.conf` (flags `cng`), authselect's
 //! `/etc/authselect/authselect.conf` and `nsswitch.conf` (flag `g`), and
 //! `/etc/default/grub` (`cng`). The authselect files carry no config flag,

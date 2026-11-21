@@ -291,3 +291,22 @@ fn a_ghost_default_grub_is_an_advisory_and_never_copied() {
         );
     }
 }
+
+/// `rpm -Va` reports a ghost file's mode change (`.M.......`, as rpm
+/// printed it for a `chmod`ed ghost file on RHEL 9.8 and 10.2) and never
+/// its content. The `rpm -Va` branch drops that row as metadata-only, and
+/// the ghost branch still carries the file on both export paths.
+#[test]
+fn a_ghost_sssd_conf_with_a_mode_change_is_still_carried() {
+    let snap = scan(sssd_host().rpm_va(".M.......", "/etc/sssd/sssd.conf"));
+
+    let sssd = entry(&snap, "/etc/sssd/sssd.conf").expect("the ghost sssd.conf is collected");
+    assert_eq!(sssd.kind, ConfigFileKind::RpmOwnedModified);
+    assert_eq!(sssd.rpm_va_flags, None);
+    assert!(sssd.disposition.is_included());
+    for (path, tree) in both_exports(&snap) {
+        let staged = std::fs::read_to_string(tree.path().join("config/etc/sssd/sssd.conf"))
+            .unwrap_or_else(|e| panic!("{path}: sssd.conf is staged: {e}"));
+        assert!(staged.contains("id_provider = ldap"), "{path}");
+    }
+}

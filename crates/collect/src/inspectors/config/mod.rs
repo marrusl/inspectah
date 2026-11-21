@@ -176,11 +176,11 @@ impl Inspector for ConfigInspector {
         });
 
         // 1b) `%ghost` files: owned, so the walk below skips them, and
-        //     never verified, so rpm -Va above never reports them.
+        //     their content never verified, so rpm -Va above reports at
+        //     most a metadata change, which it drops as unmodified.
         collect_ghost_configs(
             exec,
             rpm_state,
-            &rpm_va_paths,
             &dhcp_paths,
             &mut section,
             &mut degraded_reasons,
@@ -394,9 +394,13 @@ const GHOST_PATH_REFUSED: &str = "is a %ghost file under /etc whose name holds a
 /// A ghost file's package ships no content, so whatever the file holds
 /// was written on the host: by an admin, or by a tool such as authselect.
 /// The kind is `RpmOwnedModified` with no `rpm_va_flags`, since rpm did
-/// not verify it.
+/// not verify its content.
 ///
-/// Skipped, in order: a path rpm -Va already reported; a path that is
+/// Skipped, in order: a path an earlier branch already collected (an
+/// `rpm -Va` row with a content flag). A path `rpm -Va` reported only
+/// for its metadata is not skipped: that branch drops such a row as
+/// unmodified, and for a ghost file the metadata is all rpm checks, so
+/// the row says nothing about the content. Then a path that is
 /// not a regular file by `lstat` ([`Executor::file_kind`]): absent, a
 /// symlink (its state is the link, not content), a directory (`%ghost
 /// %dir`), or a FIFO, socket or device, which is never opened because
@@ -421,7 +425,6 @@ const GHOST_PATH_REFUSED: &str = "is a %ghost file under /etc whose name holds a
 fn collect_ghost_configs(
     exec: &dyn Executor,
     rpm_state: &RpmState,
-    rpm_va_paths: &HashSet<String>,
     dhcp_paths: &HashSet<String>,
     section: &mut ConfigSection,
     degraded_reasons: &mut Vec<String>,
@@ -452,11 +455,11 @@ fn collect_ghost_configs(
             ..Default::default()
         });
     }
+    let collected: HashSet<String> = section.files.iter().map(|f| f.path.clone()).collect();
     for ghost in query.files {
         let path = ghost.path.as_str();
         let on_host = Path::new(path);
-        if rpm_va_paths.contains(path) || !matches!(exec.file_kind(on_host), Ok(FileKind::Regular))
-        {
+        if collected.contains(path) || !matches!(exec.file_kind(on_host), Ok(FileKind::Regular)) {
             continue;
         }
         if is_excluded_unowned(exec, path)
