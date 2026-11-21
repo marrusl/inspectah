@@ -43,7 +43,7 @@ whatever row it matches.
 | Rust tests | `cargo test --workspace` | Unit and integration tests, insta snapshots, every tarball under `testdata/` loading at the current schema, the e2e fixture JSON structure, and a refine server driven over HTTP on an ephemeral port | Only on the trigger below | Yes, blocks | Same as Format, plus any change under `testdata/` |
 | Vitest | `npm run test` | Web UI unit tests, in jsdom | Never | Yes, blocks | Every PR that touches `crates/web/ui/`, and every PR that changes a web DTO or handler under `crates/web/src/`, because the hook does not run them |
 | Type check and bundle | `npm run build`, which is `tsc && vite build` | TypeScript errors under `crates/web/ui/src/` | Indirectly: `crates/web/build.rs` runs it inside the clippy and test gates when the UI source or build files changed since the last build. Any commit that changes those files gets it, a frontend-only commit included | Indirectly, the same way, inside the clippy, test, and build steps. There is no separate step | Same as Vitest |
-| Playwright e2e | `npm run test:e2e` | The UI in a real Chromium against a mocked API, plus one spec against a real refine server when one answers on `127.0.0.1:8642` | Never | Runs, does not block: the Playwright step has `continue-on-error: true`, and the run summary reports pass or fail | Same as Vitest. Report the skipped count separately from the passed count, every time |
+| Playwright e2e | `npm run test:e2e` | The UI in a real Chromium against a mocked API, plus one spec against a real refine server when one answers on `127.0.0.1:8642` | Never | Yes, blocks. One test is marked `test.fixme` and reported as skipped, with its reason in the spec | Same as Vitest. Report the skipped count separately from the passed count, every time |
 
 **The hook's trigger.** `.githooks/pre-commit` runs the three Rust
 gates on every commit that adds, changes, deletes or renames a path
@@ -178,20 +178,11 @@ rather than the screen alone. Stop the server with Ctrl-C.
 
 ### CI
 
-- **A green CI job can contain a red e2e suite.** The Playwright step has
-  `continue-on-error: true` until the mock API covers `/api/groups`. The
-  run summary says "Playwright e2e: FAILED, non-blocking"; the job's
-  check mark does not. The smoke spec's CI-only failure when no server
-  answers is inside that same non-blocking step, so even a refine server
-  that never started does not fail the job today. Read the run summary's
-  Playwright line, not the job status.
-- **CI's "Start refine server" step goes green when the server never
-  answers.** It polls `/api/health` for 30 seconds and falls through
-  without failing. The line that holds is `cargo test`:
-  `crates/refine/tests/testdata_tarballs_load.rs` loads every tarball
-  under `testdata/` at the current schema, so a missing or stale fixture
-  fails `cargo test`, which the hook runs on any commit that changes
-  `testdata/` and which CI's Test step runs on every pull request.
+- **A skipped e2e test is part of a green job.** The single-host axe
+  scan in `e2e/a11y.spec.ts` is `test.fixme` because it finds a real
+  defect in the sidebar's list markup. Playwright reports it under
+  `skipped`, and it gates nothing until the sidebar is fixed and the
+  fixme line deleted.
 - **A retry pass looks the same as a clean pass.** Playwright retries
   once in CI, the `github` reporter shows no flake counts, and the HTML
   report is uploaded only when the step fails. Locally there are no
@@ -218,20 +209,17 @@ rather than the screen alone. Stop the server with Ctrl-C.
 
   Report the skipped count separately from the passed count, every time.
   Start the server first
-  (`./target/debug/inspectah refine --open false testdata/e2e-fixture.tar.gz`)
-  and the three API cases pass, but the UI-interaction half currently
-  fails, as the next bullet says. Measured 2026-11-08, the spec on its own
-  then exited 1 with 3 passed, 1 failed (the exclude and undo case), and 2
-  did not run.
-- **The full local suite is red today, with or without a server, and
-  that is not your change.** Measured 2026-11-08: `npm run test:e2e`
-  with nothing on port 8642 ended
-  `49 failed, 6 skipped, 9 did not run, 18 passed` and exited 1; with the
-  fixture server running it ended `51 failed, 11 did not run, 20 passed`
-  and exited 1, and the smoke spec's UI-interaction half was among the
-  failures. The exemption in CI is tracked against the `/api/groups` mock
-  gap below. Until the suite is green, judge your change by the tests
-  that touch it, and say in the pull request which ones you ran.
+  (`./target/debug/inspectah refine --open=false testdata/e2e-fixture.tar.gz`)
+  and all six cases run. The server autosaves its session beside the
+  tarball and asks whether to resume it on the next start, so move
+  `testdata/.inspectah-session-e2e-fixture.json` aside and restart the
+  server between runs; `process-docs/skills/e2e-fixtures-are-hand-maintained.md`
+  has the steps.
+- **The full local suite passes, with or without a server.** Measured
+  2026-11-21: `npm run test:e2e` with nothing on port 8642 ended
+  `7 skipped, 103 passed` (the six smoke cases and the fixme); with `CI=1`
+  and the fixture server running it ended `1 skipped, 109 passed`. A
+  failure there is yours to explain.
 
 - **The e2e fixtures under `crates/web/ui/e2e/fixtures/` are hand-written
   JSON, not generated from the server's DTOs.** A DTO change updates them
@@ -243,8 +231,8 @@ rather than the screen alone. Stop the server with Ctrl-C.
   and `vite.config.ts` proxies every other `/api/*` request to
   `127.0.0.1:8642`. A mocked test's result therefore depends on whether
   nothing, your own refine session, or CI's fixture server is on that
-  port. `/api/groups` is not in the map, which is why most of the suite
-  fails locally with no server.
+  port. Every route the app fetches on load is in the map today;
+  `/api/groups` was the last one added.
 - **The real-server smoke spec proves the server starts and responds,
   not that any output is right.** It runs against
   `testdata/e2e-fixture.tar.gz`, a minimal hand-built snapshot: four
@@ -254,9 +242,10 @@ rather than the screen alone. Stop the server with Ctrl-C.
   that one toggle and its undo round-trip through the UI. It exercises no
   inspector and no other section, and checks the Containerfile preview
   only for being a string.
-- **No blocking gate runs UI code in a real browser.** `cargo test` runs
-  no browser code and vitest runs in jsdom. Playwright is the only
-  browser execution, and it does not block.
+- **Playwright is the only gate that runs UI code in a real browser.**
+  `cargo test` runs no browser code and vitest runs in jsdom, and the
+  hook runs neither vitest nor Playwright, so a browser regression
+  surfaces in CI first.
 - **The type check is narrower than "tsc".** `tsconfig.json` includes
   `src` only, so nothing under `crates/web/ui/e2e/` is ever type-checked:
   Playwright transpiles without checking and vitest excludes `e2e/`.

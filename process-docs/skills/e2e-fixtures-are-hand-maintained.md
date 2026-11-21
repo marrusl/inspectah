@@ -26,25 +26,28 @@ drifted in two independent ways:
    not serve, so a green fixture-backed test says nothing about the
    real section list.
 2. **A whole route can be missing from the mock map and nothing notices
-   until the suite is actually run.** `/api/groups` has never been in
-   `PRESET_ROUTE_MAP`, on this branch or on `main`. Nothing fetched
-   through it fails loudly in review — it fails at runtime, when
-   `useGroups`'s fetch falls through to the real network, `vite.config.ts`
-   proxies it to a refine server that usually isn't running, and the
-   resulting empty response makes `App.tsx` show "Failed to load" instead
-   of the UI under test. With the suite at 76 tests, that one gap failed
-   50 of them; at 82 tests on 2026-11-08 the local run fails 49 to 51
-   with or without a fixture server on 8642, so the groups route is not
-   the only cause (see `docs/contributing/testing.md`).
-3. **The preset view crashes the app.** As of 2026-11-12 the package
-   and config rows in `single-host/view.json` have no `disposition`, so
-   `isIncluded` in `src/api/disposition.ts` throws inside `MainContent`
-   and the page goes blank a moment after the stats bar renders. A
-   `beforeEach` that waits for `.inspectah-statsbar` still passes; the
-   next locator then times out. Capture `page.on("pageerror")` to see
-   it. `e2e/export-warnings.spec.ts` works around it by serving the
-   preset view with its item lists emptied, which is enough for a test
-   that only needs the stats bar and the Export dialog.
+   until the suite is actually run.** An unmocked `/api/*` fetch falls
+   through to `vite.config.ts`'s proxy to 8642, and with nothing there
+   the empty response makes `App.tsx` show "Failed to load" instead of
+   the UI under test. `/api/groups` was missing this way until
+   2026-11-21 and failed about half the suite. `applyMockApi` now serves
+   it on every preset from the recording
+   `src/__tests__/fixtures/system-tuning/files-no-tuned.groups.json`,
+   which `system_tuning_fixtures_test` holds to the real handler; the
+   handler's answer does not depend on the session. A spec that wants a
+   narrower sidebar still registers its own `page.route` after
+   `applyMockApi`, and that one wins.
+3. **A hand-written view row can crash the app.** Until 2026-11-21 the
+   package and config rows in the single-host view fixtures carried the
+   retired `include` bool instead of `disposition`, so `isIncluded` in
+   `src/api/disposition.ts` threw inside `MainContent` and the page went
+   blank a moment after the stats bar rendered. A `beforeEach` that
+   waits for `.inspectah-statsbar` still passes; the next locator then
+   times out. When a mocked spec times out on an element that should be
+   there, capture `page.on("pageerror")` before anything else. The rows
+   now carry `{ "kind": "actionable", "include": ... }`, the form
+   `contract_snapshots__contract_view.snap` shows; the group fixtures
+   carry the full `GroupInfo` field set from `grouped_view.snap`.
 
 **A fixture edit changes a Rust snapshot.**
 `crates/web/tests/fixture_structure_test.rs` snapshots several of these
@@ -83,6 +86,33 @@ with zero tests passed still exits 0 and looks green to anything that
 checks only the exit code. Read the `skipped` line in the output
 explicitly, every time, and report it separately from `passed`. Treat a 100%-skipped file as a different fact
 than a 100%-passed one, not as the same green.
+
+## Running the Suite the Way CI Does
+
+CI runs the mocked specs and `smoke-integration.spec.ts` in one step,
+with `CI` set (one worker, one retry) and a refine server on 8642 over
+`testdata/e2e-fixture.tar.gz`. To reproduce it, from the worktree root:
+
+```bash
+cargo build -p inspectah-cli
+./target/debug/inspectah refine --open=false testdata/e2e-fixture.tar.gz < /dev/null &
+cd crates/web/ui && CI=1 npx playwright test
+```
+
+Two things bite a second run:
+
+- **refine autosaves beside the tarball.** The run leaves
+  `testdata/.inspectah-session-e2e-fixture.json` (gitignored), and the
+  next `refine` over that tarball asks Resume, Start fresh or Quit. With
+  stdin at `/dev/null` it reads that as Quit and exits, so nothing
+  answers on 8642. Move the file aside before restarting the server. CI
+  starts from a clean checkout and never sees it.
+- **The smoke spec mutates the server.** Its UI half toggles a package
+  and undoes it, so a second run against the same server starts from a
+  different timeline. Restart the server between runs.
+
+The suite takes about a minute in CI mode on a laptop. A run that takes
+much longer is timing out on something, not running slowly.
 
 ## The Recorded Alternative
 
@@ -131,7 +161,7 @@ view with a stock host's unit fields). Rules for taking or changing one:
   keeps another view's Containerfile preview and stats, so a test of
   anything else must not read it.
 - The preset `single-host/view.json` and `sections.json` cannot serve the
-  units section: the view's rows crash the app and the sections lack
+  units section: the view has no unit rows and the sections lack
   `scheduled_tasks`.
 
 ## See Also
