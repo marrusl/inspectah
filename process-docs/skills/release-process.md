@@ -71,7 +71,11 @@ Release binaries are built by CI, never by hand. Pushing a `v*` tag runs
 `.github/workflows/release.yml`, which calls
 `.github/workflows/build-binary.yml` to build three binaries from the
 tag. `build-binary.yml` is the same workflow that smoke-builds every
-push to `main`, so the release recipe is exercised long before a tag.
+push to `main` that changes one of the build's inputs (its `paths`
+filter: crate sources and manifests, the `build.rs` files, the UI
+sources, `package.json` and `package-lock.json`, the lockfile, the
+toolchain file, and the workflow itself), so the release recipe is
+exercised long before a tag.
 Each leg builds natively on a runner of its own architecture:
 
 | Target | Runner | Release asset |
@@ -263,6 +267,15 @@ Pushing the tag is what starts the release: `release.yml` builds from
 it at once. A pushed tag that has to move means a new build and a
 deleted draft.
 
+**Whoever can push a `v*` tag chooses what is released.** The workflows
+check that the tag, `Cargo.toml` and the spec agree on the version, not
+who pushed the tag or whether its commit is on `main`, so a tag on an
+off-`main` commit builds and drafts a release from that commit. The
+draft still waits for a person to publish it, but what it holds is
+whatever the tag built. That puts inspectah's tag permissions inside
+the release's trust boundary. Its tag rulesets have not been read
+(2026-11-21); whether to restrict `v*` tag creation is Mark's call.
+
 ## GitHub release
 
 `release.yml` creates the release as a **draft** named `v<version>` with
@@ -304,13 +317,36 @@ The tag must be on the remote: the job runs `gh release create
 
 **If the publish job fails after the builds passed**, the binaries are
 still in the run as artifacts for 30 days, under their release names.
-Create the draft by hand from them:
+Finish by hand what the job would have done, starting from the release's
+current state, which the failed job may already have changed: creating
+the release and uploading its assets are separate operations, so a
+failure can leave a draft behind with some assets or none.
 
 ```bash
 gh run download <run-id> -p 'inspectah-*' -D dist
-gh release create v<version> dist/inspectah-*/inspectah-* \
-  --draft --verify-tag --title v<version> --notes "Release notes pending."
+gh release view v<version> --json isDraft --jq .isDraft
 ```
+
+| `gh release view` says | Do |
+|---|---|
+| `release not found` | `gh release create v<version> dist/inspectah-*/inspectah-* --draft --verify-tag --title v<version> --notes "Release notes pending."` |
+| `true` (a draft) | `gh release upload v<version> dist/inspectah-*/inspectah-* --clobber` |
+| `false` (published) | Stop. Replacing assets users may already have downloaded is Mark's decision, not a recovery step |
+
+`--clobber` deletes each existing asset before uploading its
+replacement, so a replacement upload that fails leaves the draft
+*without* that asset. Repeat the upload until it succeeds.
+
+Before publishing, check the draft holds exactly the three assets and
+that they are the files from the run:
+
+```bash
+gh release view v<version> --json assets --jq '.assets[].name'
+gh release download v<version> -D /tmp/check-v<version>
+shasum -a 256 /tmp/check-v<version>/inspectah-* dist/*/inspectah-*
+```
+
+Each name must appear once, and each digest twice.
 
 Re-running a failed tag run replays the workflow as it was at the tag,
 so a fix to `release.yml` on `main` does not reach that run.
@@ -330,44 +366,103 @@ exists to hold the home page and a beta no longer needs to.
 ## Homebrew formula
 
 The tap (`marrusl/homebrew-inspectah`, `Formula/inspectah.rb`) is updated
-by the `update-homebrew` job in `package-release.yml` when the release
-is published. Nothing about it is done by hand. The job runs on
-`macos-latest` and, in order:
+by two jobs in `package-release.yml` when the release is published.
+Nothing about it is done by hand.
 
-1. Downloads `inspectah-darwin-arm64` from the published release
+```
+homebrew-test   macos-latest, no tap token
+  check out tap main (the base) -> skip if the tap is newer
+  -> resolve the asset -> rewrite -> commit locally
+  -> upload the formula file -> brew install, brew test, inspectah version
+        |
+        |  data only: the formula file, the base commit, the asset sha256
+        v
+homebrew-push   fresh ubuntu-latest runner, tap token in one step
+  check out tap main -> verify base, version, digest, and that the
+  received file is its own rewrite of the base -> commit -> push to main
+```
+
+`homebrew-test`, in order:
+
+1. Checks out the tap's `main` without credentials and records that
+   commit as the base.
+2. Reads the formula's current `version` and compares it with the
+   release's using Ruby's `Gem::Version`, which orders a prerelease
+   below its release and compares numeric parts as numbers
+   (`0.9.0-beta.9 < 0.9.0-beta.10 < 0.9.0`); `sort -V` gets the first of
+   those wrong. If the tap is already newer, the release is superseded:
+   the job logs a notice and stops green with nothing tested or pushed.
+   This is what stops a re-run of an older release's `Package release`
+   run from moving the tap backward. An equal version carries on to
+   step 5.
+3. Downloads `inspectah-darwin-arm64` from the published release
    (waiting up to 300 s), hashes it, and rejects a digest that is not 64
    characters or is the hash of an empty file.
-2. Checks out the tap's `main` without credentials and rewrites
-   `version`, `url` and `sha256`, then confirms each substitution landed.
-   `install`, `test` and everything else are untouched.
-3. Commits locally. If the formula already matched the release (a
+4. Rewrites `version`, `url` and `sha256`, then confirms each
+   substitution landed. `install`, `test` and everything else are
+   untouched.
+5. Commits locally. If the formula already matched the release (a
    re-run, or a tap someone bumped by hand), it logs a notice and stops
    green without testing or pushing anything.
-4. Taps the local checkout and runs `brew install` and `brew test` on
-   exactly that commit. The formula's `test` block asserts `version.to_s`
-   appears in `inspectah version` output, so the formula's `version` must
-   be the hyphenated `CARGO_PKG_VERSION` form (`0.9.0-beta.7`), not the RPM
-   tilde form.
-5. Pushes that commit directly to the tap's `main`. There is no branch
+6. Uploads the formula file as the `homebrew-formula` artifact, before
+   anything from the release has run.
+7. Taps the local checkout and runs `brew install` and `brew test` on
+   exactly that commit, then `inspectah version`. The formula's `test`
+   block asserts `version.to_s` appears in `inspectah version` output, so
+   the formula's `version` must be the hyphenated `CARGO_PKG_VERSION`
+   form (`0.9.0-beta.7`), not the RPM tilde form.
+
+`homebrew-push` runs only when `homebrew-test` committed a change:
+
+1. Checks out the tap's `main`, again without credentials, and
+   downloads the formula artifact.
+2. Requires `main` to still be at the base. If it moved, the job fails
+   rather than re-evaluating: the tested file was written against the
+   old base, and what moved `main` may be a hand bump or a newer
+   release.
+3. Requires the digest to be 64 lowercase hex characters, repeats the
+   older-release check, and applies the same rewrite to its own
+   checkout, taking `version` and `url` from the release payload rather
+   than from `homebrew-test`. The result must be byte-identical to the
+   received file.
+4. Commits and pushes directly to the tap's `main`. There is no branch
    and no pull request: the tap update needs no review (Mark,
-   2026-08-16), and step 4 is the gate instead.
+   2026-08-16), and `homebrew-test` is the gate instead.
 
 The tap has no rulesets and no branch protection, and auto-merge is off
 (checked 2026-11-21), so nothing on the tap side stands between the
 token and `main`.
 
-**`HOMEBREW_TAP_TOKEN` is visible to the push step only.** The checkout
-and the brew steps, which download and run the release binary, never
-see it, and the checkout leaves no credential in `.git/config`. The
-token needs Contents write on `marrusl/homebrew-inspectah`; it no longer
-needs pull-request access.
+**`HOMEBREW_TAP_TOKEN` exists only in the push step of
+`homebrew-push`**, on a runner where nothing from the release has run.
+Keeping the token out of the other steps' environment would not be
+enough on a shared runner: the brew steps run code from the release
+(the binary, and the formula, which is Ruby), and that code could leave
+something behind, a git `pre-push` hook for one, that a later step
+holding the token would run. So the push job receives three values and
+one file, never `.git`, hooks or runner state, and executes nothing it
+receives. Every value it takes from `homebrew-test` is set before
+anything from the release runs, and the only one it cannot recompute is
+the digest. A wrong digest makes `brew install` fail for users rather
+than install something else, because the `url` comes from the release
+payload. This protects the token, not the asset: a compromised binary
+still reaches users through a correct formula. The token needs Contents
+write on `marrusl/homebrew-inspectah`; it no longer needs pull-request
+access.
 
-**If the push is refused**, the step fails with git's error in the log
-and nothing lands on the tap: the push is a single update to `main`.
-The two likely causes are a token without write access to `main`, and
-`main` having moved since the checkout (a hand bump). Fix the cause and
-re-run the job; if the tap is already at the release, the re-run stops
-at step 3.
+**If `homebrew-push` fails**, nothing landed on the tap: every check
+runs before the token step, and the push is a single non-force update
+to `main`. The likely causes:
+
+- `main` moved after `homebrew-test` read it (a hand bump, or another
+  release's run). Re-run `homebrew-test`, which re-runs `homebrew-push`
+  after it. Re-running `homebrew-push` alone ("Re-run failed jobs"
+  does that) reuses the old base and fails the same way.
+- The token cannot write to `main`. Fix the secret and re-run
+  `homebrew-push`.
+
+If the tap is already at the release by then, the re-run stops at
+`homebrew-test` step 5; if it is newer, at step 2.
 
 ## Gotchas
 
@@ -385,12 +480,14 @@ at step 3.
   delete it (`gh release delete v<version>`, which keeps the tag) so it
   cannot be published by mistake.
 
-- **The tap follows publishing, not tagging.** `update-homebrew` runs
-  only when a release is published, so a tag that is never published
-  leaves the tap on the previous release, which is correct. A tap bumped
-  by hand ahead of the job turns the job into a green no-op notice. A
-  release published while the job is broken leaves the tap behind
-  without anyone noticing unless the `Package release` run is checked:
+- **The tap follows publishing, not tagging.** The tap jobs run only
+  when a release is published, so a tag that is never published leaves
+  the tap on the previous release, which is correct. A tap bumped by
+  hand ahead of the jobs turns them into a green no-op notice, and so
+  does a re-run of an older release's run once a newer release has
+  reached the tap. A release published while the jobs are broken leaves
+  the tap behind without anyone noticing unless the `Package release`
+  run is checked:
   that happened at beta.4, when the tap was still bumped by hand and the
   bump was skipped.
 
@@ -416,17 +513,27 @@ at step 3.
   `gh workflow run package-release.yml --ref main -f tag=v<version>`. The
   workflow definition comes from `--ref`; the source tree comes from the
   tag. A manual run builds and verifies but touches nothing outside the
-  runner: both release-asset upload steps and the whole `update-homebrew`
-  job are guarded to `github.event_name == 'release'`, so a test run
-  cannot overwrite a published release's assets or push to the tap. The built packages come back as workflow artifacts (`srpm`,
-  `rpm-fedora`, `rpm-el9`, `rpm-el10`), so a green run leaves something to
-  inspect.
+  runner: the `attach-packages` job and both tap jobs are guarded to
+  `github.event_name == 'release'`, so a test run cannot overwrite a
+  published release's assets or push to the tap. The built packages come
+  back as workflow artifacts (`srpm`, `rpm-fedora`, `rpm-el9`,
+  `rpm-el10`), so a green run leaves something to inspect.
+
+  The guards are not the only protection. The workflow grants no
+  permissions by default, the build jobs get read access only, and the
+  SRPM checkout keeps no credential, so code that runs during a build
+  (`npm ci`, the UI build, `cargo`, `rpmbuild`) cannot write to the
+  repository or a release on either trigger. Write access lives only in
+  `attach-packages`, which checks nothing out and only reads the
+  packages it receives as artifacts. It runs after a failed RPM leg, so
+  the SRPM and the legs that built still reach the release.
 
   **A green manual run is not a green release run.** The release-upload
   paths and the tap job are guarded off on a manual run, so a manual
   green proves the build and packaging steps, not the release path. The
   RPM upload-to-release step first succeeded on a real release with
-  v0.9.0-beta.6 (run `44862766376`); the direct-push tap job and the
+  v0.9.0-beta.6 (run `44862766376`), as a step in the RPM build job.
+  `attach-packages`, which replaced it, the two tap jobs and the
   draft-creating `release.yml` publish job first run for real at
   v0.9.0-beta.7.
 
@@ -443,6 +550,17 @@ at step 3.
   from 2026-04-28, but they predate the web UI: don't read those as "it
   used to work" without that qualifier, since the pipeline now has to
   build something considerably heavier than it did then.
+
+- **Third-party actions are pinned to commit SHAs** in `release.yml`,
+  `build-binary.yml` and `package-release.yml`, with the release the
+  SHA came from in a trailing comment (`# v4.4.0`). A major tag such as
+  `v4` can be moved to new code by the action's owner, or by whoever
+  compromises it, without any change here, and these workflows hold the
+  release's write access and the tap token. To move one, resolve the
+  new tag read-only with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>`;
+  if the object it returns is a `tag`, not a `commit`, follow it with
+  `gh api repos/<owner>/<repo>/git/tags/<sha>` to the commit. Update the
+  SHA and the comment together. `rust-ci.yml` still uses tags.
 
 - **A CI failure in `Build SRPM` that reads as a gzip error is an
   ownership problem.** `actions/checkout` writes the workspace as a
