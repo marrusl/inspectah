@@ -761,6 +761,79 @@ describe("A newer focus request beats the section's opening focus", () => {
     expect(main).toBeTruthy();
     expect(main!.contains(document.activeElement)).toBe(true);
   });
+
+  describe("at a mobile viewport", () => {
+    const originalMatchMedia = window.matchMedia;
+
+    /** Report a narrow viewport, so App shows the sidebar as an overlay. */
+    beforeEach(() => {
+      Object.defineProperty(window, "matchMedia", {
+        writable: true,
+        value: (query: string) => ({
+          matches: query === "(max-width: 1023px)",
+          media: query,
+          onchange: null,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => false,
+        }),
+      });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(window, "matchMedia", {
+        writable: true,
+        value: originalMatchMedia,
+      });
+    });
+
+    /**
+     * Open the navigation overlay and choose a section from it. Closing the
+     * overlay schedules a frame that focuses the hamburger, and the section
+     * change schedules one that focuses its content.
+     */
+    async function chooseFromOverlay(label: string) {
+      await userEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
+      const overlay = document.getElementById("inspectah-sidebar-overlay");
+      expect(overlay).toBeTruthy();
+      const link = await within(overlay!).findByRole("link", {
+        name: new RegExp(`^${label}`),
+      });
+      holdFrames();
+      await userEvent.click(link);
+    }
+
+    it("keeps section search focused when / comes before the overlay's frames", async () => {
+      await renderSettled();
+
+      await chooseFromOverlay("Services");
+      expect(await screen.findByRole("heading", { level: 2, name: "Systemd units" })).toBeInTheDocument();
+      await userEvent.keyboard("/");
+      const input = screen.getByLabelText("Filter section items");
+      expect(input).toHaveFocus();
+      await userEvent.keyboard("ht");
+
+      await releaseFrames();
+      await userEvent.keyboard("tpd");
+
+      expect(input).toHaveFocus();
+      expect(input).toHaveValue("httpd");
+    });
+
+    it("still moves focus into the section after overlay navigation", async () => {
+      await renderSettled();
+
+      await chooseFromOverlay("Network");
+      expect(await screen.findByRole("heading", { level: 2, name: "Network" })).toBeInTheDocument();
+      await releaseFrames();
+
+      const main = document.querySelector(".inspectah-layout__main");
+      expect(main).toBeTruthy();
+      expect(main!.contains(document.activeElement)).toBe(true);
+    });
+  });
 });
 
 describe("App-level packages rendering with unified components", () => {

@@ -98,6 +98,20 @@ function elementByUnitKey(key: RowKey): HTMLElement | null {
 }
 
 /**
+ * Whether a focus frame scheduled while `focusedWhenScheduled` had focus
+ * should give way. Keys and clicks can arrive before the frame runs; if one
+ * has moved focus into a text field since (Ctrl+K, "/", a click in a search
+ * box), that request is newer and keeps focus, so what the operator types
+ * next lands where they asked. Focus that moved anywhere else does not
+ * count: on mobile, the overlay's frame focuses the hamburger just before
+ * the section's frame, and the section must still win.
+ */
+function focusMovedIntoTextField(focusedWhenScheduled: Element | null): boolean {
+  const focused = document.activeElement;
+  return focused !== focusedWhenScheduled && isTextInput(focused);
+}
+
+/**
  * Single-host refine UI. All single-host hooks (useView, useSections,
  * useMutation) live here and are never instantiated in aggregate mode.
  */
@@ -121,16 +135,11 @@ function SingleHostApp({
   const keyboardNavRef = useRef<boolean>(false);
 
   useEffect(() => {
-    // Keys and clicks can arrive before this frame runs. If one has moved
-    // focus into a text field since (Ctrl+K, "/", a click in a search box),
-    // that request is newer than this one and keeps focus, so what the
-    // operator types next lands where they asked.
     const focusedWhenScheduled = document.activeElement;
     requestAnimationFrame(() => {
       if (pendingFocusItemRef.current) return;
 
-      const focused = document.activeElement;
-      if (focused !== focusedWhenScheduled && isTextInput(focused)) {
+      if (focusMovedIntoTextField(focusedWhenScheduled)) {
         keyboardNavRef.current = false;
         return;
       }
@@ -575,7 +584,9 @@ function SingleHostApp({
 
   const closeSidebarOverlay = useCallback(() => {
     setSidebarOverlayOpen(false);
+    const focusedWhenScheduled = document.activeElement;
     requestAnimationFrame(() => {
+      if (focusMovedIntoTextField(focusedWhenScheduled)) return;
       hamburgerRef.current?.focus();
     });
   }, []);

@@ -236,7 +236,10 @@ The default target's pending-guard key is `["default_target"]`.
   so a test of focus during a pending op starts from a focused row.
 - Opening a section moves focus to its first `role="row"` a frame later,
   unless a text field took focus in between (Ctrl+K, `/`, a click in a
-  search box): the newer request keeps focus. A test that starts after
+  search box): the newer request keeps focus. On mobile, closing the
+  navigation overlay first focuses the hamburger a frame later, under the
+  same rule, and the section's frame still replaces it; both frames share
+  `focusMovedIntoTextField` in `App.tsx`. A test that starts after
   navigation waits two animation frames once the heading appears; a test
   of the race itself queues `requestAnimationFrame` callbacks and releases
   them by hand, as `FocusAndNavigation.test.tsx` does.
