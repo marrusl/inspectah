@@ -17,6 +17,7 @@ use inspectah_collect::inspectors::network::NetworkInspector;
 use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
+use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::inspector::Inspector;
@@ -744,32 +745,130 @@ fn a_fleet_aggregate_withholds_every_class_path() {
     assert_marker_nowhere(&key_and_ordinary);
 }
 
-/// Collect case 28, the configuration half: host A's drop-in path is a
-/// symlink to a key, host B's the same path holding a regular drop-in.
-/// The aggregate has one withheld row with both hosts and no entry at
-/// the path, and host B's content is nowhere.
+const APP_DROP_IN: &str = "/etc/systemd/system/app.service.d/key.conf";
+const SERVER_KEY: &str = "/etc/pki/tls/private/server.key";
+
+/// A host whose `app.service` is enabled at its preset, named `hostname`,
+/// for the units inspector.
+fn app_unit_host(hostname: &str) -> crate::unit_hosts::UnitHost {
+    crate::unit_hosts::UnitHost::new()
+        .file("/etc/hostname", &format!("{hostname}\n"))
+        .unit("app.service", "enabled")
+        .preset("enable app.service")
+        .vendor_unit(
+            "app.service",
+            "[Unit]\nDescription=App\n\n[Service]\nExecStart=/usr/bin/app\n\n\
+             [Install]\nWantedBy=multi-user.target\n",
+            None,
+        )
+}
+
+/// The RPM, config and units inspectors.
+fn unit_inspectors() -> Vec<Box<dyn Inspector>> {
+    vec![
+        Box::new(RpmInspector::new()),
+        Box::new(ConfigInspector::new()),
+        Box::new(UnitsInspector::new()),
+    ]
+}
+
+/// The drop-in rows of `snap` at `path`, selected or alternative.
+fn drop_ins_at<'a>(
+    snap: &'a InspectionSnapshot,
+    path: &str,
+) -> Vec<&'a inspectah_core::types::units::SystemdDropIn> {
+    snap.units
+        .iter()
+        .flat_map(|u| u.drop_ins.iter())
+        .filter(|d| d.path == path)
+        .collect()
+}
+
+/// Collect case 11: a drop-in linked to a key, through the units
+/// inspector as well as the config walk: no `units.drop_ins` row, a
+/// degraded reason naming it, a withheld config row, neither name opened,
+/// and no key bytes in the snapshot or either export.
+#[test]
+fn a_drop_in_linked_to_a_key_is_left_out_by_the_units_inspector() {
+    let exec = app_unit_host("host-a")
+        .file(SERVER_KEY, &encrypted_key())
+        .link(APP_DROP_IN, SERVER_KEY)
+        .build();
+    let snap = reload(&scan_exec(&exec, unit_inspectors()));
+    assert!(snap.units.is_some(), "the units inspector ran");
+    assert!(drop_ins_at(&snap, APP_DROP_IN).is_empty());
+    assert!(withheld(&snap, APP_DROP_IN).is_some());
+    assert!(
+        snap.warnings.iter().any(|w| w
+            .message
+            .contains(&format!("machine-state file left out: {APP_DROP_IN}"))),
+        "{:?}",
+        snap.warnings
+    );
+    assert_never_opened(&exec, APP_DROP_IN);
+    assert_never_opened(&exec, SERVER_KEY);
+    assert_marker_nowhere(&snap);
+}
+
+/// Collect case 28: host A's drop-in path is a symlink to a key, host B's
+/// the same path holding a regular drop-in, each scanned with the units
+/// inspector. Host B's snapshot has its drop-in row before the merge; the
+/// aggregate has one withheld row with both hosts and no config entry or
+/// drop-in row at the path, host B's content is nowhere, refine refuses
+/// the drop-in's include, and neither export stages or copies it.
 #[test]
 fn a_two_host_drop_in_at_a_class_path_is_withheld_for_the_fleet() {
-    const DROP_IN: &str = "/etc/systemd/system/app.service.d/key.conf";
-    let merged = aggregate(vec![
-        fleet_host("host-a", |h| {
-            h.file("/etc/pki/tls/private/server.key", &encrypted_key())
-                .link(DROP_IN, "/etc/pki/tls/private/server.key")
-        }),
-        fleet_host("host-b", |h| {
-            h.file(DROP_IN, "[Service]\nEnvironment=ROLE=worker\n")
-        }),
-    ]);
+    use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
+    let host_a = reload(&scan_exec(
+        &app_unit_host("host-a")
+            .file(SERVER_KEY, &encrypted_key())
+            .link(APP_DROP_IN, SERVER_KEY)
+            .build(),
+        unit_inspectors(),
+    ));
+    let host_b = reload(&scan_exec(
+        &app_unit_host("host-b")
+            .file(APP_DROP_IN, "[Service]\nEnvironment=ROLE=worker\n")
+            .build(),
+        unit_inspectors(),
+    ));
+    let before = drop_ins_at(&host_b, APP_DROP_IN);
+    assert_eq!(
+        before.len(),
+        1,
+        "host B's drop-in is a units row before the merge"
+    );
+    assert!(before[0].content.contains("ROLE=worker"));
+
+    let merged = aggregate(vec![host_a, host_b]);
     let config = merged.config.as_ref().unwrap();
-    assert!(!config.files.iter().any(|f| f.path == DROP_IN));
+    assert!(!config.files.iter().any(|f| f.path == APP_DROP_IN));
     let row = config
         .withheld
         .iter()
-        .find(|w| w.path == DROP_IN)
+        .find(|w| w.path == APP_DROP_IN)
         .expect("withheld");
     assert_eq!(row.aggregate.as_ref().unwrap().hosts, ["host-a", "host-b"]);
+    assert!(
+        drop_ins_at(&merged, APP_DROP_IN).is_empty(),
+        "no drop-in row after the merge"
+    );
     let json = serde_json::to_string(&merged).unwrap();
     assert!(!json.contains("ROLE=worker"));
+
+    let mut fleet = inspectah_refine::session::RefineSession::new(merged.clone());
+    let generation = fleet.generation();
+    assert!(matches!(
+        fleet.apply(RefinementOp::SetInclude {
+            item_id: ItemId::DropIn {
+                path: APP_DROP_IN.into()
+            },
+            include: true,
+        }),
+        Err(RefineError::UnknownTarget(_))
+    ));
+    assert_eq!(fleet.generation(), generation, "nothing recorded");
+
     for (path, tree) in [
         ("scan export", render_export(&merged)),
         ("refine export", export_session(&session(&merged))),

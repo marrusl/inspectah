@@ -1593,7 +1593,19 @@ fn unit_text(exec: &dyn Executor, path: &str) -> Result<Option<String>, String> 
     match exec.read_file(Path::new(path)) {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Ok(None),
-        Err(e) => Err(format!("{path}: {e}")),
+        Err(e) => Err(unit_read_failure(path, &e)),
+    }
+}
+
+/// The read failure a unit file or drop-in at `path` records: the
+/// machine-state class's own degraded reason when the read gate refused
+/// it, so the config walk's withheld row and the units section name it
+/// alike, else the path and the error.
+fn unit_read_failure(path: &str, e: &std::io::Error) -> String {
+    if inspectah_core::machine_state::refusal(e).is_some() {
+        inspectah_core::machine_state::left_out_reason(path)
+    } else {
+        format!("{path}: {e}")
     }
 }
 
@@ -2483,7 +2495,7 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
                 // records that the content was not captured.
                 Err(e) if e.kind() == std::io::ErrorKind::InvalidData => continue,
                 Err(e) => {
-                    read_failures.push(format!("{}: {e}", file_path.to_string_lossy()));
+                    read_failures.push(unit_read_failure(&file_path.to_string_lossy(), &e));
                     continue;
                 }
             };
@@ -2600,7 +2612,7 @@ fn full_shadow(exec: &dyn Executor, entry: &str) -> Result<Option<SystemdDropIn>
     let content = match exec.read_file(Path::new(&path)) {
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::InvalidData => return Ok(None),
-        Err(e) => return Err(format!("{path}: {e}")),
+        Err(e) => return Err(unit_read_failure(&path, &e)),
     };
     Ok(Some(SystemdDropIn {
         unit: entry.to_owned(),
@@ -2749,7 +2761,7 @@ fn read_mount_settings(
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::InvalidData => return,
         Err(e) => {
-            read_failures.push(format!("{path}: {e}"));
+            read_failures.push(unit_read_failure(&path, &e));
             return;
         }
     };
