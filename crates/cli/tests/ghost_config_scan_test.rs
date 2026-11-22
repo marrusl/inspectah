@@ -381,8 +381,8 @@ const DEFAULT_GRUB: &str = "GRUB_TIMEOUT=5\n\
 /// (`cng`, measured on Fedora 44, RHEL 9.8 and 10.2). Its
 /// `GRUB_CMDLINE_LINUX` sets two arguments the running kernel
 /// ([`SysctlHost`]'s `/proc/cmdline`) lacks, so the scan collects it with
-/// its content as an advisory that names them, without their values, and
-/// kargs.d; neither export copies it.
+/// its content as an advisory that points to kargs.d in fixed text,
+/// naming nothing from the file; neither export copies it.
 #[test]
 fn a_ghost_default_grub_with_arguments_not_running_is_an_advisory_and_never_copied() {
     let snap = scan(
@@ -398,13 +398,13 @@ fn a_ghost_default_grub_with_arguments_not_running_is_an_advisory_and_never_copi
     );
     match &grub.disposition {
         inspectah_core::types::FindingKind::Advisory { rationale, .. } => {
-            assert!(rationale.contains("kargs.d"), "{rationale}");
             assert!(
-                rationale.contains("does not carry them: transparent_hugepage, audit."),
+                rationale.contains("kargs.d/*.toml file by hand"),
                 "{rationale}"
             );
-            assert!(!rationale.contains("never"), "no value: {rationale}");
-            assert!(!rationale.contains("audit=1"), "no value: {rationale}");
+            for parsed in ["transparent_hugepage", "never", "audit"] {
+                assert!(!rationale.contains(parsed), "fixed text: {rationale}");
+            }
         }
         other => panic!("expected an advisory, got {other:?}"),
     }
@@ -451,6 +451,209 @@ fn a_ghost_default_grub_matching_the_running_kernel_is_not_reported_or_copied() 
             "{path}"
         );
     }
+}
+
+/// The secret in [`grub_secret_hosts`]' files.
+const GRUB_SECRET: &str = "Sup3rS3cret";
+
+/// Hosts whose `/etc/default/grub` holds [`GRUB_SECRET`] where a reader
+/// could take it for part of an argument's name: in ANSI-C quoting, which
+/// the shell decodes (`\x3d` is `=`) and the reader does not model, and
+/// as `token:<secret>`, a value the credential redaction reads. Each says
+/// whether the row's retained content may still hold the secret: the
+/// content redaction does not decode ANSI-C quoting, a gap left to the
+/// format-aware redaction work.
+fn grub_secret_hosts() -> [(&'static str, bool, SysctlHost); 2] {
+    let host = |grub: &str| {
+        sssd_host()
+            .ghost("grub2-tools", "cng", "/etc/default/grub")
+            .file("/etc/default/grub", grub)
+    };
+    [
+        (
+            "ANSI-C quoting",
+            true,
+            host("GRUB_CMDLINE_LINUX=$'rd.iscsi.password\\x3dSup3rS3cret'\n"),
+        ),
+        (
+            "a redacted value",
+            false,
+            host("GRUB_CMDLINE_LINUX=\"quiet token:Sup3rS3cret\"\n"),
+        ),
+    ]
+}
+
+/// Nothing read from `/etc/default/grub` reaches its advisory, so neither
+/// file in [`grub_secret_hosts`] puts its secret, or `token:` and the
+/// secret, in the finding, the audit report, the snapshot, refine's view
+/// or either export, beyond the row's own retained content where that
+/// host allows it.
+#[test]
+fn a_default_grub_secret_never_reaches_the_advisory_or_any_output() {
+    use inspectah_web::adapter::build_web_view;
+
+    for (label, content_keeps_secret, host) in grub_secret_hosts() {
+        let snap = scan(host);
+        let grub = entry(&snap, "/etc/default/grub").expect("the grub defaults are collected");
+        let inspectah_core::types::FindingKind::Advisory { rationale, .. } = &grub.disposition
+        else {
+            panic!("{label}: expected an advisory, got {:?}", grub.disposition);
+        };
+        let mut texts = everywhere(&snap);
+        texts.push(("finding".into(), rationale.clone()));
+        texts.push((
+            "audit".into(),
+            inspectah_pipeline::render::audit::render_audit(&snap),
+        ));
+        texts.push((
+            "refine view".into(),
+            serde_json::to_string(&build_web_view(&session(&snap))).expect("the view serializes"),
+        ));
+        // The content as the snapshot and refine's view serialize it.
+        let content = serde_json::to_string(&grub.content).expect("the content serializes");
+        let content = &content[1..content.len() - 1];
+        for secret in [GRUB_SECRET.to_string(), format!("token:{GRUB_SECRET}")] {
+            for (place, text) in &texts {
+                let text = if content_keeps_secret {
+                    text.replace(content, "")
+                } else {
+                    text.clone()
+                };
+                assert!(!text.contains(&secret), "{label}: {secret} in {place}");
+            }
+        }
+    }
+}
+
+/// The config inspector as it runs on an OSTree or bootc host: the same
+/// collector, given a bootc source system, so it takes its OSTree branch
+/// and records rows by relative path (`etc/default/grub`). `collect()`
+/// runs the config inspector on package-based hosts only, so this is how
+/// a scan reaches that branch.
+struct OstreeConfig;
+
+impl inspectah_core::traits::inspector::Inspector for OstreeConfig {
+    fn id(&self) -> inspectah_core::types::completeness::InspectorId {
+        inspectah_core::types::completeness::InspectorId::Config
+    }
+
+    fn applicable_to(&self) -> &[inspectah_core::types::completeness::SourceSystemKind] {
+        &[inspectah_core::types::completeness::SourceSystemKind::PackageBased]
+    }
+
+    fn inspect(
+        &self,
+        ctx: &inspectah_core::traits::inspector::InspectionContext<'_>,
+        progress: &dyn inspectah_core::traits::progress::ProgressSink,
+    ) -> Result<
+        inspectah_core::traits::inspector::InspectorOutput,
+        inspectah_core::traits::inspector::InspectorError,
+    > {
+        let source = inspectah_core::types::system::SourceSystem::Bootc {
+            os_release: Default::default(),
+            booted_image: "quay.io/example/rhel-bootc:9".into(),
+            staged_image: None,
+        };
+        inspectah_collect::inspectors::config::ConfigInspector::new().inspect(
+            &inspectah_core::traits::inspector::InspectionContext {
+                source_system: &source,
+                executor: ctx.executor,
+                rpm_state: ctx.rpm_state,
+                baseline_data: ctx.baseline_data,
+            },
+            progress,
+        )
+    }
+}
+
+/// A scan whose config rows come from the OSTree branch: `/usr/etc` holds
+/// the image's `default/grub`, and `/etc` the host's edit of it.
+fn ostree_scan(hostname: &str, grub: &str) -> InspectionSnapshot {
+    use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
+    use inspectah_collect::inspectors::rpm::RpmInspector;
+
+    crate::sysctl_hosts::reload(&crate::sysctl_hosts::scan_with(
+        SysctlHost::new()
+            .file("/etc/hostname", &format!("{hostname}\n"))
+            .file("/usr/etc/default/grub", "GRUB_TIMEOUT=5\n")
+            .file("/etc/default/grub", grub),
+        vec![
+            Box::new(RpmInspector::new()),
+            Box::new(OstreeConfig),
+            Box::new(KernelbootInspector::new()),
+        ],
+    ))
+}
+
+/// The OSTree collector spells the path `etc/default/grub`. That row is
+/// settled like `/etc/default/grub`: no row when kargs.d carries what it
+/// sets, the advisory when it does not, and neither export nor a fleet
+/// merge of two such hosts copies the file.
+#[test]
+fn an_ostree_default_grub_is_settled_and_never_copied() {
+    let grub_rows = |snap: &InspectionSnapshot| -> Vec<ConfigFileEntry> {
+        snap.config
+            .as_ref()
+            .expect("the config section is present")
+            .files
+            .iter()
+            .filter(|f| f.path.trim_start_matches('/') == "etc/default/grub")
+            .cloned()
+            .collect()
+    };
+    let not_copied = |label: &str, tree: &tempfile::TempDir| {
+        assert!(
+            !tree.path().join("config/etc/default/grub").exists(),
+            "{label}: /etc/default/grub is never copied"
+        );
+    };
+
+    let matching = ostree_scan("ostree-a", "GRUB_TIMEOUT=5\nGRUB_CMDLINE_LINUX=\"quiet\"\n");
+    assert!(
+        grub_rows(&matching).is_empty(),
+        "no row for a file kargs.d carries: {:?}",
+        grub_rows(&matching)
+    );
+
+    let edited = |hostname| {
+        ostree_scan(
+            hostname,
+            "GRUB_TIMEOUT=5\nGRUB_CMDLINE_LINUX=\"quiet audit=1\"\n",
+        )
+    };
+    let hosts = [edited("ostree-a"), edited("ostree-b")];
+    for snap in &hosts {
+        let rows = grub_rows(snap);
+        let [row] = rows.as_slice() else {
+            panic!("one grub row, got {rows:?}");
+        };
+        assert_eq!(row.path, "etc/default/grub", "the OSTree branch's spelling");
+        assert!(
+            matches!(
+                row.disposition,
+                inspectah_core::types::FindingKind::Advisory { .. }
+            ),
+            "{:?}",
+            row.disposition
+        );
+        for (path, tree) in both_exports(snap) {
+            not_copied(path, &tree);
+        }
+    }
+
+    let (merged, _) = inspectah_core::aggregate::merge_snapshots(hosts.to_vec(), None, None)
+        .expect("the two hosts merge");
+    let merged = crate::sysctl_hosts::reload(&merged);
+    let rows = grub_rows(&merged);
+    assert!(!rows.is_empty(), "the merge keeps the advisory row");
+    for row in &rows {
+        assert!(
+            !row.disposition.is_included(),
+            "the merged row is not carried: {:?}",
+            row.disposition
+        );
+    }
+    not_copied("fleet export", &export_session(&session(&merged)));
 }
 
 /// `rpm -Va` reports a ghost file's mode change (`.M.......`, as rpm

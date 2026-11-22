@@ -1,12 +1,12 @@
-//! `/etc/default/grub` against the running kernel command line.
+//! `/etc/default/grub` against what the scan carries in kargs.d.
 //!
 //! The file is never copied into the image: bootc does not run
 //! `grub2-mkconfig`, and the scan already carries the running kernel's
 //! operator arguments into kargs.d (`render::configtree::kargs_toml`). So
 //! the file tells the user something only when `GRUB_CMDLINE_LINUX` or
-//! `GRUB_CMDLINE_LINUX_DEFAULT` sets an argument the running kernel was not
-//! booted with: an edit made for the next boot, which kargs.d does not
-//! hold.
+//! `GRUB_CMDLINE_LINUX_DEFAULT` sets an argument kargs.d will not hold:
+//! one the running kernel was not booted with, such as an edit made for
+//! the next boot, or one the kargs.d writer leaves out.
 //!
 //! The config inspector's modernization pass marks the file an advisory on
 //! every host. It runs beside the kernel and boot inspector, so it cannot
@@ -14,9 +14,13 @@
 //! `finalize_cross_inspector`, where both sections are present and nothing
 //! is redacted yet, and decides the row from the collected data.
 
+use crate::redaction::engine::redacted_kernel_cmdline;
+use crate::render::configtree::split_operator_kargs;
 use crate::render::safety::{KernelArg, is_bootloader_karg, kernel_args, kernel_name_eq};
 use inspectah_collect::inspectors::modernization::{DEFAULT_GRUB_PATH, DEFAULT_GRUB_RATIONALE};
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::config::ConfigFileEntry;
+use inspectah_core::types::destination::Destination;
 use inspectah_core::types::{AdvisoryType, FindingKind};
 use std::iter::Peekable;
 use std::str::Chars;
@@ -27,37 +31,81 @@ use std::str::Chars;
 /// kernel booted from carries both.
 const CMDLINE_VARS: [&str; 2] = ["GRUB_CMDLINE_LINUX", "GRUB_CMDLINE_LINUX_DEFAULT"];
 
-/// Decide the `/etc/default/grub` config row, whatever disposition the
+/// The advisory when `/etc/default/grub` sets kernel arguments kargs.d
+/// does not carry. Fixed text: nothing read from the file reaches it, so
+/// a value the reader took for a name cannot either, and a value can be a
+/// credential.
+const NOT_CARRIED_RATIONALE: &str = "/etc/default/grub is not copied: an image-mode host does \
+     not run grub2-mkconfig. inspectah carries the running kernel's arguments into \
+     /usr/lib/bootc/kargs.d, but GRUB_CMDLINE_LINUX or GRUB_CMDLINE_LINUX_DEFAULT sets kernel \
+     arguments that are not among them: ones the running kernel was not booted with, or ones \
+     the scan cannot carry. Put any argument the image needs from this file in a \
+     /usr/lib/bootc/kargs.d/*.toml file by hand.";
+
+/// How the kernel arguments `/etc/default/grub` sets compare with the ones
+/// the kargs.d writer carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Comparison {
+    /// kargs.d carries every argument the file sets.
+    Carried,
+    /// The file sets an argument kargs.d does not carry.
+    NotCarried,
+    /// The comparison cannot be made: no running command line, no
+    /// captured content, or a file this reader cannot be sure of.
+    Unknown,
+}
+
+/// Decide each `/etc/default/grub` config row, whatever disposition the
 /// collector gave it, so the file is never carried:
 ///
-/// - its arguments all run now: the row is removed, since there is nothing
-///   to tell the user;
-/// - it sets arguments the running kernel lacks: an advisory naming them,
-///   never their values, which can be credentials;
-/// - the comparison cannot be made (no running command line, no captured
-///   content, or a file this pass cannot parse with confidence): the
-///   modernization advisory as the collector writes it.
+/// - kargs.d carries every argument it sets: the row is removed, since
+///   there is nothing to tell the user;
+/// - it sets arguments kargs.d does not carry: an advisory in fixed text
+///   ([`NOT_CARRIED_RATIONALE`]);
+/// - the comparison cannot be made: the modernization advisory as the
+///   collector writes it.
 ///
-/// A row whose content was not captured keeps its `ContentNotCaptured`
-/// advisory, which already keeps it out of the export.
+/// A row is matched by its normalized destination, so the OSTree
+/// collector's `etc/default/grub` is one too. A row whose content was not
+/// captured keeps its `ContentNotCaptured` advisory, and a machine-state
+/// row its class, which already keep it out of the export.
 pub(crate) fn settle_default_grub(snapshot: &mut InspectionSnapshot) {
     let running = snapshot
         .kernel_boot
         .as_ref()
-        .map(|kb| kb.cmdline.clone())
+        .map(|kb| kb.cmdline.as_str())
         .filter(|cmdline| !cmdline.trim().is_empty());
     let Some(config) = snapshot.config.as_mut() else {
         return;
     };
-    let Some(index) = config
-        .files
-        .iter()
-        .position(|entry| entry.path == DEFAULT_GRUB_PATH)
-    else {
-        return;
-    };
-    let entry = &mut config.files[index];
-    if entry.disposition.is_machine_state()
+    config.files.retain_mut(|entry| {
+        if !is_default_grub(entry) || keeps_its_disposition(entry) {
+            return true;
+        }
+        let comparison = match running {
+            Some(running) if !entry.content.is_empty() => compare(&entry.content, running),
+            _ => Comparison::Unknown,
+        };
+        let rationale = match comparison {
+            Comparison::Carried => return false,
+            Comparison::NotCarried => NOT_CARRIED_RATIONALE,
+            Comparison::Unknown => DEFAULT_GRUB_RATIONALE,
+        };
+        entry.disposition = FindingKind::advisory(AdvisoryType::Modernization, rationale);
+        true
+    });
+}
+
+/// Whether `entry` is `/etc/default/grub`, however the collector spelled
+/// the path.
+fn is_default_grub(entry: &ConfigFileEntry) -> bool {
+    Destination::new(&entry.path).is_ok_and(|dest| dest.as_str() == DEFAULT_GRUB_PATH)
+}
+
+/// Whether `entry`'s disposition already keeps it out of the export for a
+/// reason of its own, which this pass leaves in place.
+fn keeps_its_disposition(entry: &ConfigFileEntry) -> bool {
+    entry.disposition.is_machine_state()
         || matches!(
             entry.disposition,
             FindingKind::Advisory {
@@ -65,69 +113,36 @@ pub(crate) fn settle_default_grub(snapshot: &mut InspectionSnapshot) {
                 ..
             }
         )
-    {
-        return;
-    }
-    let not_running = running
-        .as_deref()
-        .filter(|_| !entry.content.is_empty())
-        .and_then(|running| configured_not_running(&entry.content, running));
-    match not_running {
-        Some(names) if names.is_empty() => {
-            config.files.remove(index);
-        }
-        Some(names) => {
-            entry.disposition =
-                FindingKind::advisory(AdvisoryType::Modernization, not_running_rationale(&names));
-        }
-        None => {
-            entry.disposition =
-                FindingKind::advisory(AdvisoryType::Modernization, DEFAULT_GRUB_RATIONALE);
-        }
-    }
 }
 
-/// The advisory for arguments `/etc/default/grub` sets that the running
-/// kernel lacks.
-fn not_running_rationale(names: &[String]) -> String {
-    format!(
-        "/etc/default/grub is not copied: an image-mode host does not run grub2-mkconfig, and \
-         bootc reads kernel arguments from /usr/lib/bootc/kargs.d. GRUB_CMDLINE_LINUX or \
-         GRUB_CMDLINE_LINUX_DEFAULT sets kernel arguments the running kernel was not booted \
-         with, so the image does not carry them: {}. Put the ones the image needs in a \
-         /usr/lib/bootc/kargs.d/*.toml file.",
-        names.join(", ")
-    )
-}
-
-/// The names of the arguments `grub` configures that `running` does not
-/// have with the same value, in order and once each, or `None` when the
-/// file cannot be parsed with confidence.
+/// Whether the kargs.d writer carries every argument `grub` configures,
+/// for a host booted with `running`.
 ///
-/// Both sides are read with [`kernel_args`] and compared by parsed name,
-/// `-` equal to `_` as the kernel compares them, and value. A name the
-/// boot loader or installer owns ([`is_bootloader_karg`]) is skipped: the
-/// kargs.d writer never carries one, so naming it would ask the user to
-/// do what the image must not. A name is shown escaped, so a control
-/// character in it cannot start a new line where the advisory is printed
-/// as a comment.
-fn configured_not_running(grub: &str, running: &str) -> Option<Vec<String>> {
-    let configured = cmdline_vars(grub)?.join(" ");
-    let running = kernel_args(running);
-    let mut names: Vec<String> = Vec::new();
-    for arg in kernel_args(&configured) {
-        if arg.name().is_empty()
-            || is_bootloader_karg(&arg)
-            || running.iter().any(|run| same_arg(run, &arg))
-        {
-            continue;
-        }
-        let name = arg.name().escape_debug().to_string();
-        if !names.contains(&name) {
-            names.push(name);
-        }
+/// The carried arguments are the writer's own: `running` as redaction
+/// leaves it ([`redacted_kernel_cmdline`]), through the writer's split
+/// ([`split_operator_kargs`]), so an argument the writer drops (a control
+/// character, a redacted credential, a boot loader name) is never one the
+/// file can match. Arguments are compared by parsed name, `-` equal to
+/// `_` as the kernel compares them, and value. A name the boot loader or
+/// installer owns ([`is_bootloader_karg`]) is skipped on the file's side:
+/// the writer never carries one, and the image must not set one.
+fn compare(grub: &str, running: &str) -> Comparison {
+    let Some(values) = cmdline_vars(grub) else {
+        return Comparison::Unknown;
+    };
+    let configured = values.join(" ");
+    let redacted = redacted_kernel_cmdline(running);
+    let (carried, _) = split_operator_kargs(&redacted);
+    let all_carried = kernel_args(&configured).iter().all(|arg| {
+        arg.name().is_empty()
+            || is_bootloader_karg(arg)
+            || carried.iter().any(|run| same_arg(run, arg))
+    });
+    if all_carried {
+        Comparison::Carried
+    } else {
+        Comparison::NotCarried
     }
-    Some(names)
 }
 
 /// Whether two arguments set the same parameter to the same value.
@@ -142,34 +157,38 @@ fn same_arg(a: &KernelArg<'_>, b: &KernelArg<'_>) -> bool {
 /// The values `/etc/default/grub` gives [`CMDLINE_VARS`] when the shell
 /// sources it, or `None` when this reader cannot be sure.
 ///
-/// A real file is a list of plain assignments, so that is all this
-/// accepts: each command must be assignments only, optionally after
-/// `export`. Values may be double-quoted, single-quoted, unquoted or a mix,
-/// and a later assignment replaces an earlier one. A tracked value may
-/// refer to either tracked variable (`"$GRUB_CMDLINE_LINUX audit=1"`), and
-/// gets its value so far. Anything else that could change a tracked value
-/// makes the file unreadable: a command (`.`, `source`, `if`), `+=`, a
-/// tracked value with command substitution or another variable, an
-/// unterminated quote, or an untracked assignment whose text names a
-/// tracked variable (`${GRUB_CMDLINE_LINUX:=...}` assigns it). An
-/// untracked value may hold anything else, since `GRUB_DISTRIBUTOR` holds
-/// a command substitution on every RHEL and Fedora host.
+/// The reader accepts an allow-list of line forms, the ones a real file
+/// is written in, and nothing else:
+///
+/// - a blank line or a comment;
+/// - one assignment, `NAME=value`;
+/// - `export NAME=value` or `export NAME`, with that one argument.
+///
+/// A comment may end a line, and a backslash before a newline joins two.
+/// Values may be double-quoted, single-quoted, unquoted or a mix, and a
+/// later assignment replaces an earlier one. A tracked value may refer to
+/// either tracked variable (`"$GRUB_CMDLINE_LINUX audit=1"`), and gets its
+/// value so far. Any other line makes the file unreadable: a command
+/// (`.`, `source`, `if`, `declare`), more than one word, `+=`, and any
+/// line holding a construct the reader does not model ([`lines`]). A
+/// tracked value holding any expansion but a tracked variable does too.
+/// An untracked value may also hold another variable, a special parameter
+/// or a plain command substitution inside double quotes, since
+/// `GRUB_DISTRIBUTOR` holds one on every RHEL and Fedora host; a
+/// substitution runs in a subshell and cannot assign a tracked variable.
 fn cmdline_vars(text: &str) -> Option<[String; 2]> {
     let mut values = [String::new(), String::new()];
-    for command in commands(text)? {
-        let exported = command.first().is_some_and(|word| word.raw == "export");
-        for word in command.iter().skip(usize::from(exported)) {
-            match assignment(word) {
-                Some((name, value)) => {
-                    if let Some(index) = CMDLINE_VARS.iter().position(|var| *var == name) {
-                        values[index] = expand(&value, &values)?;
-                    } else if word.raw.contains(CMDLINE_VARS[0]) {
-                        return None;
-                    }
-                }
-                None if exported && is_name(&word.raw) => {}
-                None => return None,
-            }
+    for line in lines(text)? {
+        let word = match line.as_slice() {
+            [] => continue,
+            [export, name] if export.raw == "export" && is_name(&name.raw) => continue,
+            [export, word] if export.raw == "export" => word,
+            [word] => word,
+            _ => return None,
+        };
+        let (name, value) = assignment(word)?;
+        if let Some(index) = CMDLINE_VARS.iter().position(|var| *var == name) {
+            values[index] = expand(&value, &values)?;
         }
     }
     Some(values)
@@ -181,9 +200,8 @@ enum Piece {
     Text(String),
     /// `$NAME` or `${NAME}`.
     Var(String),
-    /// An expansion this reader does not evaluate: command substitution,
-    /// a parameter operator, a positional or special parameter, or a
-    /// shell operator character.
+    /// An expansion this reader does not evaluate: a special or positional
+    /// parameter, or a command substitution.
     Unsupported,
 }
 
@@ -248,22 +266,37 @@ fn expand(pieces: &[Piece], values: &[String; 2]) -> Option<String> {
     Some(out)
 }
 
-/// Split `text` into commands of words, the way `sh` reads a file of
-/// simple commands: unquoted newline and `;` end a command, unquoted
-/// blanks end a word, `#` at the start of a word starts a comment, and a
-/// backslash before a newline joins the lines. `None` for an
-/// unterminated quote or `${`.
-fn commands(text: &str) -> Option<Vec<Vec<Word>>> {
+/// Unquoted characters with a shell meaning this reader does not model:
+/// the operators, which start another command, a pipeline, a redirection
+/// or a subshell; a backtick, which starts a command substitution whose
+/// end depends on backslash rules; `~`, which an assignment expands to a
+/// home directory; and the glob and brace characters, which `export`'s
+/// argument may expand.
+const UNMODELED_UNQUOTED: &[char] = &[
+    ';', '&', '|', '<', '>', '(', ')', '`', '~', '{', '}', '*', '?', '[', ']',
+];
+
+/// Split `text` into lines of words, the way `sh` reads a file of simple
+/// commands, or `None` for any construct the reader does not model.
+///
+/// Unquoted blanks end a word, an unquoted newline ends a line, `#` at the
+/// start of a word starts a comment, and a backslash before a newline
+/// joins the lines. Single quotes, double quotes ([`double_quoted`]) and
+/// `$` expansions ([`expansion`]) are read as the shell reads them. Any of
+/// [`UNMODELED_UNQUOTED`], `$'...'` and `$"..."` quoting, any other
+/// control character, an unterminated quote and a backtick anywhere make
+/// the file unreadable.
+fn lines(text: &str) -> Option<Vec<Vec<Word>>> {
     let mut chars = text.chars().peekable();
-    let mut commands = Vec::new();
-    let mut command: Vec<Word> = Vec::new();
+    let mut lines = Vec::new();
+    let mut line: Vec<Word> = Vec::new();
     let mut word: Option<Word> = None;
     while let Some(c) = chars.next() {
         match c {
-            ' ' | '\t' => command.extend(word.take()),
-            '\n' | ';' => {
-                command.extend(word.take());
-                commands.push(std::mem::take(&mut command));
+            ' ' | '\t' => line.extend(word.take()),
+            '\n' => {
+                line.extend(word.take());
+                lines.push(std::mem::take(&mut line));
             }
             '#' if word.is_none() => {
                 for skipped in chars.by_ref() {
@@ -271,7 +304,7 @@ fn commands(text: &str) -> Option<Vec<Vec<Word>>> {
                         break;
                     }
                 }
-                commands.push(std::mem::take(&mut command));
+                lines.push(std::mem::take(&mut line));
             }
             '\\' => match chars.next() {
                 Some('\n') => {}
@@ -309,13 +342,9 @@ fn commands(text: &str) -> Option<Vec<Vec<Word>>> {
             '$' => {
                 let w = word.get_or_insert_default();
                 w.raw.push(c);
-                expansion(&mut chars, w)?;
+                expansion(&mut chars, w, false)?;
             }
-            '`' | '|' | '&' | '<' | '>' | '(' | ')' => {
-                let w = word.get_or_insert_default();
-                w.raw.push(c);
-                w.pieces.push(Piece::Unsupported);
-            }
+            other if UNMODELED_UNQUOTED.contains(&other) || other.is_control() => return None,
             other => {
                 let w = word.get_or_insert_default();
                 w.raw.push(other);
@@ -323,13 +352,14 @@ fn commands(text: &str) -> Option<Vec<Vec<Word>>> {
             }
         }
     }
-    command.extend(word);
-    commands.push(command);
-    Some(commands.into_iter().filter(|c| !c.is_empty()).collect())
+    line.extend(word);
+    lines.push(line);
+    Some(lines)
 }
 
 /// The rest of a double-quoted string, its closing quote included. A
 /// backslash escapes only `$`, `` ` ``, `"`, `\` and a newline, as in `sh`.
+/// A backtick makes the file unreadable.
 fn double_quoted(chars: &mut Peekable<Chars<'_>>, w: &mut Word) -> Option<()> {
     loop {
         let c = chars.next()?;
@@ -347,62 +377,128 @@ fn double_quoted(chars: &mut Peekable<Chars<'_>>, w: &mut Word) -> Option<()> {
                 }
                 _ => w.push_text(c),
             },
-            '$' => expansion(chars, w)?,
-            '`' => w.pieces.push(Piece::Unsupported),
+            '$' => expansion(chars, w, true)?,
+            '`' => return None,
             other => w.push_text(other),
         }
     }
 }
 
-/// What follows a `$`: a variable reference, an expansion this reader
-/// does not evaluate, or a literal `$` when nothing an expansion starts
-/// with follows.
-fn expansion(chars: &mut Peekable<Chars<'_>>, w: &mut Word) -> Option<()> {
+/// What follows a `$`, in double quotes when `quoted`: a variable
+/// reference, a special parameter, a command substitution in double
+/// quotes ([`command_substitution`]), or a literal `$` when nothing an
+/// expansion starts with follows. `None` for `${` holding more than a
+/// name, `$[`, an unquoted `$(`, and unquoted `$'` or `$"`.
+fn expansion(chars: &mut Peekable<Chars<'_>>, w: &mut Word, quoted: bool) -> Option<()> {
     match chars.peek().copied() {
         Some('{') => {
             chars.next();
             w.raw.push('{');
-            let mut inner = String::new();
-            loop {
-                let c = chars.next()?;
-                w.raw.push(c);
-                if c == '}' {
-                    break;
-                }
-                inner.push(c);
+            let name = name_chars(chars, w);
+            if !is_name(&name) || chars.next()? != '}' {
+                return None;
             }
-            w.pieces.push(if is_name(&inner) {
-                Piece::Var(inner)
-            } else {
-                Piece::Unsupported
-            });
-        }
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
-            let mut name = String::new();
-            while let Some(&c) = chars.peek() {
-                if !(c.is_ascii_alphanumeric() || c == '_') {
-                    break;
-                }
-                chars.next();
-                w.raw.push(c);
-                name.push(c);
-            }
+            w.raw.push('}');
             w.pieces.push(Piece::Var(name));
         }
-        Some(c) if c.is_ascii_digit() || "($?#@*!-".contains(c) => {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            let name = name_chars(chars, w);
+            w.pieces.push(Piece::Var(name));
+        }
+        Some(c) if c.is_ascii_digit() || "$?#@*!-".contains(c) => {
             chars.next();
             w.raw.push(c);
             w.pieces.push(Piece::Unsupported);
         }
+        Some('(') if quoted => {
+            chars.next();
+            w.raw.push('(');
+            command_substitution(chars, w)?;
+            w.pieces.push(Piece::Unsupported);
+        }
+        Some('(' | '[') => return None,
+        Some('\'' | '"') if !quoted => return None,
         _ => w.push_text('$'),
     }
     Some(())
 }
 
+/// The shell name characters that follow, consumed into `w.raw`.
+fn name_chars(chars: &mut Peekable<Chars<'_>>, w: &mut Word) -> String {
+    let mut name = String::new();
+    while let Some(&c) = chars.peek() {
+        if !(c.is_ascii_alphanumeric() || c == '_') {
+            break;
+        }
+        chars.next();
+        w.raw.push(c);
+        name.push(c);
+    }
+    name
+}
+
+/// Characters a word of a command substitution may hold outside single
+/// quotes, besides ASCII letters and digits.
+const SUBSTITUTION_WORD_CHARS: &str = "_-.,/:=+@%^";
+
+/// The shell's reserved words. One opens a compound command, and `case`
+/// patterns end in a `)` that does not end a command substitution.
+const RESERVED_WORDS: &[&str] = &[
+    "case", "coproc", "do", "done", "elif", "else", "esac", "fi", "for", "function", "if", "in",
+    "select", "then", "time", "until", "while",
+];
+
+/// A command substitution inside double quotes, after its `$(`, read to
+/// and including its `)`.
+///
+/// The shell runs it in a subshell, so it cannot assign a tracked
+/// variable; what matters is that this reader ends it where the shell
+/// does. So it accepts only one plain command, which ends at the first
+/// `)` outside single quotes: words of letters, digits and
+/// [`SUBSTITUTION_WORD_CHARS`], and single-quoted strings, with no
+/// unquoted word in [`RESERVED_WORDS`]. Anything else, an operator, a
+/// newline, another quote or expansion, is `None`. The stock
+/// `"$(sed 's, release .*$,,g' /etc/system-release)"` reads.
+fn command_substitution(chars: &mut Peekable<Chars<'_>>, w: &mut Word) -> Option<()> {
+    let mut word = String::new();
+    let mut word_quoted = false;
+    loop {
+        let c = chars.next()?;
+        w.raw.push(c);
+        match c {
+            ')' | ' ' | '\t' => {
+                if !word_quoted && RESERVED_WORDS.contains(&word.as_str()) {
+                    return None;
+                }
+                if c == ')' {
+                    return Some(());
+                }
+                word.clear();
+                word_quoted = false;
+            }
+            '\'' => {
+                word_quoted = true;
+                loop {
+                    let quoted = chars.next()?;
+                    w.raw.push(quoted);
+                    match quoted {
+                        '\'' => break,
+                        '\n' => return None,
+                        _ => {}
+                    }
+                }
+            }
+            c if c.is_ascii_alphanumeric() || SUBSTITUTION_WORD_CHARS.contains(c) => word.push(c),
+            _ => return None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+    use Comparison::{Carried, NotCarried, Unknown};
+    use inspectah_core::types::config::{ConfigFileKind, ConfigSection};
     use inspectah_core::types::kernelboot::KernelBootSection;
 
     /// The command line a stock RHEL 9 host on LVM boots with.
@@ -410,8 +506,7 @@ mod tests {
          crashkernel=1G-4G:192M,4G-64G:256M,64G-:512M resume=/dev/mapper/rhel-swap \
          rd.lvm.lv=rhel/root rd.lvm.lv=rhel/swap rhgb quiet";
 
-    /// A stock RHEL 9 `/etc/default/grub`, with `GRUB_CMDLINE_LINUX` as
-    /// `{}` for each case to fill.
+    /// A stock RHEL 9 `/etc/default/grub`.
     const STOCK: &str = "GRUB_TIMEOUT=5\n\
          GRUB_DISTRIBUTOR=\"$(sed 's, release .*$,,g' /etc/system-release)\"\n\
          GRUB_DEFAULT=saved\n\
@@ -422,163 +517,273 @@ mod tests {
          GRUB_DISABLE_RECOVERY=\"true\"\n\
          GRUB_ENABLE_BLSCFG=true\n";
 
-    /// Each file's names configured but not running, against `running`,
-    /// or `None` for a file read as unparseable.
+    /// Each file against `running`.
     #[test]
-    fn configured_arguments_compare_with_the_running_ones() {
-        type Case<'a> = (&'a str, &'a str, &'a str, Option<&'a [&'a str]>);
-        let cases: &[Case] = &[
-            ("stock file, as booted", STOCK, RUNNING, Some(&[])),
+    fn configured_arguments_compare_with_the_carried_ones() {
+        let cases: &[(&str, &str, &str, Comparison)] = &[
+            ("stock file, as booted", STOCK, RUNNING, Carried),
             (
                 "stock file plus an edit after it",
                 &format!("{STOCK}GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX audit=1\"\n"),
                 RUNNING,
-                Some(&["audit"]),
+                NotCarried,
             ),
             (
                 "double quoted",
                 "GRUB_CMDLINE_LINUX=\"rhgb quiet audit=1 nosmt\"",
                 "ro quiet nosmt",
-                Some(&["audit"]),
+                NotCarried,
             ),
             (
                 "single quoted",
                 "GRUB_CMDLINE_LINUX='audit=1 nosmt'",
                 "audit=1",
-                Some(&["nosmt"]),
+                NotCarried,
             ),
             (
                 "unquoted",
                 "GRUB_CMDLINE_LINUX=audit=1",
                 "quiet",
-                Some(&["audit"]),
+                NotCarried,
             ),
             (
                 "mixed quoting in one word",
                 "GRUB_CMDLINE_LINUX=\"audit=1 \"'nosmt 'mitigations=off",
-                "audit=1 nosmt",
-                Some(&["mitigations"]),
+                "audit=1 nosmt mitigations=off",
+                Carried,
             ),
             (
                 "a later assignment overrides",
                 "GRUB_CMDLINE_LINUX=\"audit=1\"\nGRUB_CMDLINE_LINUX=\"nosmt\"",
                 "nosmt",
-                Some(&[]),
+                Carried,
             ),
             (
                 "self-reference appends",
                 "GRUB_CMDLINE_LINUX=\"quiet\"\nGRUB_CMDLINE_LINUX=\"${GRUB_CMDLINE_LINUX} audit=1\"",
                 "quiet",
-                Some(&["audit"]),
+                NotCarried,
             ),
             (
                 "_DEFAULT is on the booted entry",
                 "GRUB_CMDLINE_LINUX=\"quiet\"\nGRUB_CMDLINE_LINUX_DEFAULT=\"mitigations=off\"",
                 "quiet",
-                Some(&["mitigations"]),
+                NotCarried,
             ),
             (
                 "a different value is not running",
                 "GRUB_CMDLINE_LINUX=\"audit=1\"",
                 "audit=0",
-                Some(&["audit"]),
+                NotCarried,
             ),
             (
                 "- and _ name one parameter",
                 "GRUB_CMDLINE_LINUX=\"transparent-hugepage=never\"",
                 "transparent_hugepage=never",
-                Some(&[]),
+                Carried,
             ),
             (
                 "a quoted value compares as the kernel parses it",
                 "GRUB_CMDLINE_LINUX=\"dyndbg=\\\"file x.c +p\\\"\"",
                 "dyndbg=\"file x.c +p\"",
-                Some(&[]),
+                Carried,
             ),
             (
-                "boot loader names are never named",
+                "boot loader names are skipped",
                 "GRUB_CMDLINE_LINUX=\"root=/dev/sdb1 rd.lvm.lv=other/root rhgb\"",
                 "ro",
-                Some(&[]),
+                Carried,
             ),
             (
-                "each name once",
-                "GRUB_CMDLINE_LINUX=\"console=ttyS0 isolcpus=1 isolcpus=2\"",
-                "ro",
-                Some(&["isolcpus"]),
+                "a repeated argument with both values running",
+                "GRUB_CMDLINE_LINUX=\"isolcpus=1 isolcpus=2\"",
+                "ro isolcpus=2 isolcpus=1",
+                Carried,
+            ),
+            (
+                "a repeated argument with one value running",
+                "GRUB_CMDLINE_LINUX=\"isolcpus=1 isolcpus=2\"",
+                "ro isolcpus=1",
+                NotCarried,
             ),
             (
                 "export, comments and a continued line",
                 "# GRUB_CMDLINE_LINUX=\"ignored=1\"\nexport GRUB_CMDLINE_LINUX=\"quiet \\\n  audit=1\" # set by hand\nexport GRUB_CMDLINE_LINUX",
-                "quiet",
-                Some(&["audit"]),
+                "quiet audit=1",
+                Carried,
             ),
             (
-                "a credential is named, never its value",
+                "a credential not running",
                 "GRUB_CMDLINE_LINUX=\"quiet rd.iscsi.password=Sup3rS3cret\"",
                 "quiet",
-                Some(&["rd.iscsi.password"]),
+                NotCarried,
             ),
-            ("no tracked variable", "GRUB_TIMEOUT=5", "quiet", Some(&[])),
+            (
+                "a credential running is redacted, so kargs.d leaves it out",
+                "GRUB_CMDLINE_LINUX=\"quiet rd.iscsi.password=Sup3rS3cret\"",
+                "quiet rd.iscsi.password=Sup3rS3cret",
+                NotCarried,
+            ),
+            (
+                "a running argument with a control character, which kargs.d leaves out",
+                "GRUB_CMDLINE_LINUX=\"dyndbg=\\\"file\tx.c +p\\\"\"",
+                "quiet dyndbg=\"file\tx.c +p\"",
+                NotCarried,
+            ),
+            (
+                "a credential name in a value the redaction pattern reads",
+                "GRUB_CMDLINE_LINUX=\"quiet token:Sup3rS3cret\"",
+                "quiet",
+                NotCarried,
+            ),
+            ("no tracked variable", "GRUB_TIMEOUT=5", "quiet", Carried),
+            (
+                "ANSI-C quoting",
+                "GRUB_CMDLINE_LINUX=$'rd.iscsi.password\\x3dSup3rS3cret'",
+                "quiet",
+                Unknown,
+            ),
+            (
+                "locale quoting",
+                "GRUB_CMDLINE_LINUX=$\"quiet\"",
+                "quiet",
+                Unknown,
+            ),
+            (
+                "an operator after an untracked assignment",
+                "GRUB_CMDLINE_LINUX=audit=1\nX=1|| GRUB_CMDLINE_LINUX=quiet",
+                "quiet",
+                Unknown,
+            ),
+            (
+                "export with two arguments",
+                "GRUB_CMDLINE_LINUX=audit=1\nexport GRUB_CMDLINE_LINUX=quiet GRUB_CMDLINE_LINUX_DEFAULT=\"$GRUB_CMDLINE_LINUX\"",
+                "quiet",
+                Unknown,
+            ),
+            (
+                "declare",
+                "declare GRUB_CMDLINE_LINUX=quiet",
+                "quiet",
+                Unknown,
+            ),
+            (
+                "readonly",
+                "readonly GRUB_CMDLINE_LINUX=quiet",
+                "quiet",
+                Unknown,
+            ),
+            ("local", "local GRUB_CMDLINE_LINUX=quiet", "quiet", Unknown),
+            (
+                "two assignments on a line",
+                "X=1 GRUB_CMDLINE_LINUX=quiet",
+                "quiet",
+                Unknown,
+            ),
+            (
+                "a semicolon",
+                "X=1; GRUB_CMDLINE_LINUX=quiet",
+                "quiet",
+                Unknown,
+            ),
+            (
+                "an ampersand",
+                "X=1 & GRUB_CMDLINE_LINUX=quiet",
+                "quiet",
+                Unknown,
+            ),
+            ("a pipe", "X=1 | GRUB_CMDLINE_LINUX=quiet", "quiet", Unknown),
+            ("&&", "X=1&&GRUB_CMDLINE_LINUX=quiet", "quiet", Unknown),
+            (
+                "a redirection",
+                "GRUB_CMDLINE_LINUX=quiet >/dev/null",
+                "quiet",
+                Unknown,
+            ),
+            (
+                "an input redirection",
+                "GRUB_CMDLINE_LINUX=quiet</dev/null",
+                "quiet",
+                Unknown,
+            ),
+            ("a subshell", "(GRUB_CMDLINE_LINUX=quiet)", "quiet", Unknown),
+            (
+                "an array",
+                "GRUB_CMDLINE_LINUX=(audit=1)",
+                "audit=1",
+                Unknown,
+            ),
+            (
+                "a backtick in an untracked value",
+                "X=\"`echo`\"\nGRUB_CMDLINE_LINUX=quiet",
+                "quiet",
+                Unknown,
+            ),
+            (
+                "an unquoted command substitution",
+                "X=$(true)\nGRUB_CMDLINE_LINUX=quiet",
+                "quiet",
+                Unknown,
+            ),
+            (
+                "a case statement in a command substitution",
+                "GRUB_CMDLINE_LINUX=audit=1\nX=\"$(case a in a)\"\nGRUB_CMDLINE_LINUX=quiet\nY=\";; esac)\"",
+                "quiet",
+                Unknown,
+            ),
+            (
+                "a quote inside a command substitution",
+                "X=\"$(echo \"a\")\"\nGRUB_CMDLINE_LINUX=quiet",
+                "quiet",
+                Unknown,
+            ),
+            ("a tilde", "GRUB_CMDLINE_LINUX=~/x", "quiet", Unknown),
             (
                 "command substitution in a tracked value",
                 "GRUB_CMDLINE_LINUX=\"$(cat /etc/kargs)\"",
                 "quiet",
-                None,
+                Unknown,
             ),
             (
                 "another variable in a tracked value",
                 "GRUB_CMDLINE_LINUX=\"$EXTRA audit=1\"",
                 "quiet",
-                None,
+                Unknown,
             ),
             (
                 "a sourced file",
                 ". /etc/default/grub.local\nGRUB_CMDLINE_LINUX=\"audit=1\"",
                 "audit=1",
-                None,
+                Unknown,
             ),
             (
                 "a conditional",
                 "if true; then GRUB_CMDLINE_LINUX=\"audit=1\"; fi",
                 "audit=1",
-                None,
+                Unknown,
             ),
             (
                 "an append operator",
                 "GRUB_CMDLINE_LINUX+=\" audit=1\"",
                 "quiet",
-                None,
+                Unknown,
             ),
             (
-                "an untracked assignment that assigns a tracked one",
+                "a parameter operator",
                 "X=${GRUB_CMDLINE_LINUX:=audit=1}",
                 "quiet",
-                None,
+                Unknown,
             ),
             (
                 "an unterminated quote",
                 "GRUB_CMDLINE_LINUX=\"audit=1",
                 "audit=1",
-                None,
+                Unknown,
             ),
-            ("an array", "GRUB_CMDLINE_LINUX=(audit=1)", "audit=1", None),
         ];
         for (label, grub, running, want) in cases {
-            let got = configured_not_running(grub, running);
-            let want: Option<Vec<String>> =
-                want.map(|names| names.iter().map(|n| n.to_string()).collect());
-            assert_eq!(got, want, "{label}");
+            assert_eq!(compare(grub, running), *want, "{label}");
         }
-    }
-
-    /// A control character in a name is escaped in the advisory.
-    #[test]
-    fn a_name_is_shown_escaped() {
-        assert_eq!(
-            configured_not_running("GRUB_CMDLINE_LINUX='\"a\nb\"=1'", "quiet"),
-            Some(vec!["a\\nb\\\"".to_string()])
-        );
     }
 
     fn snapshot(grub: ConfigFileEntry, cmdline: Option<&str>) -> InspectionSnapshot {
@@ -595,9 +800,9 @@ mod tests {
         }
     }
 
-    fn grub_entry(content: &str, disposition: FindingKind) -> ConfigFileEntry {
+    fn grub_entry(path: &str, content: &str, disposition: FindingKind) -> ConfigFileEntry {
         ConfigFileEntry {
-            path: DEFAULT_GRUB_PATH.into(),
+            path: path.into(),
             kind: ConfigFileKind::RpmOwnedModified,
             content: content.into(),
             disposition,
@@ -609,13 +814,15 @@ mod tests {
     /// advisory, whatever the collector gave it, so the file is never
     /// carried, even when the modernization pass did not run.
     #[test]
-    fn the_grub_row_is_settled_against_the_running_command_line() {
+    fn the_grub_row_is_settled_against_the_carried_arguments() {
         let modernization =
             FindingKind::advisory(AdvisoryType::Modernization, DEFAULT_GRUB_RATIONALE);
+        let not_carried = FindingKind::advisory(AdvisoryType::Modernization, NOT_CARRIED_RATIONALE);
         let not_captured = FindingKind::advisory(AdvisoryType::ContentNotCaptured, "too large");
         let edited = "GRUB_CMDLINE_LINUX=\"quiet rd.iscsi.password=Sup3rS3cret audit=1\"\n";
         let generic = Some(modernization.clone());
         type Case<'a> = (
+            &'a str,
             &'a str,
             &'a str,
             FindingKind,
@@ -625,6 +832,7 @@ mod tests {
         let cases: Vec<Case> = vec![
             (
                 "matches: no row",
+                DEFAULT_GRUB_PATH,
                 "GRUB_CMDLINE_LINUX=\"quiet\"\n",
                 modernization.clone(),
                 Some("ro quiet"),
@@ -632,13 +840,39 @@ mod tests {
             ),
             (
                 "matches, modernization did not run: no row",
+                DEFAULT_GRUB_PATH,
                 "GRUB_CMDLINE_LINUX=\"quiet\"\n",
                 FindingKind::included(),
                 Some("ro quiet"),
                 None,
             ),
             (
+                "matches, OSTree's relative path: no row",
+                "etc/default/grub",
+                "GRUB_CMDLINE_LINUX=\"quiet\"\n",
+                FindingKind::included(),
+                Some("ro quiet"),
+                None,
+            ),
+            (
+                "not carried: the fixed advisory",
+                DEFAULT_GRUB_PATH,
+                edited,
+                FindingKind::included(),
+                Some("ro quiet audit=1"),
+                Some(not_carried.clone()),
+            ),
+            (
+                "not carried, OSTree's relative path: the fixed advisory",
+                "etc/default/grub",
+                edited,
+                FindingKind::included(),
+                Some("ro quiet audit=1"),
+                Some(not_carried.clone()),
+            ),
+            (
                 "no running command line",
+                DEFAULT_GRUB_PATH,
                 edited,
                 modernization.clone(),
                 None,
@@ -646,13 +880,23 @@ mod tests {
             ),
             (
                 "an empty running command line",
+                DEFAULT_GRUB_PATH,
                 edited,
                 modernization.clone(),
                 Some(""),
                 generic.clone(),
             ),
             (
-                "unparseable, modernization did not run",
+                "unreadable, modernization did not run",
+                DEFAULT_GRUB_PATH,
+                "GRUB_CMDLINE_LINUX=\"$(cat x)\"\n",
+                FindingKind::included(),
+                Some("ro quiet"),
+                generic.clone(),
+            ),
+            (
+                "unreadable, OSTree's relative path",
+                "etc/default/grub",
                 "GRUB_CMDLINE_LINUX=\"$(cat x)\"\n",
                 FindingKind::included(),
                 Some("ro quiet"),
@@ -660,6 +904,7 @@ mod tests {
             ),
             (
                 "no captured content",
+                DEFAULT_GRUB_PATH,
                 "",
                 modernization.clone(),
                 Some("ro quiet"),
@@ -667,14 +912,15 @@ mod tests {
             ),
             (
                 "content not captured keeps its advisory",
+                DEFAULT_GRUB_PATH,
                 "",
                 not_captured.clone(),
                 Some("ro quiet"),
                 Some(not_captured.clone()),
             ),
         ];
-        for (label, content, disposition, cmdline, want) in cases {
-            let mut snap = snapshot(grub_entry(content, disposition), cmdline);
+        for (label, path, content, disposition, cmdline, want) in cases {
+            let mut snap = snapshot(grub_entry(path, content, disposition), cmdline);
             settle_default_grub(&mut snap);
             let got = snap
                 .config
@@ -686,33 +932,26 @@ mod tests {
         }
     }
 
-    /// An argument set in the file and not running is named; its value,
-    /// which here is a credential, appears nowhere in the row's finding.
+    /// Nothing parsed from the file reaches the advisory: a value the
+    /// reader could take for a name, and a credential the content
+    /// redaction finds, appear nowhere in the row's finding.
     #[test]
-    fn the_advisory_names_arguments_and_never_values() {
-        let mut snap = snapshot(
-            grub_entry(
-                "GRUB_CMDLINE_LINUX=\"quiet rd.iscsi.password=Sup3rS3cret audit=1\"\n",
-                FindingKind::included(),
-            ),
-            Some("ro quiet audit=1"),
-        );
-        settle_default_grub(&mut snap);
-        let files = snap.config.unwrap().files;
-        match &files[0].disposition {
-            FindingKind::Advisory {
-                advisory_type: AdvisoryType::Modernization,
-                rationale,
-            } => {
-                assert!(
-                    rationale.contains("so the image does not carry them: rd.iscsi.password."),
-                    "{rationale}"
-                );
-                assert!(!rationale.contains("Sup3rS3cret"), "{rationale}");
-                assert!(!rationale.contains("audit"), "{rationale}");
-                assert!(rationale.contains("kargs.d"), "{rationale}");
-            }
-            other => panic!("expected a modernization advisory, got {other:?}"),
+    fn the_advisory_never_names_what_the_file_sets() {
+        for grub in [
+            "GRUB_CMDLINE_LINUX=$'rd.iscsi.password\\x3dSup3rS3cret'\n",
+            "GRUB_CMDLINE_LINUX=\"quiet token:Sup3rS3cret\"\n",
+            "GRUB_CMDLINE_LINUX=\"quiet rd.iscsi.password=Sup3rS3cret\"\n",
+        ] {
+            let mut snap = snapshot(
+                grub_entry(DEFAULT_GRUB_PATH, grub, FindingKind::included()),
+                Some("ro quiet"),
+            );
+            settle_default_grub(&mut snap);
+            let files = snap.config.unwrap().files;
+            let finding = serde_json::to_string(&files[0].disposition).expect("serializes");
+            assert!(!finding.contains("Sup3rS3cret"), "{grub}: {finding}");
+            assert!(!finding.contains("password"), "{grub}: {finding}");
+            assert!(!finding.contains("token"), "{grub}: {finding}");
         }
     }
 

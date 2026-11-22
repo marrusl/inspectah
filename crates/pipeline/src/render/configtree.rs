@@ -1215,13 +1215,11 @@ fn flatpak_provision_service(apps: &[&inspectah_core::types::containers::Flatpak
     svc
 }
 
-/// The operator kernel arguments on `kb`'s cmdline, split by whether
-/// redaction replaced part of the argument: `(carried, redacted)`, each
-/// in cmdline order.
-fn split_operator_kargs(
-    kb: &inspectah_core::types::kernelboot::KernelBootSection,
-) -> (Vec<KernelArg<'_>>, Vec<KernelArg<'_>>) {
-    operator_kargs(&kb.cmdline)
+/// The operator kernel arguments on a redacted `cmdline`, split by
+/// whether redaction replaced part of the argument: `(carried, redacted)`,
+/// each in cmdline order. The kargs.d file holds the carried ones.
+pub(crate) fn split_operator_kargs(cmdline: &str) -> (Vec<KernelArg<'_>>, Vec<KernelArg<'_>>) {
+    operator_kargs(cmdline)
         .into_iter()
         .partition(|karg| !REDACTION_TOKEN_RE.is_match(karg.raw()))
 }
@@ -1237,7 +1235,7 @@ pub fn owed_kernel_arguments(snap: &InspectionSnapshot) -> Vec<String> {
     let Some(kb) = &snap.kernel_boot else {
         return Vec::new();
     };
-    split_operator_kargs(kb)
+    split_operator_kargs(&kb.cmdline)
         .1
         .iter()
         .map(|karg| match karg.value() {
@@ -1257,7 +1255,7 @@ pub fn owed_kernel_arguments(snap: &InspectionSnapshot) -> Vec<String> {
 /// and on a kernel argument such as `rd.iscsi.password=` it can stop the
 /// machine booting. [`owed_kernel_arguments`] names it instead.
 fn kargs_toml(kb: &inspectah_core::types::kernelboot::KernelBootSection) -> Option<String> {
-    let (carried, _) = split_operator_kargs(kb);
+    let (carried, _) = split_operator_kargs(&kb.cmdline);
     if carried.is_empty() {
         return None;
     }

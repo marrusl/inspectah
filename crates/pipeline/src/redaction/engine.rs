@@ -998,6 +998,21 @@ fn redact_kernel_cmdline(cmdline: &str, registry: &mut CounterRegistry) -> Strin
     content
 }
 
+/// The kernel command line as [`redact`] writes it back to the snapshot,
+/// for a pass that runs before redaction and must know which arguments
+/// the kargs.d writer will find redacted. The tokens come from a registry
+/// of their own, so they may be numbered differently from the ones
+/// [`redact`] writes; only where they fall matters.
+pub(crate) fn redacted_kernel_cmdline(cmdline: &str) -> Cow<'_, str> {
+    if scan_content(cmdline, KERNEL_CMDLINE_PATH).is_empty() {
+        return Cow::Borrowed(cmdline);
+    }
+    Cow::Owned(redact_kernel_cmdline(
+        cmdline,
+        &mut CounterRegistry::default(),
+    ))
+}
+
 /// Returns true if the kernel reads `arg` as a credential: its name is one
 /// the generic credential pattern treats as a credential key. The kernel
 /// compares parameter names with `-` and `_` as one character (`parameq`),

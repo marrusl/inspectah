@@ -77,7 +77,7 @@ pub const MODERNIZATION_PATTERNS: &[ModernizationPattern] = &[
     // This pass cannot see the running command line, so it marks the file
     // on every host; the pipeline's cross-inspector pass
     // (`settle_default_grub`) then keeps the advisory only where the file
-    // sets an argument the running kernel lacks, and never lets the file
+    // sets an argument kargs.d does not carry, and never lets the file
     // be carried.
     ModernizationPattern {
         name: "grub_defaults",
