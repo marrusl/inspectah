@@ -61,10 +61,11 @@ recovers it. Rules for a collector:
   `Command::new` and `RealExecutor::new` in collect. `RealExecutor` has a
   private field and no `Default`, so it cannot be built by literal either.
   `run_scan` builds the only one and wraps it at once.
-- `HostRead` (`read_head`, `read_dir_raw`, `open_read`) is not on
-  `Executor`, and the gate does not implement it: no collector can make
-  a partial or raw read. The gate's own are the inventory's raw
-  listings, the keytab sniff and `screen_payload`'s streaming read.
+- `HostRead` (`read_head`, `read_dir_raw`, `open_read`, `mount_id`) is
+  not on `Executor`, and the gate does not implement it: no collector
+  can make a partial or raw read. The gate's own are the inventory's raw
+  listings and mount ids, the keytab sniff and `screen_payload`'s
+  streaming read.
 - A unit file or drop-in refusal is recorded through `unit_read_failure`
   (units inspector), so it reads `machine-state file left out: <path>`
   like every other collector's; the RPM section's repo and `gpgkey=` key
@@ -85,55 +86,99 @@ alive below, so the `/etc`-rooted `krb5.keytab.*` glob never walks
 `/etc`. A link can give a directory a spelling the rule matches where
 its own did not (`/etc/insights-client/.state -> .` makes
 `registration.json` there `.state/registration.json`), so the walk keeps
-every directory's listed states by `(dev, ino)` and skips a repeat only
-when an earlier state `covers` the new one; otherwise it lists it again.
-Never go back to skipping on directory identity alone. States are
-finite, so cycles end.
+every listing's states and skips a repeat only when an earlier state
+`covers` the new one; otherwise it lists it again.
+
+A listing is a `ListingKey`, `(dev, ino, mount id)`. Never key it on
+the inode alone: two private bind mounts of one directory share its
+inode but can show different entries, since a mount below one view
+need not be below the other (`.a` and `.b` both binding `/srv/view`,
+with a registration file mounted over an entry in `.b` only). The mount
+id is `HostRead::mount_id`: on Linux the `mnt_id` line of
+`/proc/self/fdinfo` for an `O_PATH` handle (Linux 3.15 and later, no
+libc binding needed; `statx` `STATX_MNT_ID` needs 5.8 and has no musl
+binding), `None` elsewhere. With no id, the directory is listed every
+time it is reached; a link cycle through it then ends at the depth
+limit as a gap. The inode set stays keyed by `(dev, ino)`, so every
+alias of a member is withheld. In a mock, `with_bind_mount(path,
+source, id)` makes a directory with `source`'s inode, its own entries
+(`with_dir` at `path`) and its own mount id; every other path is on
+`MOCK_ROOT_MOUNT`, and `with_mount_ids_unknown` makes every answer
+`None`. A real bind mount takes root, so tests model it there.
 
 Names come from `read_dir_raw`, never lossy. A UTF-8 name, a literal
 U+FFFD included, is ordinary. A name that is not UTF-8 is fed to the
 automaton with each invalid run as `PathSym::NotUtf8`, which only a
-wildcard matches: a Latin-1 name directly under `/etc` cannot spell the
-`krb5.keytab.` stem and is skipped. Where it cannot finish (more than 32
-directories deep, more than 65,536 entries, a name that is not UTF-8
-where the rule could match it or below it, a directory it cannot list
-in full) it records a `ScreenGap`: the gate then withholds every path,
-and `open_gate` in `scan.rs`, the only way `run_scan` builds the gate,
-fails with the gap's message before any inspector runs. Never relax
-this to "withhold below the gap": a hard link or bind mount elsewhere of
-a file the inventory never listed would read as ordinary. In a mock,
-register a directory link with `with_link` and the target directory's
-listing; the build lists the resolved path, so no listing is needed at
-the link's own path. A name that is not UTF-8 is `with_raw_dir_entry`;
-on disk only Linux can create one (macOS refuses it with `EILSEQ`), so
-on-disk raw-name tests are `#[cfg(target_os = "linux")]`, and
-`screen_test.rs`'s `RootedHost` maps a temp directory to `/`.
+wildcard matches, and decided by what the entry is, statted first: a
+regular file only when the rule `accepts` its whole path, a directory
+only when a path below it is still `alive_below`, nothing else at all.
+So `caf\xe9.crt` under `/etc/cockpit/ws-certs.d/` (rule `*.key`) is
+skipped though the wildcard is still live after it; never decide a raw
+name before knowing its type. Where the walk cannot finish (more than
+32 directories deep, more than 65,536 entries, such a raw name that
+could match, a directory it cannot list in full) it records a
+`ScreenGap`: the gate then withholds every path, and `open_gate` in
+`scan.rs`, the only way `run_scan` builds the gate, fails with the
+gap's message before any inspector runs. Never relax this to "withhold
+below the gap": a hard link or bind mount elsewhere of a file the
+inventory never listed would read as ordinary. In a mock, register a
+directory link with `with_link` and the target directory's listing; the
+build lists the resolved path, so no listing is needed at the link's
+own path. A raw name is `with_raw_dir_entry` (a regular file) or
+`with_raw_subdir` (a directory), both with metadata; on disk only Linux
+can create one (macOS refuses it with `EILSEQ`), so on-disk raw-name
+tests are `#[cfg(target_os = "linux")]`, and `screen_test.rs`'s
+`RootedHost` maps a temp directory to `/`. Check Linux-only code
+compiles with `cargo clippy --target x86_64-unknown-linux-musl`.
 
 ## Unmanaged payloads are screened by content
 
 The bundler copies unmanaged files byte for byte, so the walk calls
 `screen_payload`, not `screen`: path, alias and inode, then
 `payload_credential` over one streaming read of the whole file
-(`open_read`, `PAYLOAD_READ_CHUNK` at a time; memory is that buffer and
-two short PEM labels). A keytab header wins. Otherwise `PemKeyFinder`,
-a byte-level state machine whose state carries across buffers, finds a
-PEM private-key block anywhere: a `BEGIN` marker whose label ends with
-`PRIVATE KEY`, at any position in a line, a body of key-body bytes
-(base64, whitespace, `\`, quotes, `,`, `:`, `-`, `#`) holding base64,
-then the `END` marker or the end of the file. Any other byte ends the
-candidate, which keeps a marker quoted in code or prose ordinary. Never
-reintroduce a verdict from part of a file: a prefix rule both missed
-late and embedded keys and withheld large CRLs and indented JSON. DER
-keys and PKCS#12 archives are not detected (no ASN.1 sniffing), and ship
-as ordinary payloads. A file the check cannot read stays an item.
-`bundle_unmanaged_files` lives in `pipeline::render::unmanaged`, takes
-the host root (`/` in `run_scan`, a tempdir in tests), asks
+(`open_read`, `PAYLOAD_READ_CHUNK` at a time; memory is that buffer,
+one PEM label and counters that saturate, with no length cutoff). A
+keytab header wins. Otherwise `PemKeyFinder` recognizes a PEM private
+key by its structure, with two readers over every byte:
+
+- `BeginScan` finds every `BEGIN` marker whose label ends with
+  `PRIVATE KEY`, on the raw bytes, whatever the body reader is doing.
+  Each one starts a fresh `KeyBody`, so an earlier quoted marker and any
+  padding after it cannot hide a later key.
+- `KeyBody` decodes escapes (`\n`, `\r`, `\t`, `\f`, `\v`, `\/`,
+  quotes, `\uXXXX`, backslash runs), treats every byte at or below
+  space other than a line end as whitespace (OpenSSL strips trailing
+  VT, FF and NUL), and reads lines: a lead (whitespace, one quote, `#`),
+  then base64 or, before any key line, an RFC 1421 header, then
+  whitespace and after a closing quote one `,`, `+` or `;`. A quote
+  after that starts the next line (JSON arrays, Python concatenation).
+  Any other byte, a dash included, ends the body.
+
+The verdict is key material, `KEY_MATERIAL_MIN` (64) base64 characters:
+lines that are one base64 run count their characters, and one run of
+64 counts anywhere (lines joined by spaces, or not at all). Lines of
+several words and text on the marker's own line count for nothing.
+Sixty-four is the smallest key PEM carries (Ed25519 in PKCS#8), so a
+key is a key however its body ends, cut off included, and
+delimiter-only text, templates and prose never are. A test key needs
+64 base64 characters of key lines, or it reads as text. Never bring
+back an allowlist of body bytes or a body length limit: the first let
+neighbouring JSON count as a body and the second let padding and
+whitespace reset it. Never reintroduce a verdict from part of a file
+either: a prefix rule missed late and embedded keys and withheld large
+CRLs and indented JSON. What it does not read (DER, PKCS#12, keys with
+whitespace inside every line, other line prefixes such as `> `, other
+line-break encodings, UTF-16, compression) ships as an ordinary payload;
+the spec's § 4.6 lists them. A file the check cannot read stays an
+item. `bundle_unmanaged_files` lives in `pipeline::render::unmanaged`,
+takes the host root (`/` in `run_scan`, a tempdir in tests), asks
 `screen_payload` again for every included regular file before copying
 any, and fails on a withheld answer or a read error; it never skips a
 file. Test the whole route with
 `unmanaged_credentials_are_withheld_on_both_export_paths`: write each
-payload both to the `SysctlHost` and to a host-root tempdir. A key there
-needs base64 in its body, or the finder reads it as a placeholder.
+payload both to the `SysctlHost` and to a host-root tempdir. Test the
+recognizer's classes in `machine_state.rs`'s table and property tests
+(`pem_properties`), not single inputs.
 
 Not covered, and caught only by review: a file-opening route not on the
 lint list (a new dependency, a `libc` call) and a command whose output is a
