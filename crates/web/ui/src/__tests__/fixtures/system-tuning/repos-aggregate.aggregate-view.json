@@ -1,0 +1,119 @@
+{
+  "can_redo": false,
+  "can_undo": false,
+  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "generation": 0,
+  "machine_state": [
+    {
+      "content_captured": false,
+      "include": false,
+      "member": "hostname",
+      "mode": null,
+      "notice": {
+        "by": "provisioning",
+        "kind": "automatic"
+      },
+      "override": "never",
+      "path": "/etc/hostname",
+      "reason": "host_identity",
+      "size": null
+    }
+  ],
+  "machine_state_notices": [],
+  "machine_state_steps": [],
+  "repo_conflict_count": 0,
+  "repo_groups": [
+    {
+      "carriage_count": 2,
+      "carriage_included": 0,
+      "control": "full",
+      "effective_included": 0,
+      "effective_member_count": 0,
+      "effective_unlisted": 0,
+      "is_distro": false,
+      "kept": true,
+      "owns": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom",
+        "/etc/yum.repos.d/custom.repo"
+      ],
+      "package_count": 0,
+      "provenance": "verified",
+      "section_id": "custom",
+      "tier": "third_party"
+    }
+  ],
+  "sections": [
+    {
+      "display_name": "Packages",
+      "id": "packages",
+      "is_decision_section": true,
+      "items": []
+    },
+    {
+      "display_name": "Configuration Files",
+      "id": "configs",
+      "is_decision_section": true,
+      "items": [
+        {
+          "include": false,
+          "item_id": {
+            "key": {
+              "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom"
+            },
+            "kind": "Config"
+          },
+          "locked": false,
+          "prevalence": {
+            "count": 1,
+            "total": 2
+          },
+          "source_repo": "",
+          "triage": {
+            "bucket": "site",
+            "prevalence": 1,
+            "reason": "config_unowned",
+            "zone": "NearConsensus"
+          }
+        },
+        {
+          "include": false,
+          "item_id": {
+            "key": {
+              "path": "/etc/yum.repos.d/custom.repo"
+            },
+            "kind": "Config"
+          },
+          "locked": false,
+          "prevalence": {
+            "count": 1,
+            "total": 2
+          },
+          "source_repo": "",
+          "triage": {
+            "bucket": "site",
+            "prevalence": 1,
+            "reason": "config_unowned",
+            "zone": "NearConsensus"
+          }
+        }
+      ]
+    },
+    {
+      "display_name": "System Tuning",
+      "id": "system_tuning",
+      "is_decision_section": true,
+      "items": []
+    }
+  ],
+  "session_is_sensitive": false,
+  "summary": {
+    "actionable_variant_items": [],
+    "host_count": 2,
+    "informational_variant_count": 0,
+    "leaf_authority_hosts": 2,
+    "leaf_total_hosts": 2
+  },
+  "sysctl": {
+    "state": "aggregate"
+  }
+}

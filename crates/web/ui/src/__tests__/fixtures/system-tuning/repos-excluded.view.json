@@ -1,0 +1,1015 @@
+{
+  "baseline_summary": null,
+  "config_files": [
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBFtest\n-----END PGP PUBLIC KEY BLOCK-----\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-company",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBFtest\n-----END PGP PUBLIC KEY BLOCK-----\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBFtest\n-----END PGP PUBLIC KEY BLOCK-----\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-dis",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "# REDACTED: file did not contain a PGP public key block (source: /etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp)",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBFtest\n-----END PGP PUBLIC KEY BLOCK-----\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-shared",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBFtest\n-----END PGP PUBLIC KEY BLOCK-----\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/pki/rpm-gpg/token=vendor",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "[a]\nname=a\nbaseurl=https://a.example/repo\nenabled=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-shared\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/yum.repos.d/a.repo",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "[b]\nname=b\nbaseurl=https://b.example/repo\nenabled=1\ngpgkey=file:///etc/pki/rpm-gpg//RPM-GPG-KEY-shared\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/yum.repos.d/b.repo",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "[baseos]\nname=BaseOS mirror\nbaseurl=https://mirror.corp.example/baseos/\nenabled=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-company\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/yum.repos.d/company.repo",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "[custom]\nname=custom\nbaseurl=https://custom.example/repo\nenabled=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-custom\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/yum.repos.d/custom.repo",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "[dis]\nname=dis\nbaseurl=https://dis.example/repo\nenabled=0\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-dis\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/yum.repos.d/dis.repo",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "[epel]\nname=EPEL\nmetalink=https://mirrors.example/epel\nenabled=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n\n[epel-debuginfo]\nname=EPEL debug\nmetalink=https://mirrors.example/epel-debug\nenabled=0\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "rpm_owned_modified",
+        "package": "epel-release",
+        "path": "/etc/yum.repos.d/epel.repo",
+        "rpm_va_flags": "S.5....T.",
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_modified",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "[rhel-9-for-x86_64-baseos-rpms]\nname=RHEL 9 BaseOS\nbaseurl=https://cdn.redhat.example/baseos\nenabled=1\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/yum.repos.d/redhat.repo",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "[rej]\nname=rej\nbaseurl=https://rej.example/repo\nenabled=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/yum.repos.d/reject.repo",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "other",
+        "content": "[vend]\nname=vend\nbaseurl=https://vend.example/repo\nenabled=1\ngpgkey=file:///etc/pki/rpm-gpg/token=REDACTED_PASSWORD_1\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "kind": "inventory"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/yum.repos.d/vend.repo",
+        "rpm_va_flags": null,
+        "shadowed_by": "repositories",
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    }
+  ],
+  "containerfile_preview": "# WARNING: This Containerfile was generated from an incomplete inspection.\n# The following inspector sections may be missing or degraded: config\n# Review the audit report for details before building.\n\n# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n# === Custom Repositories (5) ===\nCOPY config/etc/yum.repos.d/ /etc/yum.repos.d/\n\n# === GPG Keys (4) ===\nCOPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/\nCOPY config/etc/pki/rpm-gpg// /etc/pki/rpm-gpg//\nRUN rpm --import /etc/pki/rpm-gpg//RPM-GPG-KEY-shared\n\n\n# === Repo-less RPM packages ===\n# FIXME: re-include repo baseos, which brings back its repo files and keys, or upload the RPM; site-tool installs from repo baseos, whose definition this export does not carry\n# === Packages (2) ===\nRUN dnf install -y \\\n    bat \\\n    epel-release \\\n    && dnf clean all \\\n    && rm -rf \\\n        /var/cache/dnf \\\n        /var/lib/dnf/history* \\\n        /var/log/dnf* \\\n        /var/log/hawkey.log \\\n        /var/log/rhsm\n\n# FIXME: config data may be incomplete (inspector returned degraded)\n# === Configuration Files ===\nCOPY config/etc/ /etc/\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "declined_generated": [],
+  "flatpaks": [],
+  "generated_timers": [],
+  "generation": 3,
+  "has_unmanaged_scan": false,
+  "machine_state": [],
+  "machine_state_notices": [],
+  "machine_state_steps": [],
+  "manual_links": [],
+  "mount_findings": [],
+  "not_carried_notice": null,
+  "not_carried_packages": [],
+  "package_groups": [],
+  "packages": [
+    {
+      "entry": {
+        "aggregate": null,
+        "arch": "x86_64",
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
+        "epoch": "0",
+        "name": "epel-release",
+        "release": "1.el9",
+        "repo_attribution": {
+          "kind": "stale",
+          "recorded": "appstream"
+        },
+        "source_repo": "appstream",
+        "state": "added",
+        "version": "1.0"
+      },
+      "triage": {
+        "primary_reason": "package_user_added",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "arch": "x86_64",
+        "disposition": {
+          "include": false,
+          "kind": "actionable"
+        },
+        "epoch": "0",
+        "name": "tool-a",
+        "release": "1.el9",
+        "repo_attribution": {
+          "id": "custom",
+          "kind": "exact"
+        },
+        "source_repo": "custom",
+        "state": "added",
+        "version": "1.0"
+      },
+      "triage": {
+        "primary_reason": "package_user_added",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "arch": "x86_64",
+        "disposition": {
+          "include": false,
+          "kind": "actionable"
+        },
+        "epoch": "0",
+        "name": "tool-b",
+        "release": "1.el9",
+        "repo_attribution": {
+          "id": "custom",
+          "kind": "exact"
+        },
+        "source_repo": "custom",
+        "state": "added",
+        "version": "1.0"
+      },
+      "triage": {
+        "primary_reason": "package_user_added",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "arch": "x86_64",
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
+        "epoch": "0",
+        "name": "bat",
+        "release": "1.el9",
+        "repo_attribution": {
+          "id": "epel",
+          "kind": "exact"
+        },
+        "source_repo": "epel",
+        "state": "added",
+        "version": "1.0"
+      },
+      "triage": {
+        "primary_reason": "package_user_added",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "arch": "x86_64",
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
+        "epoch": "0",
+        "name": "site-tool",
+        "release": "1.el9",
+        "repo_attribution": {
+          "id": "baseos",
+          "kind": "exact"
+        },
+        "repoless_annotation": "No repo source: the repo that served site-tool (baseos) is not carried by this export",
+        "source_repo": "baseos",
+        "state": "added",
+        "version": "1.0"
+      },
+      "triage": {
+        "primary_reason": "package_user_added",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    }
+  ],
+  "quadlets": [],
+  "repo_groups": [
+    {
+      "carriage_count": 0,
+      "carriage_included": 0,
+      "control": "none",
+      "effective_included": 1,
+      "effective_member_count": 1,
+      "effective_unlisted": 0,
+      "is_distro": true,
+      "kept": true,
+      "owns": [],
+      "package_count": 1,
+      "provenance": "stale",
+      "section_id": "appstream",
+      "tier": "distro"
+    },
+    {
+      "carriage_count": 2,
+      "carriage_included": 0,
+      "control": "carriage_only",
+      "effective_included": 1,
+      "effective_member_count": 1,
+      "effective_unlisted": 0,
+      "is_distro": true,
+      "kept": false,
+      "owns": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-company",
+        "/etc/yum.repos.d/company.repo"
+      ],
+      "package_count": 1,
+      "provenance": "verified",
+      "section_id": "baseos",
+      "tier": "distro"
+    },
+    {
+      "carriage_count": 2,
+      "carriage_included": 1,
+      "control": "full",
+      "effective_included": 0,
+      "effective_member_count": 0,
+      "effective_unlisted": 0,
+      "is_distro": false,
+      "kept": false,
+      "owns": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-shared",
+        "/etc/yum.repos.d/a.repo"
+      ],
+      "package_count": 0,
+      "provenance": "verified",
+      "section_id": "a",
+      "tier": "third_party"
+    },
+    {
+      "carriage_count": 2,
+      "carriage_included": 2,
+      "control": "full",
+      "effective_included": 0,
+      "effective_member_count": 0,
+      "effective_unlisted": 0,
+      "is_distro": false,
+      "kept": true,
+      "owns": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-shared",
+        "/etc/yum.repos.d/b.repo"
+      ],
+      "package_count": 0,
+      "provenance": "verified",
+      "section_id": "b",
+      "tier": "third_party"
+    },
+    {
+      "carriage_count": 2,
+      "carriage_included": 0,
+      "control": "full",
+      "effective_included": 0,
+      "effective_member_count": 2,
+      "effective_unlisted": 0,
+      "is_distro": false,
+      "kept": false,
+      "owns": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom",
+        "/etc/yum.repos.d/custom.repo"
+      ],
+      "package_count": 2,
+      "provenance": "verified",
+      "section_id": "custom",
+      "tier": "third_party"
+    },
+    {
+      "carriage_count": 2,
+      "carriage_included": 2,
+      "control": "carriage_only",
+      "effective_included": 0,
+      "effective_member_count": 0,
+      "effective_unlisted": 0,
+      "is_distro": false,
+      "kept": true,
+      "owns": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-dis",
+        "/etc/yum.repos.d/dis.repo"
+      ],
+      "package_count": 0,
+      "provenance": "disabled",
+      "section_id": "dis",
+      "tier": "third_party"
+    },
+    {
+      "carriage_count": 2,
+      "carriage_included": 2,
+      "control": "full",
+      "effective_included": 1,
+      "effective_member_count": 1,
+      "effective_unlisted": 0,
+      "is_distro": false,
+      "kept": true,
+      "owns": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9",
+        "/etc/yum.repos.d/epel.repo"
+      ],
+      "package_count": 1,
+      "provenance": "verified",
+      "section_id": "epel",
+      "tier": "third_party"
+    },
+    {
+      "carriage_count": 1,
+      "carriage_included": 1,
+      "control": "full",
+      "effective_included": 0,
+      "effective_member_count": 0,
+      "effective_unlisted": 0,
+      "is_distro": false,
+      "kept": true,
+      "owns": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp",
+        "/etc/yum.repos.d/reject.repo"
+      ],
+      "package_count": 0,
+      "provenance": "incomplete",
+      "section_id": "rej",
+      "tier": "third_party"
+    },
+    {
+      "carriage_count": 1,
+      "carriage_included": 1,
+      "control": "full",
+      "effective_included": 0,
+      "effective_member_count": 0,
+      "effective_unlisted": 0,
+      "is_distro": false,
+      "kept": true,
+      "owns": [
+        "/etc/yum.repos.d/vend.repo"
+      ],
+      "package_count": 0,
+      "provenance": "incomplete",
+      "section_id": "vend",
+      "tier": "third_party"
+    }
+  ],
+  "repo_owned": [
+    {
+      "destination": "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9",
+      "export": {
+        "kept_by": [],
+        "state": "ships"
+      },
+      "kind": "gpg_key",
+      "owners": [
+        {
+          "control": "full",
+          "kept": true,
+          "section_id": "epel"
+        },
+        {
+          "control": "none",
+          "kept": true,
+          "section_id": "epel-debuginfo"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9"
+      ]
+    },
+    {
+      "destination": "/etc/pki/rpm-gpg/RPM-GPG-KEY-company",
+      "export": {
+        "state": "not_shipped"
+      },
+      "kind": "gpg_key",
+      "owners": [
+        {
+          "control": "carriage_only",
+          "kept": false,
+          "section_id": "baseos"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-company"
+      ]
+    },
+    {
+      "destination": "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom",
+      "export": {
+        "state": "not_shipped"
+      },
+      "kind": "gpg_key",
+      "owners": [
+        {
+          "control": "full",
+          "kept": false,
+          "section_id": "custom"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom"
+      ]
+    },
+    {
+      "destination": "/etc/pki/rpm-gpg/RPM-GPG-KEY-dis",
+      "export": {
+        "kept_by": [],
+        "state": "ships"
+      },
+      "kind": "gpg_key",
+      "owners": [
+        {
+          "control": "carriage_only",
+          "kept": true,
+          "section_id": "dis"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-dis"
+      ]
+    },
+    {
+      "destination": "/etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp",
+      "export": {
+        "reason": "not_pgp",
+        "state": "rejected"
+      },
+      "kind": "gpg_key",
+      "owners": [
+        {
+          "control": "full",
+          "kept": true,
+          "section_id": "rej"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp"
+      ]
+    },
+    {
+      "destination": "/etc/pki/rpm-gpg/RPM-GPG-KEY-shared",
+      "export": {
+        "kept_by": [
+          {
+            "section_id": "b"
+          }
+        ],
+        "state": "ships"
+      },
+      "kind": "gpg_key",
+      "owners": [
+        {
+          "control": "full",
+          "kept": false,
+          "section_id": "a"
+        },
+        {
+          "control": "full",
+          "kept": true,
+          "section_id": "b"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/pki/rpm-gpg//RPM-GPG-KEY-shared",
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-shared"
+      ]
+    },
+    {
+      "destination": "/etc/pki/rpm-gpg/token=vendor",
+      "export": {
+        "cause": {
+          "kind": "redacted",
+          "repo_files": [
+            "/etc/yum.repos.d/vend.repo"
+          ]
+        },
+        "state": "no_owner"
+      },
+      "kind": "gpg_key",
+      "owners": [],
+      "recorded_paths": [
+        "/etc/pki/rpm-gpg/token=vendor"
+      ]
+    },
+    {
+      "destination": "/etc/yum.repos.d/a.repo",
+      "export": {
+        "state": "not_shipped"
+      },
+      "kind": "repo_file",
+      "owners": [
+        {
+          "control": "full",
+          "kept": false,
+          "section_id": "a"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/yum.repos.d/a.repo"
+      ]
+    },
+    {
+      "destination": "/etc/yum.repos.d/b.repo",
+      "export": {
+        "kept_by": [],
+        "state": "ships"
+      },
+      "kind": "repo_file",
+      "owners": [
+        {
+          "control": "full",
+          "kept": true,
+          "section_id": "b"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/yum.repos.d/b.repo"
+      ]
+    },
+    {
+      "destination": "/etc/yum.repos.d/company.repo",
+      "export": {
+        "state": "not_shipped"
+      },
+      "kind": "repo_file",
+      "owners": [
+        {
+          "control": "carriage_only",
+          "kept": false,
+          "section_id": "baseos"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/yum.repos.d/company.repo"
+      ]
+    },
+    {
+      "destination": "/etc/yum.repos.d/custom.repo",
+      "export": {
+        "state": "not_shipped"
+      },
+      "kind": "repo_file",
+      "owners": [
+        {
+          "control": "full",
+          "kept": false,
+          "section_id": "custom"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/yum.repos.d/custom.repo"
+      ]
+    },
+    {
+      "destination": "/etc/yum.repos.d/dis.repo",
+      "export": {
+        "kept_by": [],
+        "state": "ships"
+      },
+      "kind": "repo_file",
+      "owners": [
+        {
+          "control": "carriage_only",
+          "kept": true,
+          "section_id": "dis"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/yum.repos.d/dis.repo"
+      ]
+    },
+    {
+      "destination": "/etc/yum.repos.d/epel.repo",
+      "export": {
+        "kept_by": [],
+        "state": "ships"
+      },
+      "kind": "repo_file",
+      "owners": [
+        {
+          "control": "full",
+          "kept": true,
+          "section_id": "epel"
+        },
+        {
+          "control": "none",
+          "kept": true,
+          "section_id": "epel-debuginfo"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/yum.repos.d/epel.repo"
+      ]
+    },
+    {
+      "destination": "/etc/yum.repos.d/redhat.repo",
+      "export": {
+        "state": "default_repo_file"
+      },
+      "kind": "repo_file",
+      "owners": [
+        {
+          "control": "none",
+          "kept": true,
+          "section_id": "rhel-9-for-x86_64-baseos-rpms"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/yum.repos.d/redhat.repo"
+      ]
+    },
+    {
+      "destination": "/etc/yum.repos.d/reject.repo",
+      "export": {
+        "kept_by": [],
+        "state": "ships"
+      },
+      "kind": "repo_file",
+      "owners": [
+        {
+          "control": "full",
+          "kept": true,
+          "section_id": "rej"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/yum.repos.d/reject.repo"
+      ]
+    },
+    {
+      "destination": "/etc/yum.repos.d/vend.repo",
+      "export": {
+        "kept_by": [],
+        "state": "ships"
+      },
+      "kind": "repo_file",
+      "owners": [
+        {
+          "control": "full",
+          "kept": true,
+          "section_id": "vend"
+        }
+      ],
+      "recorded_paths": [
+        "/etc/yum.repos.d/vend.repo"
+      ]
+    }
+  ],
+  "session_is_sensitive": false,
+  "stats": {
+    "baseline_available": true,
+    "can_redo": false,
+    "can_undo": true,
+    "needs_review_count": 0,
+    "ops_applied": 3,
+    "sections": [
+      {
+        "advisory": 0,
+        "excluded": 2,
+        "included": 3,
+        "kind": "package",
+        "total": 5
+      },
+      {
+        "advisory": 15,
+        "excluded": 0,
+        "included": 0,
+        "kind": "config",
+        "total": 15
+      }
+    ]
+  },
+  "sysctl": {
+    "reason": "",
+    "state": "unavailable"
+  },
+  "tuned": [],
+  "undetermined_installs": [],
+  "unit_dropins": [],
+  "unit_states": [],
+  "users_groups_decisions": [],
+  "version_changes": []
+}

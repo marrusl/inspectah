@@ -327,3 +327,163 @@ async fn machine_state_unit_host() {
     )
     .await;
 }
+
+/// A public key block, as the scan accepts it.
+const REPO_PGP: &str =
+    "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBFtest\n-----END PGP PUBLIC KEY BLOCK-----\n";
+
+/// A host for the refine UI's Repositories section and repo-owned
+/// Configuration rows, with one repo per control and one owned entry per
+/// export state a single host can show:
+///
+/// - `custom`: a full switch with members `tool-a` and `tool-b`, its
+///   unowned `custom.repo` and key;
+/// - `epel`: a full switch over a modified `epel.repo` owned by
+///   `epel-release`, with `[epel-debuginfo]` disabled beside it, and its
+///   RPM-owned key;
+/// - `baseos`: a carriage-only switch over an unowned `company.repo` that
+///   mirrors it, serving `site-tool`;
+/// - `a` and `b`: two zero-member repos naming one key, `b` with a `//`
+///   in the reference, so the key's recorded paths hold two spellings;
+/// - `rej`: a repo naming a key the scan refuses (not a PGP key);
+/// - `vend`: a repo whose `gpgkey=` redaction rewrites, so its key has no
+///   owner;
+/// - `dis`: a repo file whose one section is disabled, with no package,
+///   and its key: a carriage-only switch is the only control over them;
+/// - an unowned `redhat.repo` with a distro section and no member: a
+///   default repo file no switch decides.
+fn repos_host() -> unit_hosts::UnitHost {
+    let repo = |id: &str, key: &str| {
+        format!(
+            "[{id}]\nname={id}\nbaseurl=https://{id}.example/repo\nenabled=1\ngpgkey=file://{key}\n"
+        )
+    };
+    unit_hosts::UnitHost::new()
+        .base_package("bash")
+        .file(
+            "/etc/yum.repos.d/custom.repo",
+            &repo("custom", "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom"),
+        )
+        .file("/etc/pki/rpm-gpg/RPM-GPG-KEY-custom", REPO_PGP)
+        .owned_file(
+            "/etc/yum.repos.d/epel.repo",
+            "[epel]\nname=EPEL\nmetalink=https://mirrors.example/epel\nenabled=1\n\
+             gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n\n[epel-debuginfo]\n\
+             name=EPEL debug\nmetalink=https://mirrors.example/epel-debug\nenabled=0\n\
+             gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n",
+            "epel-release",
+        )
+        .owned_file(
+            "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9",
+            REPO_PGP,
+            "epel-release",
+        )
+        .rpm_va("S.5....T.  c /etc/yum.repos.d/epel.repo\n", 1)
+        .file(
+            "/etc/yum.repos.d/company.repo",
+            "[baseos]\nname=BaseOS mirror\nbaseurl=https://mirror.corp.example/baseos/\n\
+             enabled=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-company\n",
+        )
+        .file("/etc/pki/rpm-gpg/RPM-GPG-KEY-company", REPO_PGP)
+        .file(
+            "/etc/yum.repos.d/a.repo",
+            &repo("a", "/etc/pki/rpm-gpg/RPM-GPG-KEY-shared"),
+        )
+        .file(
+            "/etc/yum.repos.d/b.repo",
+            &repo("b", "/etc/pki/rpm-gpg//RPM-GPG-KEY-shared"),
+        )
+        .file("/etc/pki/rpm-gpg/RPM-GPG-KEY-shared", REPO_PGP)
+        .file(
+            "/etc/yum.repos.d/reject.repo",
+            &repo("rej", "/etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp"),
+        )
+        .file(
+            "/etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp",
+            "plain text, not a key\n",
+        )
+        .file(
+            "/etc/yum.repos.d/vend.repo",
+            &repo("vend", "/etc/pki/rpm-gpg/token=vendor"),
+        )
+        .file("/etc/pki/rpm-gpg/token=vendor", REPO_PGP)
+        .file(
+            "/etc/yum.repos.d/dis.repo",
+            "[dis]\nname=dis\nbaseurl=https://dis.example/repo\nenabled=0\n\
+             gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-dis\n",
+        )
+        .file("/etc/pki/rpm-gpg/RPM-GPG-KEY-dis", REPO_PGP)
+        .file(
+            "/etc/yum.repos.d/redhat.repo",
+            "[rhel-9-for-x86_64-baseos-rpms]\nname=RHEL 9 BaseOS\n\
+             baseurl=https://cdn.redhat.example/baseos\nenabled=1\n",
+        )
+        .enabled_repos(&["custom", "epel", "baseos", "a", "b", "rej", "vend"])
+        .package("epel-release")
+        .package_from("tool-a", "custom")
+        .package_from("tool-b", "custom")
+        .package_from("bat", "epel")
+        .package_from("site-tool", "baseos")
+}
+
+/// The repo host as scanned: every repo kept, every carriable file and key
+/// shipped.
+#[tokio::test]
+async fn repos_host_as_scanned() {
+    let snap = unit_hosts::reload(&unit_hosts::scan(repos_host()));
+    record("repos", unit_hosts::session(&snap), SINGLE_HOST_ENDPOINTS).await;
+}
+
+/// The repo host after the operator excluded `custom` (its members, file
+/// and key leave), `a` (the shared key ships, kept by `b`) and `baseos`
+/// (a carriage-only switch: `company.repo` and its key leave, and
+/// `site-tool` stays included and loses its route).
+#[tokio::test]
+async fn repos_host_with_repos_excluded() {
+    use inspectah_refine::types::{ItemId, RefinementOp};
+    let snap = unit_hosts::reload(&unit_hosts::scan(repos_host()));
+    let mut session = unit_hosts::session(&snap);
+    for id in ["custom", "a", "baseos"] {
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Repo { path: id.into() },
+                include: false,
+            })
+            .unwrap_or_else(|e| panic!("repo {id} is excluded: {e}"));
+    }
+    record("repos-excluded", session, &[("view", "/api/view")]).await;
+}
+
+/// Two fleet hosts, `custom.repo` and its key on one only: the aggregate
+/// narrows both out, so `custom`'s row is kept with nothing carried.
+#[tokio::test]
+async fn repos_aggregate_of_two_hosts() {
+    let repo = "[custom]\nname=custom\nbaseurl=https://custom.example/repo\nenabled=1\n\
+                gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-custom\n";
+    let host = |name: &str, with_custom: bool| {
+        let mut h = unit_hosts::UnitHost::new()
+            .base_package("bash")
+            .file("/etc/hostname", &format!("{name}\n"))
+            .enabled_repos(&["custom"]);
+        if with_custom {
+            h = h
+                .file("/etc/yum.repos.d/custom.repo", repo)
+                .file("/etc/pki/rpm-gpg/RPM-GPG-KEY-custom", REPO_PGP);
+        }
+        unit_hosts::reload(&unit_hosts::scan(h))
+    };
+    let hosts = vec![host("host-a", true), host("host-b", false)];
+    let (mut merged, _warnings) = merge_snapshots(hosts, None, None).expect("the two hosts merge");
+    merged
+        .aggregate_meta
+        .as_mut()
+        .expect("a merge records aggregate meta")
+        .merged_at = FIXED_MERGED_AT.into();
+    let merged = unit_hosts::reload(&merged);
+    record(
+        "repos-aggregate",
+        unit_hosts::session(&merged),
+        &[("aggregate-view", "/api/aggregate/view")],
+    )
+    .await;
+}
