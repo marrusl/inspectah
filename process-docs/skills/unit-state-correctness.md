@@ -119,23 +119,32 @@ later: two rows with one content would otherwise become one write, and
 a config entry under a drop-in of the same path would show no reason.
 
 Identical content offered twice at one destination is one write, not a
-conflict. A custom repo file is both a config entry and an
-`rpm.repo_files` row, an unowned GPG key and a firewall zone likewise,
-so withholding both offers would drop every one of them.
+conflict.
 
-**A file two sections record is decided by its config entry.** Where an
-included `ConfigFile` offer shares a destination with a `RepoFile`,
-`GpgKey` or `FirewallZone` offer (`StagedFileKind::is_inventory_record`),
-the inventory offer yields. In a fleet aggregate the repo, key and zone
-inventories keep one representative payload per path while the config
-entry keeps the content variants, so without this rule two differing
-hosts withheld both and the repo file left the export. The write is the
-included config entry's content. Refine's `SelectVariant` sets only a
-config entry's `variant_selection`, and `SetInclude` on the path
-includes the first-ranked entry, so selecting another variant does not
-yet change which one is written. These three are the only kinds the config walk can record at
-the same path, because it excludes none of their directories. Two
-differing config entries at one destination still conflict.
+**A firewall zone two sections record is decided by its config entry;
+a repo file or key never is.** Where an included `ConfigFile` offer
+shares a destination with a `FirewallZone` offer
+(`StagedFileKind::is_inventory_record`, which names `FirewallZone`
+alone), the inventory offer yields, and the write is the config entry's
+content. A fleet aggregate keeps one representative zone payload per
+path while the config entry keeps the content variants, so without this
+rule two differing hosts withheld both and the zone left the export.
+Refine's `SelectVariant` sets only a config entry's `variant_selection`,
+and `SetInclude` on the path includes the first-ranked entry, so
+selecting another variant does not yet change which one is written. A
+`.repo` file and a GPG key a repo names belong to the repo
+section (Mark Russell, 2026-11-21; spec
+`2026-11-21-repo-section-owns-repo-files-and-keys.md`): every producer
+runs `repo_ownership::settle_repo_ownership`, which makes their config
+rows `Inventory` shadowed by `Repositories`, so such a row is never
+offered and the stager writes the repo inventory's payload, under the
+repo switch alone. A snapshot holding an included config row at a
+repo-owned destination is refused at load. Never let a config twin yield
+to or outvote a repo decision again: either way the bytes the repo
+section excluded, or a refused key's placeholder, can ship. Two
+differing config entries at one destination still conflict, and the
+stager's own rule 6 (one write when contents match, a `Conflict` when
+they differ) stays as the backstop for a snapshot built in memory.
 
 **What the decision covers.** Under `config/`, `drop-ins/` and
 `flatpak/`, `write_config_tree` writes `writes` and nothing else except
