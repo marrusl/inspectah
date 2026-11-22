@@ -102,7 +102,6 @@ current directory:
 
 ```
 $ inspectah aggregate scans/rhel9-20261104-222606.tar.gz scans/rhel9-b-20261104-223850.tar.gz
-warning: stale scan dates: Scan dates range from 2026-11-05T04:26:03.552382773+00:00 to 2026-11-05T04:38:47.338375489+00:00
 Aggregate: aggregate (2 hosts)
 Baseline (unanimous): registry.redhat.io/rhel9/rhel-bootc:9.8
 Merged: 25 packages, 62 config files, 5 services
@@ -111,7 +110,6 @@ Output: aggregate-aggregate-20261104-233953.tar.gz
 
 ```
 $ inspectah aggregate scans/
-warning: stale scan dates: Scan dates range from 2026-11-05T04:26:03.552382773+00:00 to 2026-11-05T04:38:47.338375489+00:00
 Aggregate: scans (2 hosts)
 Baseline (unanimous): registry.redhat.io/rhel9/rhel-bootc:9.8
 Merged: 25 packages, 62 config files, 5 services
@@ -120,8 +118,7 @@ Output: aggregate-scans-20261104-234031.tar.gz
 
 The file name is `aggregate-`, then a label, then a timestamp. With a
 directory input the label is the directory name. With tarball arguments it is
-a generic default, which is why the first name above repeats a word. The
-warning line is covered under [Verbose and strict modes](#verbose-and-strict-modes).
+a generic default, which is why the first name above repeats a word.
 
 ### Output options
 
@@ -132,7 +129,6 @@ inspectah aggregate --output-file aggregate-prod.tar.gz scans/
 ```
 
 ```
-warning: stale scan dates: Scan dates range from 2026-11-05T04:26:03.552382773+00:00 to 2026-11-05T04:38:47.338375489+00:00
 Aggregate: scans (2 hosts)
 Baseline (unanimous): registry.redhat.io/rhel9/rhel-bootc:9.8
 Merged: 25 packages, 62 config files, 5 services
@@ -146,7 +142,6 @@ inspectah aggregate --output-dir output/ scans/
 ```
 
 ```
-warning: stale scan dates: Scan dates range from 2026-11-05T04:26:03.552382773+00:00 to 2026-11-05T04:38:47.338375489+00:00
 Aggregate: scans (2 hosts)
 Baseline (unanimous): registry.redhat.io/rhel9/rhel-bootc:9.8
 Merged: 25 packages, 62 config files, 5 services
@@ -175,7 +170,6 @@ inspectah aggregate --target-image registry.redhat.io/rhel9/rhel-bootc:9.6 scans
 ```
 
 ```
-warning: stale scan dates: Scan dates range from 2026-11-05T04:26:03.552382773+00:00 to 2026-11-05T04:38:47.338375489+00:00
 Aggregate: scans (2 hosts)
 Baseline (unanimous): quay.io/centos-bootc/centos-bootc:stream9
 Merged: 25 packages, 62 config files, 5 services
@@ -183,7 +177,6 @@ Output: aggregate-scans-20261104-234032.tar.gz
 ```
 
 ```
-warning: stale scan dates: Scan dates range from 2026-11-05T04:26:03.552382773+00:00 to 2026-11-05T04:38:47.338375489+00:00
 Aggregate: scans (2 hosts)
 Baseline (unanimous): registry.redhat.io/rhel9/rhel-bootc:9.6
 Merged: 25 packages, 62 config files, 5 services
@@ -233,7 +226,6 @@ inspectah aggregate --verbose scans/
 ```
 
 ```
-warning: stale scan dates: Scan dates range from 2026-11-05T04:26:03.552382773+00:00 to 2026-11-05T04:38:47.338375489+00:00
 Aggregate: scans (2 hosts)
 Baseline (unanimous): registry.redhat.io/rhel9/rhel-bootc:9.8
 Merged: 25 packages, 62 config files, 5 services
@@ -265,19 +257,13 @@ Treat warnings (e.g., mismatched image references across hosts) as errors:
 inspectah aggregate --strict scans/
 ```
 
-```
-warning: stale scan dates: Scan dates range from 2026-11-05T04:26:03.552382773+00:00 to 2026-11-05T04:38:47.338375489+00:00
-error: aborting due to --strict: 1 warning(s)
-```
-
-The warning in every output above, `stale scan dates`, is raised whenever the
-earliest and the latest scan timestamp differ at all. There is no tolerance,
-so two scans taken at different moments, even minutes apart, trigger it. With
-`--strict` that one warning is enough to exit with code 1. The flag passes
-only when no warning of any kind is raised, which for the stale-date check
-means every scan carries the same timestamp. The other warnings are a
-baseline conflict (hosts scanned against different images), a spread of minor
-versions, and a mix of system types.
+With any warning, `--strict` prints each, then an
+`error: aborting due to --strict` line, and exits with code 1. The
+two scans above, taken 12 minutes apart, raise none. `stale scan dates` is
+raised only when the earliest and the latest scan are more than 7 days apart,
+so scanning a fleet host by host over a few days raises nothing. The other
+warnings are a baseline conflict (hosts scanned against different images), a
+spread of minor versions, and a mix of system types.
 
 ## Refine aggregate data
 

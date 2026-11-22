@@ -39,6 +39,12 @@ pub enum AggregateValidationError {
     },
 }
 
+/// The spread of scan timestamps, in days, above which an aggregate warns
+/// that its scans are stale. Scanning a fleet host by host over a few
+/// days is normal; a spread past a week means one host's picture may
+/// predate changes made on another.
+pub const STALE_SCAN_SPREAD_DAYS: i64 = 7;
+
 /// Warnings that allow aggregation but signal potential issues.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AggregateWarning {
@@ -235,18 +241,29 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
     }
 
     // --- Warning: stale scan dates ---
+    // Scans of a fleet taken one after another, over hours or days, are
+    // one picture of it; the warning is for a host scanned so much earlier
+    // than another that the two may not describe the fleet at one time.
     {
-        let timestamps: Vec<&str> = snapshots
+        let timestamps: Vec<(chrono::DateTime<chrono::FixedOffset>, &str)> = snapshots
             .iter()
             .filter_map(|s| s.meta.get("timestamp").and_then(|v| v.as_str()))
+            .filter_map(|ts| {
+                chrono::DateTime::parse_from_rfc3339(ts)
+                    .ok()
+                    .map(|at| (at, ts))
+            })
             .collect();
-        if timestamps.len() >= 2 {
-            // Simple lexicographic comparison works for ISO-8601 date strings
-            if let (Some(min), Some(max)) = (timestamps.iter().min(), timestamps.iter().max())
-                && min != max
-            {
+        if let (Some(min), Some(max)) = (timestamps.iter().min(), timestamps.iter().max()) {
+            let spread = max.0.signed_duration_since(min.0);
+            if spread > chrono::Duration::days(STALE_SCAN_SPREAD_DAYS) {
                 result.warnings.push(AggregateWarning::StaleScanDates {
-                    spread_description: format!("Scan dates range from {} to {}", min, max),
+                    spread_description: format!(
+                        "scans span {} days, more than {STALE_SCAN_SPREAD_DAYS}: from {} to {}",
+                        spread.num_days(),
+                        min.1,
+                        max.1
+                    ),
                 });
             }
         }

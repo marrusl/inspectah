@@ -346,11 +346,52 @@ fn test_stale_scan_dates_warning() {
         serde_json::Value::String("2026-03-15T00:00:00Z".to_string()),
     );
     let result = validate_snapshots(&[a, b]);
-    assert!(result.warnings.iter().any(|w| matches!(
-        w,
-        AggregateWarning::StaleScanDates { spread_description }
-        if spread_description.contains("2026-01-01") && spread_description.contains("2026-03-15")
-    )));
+    let stale: Vec<&String> = result
+        .warnings
+        .iter()
+        .filter_map(|w| match w {
+            AggregateWarning::StaleScanDates { spread_description } => Some(spread_description),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        stale,
+        ["scans span 73 days, more than 7: from 2026-01-01T00:00:00Z to 2026-03-15T00:00:00Z"]
+    );
+}
+
+/// Scans taken one after another are not stale: hosts scanned minutes
+/// apart, as the scan writes its timestamp, and a spread of exactly the
+/// threshold, raise no warning; a second past it does.
+#[test]
+fn stale_scan_dates_warn_only_past_the_threshold() {
+    let stale = |first: &str, second: &str| {
+        let mut a = make_snap("host-1", "9.4");
+        let mut b = make_snap("host-2", "9.4");
+        a.meta.insert("timestamp".into(), serde_json::json!(first));
+        b.meta.insert("timestamp".into(), serde_json::json!(second));
+        validate_snapshots(&[a, b])
+            .warnings
+            .iter()
+            .any(|w| matches!(w, AggregateWarning::StaleScanDates { .. }))
+    };
+    assert!(!stale(
+        "2026-11-05T04:26:03.552382773+00:00",
+        "2026-11-05T04:38:47.338375489+00:00"
+    ));
+    assert!(!stale(
+        "2026-11-01T00:00:00+00:00",
+        "2026-11-08T00:00:00+00:00"
+    ));
+    assert!(stale(
+        "2026-11-01T00:00:00+00:00",
+        "2026-11-08T00:00:01+00:00"
+    ));
+    // Offsets are compared as instants, not as text.
+    assert!(!stale(
+        "2026-11-08T05:00:00+05:00",
+        "2026-11-01T01:00:00+00:00"
+    ));
 }
 
 #[test]
