@@ -1526,6 +1526,21 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         staged_unit_file(&timer_file_stem(t), "timer")
             .is_some_and(|file| is_staged(&staged, &format!("{ETC_UNIT_DIR}/{file}")))
     });
+    // A carried timer whose enable the operator excluded on its unit row
+    // ships disabled: calling it carried would read as if it runs.
+    let excluded_enables: Vec<&str> = snap
+        .units
+        .iter()
+        .flat_map(|u| &u.state_changes)
+        .filter(|sc| !sc.disposition.is_included())
+        .map(|sc| sc.unit().name().as_str())
+        .collect();
+    let (not_enabled, carried): (Vec<_>, Vec<_>) =
+        carried
+            .into_iter()
+            .partition(|t: &&&inspectah_core::types::scheduled::SystemdTimer| {
+                excluded_enables.contains(&format!("{}.timer", t.name).as_str())
+            });
     let shown = |t: &&&inspectah_core::types::scheduled::SystemdTimer| {
         language_packages::sanitize_for_comment(&format!("{}.timer", t.name))
     };
@@ -1534,6 +1549,14 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         body.push(format!(
             "# Local timers carried with their configuration or drop-in row ({}): {}",
             carried.len(),
+            names.join(", ")
+        ));
+    }
+    if !not_enabled.is_empty() {
+        let names: Vec<String> = not_enabled.iter().map(shown).collect();
+        body.push(format!(
+            "# Local timers carried but not enabled, their unit row is excluded ({}): {}",
+            not_enabled.len(),
             names.join(", ")
         ));
     }

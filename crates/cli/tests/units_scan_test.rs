@@ -5291,6 +5291,49 @@ fn the_local_timers_comment_says_which_are_carried() {
     }
 }
 
+/// An enabled local timer whose unit row is excluded keeps its files (the
+/// config rows own them) and loses its enable, so the comment names it as
+/// carried but not enabled, never as carried. Control: unchanged, the
+/// timer is on the carried line and enabled.
+#[test]
+fn a_local_timer_with_its_unit_row_excluded_is_not_called_carried() {
+    const CARRIED: &str = "# Local timers carried with their configuration or drop-in row";
+    const NOT_ENABLED: &str = "# Local timers carried but not enabled, their unit row is excluded";
+    let snap = scan(t37_host(""));
+    let line = |cf: &str, prefix: &str| {
+        cf.lines()
+            .find(|l| l.starts_with(prefix))
+            .map(str::to_owned)
+    };
+
+    let unchanged = containerfile_in(&exported_after(&snap, &[]));
+    assert!(acts(&unchanged, "enable", "report.timer"), "{unchanged}");
+    assert_eq!(
+        line(&unchanged, CARRIED).as_deref(),
+        Some("# Local timers carried with their configuration or drop-in row (1): report.timer"),
+        "{unchanged}"
+    );
+    assert_eq!(line(&unchanged, NOT_ENABLED), None, "{unchanged}");
+
+    let tree = exported_after(&snap, &[(unit_item("report.timer"), false)]);
+    let cf = containerfile_in(&tree);
+    assert!(in_no_systemctl_instruction(&cf, "report.timer"), "{cf}");
+    assert_eq!(line(&cf, CARRIED), None, "{cf}");
+    assert_eq!(
+        line(&cf, NOT_ENABLED).as_deref(),
+        Some(
+            "# Local timers carried but not enabled, their unit row is excluded (1): report.timer"
+        ),
+        "{cf}"
+    );
+    assert!(
+        tree.path()
+            .join("config/etc/systemd/system/report.timer")
+            .exists(),
+        "the config row still carries the file"
+    );
+}
+
 // ---------------------------------------------------------------------
 // § 8, § 11.1: every scheduled control applies or is refused by name
 // (T35).
