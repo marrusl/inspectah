@@ -418,6 +418,59 @@ describe("RepoBar's Switch in AggregateApp reads the decision and the members", 
     expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
   });
 
+  // A refused repo op's recovery fetch runs outside the mutation queue, so
+  // a later op's fetch can answer first. Whichever order they answer in,
+  // the newer generation stays on screen.
+  it("keeps the newer view when a refused op's recovery fetch answers last", async () => {
+    const kept = makeView(makeVendorRepo());
+    mockFetchAggregateView.mockResolvedValueOnce(kept);
+    renderAggregateApp();
+    await waitForContent();
+    expect(screen.getByRole("switch")).toBeChecked();
+    const fetchesBefore = mockFetchAggregateView.mock.calls.length;
+
+    let answerRecovery!: (view: AggregateViewResponse) => void;
+    let answerQueue!: (view: AggregateViewResponse) => void;
+    mockFetchAggregateView
+      .mockReturnValueOnce(new Promise((r) => (answerRecovery = r)))
+      .mockReturnValueOnce(new Promise((r) => (answerQueue = r)));
+    mockApplyOp
+      .mockRejectedValueOnce(
+        new ApiError(422, {
+          error: "nothing to change: repo 'vendor' is already kept",
+        }),
+      )
+      .mockResolvedValueOnce({});
+
+    // The refused op starts the recovery fetch, which stays out.
+    fireEvent.click(screen.getByRole("switch"));
+    await screen.findByTestId("repo-failure-vendor");
+    await waitFor(() =>
+      expect(mockFetchAggregateView.mock.calls.length).toBe(fetchesBefore + 1),
+    );
+
+    // The next op is accepted, and its fetch stays out too.
+    fireEvent.click(screen.getByRole("switch"));
+    await waitFor(() =>
+      expect(mockFetchAggregateView.mock.calls.length).toBe(fetchesBefore + 2),
+    );
+
+    const excluded = makeView(
+      makeVendorRepo({ kept: false, effective_included: 0 }),
+    );
+    excluded.generation = 11;
+    const stale = { ...structuredClone(kept), generation: 10 };
+
+    await act(async () => answerQueue(excluded));
+    await waitFor(() => expect(screen.getByRole("switch")).not.toBeChecked());
+    await act(async () => answerRecovery(stale));
+
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    expect(
+      screen.getByText("2 packages excluded, excluded in refine"),
+    ).toBeInTheDocument();
+  });
+
   it("states an inventory refusal on a configuration row as information", async () => {
     const fake = makeFakeApi(makeView(makeVendorRepo()));
     wireFake(fake);

@@ -179,6 +179,15 @@ export function AggregateApp({
 }: AggregateAppProps) {
   const prevalenceDisplay = usePrevalenceDisplayState();
   const [view, setView] = useState<AggregateViewResponse | null>(null);
+  // Every fetched view is shown through this. Fetches can answer out of
+  // order (a refused repo op's recovery fetch runs outside the mutation
+  // queue), and the server's generation only grows, undo and redo
+  // included, so an older view never replaces a newer one.
+  const publishView = useCallback((next: AggregateViewResponse) => {
+    setView((prev) =>
+      prev !== null && next.generation < prev.generation ? prev : next,
+    );
+  }, []);
   const [activeSection, setActiveSection] = useState("packages");
   const [error, setError] = useState<string | null>(null);
   const [expandedItemId, setExpandedItemId] = useState<ItemId | null>(null);
@@ -189,9 +198,9 @@ export function AggregateApp({
   } | null>(null);
   useEffect(() => {
     fetchAggregateView()
-      .then(setView)
+      .then(publishView)
       .catch((e) => setError(e.message));
-  }, []);
+  }, [publishView]);
 
   // A refused repo op is shown on its row, the way the single-host
   // Repositories section shows it; a `nothing to change:` means the view
@@ -222,7 +231,7 @@ export function AggregateApp({
         setRepoFailures((prev) => new Map(prev).set(sectionId, failure));
         if (failure.kind === "nothing_to_change") {
           fetchAggregateView()
-            .then(setView)
+            .then(publishView)
             .catch((e: unknown) =>
               setError(e instanceof Error ? e.message : String(e)),
             );
@@ -231,7 +240,7 @@ export function AggregateApp({
       }
       setError(err.message);
     },
-    [],
+    [publishView],
   );
   const {
     mutate,
@@ -240,7 +249,7 @@ export function AggregateApp({
     isPending,
     refetchError,
     retry,
-  } = useAggregateMutation(setView, handleMutationError);
+  } = useAggregateMutation(publishView, handleMutationError);
   // An Undo or Redo can replace any repo's state, so it ends every
   // failure the rows show.
   const undo = useCallback(() => {
@@ -511,7 +520,7 @@ export function AggregateApp({
                 onClick={() => {
                   setError(null);
                   fetchAggregateView()
-                    .then(setView)
+                    .then(publishView)
                     .catch((e) => setError(e.message));
                 }}
               >
@@ -608,7 +617,7 @@ export function AggregateApp({
           onUndo={undo}
           onRedo={redo}
           onExportComplete={() => {
-            fetchAggregateView().then(setView);
+            fetchAggregateView().then(publishView);
           }}
           isPending={isPending}
           activeSection={activeSection}

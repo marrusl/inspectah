@@ -151,6 +151,29 @@ describe("useView", () => {
     expect(result.current.data).toEqual(newer);
   });
 
+  // A refused repo op's recovery reaches the view through `invalidate`
+  // (App passes MainContent `onViewUpdate={() => view.invalidate()}`), as
+  // the next op's update does, so the two fetches can answer either way
+  // round.
+  it("an older fetch answering after a newer one leaves the newer view shown", async () => {
+    const answers = holdFetches();
+    const { result } = renderHook(() => useView());
+    await act(async () => answers[0]({ ...MOCK_VIEW, generation: 9 }));
+
+    act(() => result.current.invalidate());
+    await waitFor(() => expect(answers).toHaveLength(2));
+    act(() => result.current.invalidate());
+    await waitFor(() => expect(answers).toHaveLength(3));
+
+    const newer = { ...MOCK_VIEW, generation: 11, containerfile_preview: "11" };
+    await act(async () => answers[2](newer));
+    await act(async () =>
+      answers[1]({ ...MOCK_VIEW, generation: 10, containerfile_preview: "10" }),
+    );
+    expect(result.current.data).toEqual(newer);
+    expect(result.current.loading).toBe(false);
+  });
+
   it("a newer fetch answering after a publish replaces the published view", async () => {
     const answers = holdFetches();
     const { result } = renderHook(() => useView());
