@@ -521,6 +521,10 @@ pub fn dhcp_connection_paths(exec: &dyn Executor) -> Vec<String> {
             continue;
         }
         let file_path = format!("{nm_dir}/{name}");
+        // Opening a FIFO with no writer blocks the scan.
+        if !super::admit::opens_without_blocking(exec, &file_path) {
+            continue;
+        }
         if let Ok(content) = exec.read_file(Path::new(&file_path)) {
             // DHCP connections have method=auto in the [ipv4] section
             if content.contains("method=auto") {
@@ -806,6 +810,35 @@ mod tests {
         let paths = dhcp_connection_paths(&exec);
         assert_eq!(paths.len(), 1);
         assert!(paths[0].contains("eth0.nmconnection"));
+    }
+
+    /// A FIFO named like a connection, or a link to one, is never opened:
+    /// `with_special_file` paths panic when read.
+    #[test]
+    fn dhcp_detection_never_opens_a_special_file() {
+        let nm_dir = "/etc/NetworkManager/system-connections";
+        let exec = MockExecutor::new()
+            .with_dir(
+                nm_dir,
+                vec![
+                    "control.nmconnection",
+                    "link.nmconnection",
+                    "eth0.nmconnection",
+                ],
+            )
+            .with_special_file(&format!("{nm_dir}/control.nmconnection"))
+            .with_link(
+                &format!("{nm_dir}/link.nmconnection"),
+                "control.nmconnection",
+            )
+            .with_file(
+                &format!("{nm_dir}/eth0.nmconnection"),
+                "[ipv4]\nmethod=auto\n",
+            );
+        assert_eq!(
+            dhcp_connection_paths(&exec),
+            [format!("{nm_dir}/eth0.nmconnection")]
+        );
     }
 
     // ---- Symlink-aware directory skipping tests ----

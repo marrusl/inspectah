@@ -74,6 +74,8 @@ pub struct SysctlHost {
     files: BTreeMap<String, String>,
     links: BTreeMap<String, String>,
     dangling_links: BTreeMap<String, String>,
+    /// FIFOs, sockets and devices: a read of one panics.
+    specials: BTreeSet<String>,
     dirs: BTreeMap<String, BTreeSet<String>>,
     dir_errors: BTreeMap<String, std::io::ErrorKind>,
     link_errors: BTreeMap<String, std::io::ErrorKind>,
@@ -122,6 +124,14 @@ impl SysctlHost {
     pub fn dangling_link(mut self, path: &str, target: &str) -> Self {
         self.list(path);
         self.dangling_links.insert(path.into(), target.into());
+        self
+    }
+
+    /// A FIFO, socket or device, listed in its directory. Reading it
+    /// panics, as opening a FIFO with no writer blocks a real scan.
+    pub fn special_file(mut self, path: &str) -> Self {
+        self.list(path);
+        self.specials.insert(path.into());
         self
     }
 
@@ -263,6 +273,9 @@ impl SysctlHost {
         }
         for (path, content) in &self.files {
             mock = mock.with_file(path, content);
+        }
+        for path in &self.specials {
+            mock = mock.with_special_file(path);
         }
         for (dir, kind) in &self.dir_iteration_errors {
             mock = mock.with_dir_iteration_error(dir, *kind);

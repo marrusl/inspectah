@@ -1,5 +1,6 @@
 use inspectah_core::types::symlink_allowlist::{crosses_tree_boundary, is_allowlisted};
 use inspectah_core::types::{AdvisoryType, FindingKind};
+pub(crate) mod admit;
 pub mod classify;
 mod ghost;
 pub mod rpmva;
@@ -133,6 +134,14 @@ impl Inspector for ConfigInspector {
             if !exec.file_exists(Path::new(path)) {
                 continue;
             }
+            match admit::locate(exec, path) {
+                Ok(_) => {}
+                Err(admit::Refusal::NotUnderEtc) => continue,
+                Err(_) => {
+                    warnings.push(aliased_path_warning(path));
+                    continue;
+                }
+            }
             if dhcp_paths.contains(*path) {
                 continue;
             }
@@ -143,8 +152,6 @@ impl Inspector for ConfigInspector {
                 continue;
             }
 
-            let (content, disposition) = capture_config(exec, path, &mut degraded_reasons);
-
             let kind = if is_rpm_owned_dev_null_link(exec, path, flags) {
                 ConfigFileKind::RpmOwnedModified
             } else {
@@ -153,9 +160,23 @@ impl Inspector for ConfigInspector {
 
             // Default/unmodified configs don't belong in the snapshot.
             // Only modified (content-changed) RPM configs are migration-relevant.
+            // Decided before any read: a row rpm reported only for its
+            // metadata is never opened.
             if kind == ConfigFileKind::RpmOwnedDefault {
                 continue;
             }
+
+            let (content, disposition) = match capture_config(exec, path, &mut degraded_reasons) {
+                Ok(captured) => captured,
+                Err(
+                    admit::Unreadable::LinkLeavesEtc(target)
+                    | admit::Unreadable::LinkToWithheld(target),
+                ) => {
+                    warnings.push(withheld_link_warning(path, &target));
+                    continue;
+                }
+                Err(admit::Unreadable::Special | admit::Unreadable::NotAFile) => continue,
+            };
 
             section.files.push(ConfigFileEntry {
                 path: path.to_string(),
@@ -219,9 +240,15 @@ impl Inspector for ConfigInspector {
                     if is_rpm_owned_via_symlink(exec, rpm_state, &abs_path) {
                         continue;
                     }
+                    // A second name for a file under a directory link:
+                    // the walk reaches that file under its own name, or
+                    // it is outside /etc.
+                    if admit::locate(exec, &abs_path).is_err() {
+                        continue;
+                    }
                     // Never open a FIFO, socket or device, before any
                     // check below reads the file.
-                    if is_special_file(exec, &abs_path) {
+                    if admit::readable(exec, &abs_path) == Err(admit::Unreadable::Special) {
                         continue;
                     }
                     // Skip excluded unowned
@@ -257,7 +284,7 @@ impl Inspector for ConfigInspector {
                             }
                             Ok(resolved) => {
                                 let resolved_str = resolved.to_string_lossy();
-                                if is_authselect_profile_link(&abs_path, &resolved_str) {
+                                if admit::is_authselect_profile_link(&abs_path, &resolved_str) {
                                     // Collected below with the content
                                     // it resolves to.
                                 } else if is_allowlisted(&abs_path, &resolved_str) {
@@ -283,7 +310,22 @@ impl Inspector for ConfigInspector {
                     }
 
                     let (content, disposition) =
-                        capture_config(exec, &abs_path, &mut degraded_reasons);
+                        match capture_config(exec, &abs_path, &mut degraded_reasons) {
+                            Ok(captured) => captured,
+                            Err(admit::Unreadable::LinkLeavesEtc(_)) => (
+                                String::new(),
+                                FindingKind::advisory(
+                                    AdvisoryType::CrossTreeSymlink,
+                                    LINK_LEAVES_ETC_RATIONALE,
+                                ),
+                            ),
+                            // The target is collected, or excluded, under
+                            // its own path.
+                            Err(admit::Unreadable::LinkToWithheld(_)) => continue,
+                            Err(admit::Unreadable::Special | admit::Unreadable::NotAFile) => {
+                                continue;
+                            }
+                        };
 
                     section.files.push(ConfigFileEntry {
                         path: abs_path,
@@ -416,13 +458,15 @@ const GHOST_CREDENTIAL_WITHHELD: &str = "holds key material, so it was withheld:
 /// not a regular file by `lstat` ([`Executor::file_kind`]): absent, a
 /// symlink (its state is the link, not content), a directory (`%ghost
 /// %dir`), or a FIFO, socket or device, which is never opened because
-/// opening a FIFO with no writer blocks. Then every path
+/// opening a FIFO with no writer blocks. Then a path with a directory
+/// link above it ([`admit::locate`]), which names a file elsewhere and is
+/// a scan warning. Then every path, in its normalized spelling,
 /// [`ghost::classify_ghost`] does not call [`ghost::GhostClass::Config`]:
-/// a file another section records (fstab, crypttab, repo files, the
-/// SELinux config, the account databases, the locale), a machine-state
-/// member, a file the host generates, or a keymap file the locale item
-/// decides. A credential by path is never opened and is withheld with a
-/// scan warning naming it. Then the unowned walk's exclusions that need
+/// a file another section records (fstab, crypttab, the `*.repo` files
+/// the repos section reads, the SELinux config, the account databases,
+/// the locale), a machine-state member, a file the host generates, or a
+/// keymap file the locale item decides. A credential by path is never
+/// opened and is withheld with a scan warning naming it. Then the unowned walk's exclusions that need
 /// the host (`is_excluded_unowned`'s unit-link test, DHCP connections).
 /// Last, once read, a file whose content is a keytab or a whole-file
 /// private key (`ghost::is_credential_content`) is dropped before the
@@ -476,15 +520,24 @@ fn collect_ghost_configs(
     }
     let collected: HashSet<String> = section.files.iter().map(|f| f.path.clone()).collect();
     for ghost in query.files {
-        let path = ghost.path.as_str();
-        let on_host = Path::new(path);
-        if collected.contains(path) || !matches!(exec.file_kind(on_host), Ok(FileKind::Regular)) {
+        let requested = ghost.path.as_str();
+        if collected.contains(requested)
+            || !matches!(exec.file_kind(Path::new(requested)), Ok(FileKind::Regular))
+        {
             continue;
         }
+        let path = match admit::locate(exec, requested) {
+            Ok(located) => located,
+            Err(_) => {
+                warnings.push(aliased_path_warning(requested));
+                continue;
+            }
+        };
+        let path = path.as_str();
         match ghost::classify_ghost(path) {
             ghost::GhostClass::Config => {}
             ghost::GhostClass::Credential => {
-                warnings.push(ghost_credential_warning(path));
+                warnings.push(ghost_credential_warning(requested));
                 continue;
             }
             ghost::GhostClass::OwnedBy(_)
@@ -496,7 +549,9 @@ fn collect_ghost_configs(
             continue;
         }
 
-        let (content, disposition) = capture_config(exec, path, degraded_reasons);
+        let Ok((content, disposition)) = capture_config(exec, path, degraded_reasons) else {
+            continue;
+        };
         if ghost::is_credential_content(&content) {
             warnings.push(ghost_credential_warning(path));
             continue;
@@ -515,29 +570,43 @@ fn collect_ghost_configs(
     }
 }
 
+/// The scan warning for a packaged path refused by [`admit::locate`]; the
+/// path comes first.
+const ALIASED_PATH_REFUSED: &str = "was not read and is not carried: a directory above it is a \
+     symbolic link, so the path names a file somewhere else. That file is collected, or left \
+     out, under its own path.";
+
+/// The scan warning for a modified packaged file that is a link to a file
+/// this section does not carry; the path and the target come first.
+const LINKED_FILE_WITHHELD: &str = "which is outside /etc, key material, host identity, or a file \
+     another section records, so it was not read and is not carried.";
+
+/// Why a walked link whose target is outside `/etc` carries no content.
+const LINK_LEAVES_ETC_RATIONALE: &str = "Symlink points outside /etc: its target was not read and \
+     is not carried. Recreate the link in the image if it is needed.";
+
+fn aliased_path_warning(path: &str) -> Warning {
+    Warning {
+        inspector: "config".into(),
+        message: format!("{path} {ALIASED_PATH_REFUSED}"),
+        ..Default::default()
+    }
+}
+
+fn withheld_link_warning(path: &str, target: &str) -> Warning {
+    Warning {
+        inspector: "config".into(),
+        message: format!("{path} is a symbolic link to {target}, {LINKED_FILE_WITHHELD}"),
+        ..Default::default()
+    }
+}
+
 /// The scan warning naming a ghost file withheld as a credential.
 fn ghost_credential_warning(path: &str) -> Warning {
     Warning {
         inspector: "config".into(),
         message: format!("{path} {GHOST_CREDENTIAL_WITHHELD}"),
         ..Default::default()
-    }
-}
-
-/// Whether `path` is, or resolves through links to, a FIFO, socket or
-/// device. The walk lists every entry that is not a directory, and opening
-/// a FIFO with no writer blocks: the subprocess timeout does not cover file
-/// reads, so one such entry under `/etc` would hang the scan. A link that
-/// does not resolve is not special; the walk reports it as broken.
-fn is_special_file(exec: &dyn Executor, path: &str) -> bool {
-    let path = Path::new(path);
-    match exec.file_kind(path) {
-        Ok(FileKind::Special) => true,
-        Ok(FileKind::Symlink) => exec
-            .resolve_final_target(path)
-            .and_then(|target| exec.file_kind(&target))
-            .is_ok_and(|kind| matches!(kind, FileKind::Special)),
-        _ => false,
     }
 }
 
@@ -619,7 +688,9 @@ fn authselect_edit_advisories(
         )),
         Some(selection) => {
             for (path, option) in ghost::AUTHSELECT_GENERATED {
-                if !matches!(exec.file_kind(Path::new(path)), Ok(FileKind::Regular)) {
+                if !matches!(exec.file_kind(Path::new(path)), Ok(FileKind::Regular))
+                    || admit::locate(exec, path).is_err()
+                {
                     continue;
                 }
                 let Ok(on_host) = exec.read_file(Path::new(path)) else {
@@ -672,10 +743,14 @@ fn authselect_edit_advisories(
             existing.disposition = with_modernization(&existing.disposition, advisory());
             continue;
         }
-        if !matches!(exec.file_kind(Path::new(&path)), Ok(FileKind::Regular)) {
+        if !matches!(exec.file_kind(Path::new(&path)), Ok(FileKind::Regular))
+            || admit::locate(exec, &path).is_err()
+        {
             continue;
         }
-        let (content, captured) = capture_config(exec, &path, degraded_reasons);
+        let Ok((content, captured)) = capture_config(exec, &path, degraded_reasons) else {
+            continue;
+        };
         let kind = if rpm_state.is_rpm_owned(Path::new(&path)) {
             ConfigFileKind::RpmOwnedModified
         } else {
@@ -796,37 +871,6 @@ fn is_authselect_pam_link(exec: &dyn Executor, path: &str, flags: &str) -> bool 
     }
 }
 
-/// Where `authselect create-profile` puts a custom profile.
-const AUTHSELECT_CUSTOM_PREFIX: &str = "/etc/authselect/custom/";
-
-/// Where authselect's shipped profiles live, which a custom profile's
-/// links point into.
-const AUTHSELECT_SHIPPED_PREFIX: &str = "/usr/share/authselect/";
-
-/// A file of a custom authselect profile that is a link into the shipped
-/// profiles, as `authselect create-profile <name> -b <base>
-/// --symlink-meta --symlink-pam` makes them (`README`, `REQUIREMENTS`
-/// and the PAM templates link to `/usr/share/authselect/vendor/<base>/`,
-/// measured on RHEL 9.8 and 10.2).
-///
-/// The walk would make such a link a cross-tree advisory and carry
-/// nothing, but the export selects the profile, and `authselect select`
-/// refuses a profile with no `README` ("Unable to find profile"), and
-/// writes an empty PAM stack for a missing template: both measured in
-/// rhel-bootc 9.8 and 10.2. So the link is collected as a file holding
-/// what it resolves to, and the image's profile is complete. A build from
-/// such a context selected the profile and passed `authselect check` on
-/// both releases. The profile's files are then copies of the host's
-/// shipped templates; they no longer follow the image's own.
-fn is_authselect_profile_link(path: &str, resolved: &str) -> bool {
-    path.strip_prefix(AUTHSELECT_CUSTOM_PREFIX)
-        .and_then(|rest| rest.split_once('/'))
-        .is_some_and(|(profile, file)| {
-            !profile.is_empty() && !file.is_empty() && !file.contains('/')
-        })
-        && resolved.starts_with(AUTHSELECT_SHIPPED_PREFIX)
-}
-
 /// Where an admin points a package symlink to mask the file it names.
 const DEV_NULL: &str = "/dev/null";
 
@@ -930,25 +974,31 @@ fn with_modernization(existing: &FindingKind, modernization: FindingKind) -> Fin
     }
 }
 
-/// The content and starting disposition of a collected config file.
+/// The content and starting disposition of a collected config file, or
+/// why its content is not read at all ([`admit::readable`]): the one read
+/// every branch makes of a file it keeps.
 ///
-/// Captured content, empty or not, keeps the default disposition. A failed
-/// capture becomes a `ContentNotCaptured` advisory with no content: the
-/// config tree stages only included entries, and refine and the fleet merge
-/// leave advisories alone, so no export path can copy an empty file over
-/// the one on the host.
+/// Captured content, empty or not, keeps the default disposition. A link
+/// to `/dev/null` is a mask: its content is empty, and nothing is opened.
+/// A failed capture becomes a `ContentNotCaptured` advisory with no
+/// content: the config tree stages only included entries, and refine and
+/// the fleet merge leave advisories alone, so no export path can copy an
+/// empty file over the one on the host.
 fn capture_config(
     exec: &dyn Executor,
     path: &str,
     degraded_reasons: &mut Vec<String>,
-) -> (String, FindingKind) {
-    match read_config_content(exec, path, degraded_reasons) {
+) -> Result<(String, FindingKind), admit::Unreadable> {
+    if admit::readable(exec, path)? == admit::Readable::DevNullMask {
+        return Ok((String::new(), FindingKind::default()));
+    }
+    Ok(match read_config_content(exec, path, degraded_reasons) {
         Ok(content) => (content, FindingKind::default()),
         Err(failure) => (
             String::new(),
             FindingKind::advisory(AdvisoryType::ContentNotCaptured, failure.rationale()),
         ),
-    }
+    })
 }
 
 /// Checks if the source system is an ostree/bootc variant.
@@ -959,9 +1009,15 @@ fn is_ostree_system(source: &SourceSystem) -> bool {
     )
 }
 
+/// The file naming the system crypto policy.
+const CRYPTO_POLICY_CONFIG: &str = "/etc/crypto-policies/config";
+
 /// Detects the system crypto policy and adds a warning if non-default.
 fn detect_crypto_policy(exec: &dyn Executor, warnings: &mut Vec<Warning>) {
-    let content = match exec.read_file(Path::new("/etc/crypto-policies/config")) {
+    if !admit::opens_without_blocking(exec, CRYPTO_POLICY_CONFIG) {
+        return;
+    }
+    let content = match exec.read_file(Path::new(CRYPTO_POLICY_CONFIG)) {
         Ok(c) => c,
         Err(_) => return,
     };
@@ -1064,8 +1120,14 @@ fn detect_orphaned_configs(
             if dhcp_paths.contains(&abs_path) {
                 continue;
             }
+            if admit::locate(exec, &abs_path).is_err() {
+                continue;
+            }
 
-            let (content, disposition) = capture_config(exec, &abs_path, degraded_reasons);
+            let Ok((content, disposition)) = capture_config(exec, &abs_path, degraded_reasons)
+            else {
+                continue;
+            };
 
             section.files.push(ConfigFileEntry {
                 path: abs_path,
@@ -1269,48 +1331,6 @@ mod tests {
             verification_results: va_entries,
             path_to_package,
             ..Default::default()
-        }
-    }
-
-    #[test]
-    fn authselect_profile_links() {
-        for (path, resolved, carried) in [
-            (
-                "/etc/authselect/custom/corp/README",
-                "/usr/share/authselect/vendor/sssd/README",
-                true,
-            ),
-            (
-                "/etc/authselect/custom/corp/system-auth",
-                "/usr/share/authselect/default/sssd/system-auth",
-                true,
-            ),
-            (
-                "/etc/authselect/custom/corp/README",
-                "/usr/share/doc/README",
-                false,
-            ),
-            (
-                "/etc/authselect/custom/README",
-                "/usr/share/authselect/vendor/sssd/README",
-                false,
-            ),
-            (
-                "/etc/authselect/custom/corp/sub/README",
-                "/usr/share/authselect/vendor/sssd/README",
-                false,
-            ),
-            (
-                "/etc/pam.d/system-auth",
-                "/usr/share/authselect/vendor/sssd/system-auth",
-                false,
-            ),
-        ] {
-            assert_eq!(
-                is_authselect_profile_link(path, resolved),
-                carried,
-                "{path} -> {resolved}"
-            );
         }
     }
 

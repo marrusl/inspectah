@@ -755,6 +755,224 @@ fn ghost_fstab_repo_and_key_files_are_never_copied_on_either_export_path() {
     }
 }
 
+/// `/etc/chrony.keys` content: an NTP authentication key that no
+/// redaction pattern recognizes, so only admission keeps it out.
+const CHRONY_KEY: &str = "HEX:4D6F6E6B65795365637265744B6579";
+/// A shadow hash, an outside-`/etc` token and an Insights machine ID,
+/// each unique to the case that plants it.
+const SHADOW_HASH: &str = "$6$saltsalt$AncestorAliasHash";
+const VAR_TOKEN: &str = "token-behind-an-ancestor-link";
+const INSIGHTS_ID: &str = "insights-id-through-a-final-link";
+const ROOT_SECRET: &str = "root-secret-through-a-final-link";
+
+/// The snapshot as JSON, and every file of both export trees, so a test
+/// can say a value is nowhere.
+fn everywhere(snap: &InspectionSnapshot) -> Vec<(String, String)> {
+    let mut texts = vec![(
+        "snapshot".to_string(),
+        serde_json::to_string(snap).expect("the snapshot serializes"),
+    )];
+    for (path, tree) in both_exports(snap) {
+        let mut dirs = vec![tree.path().to_path_buf()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).expect("an export directory lists") {
+                let entry = entry.expect("an export entry reads");
+                let file = entry.path();
+                if file.is_dir() {
+                    dirs.push(file);
+                } else if let Ok(text) = std::fs::read_to_string(&file) {
+                    texts.push((format!("{path}: {}", file.display()), text));
+                }
+            }
+        }
+    }
+    texts
+}
+
+/// Paths under `/etc` that name a file elsewhere through a directory
+/// link are never read, whatever rule the file they lead to falls under:
+/// a credential (`chrony.keys`), host identity (`machine-id`), another
+/// section's file (`shadow`), and a file outside `/etc`. Each is a
+/// packaged `%ghost` path, so each is named by a scan warning. A final
+/// link is read only to carried configuration under `/etc`: a modified
+/// packaged file re-pointed at the key file is withheld with a warning,
+/// an unowned link to a machine-state file is left out, and one leaving
+/// `/etc` is a content-free advisory.
+#[test]
+fn a_path_through_a_linked_directory_or_to_a_withheld_file_is_never_read() {
+    let snap = scan(
+        sssd_host()
+            .ghost("chrony", "cg", "/etc/chrony.keys")
+            .file("/etc/chrony.keys", &format!("1 SHA1 {CHRONY_KEY}\n"))
+            .rpm_owned("/etc/shadow", "setup")
+            .file(
+                "/etc/shadow",
+                &format!("root:{SHADOW_HASH}:19000:0:99999:7:::\n"),
+            )
+            .file("/var/lib/app/token", &format!("{VAR_TOKEN}\n"))
+            .link("/etc/app/state", "/etc")
+            .link("/etc/app/data", "/var/lib/app")
+            .ghost("app", "g", "/etc/app/state/chrony.keys")
+            .ghost("app", "g", "/etc/app/state/machine-id")
+            .ghost("app", "g", "/etc/app/state/shadow")
+            .ghost("app", "g", "/etc/app/data/token")
+            .rpm_owned("/etc/app/app.conf", "app")
+            .rpm_va("S.5....T.", "/etc/app/app.conf")
+            .link("/etc/app/app.conf", "/etc/chrony.keys")
+            .file(
+                "/etc/insights-client/machine-id",
+                &format!("{INSIGHTS_ID}\n"),
+            )
+            .link("/etc/app/insights-id", "/etc/insights-client/machine-id")
+            .file("/root/token", &format!("{ROOT_SECRET}\n"))
+            .link("/etc/app/root-token", "/root/token"),
+    );
+
+    for (where_, text) in everywhere(&snap) {
+        for secret in [CHRONY_KEY, SHADOW_HASH, VAR_TOKEN, INSIGHTS_ID, ROOT_SECRET] {
+            assert!(!text.contains(secret), "{where_}: {secret}");
+        }
+    }
+    for path in [
+        "/etc/app/state/chrony.keys",
+        "/etc/app/state/machine-id",
+        "/etc/app/state/shadow",
+        "/etc/app/data/token",
+    ] {
+        assert!(entry(&snap, path).is_none(), "{path} is not a config entry");
+        assert!(
+            snap.warnings.iter().any(|w| w.message.starts_with(&format!(
+                "{path} was not read and is not carried: a directory above it is a symbolic link"
+            ))),
+            "{path} is named: {:?}",
+            snap.warnings
+        );
+    }
+    assert!(entry(&snap, "/etc/app/app.conf").is_none());
+    assert!(
+        snap.warnings.iter().any(|w| w
+            .message
+            .starts_with("/etc/app/app.conf is a symbolic link to /etc/chrony.keys")),
+        "{:?}",
+        snap.warnings
+    );
+    assert!(entry(&snap, "/etc/app/insights-id").is_none());
+    let root_link = entry(&snap, "/etc/app/root-token").expect("the link is an advisory");
+    assert!(root_link.content.is_empty());
+    assert!(!root_link.disposition.is_included(), "{root_link:?}");
+
+    for (path, tree) in both_exports(&snap) {
+        assert!(!tree.path().join("config/etc/app").exists(), "{path}");
+        assert!(
+            tree.path().join("config/etc/sssd/sssd.conf").exists(),
+            "{path}: the control"
+        );
+    }
+}
+
+/// An alias of the repo directory: the walk reaches `redhat.repo` under
+/// `/etc/repo-alias/`, a spelling no ownership or section claim matches.
+/// The repos section reads the file under its own name and leaves it out
+/// of both exports as the subscription's default repo; the alias is never
+/// collected, so it cannot carry the file in by another name.
+#[test]
+fn a_repo_directory_alias_does_not_carry_an_excluded_repo() {
+    const REPO_URL: &str = "https://cdn.example.com/rhel-through-alias";
+    let snap = scan(
+        sssd_host()
+            .ghost("subscription-manager", "g", "/etc/yum.repos.d/redhat.repo")
+            .file(
+                "/etc/yum.repos.d/redhat.repo",
+                &format!("[rhel-sub]\nname=Subscribed\nbaseurl={REPO_URL}\nenabled=1\n"),
+            )
+            .link("/etc/repo-alias", "yum.repos.d"),
+    );
+    let config = &snap.config.as_ref().expect("a config section").files;
+    assert!(
+        !config
+            .iter()
+            .any(|f| f.path.starts_with("/etc/repo-alias/")),
+        "{:?}",
+        config.iter().map(|f| &f.path).collect::<Vec<_>>()
+    );
+    let repo = snap
+        .rpm
+        .as_ref()
+        .expect("an rpm section")
+        .repo_files
+        .iter()
+        .find(|r| r.path == "/etc/yum.repos.d/redhat.repo")
+        .expect("the repos section reads redhat.repo");
+    assert!(
+        !repo.disposition.is_included(),
+        "the default repo is left out"
+    );
+
+    for (path, tree) in both_exports(&snap) {
+        assert!(
+            !tree.path().join("config/etc/repo-alias").exists(),
+            "{path}"
+        );
+        assert!(
+            !tree
+                .path()
+                .join("config/etc/yum.repos.d/redhat.repo")
+                .exists(),
+            "{path}"
+        );
+        assert!(!containerfile(tree.path()).contains("repo-alias"), "{path}");
+    }
+}
+
+/// No read path opens a FIFO, socket or device: DHCP detection over a
+/// NetworkManager connection, a ghost file rpm reported only for its
+/// metadata (`.M.......`), and orphan detection for a removed package,
+/// each on a host of its own. `special_file` paths panic when read.
+#[test]
+fn no_read_path_opens_a_special_file() {
+    let control = || SysctlHost::new().file("/etc/app.conf", "setting=value\n");
+    let hosts = [
+        (
+            "DHCP detection",
+            control().special_file("/etc/NetworkManager/system-connections/control.nmconnection"),
+        ),
+        (
+            "metadata-only rpm -Va row",
+            control()
+                .ghost("sssd-common", "cng", "/etc/sssd/sssd.conf")
+                .special_file("/etc/sssd/sssd.conf")
+                .rpm_va(".M.......", "/etc/sssd/sssd.conf"),
+        ),
+        (
+            "orphan detection",
+            control().special_file("/etc/oldapp.fifo").command(
+                "dnf history list --reverse",
+                0,
+                "oldapp Removed\n",
+                "",
+            ),
+        ),
+    ];
+    for (case, host) in hosts {
+        let snap = scan(host);
+        let paths: Vec<&str> = snap
+            .config
+            .as_ref()
+            .unwrap_or_else(|| panic!("{case}: a config section"))
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(paths, ["/etc/app.conf"], "{case}");
+        for (path, tree) in both_exports(&snap) {
+            assert!(
+                tree.path().join("config/etc/app.conf").exists(),
+                "{case}: {path}"
+            );
+        }
+    }
+}
+
 /// The repos section reads only `*.repo` files directly in
 /// `/etc/yum.repos.d`, and claims only those: a nested ghost file and one
 /// with another suffix are carried as configuration, never dropped by

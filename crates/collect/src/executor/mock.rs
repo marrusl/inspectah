@@ -320,7 +320,13 @@ impl Executor for MockExecutor {
             Ok(FileKind::Symlink)
         } else if self.specials.contains(key) {
             Ok(FileKind::Special)
-        } else if self.dirs.contains_key(key) || self.dir_errors.contains_key(key) {
+        } else if self.dirs.contains_key(key)
+            // Listing fails with `NotADirectory` only on what is not one.
+            || self
+                .dir_errors
+                .get(key)
+                .is_some_and(|kind| *kind != io::ErrorKind::NotADirectory)
+        {
             Ok(FileKind::Directory)
         } else if self.files.contains_key(key) || self.file_errors.contains_key(key) {
             Ok(FileKind::Regular)

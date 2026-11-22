@@ -177,6 +177,9 @@ pub fn check_modernization_patterns(
                 path,
                 default_marker: _,
             } => {
+                if !super::config::admit::opens_without_blocking(exec, path) {
+                    continue;
+                }
                 if let Ok(content) = exec.read_file(Path::new(path)) {
                     // Check if ANY data line has a non-default job identifier.
                     // anacrontab format: period  delay  job-identifier  command
