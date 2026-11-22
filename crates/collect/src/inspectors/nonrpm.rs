@@ -2147,9 +2147,11 @@ fn is_rpm_owned_path(exec: &dyn Executor, path: &str) -> bool {
 /// to populate `usr_entries`.
 ///
 /// Each regular file is screened through the machine-state read gate
-/// before it is stat'ed, typed or hashed: an alias or hard link of a
-/// withheld member's file is recorded in `withheld`, never in `items`, so
-/// no Containerfile names a payload the export does not carry.
+/// before it is stat'ed, typed or hashed
+/// ([`ScreenedExecutor::screen_payload`]): an alias or hard link of a
+/// withheld member's file, a keytab and a whole-file private key are
+/// recorded in `withheld`, never in `items`, so no Containerfile names a
+/// payload the export does not carry and no bundle copies a credential.
 pub fn scan_unmanaged_files(
     exec: &ScreenedExecutor<'_>,
     language_env_paths: &[String],
@@ -2350,9 +2352,12 @@ fn walk_for_unmanaged(
             continue;
         }
 
-        // The machine-state read gate, before anything reads the file: an
-        // alias or hard link of a withheld member is recorded as withheld.
-        if let Screened::Withheld(member) = exec.screen(&child) {
+        // The machine-state read gate, before the stat, the type check and
+        // the hash: an alias or hard link of a withheld member, and a
+        // keytab or whole-file private key at any path, is recorded as
+        // withheld. A file the check cannot read stays an item; the
+        // bundler checks it again and fails the scan if it still cannot.
+        if let Ok(Screened::Withheld(member)) = exec.screen_payload(&child) {
             let meta = exec.file_metadata(Path::new(&child)).ok();
             withheld.push(WithheldUnmanagedEntry {
                 path: child,

@@ -126,6 +126,11 @@ fn artifacts(snap: &InspectionSnapshot) -> Vec<(String, Vec<u8>)> {
 /// The marker is in no artifact, raw, as lowercase hex or as base64 at
 /// any of the three alignments.
 fn assert_marker_nowhere(snap: &InspectionSnapshot) {
+    assert_marker_absent(&artifacts(snap));
+}
+
+/// [`assert_marker_nowhere`] over artifacts the caller gathered.
+fn assert_marker_absent(artifacts: &[(String, Vec<u8>)]) {
     let raw = MARKER.as_bytes().to_vec();
     let hex: String = MARKER.bytes().map(|b| format!("{b:02x}")).collect();
     let mut needles = vec![raw, hex.into_bytes()];
@@ -139,7 +144,7 @@ fn assert_marker_nowhere(snap: &InspectionSnapshot) {
         let start = pad.div_ceil(3) * 4;
         needles.push(encoded.as_bytes()[start..encoded.len() - 4].to_vec());
     }
-    for (where_, bytes) in artifacts(snap) {
+    for (where_, bytes) in artifacts {
         for needle in &needles {
             assert!(
                 !bytes.windows(needle.len()).any(|w| w == needle.as_slice()),
@@ -1357,4 +1362,217 @@ fn withheld_rows_are_never_overridable_in_refine() {
         }),
         Err(RefineError::NotCarriable(_))
     ));
+}
+
+/// An OpenSSH private key, the whole of a file, carrying [`MARKER`]. Not a
+/// real key.
+fn openssh_key() -> String {
+    format!(
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA{MARKER}\n\
+         -----END OPENSSH PRIVATE KEY-----\n"
+    )
+}
+
+/// An ordinary binary payload: not UTF-8, no credential.
+const ORDINARY_BINARY: &[u8] = b"\x7fELF\x02\x01\x01\x00\xff\xfe\x80 ordinary";
+
+/// What an unmanaged host holds under `/opt` and `/srv`: credentials with
+/// no link to any class path (an independent binary keytab, a whole-file
+/// encrypted PKCS#8 key and an OpenSSH key), a hard link to a key
+/// (case 31), and next to each, ordinary files, one of them binary, so
+/// every `/opt` directory renders a directory `COPY`.
+fn unmanaged_payloads() -> Vec<(&'static str, Vec<u8>)> {
+    vec![
+        ("/opt/app/app.conf", b"a = 1\n".to_vec()),
+        ("/opt/app/run", ORDINARY_BINARY.to_vec()),
+        ("/opt/myapp/client.kt", binary_keytab()),
+        ("/opt/myapp/client.pem", encrypted_key().into_bytes()),
+        ("/opt/myapp/app.conf", b"server = example\n".to_vec()),
+        ("/opt/myapp/lib.so", ORDINARY_BINARY.to_vec()),
+        ("/srv/data/id_ed25519", openssh_key().into_bytes()),
+        ("/srv/data/readme.txt", b"data\n".to_vec()),
+    ]
+}
+
+/// The scan command's unmanaged path over `exec`: the collectors, then
+/// `scan_unmanaged_files` through the same gate kind, as `run_scan` does
+/// with `--include-unmanaged`, then the written snapshot loaded again.
+fn scan_unmanaged(exec: &MockExecutor) -> InspectionSnapshot {
+    let mut snap = scan_exec(exec, std_inspectors());
+    let gate = inspectah_core::machine_state::ScreenedExecutor::new(exec);
+    snap.unmanaged_files = Some(inspectah_collect::inspectors::nonrpm::scan_unmanaged_files(
+        &gate,
+        &[],
+        &[],
+    ));
+    reload(&snap)
+}
+
+/// Collect case 31 and the unmanaged credential cases, through real
+/// payload bundling, scan packaging, the refine export and both
+/// Containerfiles' `COPY` sources. Each credential is a withheld row
+/// before anything renders, is opened only by the gate, and is in no
+/// artifact; each ordinary file beside it, binary included, is carried
+/// byte for byte on both paths.
+#[test]
+fn unmanaged_credentials_are_withheld_on_both_export_paths() {
+    use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
+    let host_root = tempfile::tempdir().expect("a host root");
+    let mut host = SysctlHost::new()
+        .file("/etc/pki/tls/private/server.key", &encrypted_key())
+        .hard_link("/opt/app/k", "/etc/pki/tls/private/server.key");
+    for (path, bytes) in unmanaged_payloads() {
+        host = host.file_bytes(path, &bytes);
+        let on_disk = host_root.path().join(path.trim_start_matches('/'));
+        std::fs::create_dir_all(on_disk.parent().unwrap()).unwrap();
+        std::fs::write(on_disk, &bytes).unwrap();
+    }
+    // A bundler that copied the hard link would find the key there.
+    std::fs::write(host_root.path().join("opt/app/k"), encrypted_key()).unwrap();
+    let exec = host.build();
+    let snap = scan_unmanaged(&exec);
+
+    let unmanaged = snap.unmanaged_files.as_ref().expect("an unmanaged section");
+    let withheld: Vec<(&str, MachineStateMember)> = unmanaged
+        .withheld
+        .iter()
+        .map(|w| (w.path.as_str(), w.member))
+        .collect();
+    assert_eq!(
+        withheld,
+        vec![
+            ("/opt/app/k", MachineStateMember::PrivateKeyFile),
+            ("/opt/myapp/client.kt", MachineStateMember::KerberosKeytab),
+            ("/opt/myapp/client.pem", MachineStateMember::PrivateKeyFile),
+            ("/srv/data/id_ed25519", MachineStateMember::PrivateKeyFile),
+        ]
+    );
+    let mut items: Vec<&str> = unmanaged.items.iter().map(|i| i.path.as_str()).collect();
+    items.sort_unstable();
+    assert_eq!(
+        items,
+        vec![
+            "/opt/app/app.conf",
+            "/opt/app/run",
+            "/opt/myapp/app.conf",
+            "/opt/myapp/lib.so",
+            "/srv/data/readme.txt",
+        ]
+    );
+    assert_never_opened(&exec, "/opt/app/k");
+
+    // The scan's export: render, then bundle from the host root.
+    let gate = inspectah_core::machine_state::ScreenedExecutor::new(&exec);
+    let scan_tree = render_export(&snap);
+    inspectah_pipeline::render::unmanaged::bundle_unmanaged_files(
+        &unmanaged.items,
+        scan_tree.path(),
+        host_root.path(),
+        &gate,
+    )
+    .expect("the ordinary payloads bundle");
+    // Refine, opened on the packed scan tarball, exports from it.
+    let packed = tempfile::tempdir().unwrap();
+    let tarball = packed.path().join("scan.tar.gz");
+    inspectah_pipeline::render::tarball::create_tarball(scan_tree.path(), &tarball, "host")
+        .expect("the scan tarball packs");
+    let mut session = inspectah_refine::tarball::from_tarball(&tarball).expect("refine opens it");
+    session.set_tarball_path(tarball.clone());
+    let refine_tree = export_session(&session);
+
+    for (via, root) in [
+        ("scan export", scan_tree.path()),
+        ("refine export", refine_tree.path()),
+    ] {
+        crate::copy_source_exists_test::assert_every_copy_source_exists(via, root);
+        let cf = std::fs::read_to_string(root.join("Containerfile")).unwrap();
+        for dir in ["/opt/app/", "/opt/myapp/"] {
+            let rel = dir.trim_start_matches('/');
+            assert!(
+                cf.contains(&format!("COPY unmanaged/{rel} {dir}")),
+                "{via}: a directory COPY for {dir}:\n{cf}"
+            );
+        }
+        for path in [
+            "/opt/app/k",
+            "/opt/myapp/client.kt",
+            "/opt/myapp/client.pem",
+            "/srv/data/id_ed25519",
+        ] {
+            let rel = path.trim_start_matches('/');
+            assert!(
+                !root.join("unmanaged").join(rel).exists(),
+                "{via}: no payload for {path}"
+            );
+            assert!(
+                !cf.lines().any(|l| !l.starts_with('#') && l.contains(path)),
+                "{via}: {path} is in no instruction:\n{cf}"
+            );
+        }
+        for (path, bytes) in unmanaged_payloads() {
+            if items.contains(&path) {
+                let staged = std::fs::read(root.join("unmanaged").join(&path[1..])).ok();
+                assert_eq!(staged.as_deref(), Some(bytes.as_slice()), "{via}: {path}");
+            }
+        }
+        let audit = std::fs::read_to_string(root.join("audit-report.md")).unwrap();
+        assert!(audit.contains("/opt/myapp/client.pem"), "{via}:\n{audit}");
+        assert!(
+            audit.contains("deliver it at deploy time"),
+            "{via}:\n{audit}"
+        );
+    }
+    let mut all = vec![(
+        "snapshot".to_string(),
+        serde_json::to_vec(&snap).expect("the snapshot serializes"),
+    )];
+    for root in [scan_tree.path(), refine_tree.path()] {
+        all.extend(
+            walkdir_files(root)
+                .into_iter()
+                .filter_map(|f| std::fs::read(&f).ok().map(|b| (f, b))),
+        );
+    }
+    assert_marker_absent(&all);
+
+    // The refine half: a collected withheld row, never overridable.
+    let view = inspectah_web::adapter::build_web_view(&session);
+    let row = view
+        .machine_state
+        .iter()
+        .find(|r| r.path == "/opt/app/k")
+        .expect("a view row for the hard link");
+    assert_eq!(
+        serde_json::to_value(row).unwrap()["override"],
+        serde_json::json!("never")
+    );
+    assert!(row.item_id.is_none());
+    let before = session.generation();
+    for path in ["/opt/app/k", "/opt/myapp/client.kt"] {
+        match session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::UnmanagedFile { path: path.into() },
+            include: true,
+        }) {
+            Err(RefineError::NotCarriable(_)) => {}
+            other => panic!("{path}: expected NotCarriable, got {other:?}"),
+        }
+    }
+    assert_eq!(session.generation(), before, "nothing recorded");
+    let warnings: Vec<String> = {
+        let out = tempfile::tempdir().unwrap();
+        session
+            .export_plan(session.generation())
+            .unwrap()
+            .render(&out.path().join("e.tar.gz"))
+            .unwrap()
+            .into_iter()
+            .map(|w| w.to_string())
+            .collect()
+    };
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("deliver the private keys at deploy time")),
+        "{warnings:?}"
+    );
 }

@@ -913,8 +913,13 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
 
     // Bundle unmanaged files into render directory if present
     if let Some(ref unmanaged) = snapshot.unmanaged_files {
-        bundle_unmanaged_files(&unmanaged.items, render_dir.path(), &executor)
-            .context("failed to bundle unmanaged files")?;
+        render::unmanaged::bundle_unmanaged_files(
+            &unmanaged.items,
+            render_dir.path(),
+            executor.host_root(),
+            &executor,
+        )
+        .context("failed to bundle unmanaged files")?;
     }
 
     // Bundle repo-less RPMs from dnf cache into render directory, on the
@@ -1191,76 +1196,6 @@ fn describe_scan_roots(items: &[inspectah_core::types::nonrpm::UnmanagedFile]) -
     } else {
         roots.join(", ")
     }
-}
-
-/// Bundle unmanaged files into the render directory for tarball inclusion.
-///
-/// Symlinks are recreated as symlinks (not followed) to prevent
-/// exfiltration of files outside the scan roots.
-///
-/// Each included regular file is screened again through the scan's read
-/// gate. The walk already moved every withheld file out of `items`, so a
-/// withheld answer here means the file changed after the walk: the scan
-/// fails with an error naming the path, before the tarball is written.
-/// It never skips the file, which would leave a `COPY` with no source.
-fn bundle_unmanaged_files(
-    items: &[inspectah_core::types::nonrpm::UnmanagedFile],
-    render_dir: &Path,
-    gate: &inspectah_core::machine_state::ScreenedExecutor<'_>,
-) -> Result<()> {
-    use inspectah_core::machine_state::Screened;
-    use inspectah_core::types::nonrpm::FileType;
-
-    for item in items {
-        if item.disposition.is_included()
-            && item.file_type != FileType::Symlink
-            && inspectah_pipeline::render::configtree::unmanaged_withheld(&item.path).is_none()
-            && let Screened::Withheld(member) = gate.screen(&item.path)
-        {
-            anyhow::bail!(
-                "{} became a machine-state file ({}) after the scan walked it; \
-                 re-run the scan",
-                item.path,
-                member.as_str()
-            );
-        }
-    }
-    for item in items {
-        // A file under `/etc/systemd/system`, or at the machine-id, is
-        // withheld on the render's own decision, so the tarball carries no
-        // payload for it.
-        if !item.disposition.is_included()
-            || inspectah_pipeline::render::configtree::unmanaged_withheld(&item.path).is_some()
-        {
-            continue;
-        }
-        // Strip leading / to create relative path under unmanaged/
-        let rel_path = item.path.trim_start_matches('/');
-        let dest = render_dir.join("unmanaged").join(rel_path);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create dir for {}", dest.display()))?;
-        }
-        if item.file_type == FileType::Symlink {
-            // Recreate symlink rather than following target.
-            // Use the recorded link_target if available, otherwise read it.
-            let target = if !item.link_target.is_empty() {
-                item.link_target.clone()
-            } else {
-                std::fs::read_link(&item.path)
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default()
-            };
-            if !target.is_empty() {
-                std::os::unix::fs::symlink(&target, &dest)
-                    .with_context(|| format!("failed to recreate symlink {}", item.path))?;
-            }
-        } else {
-            std::fs::copy(&item.path, &dest)
-                .with_context(|| format!("failed to copy {} to tarball", item.path))?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -2267,102 +2202,6 @@ VARIANT_ID="workstation"
         assert!(
             roots.contains(&"/var/www2/data".to_string()),
             "/var/www must NOT suppress sibling /var/www2/data via --scan-path"
-        );
-    }
-
-    /// D4 on the scan route: the bundler writes no payload for an included
-    /// unmanaged file or symlink under `/etc/systemd/system`, however the
-    /// path is spelled. Controls: an ordinary file is copied byte for byte,
-    /// and an ordinary symlink is recreated, so the bundler does bundle
-    /// both kinds when the destination is allowed.
-    #[test]
-    fn bundling_fails_on_a_file_the_gate_now_withholds() {
-        use inspectah_core::types::FindingKind;
-        use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};
-        let host = inspectah_collect::executor::mock::MockExecutor::new()
-            .with_dir("/etc/pki/tls/private", vec!["server.key"])
-            .with_file(
-                "/etc/pki/tls/private/server.key",
-                "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n",
-            )
-            .with_hard_link("/opt/app/k", "/etc/pki/tls/private/server.key");
-        let gate = inspectah_core::machine_state::ScreenedExecutor::new(&host);
-        let items = vec![UnmanagedFile {
-            path: "/opt/app/k".into(),
-            file_type: FileType::Config,
-            disposition: FindingKind::included(),
-            ..Default::default()
-        }];
-        let render = tempfile::tempdir().expect("a render directory");
-        let err = bundle_unmanaged_files(&items, render.path(), &gate)
-            .expect_err("a withheld file fails the scan");
-        assert!(err.to_string().contains("/opt/app/k"), "{err}");
-        assert!(!render.path().join("unmanaged").exists());
-    }
-
-    #[test]
-    fn bundling_writes_no_payload_under_the_unit_directory() {
-        use inspectah_core::types::FindingKind;
-        use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};
-
-        const CONTROL_BYTES: &[u8] = b"#!/bin/sh\necho control\n";
-        let src = tempfile::tempdir().expect("a source directory");
-        let control = src.path().join("run.sh");
-        std::fs::write(&control, CONTROL_BYTES).expect("the control file is written");
-        let control_path = control.to_string_lossy().into_owned();
-        let render = tempfile::tempdir().expect("a render directory");
-
-        let file = |path: &str| UnmanagedFile {
-            path: path.into(),
-            file_type: FileType::Script,
-            disposition: FindingKind::included(),
-            ..Default::default()
-        };
-        let link = |path: &str, target: &str| UnmanagedFile {
-            path: path.into(),
-            file_type: FileType::Symlink,
-            link_target: target.into(),
-            disposition: FindingKind::included(),
-            ..Default::default()
-        };
-        let items = vec![
-            file("/etc/systemd/system/backup.service"),
-            file("/etc/systemd/./system/dotted.service"),
-            file("/etc//systemd/system/doubled.service"),
-            file("/etc/systemd/system/./here.service"),
-            link(
-                "/etc/systemd/system/multi-user.target.wants/backup.service",
-                "/usr/lib/systemd/system/backup.service",
-            ),
-            link(
-                "/etc/systemd//system/linked.service",
-                "/usr/lib/systemd/system/linked.service",
-            ),
-            file(&control_path),
-            link("/opt/app/current", "/opt/app/releases/1"),
-        ];
-
-        let host = inspectah_collect::executor::mock::MockExecutor::new();
-        let gate = inspectah_core::machine_state::ScreenedExecutor::new(&host);
-        bundle_unmanaged_files(&items, render.path(), &gate).expect("bundling succeeds");
-
-        let unmanaged = render.path().join("unmanaged");
-        assert!(
-            !unmanaged.join("etc").exists(),
-            "no payload under etc/: {:?}",
-            std::fs::read_dir(&unmanaged)
-                .map(|d| d.flatten().map(|e| e.path()).collect::<Vec<_>>())
-                .unwrap_or_default()
-        );
-        let copied = unmanaged.join(control_path.trim_start_matches('/'));
-        assert_eq!(
-            std::fs::read(&copied).expect("the control file is bundled"),
-            CONTROL_BYTES
-        );
-        let recreated = unmanaged.join("opt/app/current");
-        assert_eq!(
-            std::fs::read_link(&recreated).expect("the control symlink is bundled"),
-            std::path::Path::new("/opt/app/releases/1")
         );
     }
 }

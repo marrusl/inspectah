@@ -1,3 +1,4 @@
+use inspectah_core::machine_state::{Screened, ScreenedExecutor};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};
 use std::collections::BTreeMap;
@@ -206,6 +207,82 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     lines
+}
+
+/// Copy each included unmanaged file into `render_dir/unmanaged/`, for
+/// the scan tarball. `host_root` is where the host's filesystem is
+/// (`/` on a real scan); item paths are host paths below it.
+///
+/// Symlinks are recreated as symlinks, not followed, so nothing outside
+/// the scan roots is copied through one.
+///
+/// Every included regular file is first asked of the scan's read gate
+/// again, through the walk's own check
+/// ([`ScreenedExecutor::screen_payload`]). The walk already moved every
+/// withheld file out of `items`, so a withheld answer here means the file
+/// changed after the walk, and a read error means it can no longer be
+/// checked: either fails the bundle with an error naming the path, before
+/// anything is copied. A file is never skipped, which would leave a
+/// `COPY` with no source.
+pub fn bundle_unmanaged_files(
+    items: &[UnmanagedFile],
+    render_dir: &std::path::Path,
+    host_root: &std::path::Path,
+    gate: &ScreenedExecutor<'_>,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let payloads: Vec<&UnmanagedFile> = items
+        .iter()
+        .filter(|item| item.disposition.is_included() && unmanaged_withheld(&item.path).is_none())
+        .collect();
+    for item in &payloads {
+        if item.file_type == FileType::Symlink {
+            continue;
+        }
+        match gate.screen_payload(&item.path) {
+            Ok(Screened::Withheld(member)) => anyhow::bail!(
+                "{} became a machine-state file ({}) after the scan walked it; re-run the scan",
+                item.path,
+                member.as_str()
+            ),
+            Ok(_) => {}
+            Err(e) => anyhow::bail!(
+                "{} could not be checked for credentials before copying it ({}); \
+                 re-run the scan",
+                item.path,
+                e.kind()
+            ),
+        }
+    }
+    for item in payloads {
+        let rel_path = item.path.trim_start_matches('/');
+        let dest = render_dir.join("unmanaged").join(rel_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create dir for {}", dest.display()))?;
+        }
+        let source = host_root.join(rel_path);
+        if item.file_type == FileType::Symlink {
+            // Recreate the link rather than following its target, from
+            // the recorded target when there is one.
+            let target = if !item.link_target.is_empty() {
+                item.link_target.clone()
+            } else {
+                std::fs::read_link(&source)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            };
+            if !target.is_empty() {
+                std::os::unix::fs::symlink(&target, &dest)
+                    .with_context(|| format!("failed to recreate symlink {}", item.path))?;
+            }
+        } else {
+            std::fs::copy(&source, &dest)
+                .with_context(|| format!("failed to copy {} to tarball", item.path))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -479,6 +556,103 @@ mod tests {
         assert!(
             lines.iter().any(|l| l.contains("RUN ln -sf")),
             "symlink must produce RUN ln -sf"
+        );
+    }
+
+    fn payload(path: &str, file_type: FileType) -> UnmanagedFile {
+        UnmanagedFile {
+            path: path.into(),
+            file_type,
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }
+    }
+
+    fn link(path: &str, target: &str) -> UnmanagedFile {
+        UnmanagedFile {
+            link_target: target.into(),
+            ..payload(path, FileType::Symlink)
+        }
+    }
+
+    /// The bundler fails, naming the path and writing nothing, for an item
+    /// the gate now withholds: by inode (a hard link to a key), by content
+    /// (a keytab header, a whole-file key) and one it cannot read to check.
+    #[test]
+    fn bundling_fails_on_a_payload_the_gate_withholds_or_cannot_check() {
+        use inspectah_collect::executor::mock::MockExecutor;
+        use inspectah_core::machine_state::ScreenedExecutor;
+        const KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n";
+        let host = MockExecutor::new()
+            .with_dir("/etc/pki/tls/private", vec!["server.key"])
+            .with_file("/etc/pki/tls/private/server.key", KEY)
+            .with_hard_link("/opt/app/k", "/etc/pki/tls/private/server.key")
+            .with_file_bytes("/opt/app/client.kt", &[0x05, 0x02, 0xff, 0x00])
+            .with_file("/opt/app/client.pem", KEY);
+        let gate = ScreenedExecutor::new(&host);
+        let host_root = tempfile::tempdir().expect("a host root");
+        for path in [
+            "/opt/app/k",
+            "/opt/app/client.kt",
+            "/opt/app/client.pem",
+            "/opt/app/gone",
+        ] {
+            let render = tempfile::tempdir().expect("a render directory");
+            let items = vec![payload(path, FileType::DataFile)];
+            let err = bundle_unmanaged_files(&items, render.path(), host_root.path(), &gate)
+                .expect_err("the bundle fails");
+            assert!(err.to_string().contains(path), "{err}");
+            assert!(!render.path().join("unmanaged").exists(), "{path}");
+        }
+    }
+
+    /// D4 on the scan route: the bundler writes no payload for an included
+    /// unmanaged file or symlink under `/etc/systemd/system`, however the
+    /// path is spelled. Controls: an ordinary file, binary and not UTF-8,
+    /// is copied byte for byte from the host root, and an ordinary symlink
+    /// is recreated.
+    #[test]
+    fn bundling_writes_no_payload_under_the_unit_directory() {
+        use inspectah_collect::executor::mock::MockExecutor;
+        use inspectah_core::machine_state::ScreenedExecutor;
+        const CONTROL_BYTES: &[u8] = b"\x7fELF\x02\x01\xff\xfe binary";
+        const CONTROL: &str = "/opt/app/run";
+        let host_root = tempfile::tempdir().expect("a host root");
+        std::fs::create_dir_all(host_root.path().join("opt/app")).unwrap();
+        std::fs::write(host_root.path().join("opt/app/run"), CONTROL_BYTES).unwrap();
+        let host = MockExecutor::new().with_file_bytes(CONTROL, CONTROL_BYTES);
+        let gate = ScreenedExecutor::new(&host);
+        let render = tempfile::tempdir().expect("a render directory");
+
+        let items = vec![
+            payload("/etc/systemd/system/backup.service", FileType::Script),
+            payload("/etc/systemd/./system/dotted.service", FileType::Script),
+            payload("/etc//systemd/system/doubled.service", FileType::Script),
+            payload("/etc/systemd/system/./here.service", FileType::Script),
+            link(
+                "/etc/systemd/system/multi-user.target.wants/backup.service",
+                "/usr/lib/systemd/system/backup.service",
+            ),
+            link(
+                "/etc/systemd//system/linked.service",
+                "/usr/lib/systemd/system/linked.service",
+            ),
+            payload(CONTROL, FileType::ElfBinary),
+            link("/opt/app/current", "/opt/app/releases/1"),
+        ];
+        bundle_unmanaged_files(&items, render.path(), host_root.path(), &gate)
+            .expect("bundling succeeds");
+
+        let unmanaged = render.path().join("unmanaged");
+        assert!(!unmanaged.join("etc").exists(), "no payload under etc/");
+        assert_eq!(
+            std::fs::read(unmanaged.join("opt/app/run")).expect("the control file is bundled"),
+            CONTROL_BYTES
+        );
+        assert_eq!(
+            std::fs::read_link(unmanaged.join("opt/app/current"))
+                .expect("the control symlink is bundled"),
+            std::path::Path::new("/opt/app/releases/1")
         );
     }
 }

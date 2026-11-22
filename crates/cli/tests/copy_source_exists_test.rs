@@ -75,7 +75,7 @@ fn copy_sources(containerfile: &str) -> Vec<String> {
 }
 
 /// Panics naming every COPY source `root` does not contain.
-fn assert_every_copy_source_exists(path_label: &str, root: &Path) {
+pub(crate) fn assert_every_copy_source_exists(path_label: &str, root: &Path) {
     let containerfile = std::fs::read_to_string(root.join("Containerfile"))
         .unwrap_or_else(|e| panic!("{path_label}: no Containerfile in the export: {e}"));
     let sources = copy_sources(&containerfile);

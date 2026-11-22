@@ -234,8 +234,9 @@ fn glob_match_simple(pattern: &str, text: &str) -> bool {
     pi == pat.len()
 }
 
-/// How many bytes the keytab header sniff reads: the only prefix read
-/// anything in the scan makes.
+/// How many bytes the keytab header sniff reads. With the unmanaged
+/// payload check ([`ScreenedExecutor::screen_payload`]), the only prefix
+/// reads the scan makes.
 pub const KEYTAB_HEADER_LEN: usize = 2;
 
 /// The first two bytes of a Kerberos keytab: file format version 1 or 2.
@@ -287,6 +288,24 @@ const PEM_DASHES: &str = "-----";
 /// in it is left to redaction. A block that never ends counts as a block
 /// to the end of the file, so a cut-off key is still a key.
 pub fn is_whole_file_private_key(content: &str) -> bool {
+    matches!(scan_key_file(content), KeyFileScan::KeyFile { .. })
+}
+
+/// What [`scan_key_file`] found in the lines it read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyFileScan {
+    /// A line no key file holds: the text is configuration.
+    Other,
+    /// Only key-file lines, and at least one private-key block.
+    KeyFile { open_block: bool },
+    /// Only key-file lines, and no private-key block yet.
+    NoKey { open_block: bool },
+}
+
+/// The line-by-line test behind [`is_whole_file_private_key`], also
+/// telling whether the text ended inside a PEM block, for a caller that
+/// holds only the start of a file ([`payload_credential`]).
+fn scan_key_file(content: &str) -> KeyFileScan {
     let mut open_label: Option<&str> = None;
     let mut has_key = false;
     for line in content.lines() {
@@ -301,20 +320,70 @@ pub fn is_whole_file_private_key(content: &str) -> bool {
             if label.ends_with(PRIVATE_KEY_LABEL_SUFFIX) {
                 has_key = true;
             } else if !COMPANION_LABELS.contains(&label) {
-                return false;
+                return KeyFileScan::Other;
             }
             open_label = Some(label);
             continue;
         }
-        let envelope = line.trim().is_empty()
-            || line.starts_with('#')
-            || line.starts_with([' ', '\t'])
-            || ENVELOPE_PREFIXES.iter().any(|p| line.starts_with(p));
-        if !envelope {
-            return false;
+        if !is_envelope_line(line) {
+            return KeyFileScan::Other;
         }
     }
-    has_key
+    let open_block = open_label.is_some();
+    if has_key {
+        KeyFileScan::KeyFile { open_block }
+    } else {
+        KeyFileScan::NoKey { open_block }
+    }
+}
+
+/// A line a key file may hold outside a PEM block: blank, a `#` comment,
+/// indented `openssl` attribute text, or an envelope line.
+fn is_envelope_line(line: &str) -> bool {
+    line.trim().is_empty()
+        || line.starts_with('#')
+        || line.starts_with([' ', '\t'])
+        || ENVELOPE_PREFIXES.iter().any(|p| line.starts_with(p))
+}
+
+/// How many bytes of an unmanaged payload [`payload_credential`] judges.
+/// A whole-file key is a few kilobytes; a file longer than this is judged
+/// by its start.
+pub const PAYLOAD_CHECK_LEN: usize = 1 << 20;
+
+/// The credential member a payload is by its bytes, binary-safe: `head`
+/// is the whole file when `complete`, else its first
+/// [`PAYLOAD_CHECK_LEN`] bytes or more. A keytab header is a keytab in
+/// either case. A complete file is judged by [`credential_content`], so
+/// bytes that are not UTF-8 are never a PEM key. A longer file is a
+/// private key unless its start already rules it out: bytes that are not
+/// UTF-8, or a line, the cut-off last one included, that no key file
+/// holds. So a large binary or a one-line minified file stays ordinary,
+/// and a key file padded past the limit is still refused.
+pub fn payload_credential(head: &[u8], complete: bool) -> Option<MachineStateMember> {
+    if complete || is_keytab_header(head) {
+        return credential_content(head);
+    }
+    let text = match std::str::from_utf8(head) {
+        Ok(text) => text,
+        // The cut fell inside a character: judge the bytes before it.
+        Err(e) if e.error_len().is_none() => std::str::from_utf8(&head[..e.valid_up_to()])
+            .expect("valid_up_to bounds the valid UTF-8 prefix"),
+        Err(_) => return None,
+    };
+    let (lines, cut) = match text.rfind('\n') {
+        Some(end) => (&text[..=end], &text[end + 1..]),
+        None => ("", text),
+    };
+    let open_block = match scan_key_file(lines) {
+        KeyFileScan::Other => return None,
+        KeyFileScan::KeyFile { open_block } | KeyFileScan::NoKey { open_block } => open_block,
+    };
+    let cut_may_belong = open_block
+        || is_envelope_line(cut)
+        || cut.starts_with('-')
+        || ENVELOPE_PREFIXES.iter().any(|p| p.starts_with(cut));
+    cut_may_belong.then_some(MachineStateMember::PrivateKeyFile)
 }
 
 /// The label of a `-----BEGIN <label>-----` or `-----END <label>-----`
@@ -523,6 +592,32 @@ impl<'a> ScreenedExecutor<'a> {
             Some(RuleTarget::Carriable(member)) => Screened::Carriable(member),
             _ => Screened::Ordinary,
         }
+    }
+
+    /// The decision for an unmanaged payload, a file the scan copies into
+    /// its tarball byte for byte: [`screen`](Self::screen), then, for a
+    /// regular file, the credential detectors over its bytes
+    /// ([`payload_credential`], one read of at most
+    /// [`PAYLOAD_CHECK_LEN`] + 1 bytes). The unmanaged walk asks it before
+    /// recording an item, and the bundler asks it again before copying.
+    /// An error is a file the check could not read; it is not a
+    /// classification, and the caller decides what an unchecked file
+    /// means.
+    pub fn screen_payload(&self, path: &str) -> io::Result<Screened> {
+        let screened = self.screen(path);
+        if matches!(screened, Screened::Withheld(_)) {
+            return Ok(screened);
+        }
+        let file = Path::new(path);
+        if !self.inner.file_metadata(file)?.is_regular() {
+            return Ok(screened);
+        }
+        let head = self.inner.read_head(file, PAYLOAD_CHECK_LEN + 1)?;
+        let complete = head.len() <= PAYLOAD_CHECK_LEN;
+        Ok(match payload_credential(&head, complete) {
+            Some(member) => Screened::Withheld(member),
+            None => screened,
+        })
     }
 
     /// The unscreened executor, for one of the reasons [`ScreenBypass`]
@@ -941,5 +1036,63 @@ mod tests {
         let embedded = format!("listen = 443\n{key}");
         assert_eq!(credential_content(embedded.as_bytes()), None);
         assert_eq!(credential_content(b"plain text"), None);
+    }
+
+    /// A payload's start decides a long file: a key file padded past the
+    /// limit and a keytab are refused; a binary, a one-line minified file
+    /// and a configuration file are not. A complete payload is judged as
+    /// `credential_content` judges it, and bytes that are not UTF-8 are
+    /// never a PEM key.
+    #[test]
+    fn payload_credential_judges_a_long_file_by_its_start() {
+        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl\n-----END OPENSSH PRIVATE KEY-----\n";
+        let padded = format!("{key}{}", "# padding\n".repeat(PAYLOAD_CHECK_LEN / 8));
+        let head = &padded.as_bytes()[..=PAYLOAD_CHECK_LEN];
+        let cut_in_block = format!("-----BEGIN PRIVATE KEY-----\n{}", "QUJD\n".repeat(1 << 19));
+        let cases: &[(&str, &[u8], bool, Option<MachineStateMember>)] = &[
+            (
+                "complete key",
+                key.as_bytes(),
+                true,
+                Some(M::PrivateKeyFile),
+            ),
+            ("padded key", head, false, Some(M::PrivateKeyFile)),
+            (
+                "cut inside a key block",
+                &cut_in_block.as_bytes()[..=PAYLOAD_CHECK_LEN],
+                false,
+                Some(M::PrivateKeyFile),
+            ),
+            (
+                "keytab",
+                &[0x05, 0x01, 0xff],
+                false,
+                Some(M::KerberosKeytab),
+            ),
+            (
+                "complete keytab",
+                &[0x05, 0x02],
+                true,
+                Some(M::KerberosKeytab),
+            ),
+            ("complete binary", b"\x7fELF\x02\xff\xfe", true, None),
+            ("long binary", b"\x7fELF\x02\xff\xfe\x00", false, None),
+            ("minified, one line", b"{\"a\":1,\"b\":[1,2,3", false, None),
+            ("configuration", b"listen = 443\nworkers = 4\n", false, None),
+            (
+                "certificate",
+                b"-----BEGIN CERTIFICATE-----\nMII=\n-----END CERTIFICATE-----\nkey = x",
+                false,
+                None,
+            ),
+        ];
+        for (name, bytes, complete, want) in cases {
+            assert_eq!(payload_credential(bytes, *complete), *want, "{name}");
+        }
+        // A cut inside a multi-byte character is judged by the bytes before it.
+        let mut split = key.as_bytes().to_vec();
+        split.extend_from_slice("# é".as_bytes());
+        split.pop();
+        assert_eq!(payload_credential(&split, false), Some(M::PrivateKeyFile));
     }
 }
