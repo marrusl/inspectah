@@ -21,11 +21,14 @@ use inspectah_core::traits::renderer::RenderError;
 use inspectah_core::types::config::AUTHSELECT_CONF_PATH;
 use inspectah_core::types::machine_state::MachineStateMember;
 use inspectah_core::types::units::{UNIT_TYPE_SUFFIXES, UnitName};
+use regex::Regex;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use super::safety::{BareWord, has_line_break_or_control, operator_kargs};
+use super::users::toml_string;
 use crate::build::extract::is_single_normal_component;
 
 /// The directory systemd reads the administrator's unit files from. A
@@ -38,6 +41,19 @@ pub(crate) const FLATPAK_SERVICE: &str = "flatpak-provision.service";
 /// Where the export writes the kernel arguments it migrates from the
 /// host's cmdline (bootc's kargs.d).
 pub(crate) const KARGS_PATH: &str = "/usr/lib/bootc/kargs.d/inspectah-migrated.toml";
+
+/// The comment the kargs file opens with. Fixed text: nothing from the
+/// snapshot reaches a comment there.
+const KARGS_HEADER: &str = "# Migrated from kernel cmdline by inspectah\n";
+
+/// A placeholder redaction writes, `REDACTED_<KIND>_<N>`, as the
+/// redaction engine's `token_for` builds it.
+static REDACTION_TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"REDACTED_[A-Z0-9_]+_[0-9]+").expect("the token pattern is a valid regex")
+});
+
+/// What an owed kernel argument shows in place of its redacted value.
+const KARGS_VALUE_HOLE: &str = "<value>";
 
 pub use inspectah_core::types::destination::{Destination, PathError};
 
@@ -1199,20 +1215,50 @@ fn flatpak_provision_service(apps: &[&inspectah_core::types::containers::Flatpak
     svc
 }
 
+/// The operator kernel arguments on `kb`'s cmdline, split by whether
+/// redaction replaced part of the argument: `(carried, redacted)`, each
+/// in cmdline order.
+fn split_operator_kargs(
+    kb: &inspectah_core::types::kernelboot::KernelBootSection,
+) -> (Vec<String>, Vec<String>) {
+    operator_kargs(&kb.cmdline)
+        .into_iter()
+        .partition(|karg| !REDACTION_TOKEN_RE.is_match(karg))
+}
+
+/// The kernel arguments a deployed machine owes at install time: each
+/// operator argument whose value redaction replaced, which the kargs file
+/// therefore leaves out, with every placeholder shown as `<value>`
+/// (`rd.iscsi.password=<value>`). Empty when there are none.
+pub fn owed_kernel_arguments(snap: &InspectionSnapshot) -> Vec<String> {
+    let Some(kb) = &snap.kernel_boot else {
+        return Vec::new();
+    };
+    split_operator_kargs(kb)
+        .1
+        .iter()
+        .map(|karg| {
+            REDACTION_TOKEN_RE
+                .replace_all(karg, KARGS_VALUE_HOLE)
+                .into_owned()
+        })
+        .collect()
+}
+
 /// The kargs.d file for the operator's kernel arguments on `kb`'s cmdline,
-/// or `None` when there are none.
+/// or `None` when there are none to carry.
+///
+/// bootc reads a top-level `kargs` string array. An argument redaction
+/// replaced part of is left out: its placeholder is not a usable value,
+/// and on a kernel argument such as `rd.iscsi.password=` it can stop the
+/// machine booting. [`owed_kernel_arguments`] names it instead.
 fn kargs_toml(kb: &inspectah_core::types::kernelboot::KernelBootSection) -> Option<String> {
-    let safe_kargs = operator_kargs(&kb.cmdline);
-    if safe_kargs.is_empty() {
+    let (carried, _) = split_operator_kargs(kb);
+    if carried.is_empty() {
         return None;
     }
-    let mut toml = String::new();
-    toml.push_str("[kargs]\n");
-    toml.push_str("# Migrated from kernel cmdline by inspectah\n");
-    for k in &safe_kargs {
-        toml.push_str(&format!("append = [\"{k}\"]\n"));
-    }
-    Some(toml)
+    let items: Vec<String> = carried.iter().map(|k| toml_string(k)).collect();
+    Some(format!("{KARGS_HEADER}kargs = [{}]\n", items.join(", ")))
 }
 
 /// Write all config files from snapshot to output_dir/config/ preserving
@@ -1581,9 +1627,82 @@ mod tests {
                 .join("config/usr/lib/bootc/kargs.d/inspectah-migrated.toml"),
         )
         .unwrap();
-        assert!(kargs.contains("nosmt=force"));
+        assert_eq!(parse_kargs(&kargs), vec!["nosmt=force"]);
         assert!(!kargs.contains("quiet"));
         assert!(!kargs.contains("crashkernel"));
+    }
+
+    /// bootc's kargs.d file as its parser reads it: a top-level `kargs`
+    /// array, an optional `match-architectures` array, nothing else.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "kebab-case")]
+    struct BootcKargs {
+        kargs: Vec<String>,
+        #[allow(dead_code)]
+        match_architectures: Option<Vec<String>>,
+    }
+
+    /// The `kargs` array of a kargs.d file, parsed the way bootc does.
+    fn parse_kargs(file: &str) -> Vec<String> {
+        toml::from_str::<BootcKargs>(file)
+            .unwrap_or_else(|e| panic!("bootc cannot parse the kargs file: {e}\n{file}"))
+            .kargs
+    }
+
+    /// The kargs file is one valid top-level `kargs` array for any number
+    /// of arguments, with quotes, spaces and backslashes escaped, and an
+    /// argument redaction replaced part of is left out of it and named as
+    /// owed instead. Before, each argument was its own `append = [...]`
+    /// line under `[kargs]`: not bootc's format, and with two arguments
+    /// not valid TOML.
+    #[test]
+    fn test_kargs_file_is_one_bootc_kargs_array() {
+        /// The cmdline, the file's `kargs` array (`None`: no file), and
+        /// the arguments owed at install time.
+        type Case<'a> = (&'a str, Option<&'a [&'a str]>, &'a [&'a str]);
+        let cases: &[Case] = &[
+            ("ro quiet rhgb", None, &[]),
+            ("ro nosmt=force", Some(&["nosmt=force"]), &[]),
+            (
+                "quiet nosmt=force hugepages=16 mitigations=auto,nosmt",
+                Some(&["nosmt=force", "hugepages=16", "mitigations=auto,nosmt"]),
+                &[],
+            ),
+            (
+                "dyndbg=\"file x.c +p\" path=C:\\dir quote=a\"b\"",
+                Some(&["dyndbg=\"file x.c +p\"", "path=C:\\dir", "quote=a\"b\""]),
+                &[],
+            ),
+            (
+                "nosmt=force rd.iscsi.password=REDACTED_PASSWORD_1 \
+                 app.key=REDACTED_GENERICCREDENTIAL_2",
+                Some(&["nosmt=force"]),
+                &["rd.iscsi.password=<value>", "app.key=<value>"],
+            ),
+            (
+                "quiet rd.iscsi.password=REDACTED_PASSWORD_1",
+                None,
+                &["rd.iscsi.password=<value>"],
+            ),
+        ];
+        for (cmdline, carried, owed) in cases {
+            let mut snap = InspectionSnapshot::new();
+            snap.kernel_boot = Some(KernelBootSection {
+                cmdline: (*cmdline).to_string(),
+                ..Default::default()
+            });
+            let file = kargs_toml(snap.kernel_boot.as_ref().unwrap());
+            match carried {
+                None => assert_eq!(file, None, "{cmdline}"),
+                Some(want) => {
+                    let file = file.unwrap_or_else(|| panic!("{cmdline}: no kargs file"));
+                    assert!(file.starts_with(KARGS_HEADER), "{file}");
+                    assert_eq!(parse_kargs(&file), *want, "{cmdline}\n{file}");
+                    assert!(!file.contains("REDACTED"), "{file}");
+                }
+            }
+            assert_eq!(owed_kernel_arguments(&snap), *owed, "{cmdline}");
+        }
     }
 
     /// Where the kernel directories went: the config loop copies them,

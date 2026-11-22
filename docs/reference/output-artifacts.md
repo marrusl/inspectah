@@ -55,7 +55,7 @@ system did not have the relevant configuration.
 | File / Directory | Condition | Description |
 |------------------|-----------|-------------|
 | `config/etc/` | Config files with `include: true` exist | Modified configs, repo files, GPG keys, firewall zones, audit rules, PAM configs, kernel modules, modprobe, dracut conf, sysctl files (`etc/sysctl.conf` and `etc/sysctl.d/*.conf`, copied as the host had them). |
-| `config/usr/lib/bootc/kargs.d/inspectah-migrated.toml` | Kernel cmdline has safe operator kargs | Kernel argument drop-in for bootc. |
+| `config/usr/lib/bootc/kargs.d/inspectah-migrated.toml` | Kernel cmdline has operator kargs whose values were not redacted | Kernel argument drop-in for bootc, a top-level `kargs = [...]` array. An argument whose value was redacted is left out, and the audit report's Provisioning steps names it for `bootc install to-disk --karg`. |
 | `config/usr/lib/tmpfiles.d/inspectah-var.conf` | The storage inspector found `/var` directories the image must provision, and they carry an owner and mode | tmpfiles.d fragment that creates those directories. See [`/var` provisioning](#var-provisioning). |
 | `env-files/` | `non_rpm_software.env_files` has included entries | `.env` files, separated from `config/` because they are high-probability secret carriers. |
 | `quadlet/` | `containers.quadlet_units` has included entries | Quadlet unit files for container workloads. One file per unit. |

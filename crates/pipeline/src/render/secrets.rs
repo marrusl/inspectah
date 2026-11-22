@@ -12,7 +12,9 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::machine_state::{ProvisioningNotice, ProvisioningStep};
 use inspectah_core::types::redaction::{DetectionMethod, RedactionFinding, RedactionKind};
 
-use super::configtree::{Destination, ETC_UNIT_DIR, KARGS_PATH, staged_unit_file, staged_writes};
+use super::configtree::{
+    Destination, ETC_UNIT_DIR, KARGS_PATH, owed_kernel_arguments, staged_unit_file, staged_writes,
+};
 use super::machine_state::class_rows;
 use super::md_literal::{md_code, md_code_cell};
 
@@ -51,9 +53,10 @@ enum SupplyAdvice {
     /// `carried` when the export stages the file, so it ships as the host
     /// had it; otherwise where it goes is not known here.
     ReviewOnly { carried: bool },
-    /// The kernel command line; `kargs_file` when the image carries the
-    /// kernel arguments file inspectah generates from it.
-    KernelArgument { kargs_file: bool },
+    /// The kernel command line; `owed` when the kargs file leaves out
+    /// an operator argument because redaction replaced its value, which
+    /// the provisioning steps then name.
+    KernelArgument { owed: bool },
     /// Password hashes in the account database.
     AccountPassword,
     /// A running container's environment.
@@ -109,13 +112,14 @@ impl SupplyAdvice {
                  of the image into a deploy-time step."
                     .into()
             }
-            Self::KernelArgument { kargs_file: true } => format!(
-                "The image's kernel arguments file {} carries the placeholder: remove that \
-                 argument there and pass the real one at install time, for example with \
-                 `bootc install to-disk --karg`.",
+            Self::KernelArgument { owed: true } => format!(
+                "A kernel argument whose value was redacted is left out of the image's kernel \
+                 arguments file {}: pass each with its real value at install time, for example \
+                 with `bootc install to-disk --karg`. Provisioning steps in the audit report \
+                 names each one.",
                 md_code(KARGS_PATH)
             ),
-            Self::KernelArgument { kargs_file: false } => "Not in the image: pass the real kernel \
+            Self::KernelArgument { owed: false } => "Not in the image: pass the real kernel \
                  argument at install time, for example with `bootc install to-disk --karg`."
                 .into(),
             Self::AccountPassword => "The password hashes here were replaced: set each account's \
@@ -161,6 +165,8 @@ impl SupplyAdvice {
 struct Carriage {
     carried: std::collections::BTreeSet<String>,
     machine_state: BTreeMap<String, SupplyAdvice>,
+    /// The kargs file leaves out a kernel argument redaction replaced.
+    owed_kargs: bool,
 }
 
 impl Carriage {
@@ -201,6 +207,7 @@ impl Carriage {
         Self {
             carried,
             machine_state,
+            owed_kargs: !owed_kernel_arguments(snap).is_empty(),
         }
     }
 
@@ -238,7 +245,7 @@ impl Carriage {
         match key {
             CMDLINE_PATH => {
                 return SupplyAdvice::KernelArgument {
-                    kargs_file: self.carried.contains(KARGS_PATH),
+                    owed: self.owed_kargs,
                 };
             }
             SHADOW_PATH => return SupplyAdvice::AccountPassword,
@@ -662,7 +669,7 @@ mod tests {
                 "/proc/cmdline",
                 "pattern",
                 &[Inline],
-                SupplyAdvice::KernelArgument { kargs_file: false },
+                SupplyAdvice::KernelArgument { owed: false },
             ),
             (
                 "/etc/shadow",

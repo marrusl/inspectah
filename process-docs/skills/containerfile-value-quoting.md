@@ -79,7 +79,7 @@ What the join does not do:
   carrying `\nRUN x` would split into an uncommented `RUN x` line and
   escape nothing.
 - **It does not cover a file built another way.** Two `#`-comment
-  files in `configtree.rs` are assembled with `push_str`. The flatpak
+  files in `configtree.rs` are assembled as strings. The flatpak
   provisioning unit escapes its value-carrying comments (the unknown-URL
   remote and the refusal FIXMEs) at the site. The kernel arguments TOML
   writes fixed comment text only. A new file builds a

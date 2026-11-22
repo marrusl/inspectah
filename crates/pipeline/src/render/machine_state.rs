@@ -1,12 +1,15 @@
 //! What every export says about the machine-state class: the provisioning
 //! steps a deployed machine owes, the "Machine state" table and the export
-//! notices.
+//! notices. The same surfaces carry the one owed step that is not a
+//! machine-state file: the kernel arguments the kargs file leaves out
+//! because redaction replaced their values.
 //!
 //! Every surface is built here from the snapshot, so the audit report, the
 //! Containerfile, the README, `x-export-warnings` and the scan's stderr
 //! list the same steps in the same order. Notices are derived from each
-//! row's member, never stored. All text is enum-owned or a path; no file
-//! content reaches any surface.
+//! row's member, never stored. All text is enum-owned, a path or a kernel
+//! argument with its redacted value shown as `<value>`; no file content
+//! reaches any surface.
 
 use std::collections::BTreeMap;
 
@@ -17,12 +20,16 @@ use inspectah_core::types::machine_state::{
 };
 
 use super::comment::escape_comment_text;
+use super::configtree::owed_kernel_arguments;
 use super::md_literal::{md_code, md_code_cell};
 use crate::export_warning::ExportWarning;
 
 /// The most bytes of a path the export header carries in a `warn`
 /// override notice.
 const NOTICE_PATH_MAX: usize = 200;
+
+/// How a deployed machine gets a kernel argument the image leaves out.
+const KARGS_INSTALL_STEP: &str = "bootc install to-disk --karg";
 
 /// One machine-state row, from any of the snapshot's three class lists.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,42 +178,77 @@ fn header_path(path: &str) -> String {
     format!("{}{ELLIPSIS}", &clean[..NOTICE_PATH_MAX - ELLIPSIS.len()])
 }
 
+/// The `notice` the export header and the scan's stderr carry when the
+/// kargs file leaves out kernel arguments whose values were redacted: a
+/// count and the install-time step, fixed text only. None when nothing
+/// is owed.
+pub fn owed_kernel_arguments_notice(snap: &InspectionSnapshot) -> Option<ExportWarning> {
+    let owed = owed_kernel_arguments(snap).len();
+    if owed == 0 {
+        return None;
+    }
+    let args = if owed == 1 { "argument" } else { "arguments" };
+    Some(ExportWarning::notice(format!(
+        "{owed} kernel {args} left out: the value was redacted. At install time: \
+         {KARGS_INSTALL_STEP}."
+    )))
+}
+
 /// Every class notice the export header carries, in header order: the
-/// left-out notice, then one per `warn` override.
+/// left-out notice, the owed kernel arguments, then one per `warn`
+/// override.
 pub fn export_notices(snap: &InspectionSnapshot) -> Vec<ExportWarning> {
     left_out_notice(snap)
         .into_iter()
+        .chain(owed_kernel_arguments_notice(snap))
         .chain(warn_override_notices(snap))
         .collect()
 }
 
 /// The Containerfile's `Provisioning` section body: a note a person would
-/// leave, with the steps and no paths (the audit report has the paths).
-/// Empty when nothing is owed.
+/// leave, with the steps and no paths (the audit report has the paths),
+/// then each kernel argument owed at install time. Empty when nothing is
+/// owed.
 pub fn containerfile_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let steps = provisioning_steps(snap);
-    if steps.is_empty() {
-        return Vec::new();
+    let mut lines = Vec::new();
+    if !steps.is_empty() {
+        lines.push("# Not in the image: this host's identity. At provisioning:".to_string());
+        lines.extend(
+            steps
+                .iter()
+                .map(|(step, _)| format!("#   {}", escape_comment_text(step.short()))),
+        );
     }
-    let mut lines = vec!["# Not in the image: this host's identity. At provisioning:".to_string()];
-    lines.extend(
-        steps
-            .iter()
-            .map(|(step, _)| format!("#   {}", escape_comment_text(step.short()))),
-    );
+    let kargs = owed_kernel_arguments(snap);
+    if !kargs.is_empty() {
+        lines.push(
+            "# Not in the image: kernel arguments whose values were redacted. Pass each at \
+             install time, for example:"
+                .to_string(),
+        );
+        lines.extend(kargs.iter().map(|karg| {
+            format!(
+                "#   {}",
+                escape_comment_text(&format!("{KARGS_INSTALL_STEP} {karg}"))
+            )
+        }));
+    }
     lines
 }
 
 /// The `## Provisioning steps` section the audit report and the README
-/// carry: one bullet per step with the paths it covers, then the count of
-/// files recreated without a step. Empty when no step is owed.
+/// carry: one bullet per step with the paths it covers, then each kernel
+/// argument owed at install time, then the count of files recreated
+/// without a step. Empty when no step is owed.
 pub fn provisioning_markdown(snap: &InspectionSnapshot) -> Vec<String> {
     let steps = provisioning_steps(snap);
-    if steps.is_empty() {
+    let kargs = owed_kernel_arguments(snap);
+    if steps.is_empty() && kargs.is_empty() {
         return Vec::new();
     }
     let mut lines = vec!["## Provisioning steps".to_string(), String::new()];
-    {
+    if !steps.is_empty() {
         lines.push(
             "These files belong to this host, so the image leaves them out. Run each step \
              when you deploy a machine from the image:"
@@ -223,8 +265,19 @@ pub fn provisioning_markdown(snap: &InspectionSnapshot) -> Vec<String> {
         }
         lines.push(String::new());
     }
+    if !kargs.is_empty() {
+        lines.push(format!(
+            "These kernel arguments had their values redacted, so the image's kernel arguments \
+             file leaves them out. Pass each with its real value at install time, for example \
+             with {}:",
+            md_code(KARGS_INSTALL_STEP)
+        ));
+        lines.push(String::new());
+        lines.extend(kargs.iter().map(|karg| format!("- {}", md_code(karg))));
+        lines.push(String::new());
+    }
     let automatic = automatic_count(snap);
-    if automatic > 0 {
+    if !steps.is_empty() && automatic > 0 {
         let files = if automatic == 1 {
             "file is"
         } else {
@@ -394,6 +447,56 @@ mod tests {
             notices[0].text(),
             "Host identity included in the image: /etc/iscsi/initiatorname.iscsi"
         );
+    }
+
+    /// A kernel argument whose value was redacted is owed at install time
+    /// on every surface the machine-state steps reach, alone or beside
+    /// them, by its name with the value shown as `<value>`.
+    #[test]
+    fn a_redacted_kernel_argument_is_an_owed_step_everywhere() {
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        let with_cmdline = |mut snap: InspectionSnapshot| {
+            snap.kernel_boot = Some(KernelBootSection {
+                cmdline: "ro nosmt=force rd.iscsi.password=REDACTED_PASSWORD_1".into(),
+                ..Default::default()
+            });
+            snap
+        };
+        let owed_line = "#   bootc install to-disk --karg rd.iscsi.password=<value>";
+        let notice = "1 kernel argument left out: the value was redacted. At install time: \
+                      bootc install to-disk --karg.";
+
+        // Alone: the section exists for the kernel argument only.
+        let alone = with_cmdline(InspectionSnapshot::new());
+        let md = provisioning_markdown(&alone).join("\n");
+        assert!(md.starts_with("## Provisioning steps"), "{md}");
+        assert!(md.contains("- `rd.iscsi.password=<value>`"), "{md}");
+        assert!(!md.contains("These files belong to this host"), "{md}");
+        assert!(!md.contains("REDACTED"), "{md}");
+        let cf = containerfile_lines(&alone);
+        assert_eq!(cf.len(), 2, "{cf:?}");
+        assert_eq!(cf[1], owed_line);
+        let notices: Vec<String> = export_notices(&alone)
+            .iter()
+            .map(|n| n.text().to_owned())
+            .collect();
+        assert_eq!(notices, vec![notice.to_owned()]);
+
+        // Beside the machine-state steps: both, machine state first.
+        let both = with_cmdline(snap());
+        let md = provisioning_markdown(&both).join("\n");
+        let realm = md.find("realm join").expect("the realm step");
+        let karg = md.find("rd.iscsi.password=<value>").expect("the karg");
+        assert!(realm < karg, "{md}");
+        assert!(md.contains("recreated without operator action"), "{md}");
+        let cf = containerfile_lines(&both);
+        assert_eq!(cf.last().map(String::as_str), Some(owed_line), "{cf:?}");
+        let notices: Vec<String> = export_notices(&both)
+            .iter()
+            .map(|n| n.text().to_owned())
+            .collect();
+        assert_eq!(notices.len(), 2, "{notices:?}");
+        assert_eq!(notices[1], notice);
     }
 
     #[test]

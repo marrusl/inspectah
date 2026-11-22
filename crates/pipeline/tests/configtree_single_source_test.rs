@@ -1261,7 +1261,7 @@ fn the_kargs_file_is_staged_through_the_decision() {
         .expect("the kargs file is a write");
     assert_eq!(write.source, StagedFileKind::KargsFile);
     assert!(
-        write.content.contains("append = [\"hugepages=16\"]"),
+        write.content.contains("\nkargs = [\"hugepages=16\"]\n"),
         "{}",
         write.content
     );
@@ -1274,10 +1274,7 @@ fn the_kargs_file_is_staged_through_the_decision() {
         ("a collected file under its path", format!("{KARGS}/extra")),
     ] {
         let snap = with_kargs(staged_snapshot(
-            vec![config_entry(
-                &collected,
-                "[kargs]\nappend = [\"other=1\"]\n",
-            )],
+            vec![config_entry(&collected, "kargs = [\"other=1\"]\n")],
             vec![],
         ));
         let staged = staged_writes(&snap);

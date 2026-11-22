@@ -10,7 +10,7 @@
 //! first loses nothing: the escaped text holds none of these characters,
 //! so the join leaves it as it is.
 //!
-//! Two `#`-comment files in `configtree.rs` are built with `push_str`
+//! Two `#`-comment files in `configtree.rs` are built as strings
 //! instead and do not pass through the join. The flatpak provisioning unit
 //! escapes its value-carrying comments (the unknown-URL remote and the
 //! refusal FIXMEs) at the site. The kernel arguments TOML writes fixed

@@ -114,7 +114,7 @@ fn useradd_refusal(u: &serde_json::Value) -> Option<&'static str> {
 /// terminator is written as a `\uXXXX` escape. U+0085, U+2028 and
 /// U+2029 are legal raw in a TOML string, but an editor may break the
 /// line there, so they are escaped too.
-fn toml_string(s: &str) -> String {
+pub(super) fn toml_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {

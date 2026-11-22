@@ -636,14 +636,41 @@ pub fn is_bootloader_karg(karg: &str) -> bool {
         .any(|prefix| karg.starts_with(prefix))
 }
 
+/// Splits a kernel command line into its arguments the way the kernel
+/// does: on whitespace, except inside double quotes, which stay part of
+/// the argument (`dyndbg="file x.c +p"` is one argument).
+pub fn cmdline_args(cmdline: &str) -> Vec<&str> {
+    let mut args = Vec::new();
+    let mut start = None;
+    let mut in_quote = false;
+    for (i, c) in cmdline.char_indices() {
+        if c == '"' {
+            in_quote = !in_quote;
+        }
+        if c.is_ascii_whitespace() && !in_quote {
+            if let Some(s) = start.take() {
+                args.push(&cmdline[s..i]);
+            }
+        } else if start.is_none() {
+            start = Some(i);
+        }
+    }
+    if let Some(s) = start {
+        args.push(&cmdline[s..]);
+    }
+    args
+}
+
 /// Extracts operator-defined kargs from a cmdline string, filtering out
-/// bootloader-managed ones and those with unsafe characters.
+/// bootloader-managed ones and any holding a line break or other control
+/// character. The arguments go into a TOML string array, which escapes
+/// quotes and backslashes itself, so no shell character is refused.
 pub fn operator_kargs(cmdline: &str) -> Vec<String> {
-    cmdline
-        .split_whitespace()
+    cmdline_args(cmdline)
+        .into_iter()
         .filter(|karg| !is_bootloader_karg(karg))
-        .filter(|karg| sanitize_shell_value(karg).is_some())
-        .map(|s| s.to_string())
+        .filter(|karg| !has_line_break_or_control(karg))
+        .map(str::to_owned)
         .collect()
 }
 
@@ -917,5 +944,28 @@ mod tests {
     fn test_operator_kargs_filters_bootloader() {
         let result = operator_kargs("ro rhgb quiet root=/dev/sda1 BOOT_IMAGE=/vmlinuz nosmt=force");
         assert_eq!(result, vec!["nosmt=force"]);
+    }
+
+    /// A quoted value with spaces is one argument, as the kernel reads it;
+    /// characters a shell would treat specially are kept, and an argument
+    /// with a control character is refused.
+    #[test]
+    fn operator_kargs_split_like_the_kernel() {
+        let cases: &[(&str, &[&str])] = &[
+            ("", &[]),
+            ("  quiet  ", &[]),
+            ("a=1\tb=2", &["a=1", "b=2"]),
+            (
+                "quiet dyndbg=\"file x.c +p\" nosmt",
+                &["dyndbg=\"file x.c +p\"", "nosmt"],
+            ),
+            ("\"a b\"=c d", &["\"a b\"=c", "d"]),
+            ("x=$y;z back\\slash", &["x=$y;z", "back\\slash"]),
+            ("unclosed=\"a b", &["unclosed=\"a b"]),
+            ("bell=\u{7} ok=1", &["ok=1"]),
+        ];
+        for (cmdline, want) in cases {
+            assert_eq!(operator_kargs(cmdline), *want, "{cmdline:?}");
+        }
     }
 }

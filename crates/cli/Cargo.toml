@@ -41,6 +41,9 @@ assert_cmd = "2"
 predicates = "3"
 # The audit's literal-rendering case parses the report as GFM.
 comrak = { version = "0.59", default-features = false }
+# Parses the kernel arguments file as bootc does. Already in the
+# workspace through inspectah-core.
+toml = "0.8"
 
 [[bin]]
 name = "inspectah"

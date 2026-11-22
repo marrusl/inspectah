@@ -605,6 +605,15 @@ so rather than promising one token per value.
 The scan, the fleet aggregate and the refine export all write the file
 through this one function.
 
+**A placeholder never goes into executable configuration.** A redacted
+value in a file the image reads at runtime is the operator's to replace,
+and the review says so. A redacted kernel argument is different: in the
+kargs file a placeholder is what the machine boots with, so the kargs
+writer leaves the argument out and names it as an install-time step (see
+[kernel-arguments-file](kernel-arguments-file.md)); the `/proc/cmdline`
+line points at that step. A new writer of executable configuration from
+a redacted field needs the same split.
+
 ## Testing it
 
 Assert over the **whole export directory**, not over one named file:

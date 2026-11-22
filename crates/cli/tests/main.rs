@@ -20,6 +20,7 @@ mod baseline_summary_scan_test;
 mod copy_source_exists_test;
 mod fleet_repo_precedence_test;
 mod ghost_config_scan_test;
+mod kargs_file_export_test;
 mod machine_state_scan_test;
 mod not_carried_parity_test;
 mod refine_e2e_test;
