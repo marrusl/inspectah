@@ -62,7 +62,50 @@ recovers it. Rules for a collector:
   private field and no `Default`, so it cannot be built by literal either.
   `run_scan` builds the only one and wraps it at once.
 - `HostRead::read_head` is not on `Executor`, and the gate does not
-  implement `HostRead`: no collector can make a prefix read.
+  implement `HostRead`: no collector can make a prefix read. The gate's
+  own are the keytab sniff and `screen_payload`'s check.
+- A unit file or drop-in refusal is recorded through `unit_read_failure`
+  (units inspector), so it reads `machine-state file left out: <path>`
+  like every other collector's; the RPM section's repo and `gpgkey=` key
+  readers push the same reason and the inspector returns `Degraded`.
+- The subscription inspector reads `/etc/hostname` through the gate; only
+  the RHSM material goes through its bypass.
+
+## The inode inventory follows links, or the scan does not run
+
+`MachineStateScreen::build` lists each withheld `Glob` and `Prefix`
+rule's tree from the rule's directory, following directory links and
+matching the rule against the logical spelling, so a member directory
+that is a link elsewhere still puts the physical files in the inode set.
+It descends only where `may_match_below` says the rule can still match
+(a glob is read as an NFA over the path's start), so the `/etc`-rooted
+`krb5.keytab.*` glob never walks `/etc`, and it skips a directory already
+on the current path, which ends link cycles. Where it cannot finish (more
+than 32 directories deep, more than 65,536 entries, a name that is not
+UTF-8 where a rule could match, a directory `read_dir_strict` cannot list)
+it records a `ScreenGap`: the gate then withholds every path, and
+`run_scan` bails with the gap's message before any inspector runs.
+Never relax this to "withhold below the gap": a hard link or bind mount
+elsewhere of a file the inventory never listed would read as ordinary.
+In a mock, register a directory link with `with_link` and the target
+directory's listing; the build lists the resolved path, so no listing is
+needed at the link's own path.
+
+## Unmanaged payloads are screened by content
+
+The bundler copies unmanaged files byte for byte, so the walk calls
+`screen_payload`, not `screen`: path, alias and inode, then one read of at
+most `PAYLOAD_CHECK_LEN` + 1 bytes judged by `payload_credential`. A
+keytab header wins; a file within the limit is judged whole, so bytes
+that are not UTF-8 are never a PEM key (an ordinary binary is carried); a
+longer file is a key unless its start rules that out. A file the check
+cannot read stays an item. `bundle_unmanaged_files` lives in
+`pipeline::render::unmanaged`, takes the host root (`/` in `run_scan`, a
+tempdir in tests), asks `screen_payload` again for every included regular
+file before copying any, and fails on a withheld answer or a read error;
+it never skips a file. Test the whole route with
+`unmanaged_credentials_are_withheld_on_both_export_paths`: write each
+payload both to the `SysctlHost` and to a host-root tempdir.
 
 Not covered, and caught only by review: a file-opening route not on the
 lint list (a new dependency, a `libc` call) and a command whose output is a
@@ -116,6 +159,10 @@ leave `config_files`, so stats and bulk controls never reach them.
 `item_id` is present exactly when the row can be overridden. `SetInclude`
 on a withheld config or unmanaged path, and `EditVariant` holding a
 credential, return `RefineError::NotCarriable` (422, `not carried:`).
+`SetInclude` on a carriable row that already holds the value returns
+`NoopTarget` (422, `nothing to change:`), checked in `apply` before the
+generic idempotency shortcut, which would answer 200. The HTTP contract is
+pinned in `crates/web/tests/machine_state_api_test.rs`.
 
 The UI (`MachineStateGroup.tsx`) takes a row's control from `override`
 alone, never from its path, member or reason: `never` shows the text

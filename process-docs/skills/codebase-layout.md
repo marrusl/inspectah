@@ -132,7 +132,7 @@ Artifact generators invoked after triage decisions finalized:
 - `not_carried.rs`: the not-carried class (`classify_auto_carriage`, `apply_scan_package_defaults`, `not_carried_packages`); the one decider of which auto packages the image leaves out, read by the Containerfile, the audit report and `unit_plan.rs`; `var_dirs.rs` asks `unit_plan::pulled_in_by_included` directly
 - `unit_plan.rs`: `plan_units`, every `systemctl` line for a collected unit and the default target, checked against `staged_writes` (see `service-omission-model.md`); `declined_line`, the one source of a declined command's text; `mount_advisory_lines` for mount findings; `manual_link_lines`, `undetermined_install_lines` and `also_advisory_lines` for link findings and rule 7; `unit_state_lines` writes the `# === Systemd Unit State ===` section
 - `language_packages.rs` — Tier 1 pip/npm/gem Containerfile rendering
-- `unmanaged.rs` — Tier 2 unmanaged file COPY directives and symlink `ln -sf`
+- `unmanaged.rs`: Tier 2 unmanaged file COPY directives and symlink `ln -sf`; `bundle_unmanaged_files`, which copies the payloads into the scan tarball after the read gate checks each again
 - `repoless.rs`: package routing (`route_for`), repo-less install planning for the combined local and disabled-repo install, and the scan tarball's cached RPM writer
 - `safety.rs` — Safety checks and destructive-action warnings
 - `configtree.rs`: the staged file tree. `staged_writes` is the one decision of which offered files the export writes, keyed by `Destination` (a normalized image path), with every withheld and refused offer; `is_staged` asks it
