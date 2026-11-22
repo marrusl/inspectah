@@ -270,9 +270,12 @@ pub(crate) fn parse_authselect_check(
 // `classify_path` and `ConfigCollector::admit` replace this list: the
 // branch hands every surviving candidate to `admit`, which records a
 // member as a withheld or machine-state row instead of skipping it.
-// The content sniffs (keytab header, whole-file private key) are the
-// class's read gate and are not repeated here; a keytab is binary and is
-// not captured as text either way.
+// Two members are defined by content as well as by path: a Kerberos
+// keytab and a whole-file private key (§§ 4.5 and 5.3). A ghost file can
+// sit at any path under `/etc`, so the branch checks its content too
+// ([`is_credential_content`]) and drops such a file before its content
+// is kept. The class's read gate will sniff before reading; this interim
+// check reads the file, then discards it.
 
 /// Exact member paths.
 const MACHINE_STATE_EXACT: &[&str] = &[
@@ -325,6 +328,89 @@ pub(crate) fn is_machine_state_member(path: &str) -> bool {
             .rsplit('/')
             .next()
             .is_some_and(|name| name.ends_with(KEYTAB_SUFFIX))
+}
+
+/// The first two bytes of a Kerberos keytab: file format version 1 or 2
+/// (§ 4.5 of the machine-state class spec).
+const KEYTAB_HEADERS: [[u8; 2]; 2] = [[0x05, 0x01], [0x05, 0x02]];
+
+/// What every private-key PEM label ends with: `PRIVATE KEY`, `ENCRYPTED
+/// PRIVATE KEY`, `RSA PRIVATE KEY`, `EC PRIVATE KEY`, `DSA PRIVATE KEY`,
+/// `OPENSSH PRIVATE KEY` (§ 5.3).
+const PRIVATE_KEY_LABEL_SUFFIX: &str = "PRIVATE KEY";
+
+/// PEM labels that may sit beside a private key in a key file (§ 5.3).
+const COMPANION_LABELS: &[&str] = &[
+    "CERTIFICATE",
+    "TRUSTED CERTIFICATE",
+    "X509 CRL",
+    "EC PARAMETERS",
+    "DH PARAMETERS",
+    "DSA PARAMETERS",
+];
+
+/// Lines `openssl pkcs12` writes before each block (§ 5.3), matched at
+/// the start of an unindented line.
+const ENVELOPE_PREFIXES: &[&str] = &["Bag Attributes", "Key Attributes", "subject=", "issuer="];
+
+const PEM_BEGIN: &str = "-----BEGIN ";
+const PEM_END: &str = "-----END ";
+const PEM_DASHES: &str = "-----";
+
+/// Whether a file's content makes it a machine-state credential whatever
+/// its path: a keytab, or a file that is a private key and nothing else.
+pub(crate) fn is_credential_content(content: &str) -> bool {
+    KEYTAB_HEADERS
+        .iter()
+        .any(|header| content.as_bytes().starts_with(header))
+        || is_whole_file_private_key(content)
+}
+
+/// § 5.3: every line outside a PEM block is blank, a `#` comment or
+/// `openssl` envelope metadata, every block's label is a private-key
+/// label or a companion, and at least one block is a private key. Any
+/// other line (an application setting) makes the file configuration, and
+/// a key embedded in it is left to redaction. A block that never ends
+/// counts as a block to the end of the file, so a cut-off key is still a
+/// key.
+pub(crate) fn is_whole_file_private_key(content: &str) -> bool {
+    let mut open_label: Option<&str> = None;
+    let mut has_key = false;
+    for line in content.lines() {
+        let line = line.trim_end_matches('\r');
+        if let Some(label) = open_label {
+            if pem_label(line, PEM_END) == Some(label) {
+                open_label = None;
+            }
+            continue;
+        }
+        if let Some(label) = pem_label(line, PEM_BEGIN) {
+            if label.ends_with(PRIVATE_KEY_LABEL_SUFFIX) {
+                has_key = true;
+            } else if !COMPANION_LABELS.contains(&label) {
+                return false;
+            }
+            open_label = Some(label);
+            continue;
+        }
+        let envelope = line.trim().is_empty()
+            || line.starts_with('#')
+            || line.starts_with([' ', '\t'])
+            || ENVELOPE_PREFIXES.iter().any(|p| line.starts_with(p));
+        if !envelope {
+            return false;
+        }
+    }
+    has_key
+}
+
+/// The label of a `-----BEGIN <label>-----` or `-----END <label>-----`
+/// line, by `marker`.
+fn pem_label<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
+    line.trim()
+        .strip_prefix(marker)?
+        .strip_suffix(PEM_DASHES)
+        .filter(|label| !label.is_empty())
 }
 
 #[cfg(test)]
@@ -469,6 +555,36 @@ setup cn '/etc/hosts'
             assert_eq!(err.record, record, "{out:?}: {err}");
         }
         assert_eq!(parse_ghost_files(""), Ok(GhostQuery::default()));
+    }
+
+    /// § 5.3 by example. A key file is a key whatever its label or
+    /// companions; a key inside a configuration file is configuration.
+    #[test]
+    fn whole_file_private_keys() {
+        let encrypted = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHDBOBgkqhkiG9w0BBQ0w\n-----END ENCRYPTED PRIVATE KEY-----\n";
+        let pkcs12 = "Bag Attributes\n    localKeyID: 01 02\n    friendlyName: server\nsubject=CN = host\nissuer=CN = ca\n-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\nKey Attributes: <No Attributes>\n-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n";
+        let ec = "# generated\n\n-----BEGIN EC PARAMETERS-----\nBggq\n-----END EC PARAMETERS-----\n-----BEGIN EC PRIVATE KEY-----\nMHcC\n-----END EC PRIVATE KEY-----\n";
+        let crlf = "-----BEGIN RSA PRIVATE KEY-----\r\nMIIE\r\n-----END RSA PRIVATE KEY-----\r\n";
+        let cut_off = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl\n";
+        for content in [encrypted, pkcs12, ec, crlf, cut_off] {
+            assert!(is_whole_file_private_key(content), "{content:?}");
+            assert!(is_credential_content(content), "{content:?}");
+        }
+
+        let embedded = "listen = 443\nkey = <<EOF\n-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n";
+        let cert_only = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+        let other_label = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQIN\n-----END PGP PUBLIC KEY BLOCK-----\n-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n";
+        for content in [embedded, cert_only, other_label, "", "[sssd]\n"] {
+            assert!(!is_whole_file_private_key(content), "{content:?}");
+        }
+    }
+
+    #[test]
+    fn keytab_headers() {
+        assert!(is_credential_content("\u{5}\u{2}\0\0\0\u{3c}"));
+        assert!(is_credential_content("\u{5}\u{1}"));
+        assert!(!is_credential_content("\u{5}\u{3}"));
+        assert!(!is_credential_content("0502"));
     }
 
     #[test]

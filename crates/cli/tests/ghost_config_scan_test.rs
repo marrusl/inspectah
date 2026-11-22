@@ -310,3 +310,51 @@ fn a_ghost_sssd_conf_with_a_mode_change_is_still_carried() {
         assert!(staged.contains("id_provider = ldap"), "{path}");
     }
 }
+
+/// An encrypted private key, the whole of a file, as `openssl pkcs8
+/// -topk8` writes it. The body is not a real key.
+const ENCRYPTED_KEY_FILE: &str = "\
+-----BEGIN ENCRYPTED PRIVATE KEY-----
+MIIFHDBOBgkqhkiG9w0BBQ0wQTApBgkqhkiG9w0BBQwwHAQIl2ghostkeymaterial
+-----END ENCRYPTED PRIVATE KEY-----
+";
+
+/// A keytab's opening bytes: format version 2, then the start of an
+/// entry. Valid UTF-8, so a text read succeeds and only the content
+/// says what the file is.
+const KEYTAB_CONTENT: &str = "\u{5}\u{2}\0\0\0\u{3c}\0\u{1}\0\u{b}EXAMPLE.COM";
+
+/// A ghost file whose content is a private key and nothing else, or a
+/// keytab, is a machine-state credential at any path. Neither path is on
+/// the class's path list, so only the content can say so: neither reaches
+/// the snapshot or either export.
+#[test]
+fn ghost_files_holding_a_credential_by_content_are_never_collected() {
+    let snap = scan(
+        SysctlHost::new()
+            .ghost("myapp", "g", "/etc/myapp/server.pem")
+            .file("/etc/myapp/server.pem", ENCRYPTED_KEY_FILE)
+            .ghost("myapp", "g", "/etc/myapp/service.kt")
+            .file("/etc/myapp/service.kt", KEYTAB_CONTENT)
+            .ghost("myapp", "cng", "/etc/myapp/app.conf")
+            .file("/etc/myapp/app.conf", "listen = 8443\n"),
+    );
+
+    assert!(entry(&snap, "/etc/myapp/app.conf").is_some(), "the control");
+    for path in ["/etc/myapp/server.pem", "/etc/myapp/service.kt"] {
+        assert!(entry(&snap, path).is_none(), "{path} is not collected");
+    }
+    let json = serde_json::to_string(&snap).expect("the snapshot serializes");
+    assert!(!json.contains("ghostkeymaterial"));
+    assert!(!json.contains("EXAMPLE.COM"));
+
+    for (path, tree) in both_exports(&snap) {
+        assert!(
+            tree.path().join("config/etc/myapp/app.conf").exists(),
+            "{path}"
+        );
+        for staged in ["config/etc/myapp/server.pem", "config/etc/myapp/service.kt"] {
+            assert!(!tree.path().join(staged).exists(), "{path}: {staged}");
+        }
+    }
+}

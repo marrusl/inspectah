@@ -406,8 +406,10 @@ const GHOST_PATH_REFUSED: &str = "is a %ghost file under /etc whose name holds a
 /// %dir`), or a FIFO, socket or device, which is never opened because
 /// opening a FIFO with no writer blocks; every skip the unowned walk applies
 /// (`is_excluded_unowned`, dev artifacts, DHCP connections, the SELinux
-/// fcontext store); a machine-state member
-/// (`ghost::is_machine_state_member`); and `ghost::is_ghost_skip`.
+/// fcontext store); a machine-state member by path
+/// (`ghost::is_machine_state_member`); `ghost::is_ghost_skip`; and, once
+/// read, a file whose content is a keytab or a whole-file private key
+/// (`ghost::is_credential_content`), dropped before the content is kept.
 ///
 /// When the machine-state class lands, the member skip goes and each
 /// surviving candidate goes through `ConfigCollector::admit` with
@@ -473,6 +475,9 @@ fn collect_ghost_configs(
         }
 
         let (content, disposition) = capture_config(exec, path, degraded_reasons);
+        if ghost::is_credential_content(&content) {
+            continue;
+        }
         section.files.push(ConfigFileEntry {
             path: ghost.path.clone(),
             kind: ConfigFileKind::RpmOwnedModified,
