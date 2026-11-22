@@ -14,6 +14,10 @@ use regex::Regex;
 use std::path::Path;
 use std::sync::LazyLock;
 
+/// The SELinux configuration file this inspector reads the policy type
+/// from. The config inspector's `%ghost` branch leaves it to this section.
+pub(crate) const SELINUX_CONFIG_PATH: &str = "/etc/selinux/config";
+
 /// Regex for parsing `semanage boolean -l -C` output lines:
 ///   name  (running , persistent)  description
 static BOOL_RE: LazyLock<Regex> =
@@ -153,12 +157,9 @@ fn collect_selinux_mode(
 // Policy type
 // ---------------------------------------------------------------------------
 
-/// The SELinux configuration file.
-const SELINUX_CONFIG: &str = "/etc/selinux/config";
-
 /// Reads SELINUXTYPE from `/etc/selinux/config`, defaulting to "targeted".
 fn read_policy_type(exec: &dyn Executor) -> String {
-    let content = match exec.read_file(Path::new(SELINUX_CONFIG)) {
+    let content = match exec.read_file(Path::new(SELINUX_CONFIG_PATH)) {
         Ok(c) => c,
         Err(_) => return "targeted".to_string(),
     };
@@ -349,7 +350,7 @@ fn collect_custom_modules(
         Ok(entries) => entries,
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound
-                || exec.file_exists(Path::new(SELINUX_CONFIG))
+                || exec.file_exists(Path::new(SELINUX_CONFIG_PATH))
             {
                 warnings.push(selinux_warning(format!(
                     "SELinux custom policy modules not read: modules/ in {label}: {}",
@@ -552,7 +553,7 @@ fn collect_boolean_overrides(
     }
 
     // No store and no semanage on a host without SELinux: nothing to read.
-    if !exec.file_exists(Path::new(SELINUX_CONFIG)) {
+    if !exec.file_exists(Path::new(SELINUX_CONFIG_PATH)) {
         return;
     }
     warnings.push(selinux_warning(format!(

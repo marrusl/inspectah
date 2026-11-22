@@ -215,28 +215,22 @@ const UNOWNED_EXCLUDE_PREFIX: &[&str] = &[
 /// Checks: exact match, glob match, subtree prefix exclusion, and the
 /// systemd unit symlink test, which needs `exec` to read link metadata.
 pub fn is_excluded_unowned(exec: &dyn Executor, path: &str) -> bool {
-    // Exact match
-    if UNOWNED_EXCLUDE_EXACT.contains(&path) {
-        return true;
-    }
-
-    // Glob match
-    for pattern in UNOWNED_EXCLUDE_GLOBS {
-        if match_unowned_glob(pattern, path) {
-            return true;
-        }
-    }
-
-    // Subtree prefix exclusion (system-generated noise)
-    for prefix in UNOWNED_EXCLUDE_PREFIX {
-        if path.starts_with(prefix) {
-            return true;
-        }
-    }
-
     // Systemd unit links and masks directly under /etc/systemd/system/:
     // state the units inspector records.
-    is_systemd_unit_symlink(exec, path)
+    is_excluded_unowned_path(path) || is_systemd_unit_symlink(exec, path)
+}
+
+/// The part of [`is_excluded_unowned`] decided by the path alone: the
+/// exact, glob and subtree exclusion lists.
+pub(super) fn is_excluded_unowned_path(path: &str) -> bool {
+    UNOWNED_EXCLUDE_EXACT.contains(&path)
+        || UNOWNED_EXCLUDE_GLOBS
+            .iter()
+            .any(|pattern| match_unowned_glob(pattern, path))
+        // Subtree prefix exclusion (system-generated noise)
+        || UNOWNED_EXCLUDE_PREFIX
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
 }
 
 /// Returns `true` if the path is unit state rather than a unit file: a

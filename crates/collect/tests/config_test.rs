@@ -1499,3 +1499,69 @@ fn a_ghost_file_rpm_reports_for_metadata_only_is_still_collected() {
     assert!(sssd.content.contains("id_provider = ad"));
     assert!(sssd.disposition.is_included());
 }
+
+/// The ghost files measured on RHEL 9.8 and 10.2 that the branch must not
+/// carry: fstab and crypttab are storage's, `redhat.repo` the repos
+/// section's (and larger than the config read limit on RHEL 9.8, so
+/// reading it degraded the section), the SELinux config the SELinux
+/// section's. `/etc/chrony.keys` is key material: it is never opened,
+/// and a warning names it. Each of these is registered as unreadable
+/// (`PermissionDenied`), so a read of any would have degraded the section
+/// or left an advisory row; the inspector succeeds with neither.
+#[test]
+fn ghost_files_another_section_owns_are_left_to_it_and_key_files_are_withheld() {
+    let rows = "\
+setup cmng '/etc/fstab'
+systemd-udev cng '/etc/crypttab'
+subscription-manager g '/etc/yum.repos.d/redhat.repo'
+selinux-policy cng '/etc/selinux/config'
+chrony cg '/etc/chrony.keys'
+cockpit-ws g '/etc/cockpit/disallowed-users'
+";
+    let owned = [
+        "/etc/fstab",
+        "/etc/crypttab",
+        "/etc/yum.repos.d/redhat.repo",
+        "/etc/selinux/config",
+        "/etc/chrony.keys",
+        "/etc/cockpit/disallowed-users",
+    ];
+    let mut exec = with_ghosts(MockExecutor::new(), rows)
+        .with_dir("/etc", vec![])
+        .with_file(
+            "/etc/cockpit/disallowed-users",
+            "# List of users which are not allowed to login to Cockpit\nroot\n",
+        );
+    for path in &owned[..5] {
+        exec = exec.with_file_error(path, std::io::ErrorKind::PermissionDenied);
+    }
+    let rpm_state = RpmState {
+        owned_paths: owned.iter().map(PathBuf::from).collect(),
+        ..Default::default()
+    };
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("nothing another section owns, and no key file, is read");
+    let SectionData::Config(section) = &output.section else {
+        panic!("expected a config section");
+    };
+    let paths: Vec<&str> = section.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, vec!["/etc/cockpit/disallowed-users"], "the control");
+
+    let withheld: Vec<&str> = output
+        .warnings
+        .iter()
+        .map(|w| w.message.as_str())
+        .filter(|m| m.contains("holds key material"))
+        .collect();
+    assert_eq!(withheld.len(), 1, "{:?}", output.warnings);
+    assert!(withheld[0].starts_with("/etc/chrony.keys "), "{withheld:?}");
+}

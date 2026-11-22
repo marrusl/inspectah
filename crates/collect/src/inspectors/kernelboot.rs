@@ -18,6 +18,10 @@ use crate::inspectors::config::MAX_CONFIG_FILE_SIZE;
 /// The final target of a link that masks a sysctl file.
 const DEV_NULL: &str = "/dev/null";
 
+/// The locale file this inspector records the host's locale from. The
+/// config inspector's `%ghost` branch leaves it to this section.
+pub(crate) const LOCALE_CONF_PATH: &str = "/etc/locale.conf";
+
 /// Secret-like patterns in the kernel cmdline.
 const CMDLINE_SECRET_PATTERNS: &[&str] = &["password=", "key=", "secret="];
 
@@ -105,7 +109,7 @@ impl Inspector for KernelbootInspector {
 
         // 4. Read /etc/locale.conf — OPTIONAL
         let locale = exec
-            .read_file(Path::new("/etc/locale.conf"))
+            .read_file(Path::new(LOCALE_CONF_PATH))
             .ok()
             .and_then(|content| parse_locale(&content));
 

@@ -17,6 +17,18 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// The file this inspector reads the host's mounts from.
+pub(crate) const FSTAB_PATH: &str = "/etc/fstab";
+
+/// The host's encrypted-volume table. It describes this host's block
+/// devices, as fstab does, so it is storage's to decide. The section does
+/// not parse it yet: an entry in it is recorded by no section.
+pub(crate) const CRYPTTAB_PATH: &str = "/etc/crypttab";
+
+/// The files under `/etc` this section claims. The config inspector's
+/// `%ghost` branch leaves them to storage and never copies them.
+pub(crate) const OWNED_ETC_FILES: &[&str] = &[FSTAB_PATH, CRYPTTAB_PATH];
+
 /// Inspects storage configuration: fstab entries, active mount points,
 /// LVM volumes, and detects credential references in mount options.
 pub struct StorageInspector;
@@ -82,11 +94,11 @@ impl Inspector for StorageInspector {
         let exec = ctx.executor;
 
         // 1. Read /etc/fstab — primary source, failure is fatal.
-        let fstab_path = Path::new("/etc/fstab");
+        let fstab_path = Path::new(FSTAB_PATH);
         let fstab_content = exec
             .read_file(fstab_path)
             .map_err(|e| InspectorError::Failed {
-                reason: format!("cannot read /etc/fstab: {e}"),
+                reason: format!("cannot read {FSTAB_PATH}: {e}"),
             })?;
 
         let (fstab_entries, credential_refs, redaction_hints) = parse_fstab(&fstab_content);
@@ -293,7 +305,7 @@ fn parse_fstab(content: &str) -> (Vec<FstabEntry>, Vec<CredentialRef>, Vec<Redac
                     source: "fstab".into(),
                 });
                 hints.push(RedactionHint {
-                    path: "/etc/fstab".into(),
+                    path: FSTAB_PATH.into(),
                     reason: format!(
                         "credential reference in mount options for {mount_point}: {cred_path}"
                     ),
@@ -302,7 +314,7 @@ fn parse_fstab(content: &str) -> (Vec<FstabEntry>, Vec<CredentialRef>, Vec<Redac
             }
             if opt.starts_with("password=") {
                 hints.push(RedactionHint {
-                    path: "/etc/fstab".into(),
+                    path: FSTAB_PATH.into(),
                     reason: format!("inline password in mount options for {mount_point}"),
                     confidence: Some(Confidence::High),
                 });

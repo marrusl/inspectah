@@ -16,11 +16,16 @@
 //! ones.
 //!
 //! The files come from one `rpm -qa` query that prints each packaged
-//! file's flags ([`RPM_FILE_FLAGS_FORMAT`]); the branch in `mod.rs` then
-//! applies the same skips as the unowned walk, plus the machine-state
-//! members ([`is_machine_state_member`]) and [`GHOST_SKIP_EXACT`].
+//! file's flags ([`RPM_FILE_FLAGS_FORMAT`]). [`classify_ghost`] then
+//! decides each path: the branch carries general configuration no other
+//! section owns, and leaves out a file another section records, key
+//! material, machine-state members and files the host generates.
 
-use super::walk::match_unowned_glob;
+use super::is_selinux_fcontext_store_file;
+use super::walk::{is_dev_artifact, is_excluded_unowned_path, match_unowned_glob};
+use crate::inspectors::rpm::repos;
+use crate::inspectors::{kernelboot, selinux, storage, users};
+use inspectah_core::types::completeness::InspectorId;
 
 /// `rpm -qa` query format for every packaged file with its flags: the
 /// owning package, rpm's `fflags` rendering of `FILEFLAGS`, then the path
@@ -149,29 +154,166 @@ fn take_shell_quoted(text: &str) -> Option<(String, &str)> {
     }
 }
 
-/// Ghost files the branch leaves alone although no exclusion list names
-/// them, each for its own reason:
-///
-/// - `/etc/locale.conf`, `/etc/vconsole.conf` and
-///   `/etc/X11/xorg.conf.d/00-keyboard.conf` are systemd's locale and
-///   keymap settings. Whether and how the image carries locale is an open
-///   design question of its own, which copying these files would answer
-///   by accident.
-/// - `/etc/pki/tls/certs/localhost.crt` is the self-signed certificate
-///   `sscg` generates beside `/etc/pki/tls/private/localhost.key`, a
-///   machine-state member that is never carried; the certificate alone
-///   would not match the key the image generates.
-const GHOST_SKIP_EXACT: &[&str] = &[
-    "/etc/locale.conf",
-    "/etc/vconsole.conf",
-    "/etc/X11/xorg.conf.d/00-keyboard.conf",
-    "/etc/pki/tls/certs/localhost.crt",
+// ---------------------------------------------------------------------------
+// What the branch does with each ghost path
+// ---------------------------------------------------------------------------
+
+/// What the ghost branch does with a `%ghost` path under `/etc`, decided
+/// by the path alone. The branch carries general configuration that no
+/// other section owns, and nothing else. The full classification of
+/// every ghost file on RHEL 9.8 and 10.2 is in
+/// `process-docs/skills/ghost-config-files.md`, and
+/// `measured_ghost_files_land_in_known_classes` pins it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GhostClass {
+    /// General configuration: collected with its content, unless the
+    /// content turns out to be a credential ([`is_credential_content`]).
+    Config,
+    /// Another section records the file ([`OWNED_ELSEWHERE`]). The config
+    /// walk never copies it, so it cannot land in the image beside, or
+    /// instead of, that section's own decision.
+    OwnedBy(InspectorId),
+    /// Key material by path ([`GHOST_CREDENTIAL_EXACT`]): never opened,
+    /// withheld by name with a scan warning.
+    Credential,
+    /// A member of the machine-state class by path
+    /// ([`is_machine_state_member`]): never collected.
+    MachineState,
+    /// Not configuration: written on the host by a tool or at run time
+    /// from other input that the image writes again, or excluded by the
+    /// unowned walk's lists.
+    Generated,
+    /// An open item decides how the image carries it ([`GHOST_DEFERRED`]).
+    Deferred,
+}
+
+/// The files under `/etc` other sections claim, each with the claiming
+/// inspector. Every entry is that inspector's own constant, the one it
+/// reads the file by, so the claim and the read cannot drift apart. The
+/// one exception is storage's `/etc/crypttab`, which storage claims but
+/// does not parse yet.
+const OWNED_ELSEWHERE: &[(&[&str], InspectorId)] = &[
+    (storage::OWNED_ETC_FILES, InspectorId::Storage),
+    (users::OWNED_ETC_FILES, InspectorId::UsersGroups),
+    (&[selinux::SELINUX_CONFIG_PATH], InspectorId::Selinux),
+    (&[kernelboot::LOCALE_CONF_PATH], InspectorId::KernelBoot),
 ];
 
-/// Ghost subtrees generated from a file another section carries:
-/// `update-crypto-policies` writes `state/` from
-/// `/etc/crypto-policies/config`, which the crypto policy line renders.
-const GHOST_SKIP_PREFIX: &[&str] = &["/etc/crypto-policies/state/"];
+/// Directories whose every file another section claims.
+const OWNED_DIRS_ELSEWHERE: &[(&str, InspectorId)] = &[(repos::REPO_DIR, InspectorId::Rpm)];
+
+/// Ghost files whose content is a shared secret or a private key, at
+/// paths no machine-state rule names. Each is withheld by name and never
+/// opened, so the content sniffs cannot be the only guard.
+///
+/// - `/etc/chrony.keys`: chrony's NTP authentication keys, one `<id>
+///   <hash> HEX:<key>` line each. A `%ghost` of `chrony` on RHEL 10.2
+///   (`cg`); a plain `%config` file on RHEL 9.8.
+/// - `/etc/rndc.key` and `/etc/rndc.conf`: bind's rndc HMAC secret,
+///   written by `rndc-confgen`, which puts the key inline in `rndc.conf`
+///   when run without `-a` (`cng` ghosts of `bind` on both releases).
+/// - `/etc/unbound/unbound_control.key` and `unbound_server.key`: the
+///   private keys `unbound-control-setup` writes (`g` ghosts of `unbound`).
+const GHOST_CREDENTIAL_EXACT: &[&str] = &[
+    "/etc/chrony.keys",
+    "/etc/rndc.key",
+    "/etc/rndc.conf",
+    "/etc/unbound/unbound_control.key",
+    "/etc/unbound/unbound_server.key",
+];
+
+/// Ghost files a tool writes on the host, each from input the image has
+/// or writes again, so the copy would be stale or wrong in the image:
+///
+/// - `/etc/pki/tls/certs/localhost.crt`: the self-signed certificate
+///   `sscg` generates beside `/etc/pki/tls/private/localhost.key`, a
+///   machine-state member that is never carried; the certificate alone
+///   would not match the key the image generates. The `unbound_*.pem`
+///   certificates are the same case for the unbound keys.
+/// - `/etc/audit/audit.rules`: `augenrules --load` writes it from
+///   `/etc/audit/rules.d/` (which is carried) whenever audit starts
+///   (`auditd.service` `ExecStartPost=` on RHEL 9.8, `audit-rules.service`
+///   on 10.2).
+/// - `/etc/avahi/etc/localtime`: `avahi`'s `%post` copies
+///   `/etc/localtime` into the daemon's chroot.
+/// - `/etc/modprobe.d/kvm.rt.tuned.conf`: written by tuned's
+///   `realtime-virtual-host` profile functions; the tuned profile is what
+///   the image carries.
+/// - `/etc/lvm/cache/.cache`: LVM's device cache.
+/// - `/etc/cni/net.d/87-podman-bridge.conflist`: the default network
+///   podman's CNI backend wrote on first use.
+const GHOST_GENERATED_EXACT: &[&str] = &[
+    "/etc/pki/tls/certs/localhost.crt",
+    "/etc/unbound/unbound_control.pem",
+    "/etc/unbound/unbound_server.pem",
+    "/etc/audit/audit.rules",
+    "/etc/avahi/etc/localtime",
+    "/etc/modprobe.d/kvm.rt.tuned.conf",
+    "/etc/lvm/cache/.cache",
+    "/etc/cni/net.d/87-podman-bridge.conflist",
+];
+
+/// Ghost subtrees written on the host: `update-crypto-policies` writes
+/// `state/` from `/etc/crypto-policies/config`, which the crypto policy
+/// line renders; cups-filters rewrites `hashes.d/hashes.new` while the
+/// host runs (an empty file dated after the install on both test hosts).
+const GHOST_GENERATED_PREFIX: &[&str] = &["/etc/crypto-policies/state/", "/etc/foomatic/hashes.d/"];
+
+/// systemd's keymap settings, written by `localectl`. Whether and how the
+/// image carries locale and keymap is an open item of its own, which
+/// copying these files would answer by accident. `/etc/locale.conf` is
+/// the kernel and boot section's ([`OWNED_ELSEWHERE`]).
+const GHOST_DEFERRED: &[&str] = &[
+    "/etc/vconsole.conf",
+    "/etc/X11/xorg.conf.d/00-keyboard.conf",
+];
+
+/// Classify a ghost path under `/etc`. Checked in order, so a path two
+/// rules name takes the first: a credential is never treated as anything
+/// else.
+pub(crate) fn classify_ghost(path: &str) -> GhostClass {
+    if GHOST_CREDENTIAL_EXACT.contains(&path) {
+        return GhostClass::Credential;
+    }
+    if is_machine_state_member(path) {
+        return GhostClass::MachineState;
+    }
+    if let Some(owner) = owner_elsewhere(path) {
+        return GhostClass::OwnedBy(owner);
+    }
+    if GHOST_GENERATED_EXACT.contains(&path)
+        || GHOST_GENERATED_PREFIX.iter().any(|p| path.starts_with(p))
+        || AUTHSELECT_GENERATED
+            .iter()
+            .any(|(generated, _)| *generated == path)
+        || is_excluded_unowned_path(path)
+        || is_dev_artifact(path)
+        || is_selinux_fcontext_store_file(path)
+    {
+        return GhostClass::Generated;
+    }
+    if GHOST_DEFERRED.contains(&path) {
+        return GhostClass::Deferred;
+    }
+    GhostClass::Config
+}
+
+/// The inspector that claims `path`, if one does.
+fn owner_elsewhere(path: &str) -> Option<InspectorId> {
+    let by_file = OWNED_ELSEWHERE
+        .iter()
+        .find(|(paths, _)| paths.contains(&path))
+        .map(|(_, owner)| *owner);
+    by_file.or_else(|| {
+        OWNED_DIRS_ELSEWHERE
+            .iter()
+            .find(|(dir, _)| {
+                path.strip_prefix(dir)
+                    .is_some_and(|rest| rest.starts_with('/'))
+            })
+            .map(|(_, owner)| *owner)
+    })
+}
 
 /// The files `authselect select` writes from the selected profile, each
 /// with the `authselect test` option that prints what it would write
@@ -195,16 +337,6 @@ pub(crate) const AUTHSELECT_GENERATED: &[(&str, &str)] = &[
     ("/etc/authselect/dconf-db", "--dconf-db"),
     ("/etc/authselect/dconf-locks", "--dconf-lock"),
 ];
-
-/// Whether the ghost branch leaves `path` alone on [`GHOST_SKIP_EXACT`],
-/// [`GHOST_SKIP_PREFIX`] or [`AUTHSELECT_GENERATED`].
-pub(crate) fn is_ghost_skip(path: &str) -> bool {
-    GHOST_SKIP_EXACT.contains(&path)
-        || GHOST_SKIP_PREFIX.iter().any(|p| path.starts_with(p))
-        || AUTHSELECT_GENERATED
-            .iter()
-            .any(|(generated, _)| *generated == path)
-}
 
 // ---------------------------------------------------------------------------
 // authselect check and authselect test
@@ -855,13 +987,143 @@ setup cn '/etc/hosts'
     }
 
     #[test]
-    fn ghost_skips() {
-        assert!(is_ghost_skip("/etc/authselect/nsswitch.conf"));
-        assert!(!is_ghost_skip(AUTHSELECT_CONF_PATH));
-        assert!(!is_ghost_skip("/etc/authselect/user-nsswitch.conf"));
-        assert!(is_ghost_skip("/etc/locale.conf"));
-        assert!(is_ghost_skip("/etc/crypto-policies/state/current"));
-        assert!(!is_ghost_skip("/etc/crypto-policies/config"));
-        assert!(!is_ghost_skip("/etc/sssd/sssd.conf"));
+    fn classify_ghost_by_rule() {
+        use GhostClass::*;
+        for (path, class) in [
+            ("/etc/sssd/sssd.conf", Config),
+            (AUTHSELECT_CONF_PATH, Config),
+            ("/etc/authselect/user-nsswitch.conf", Config),
+            ("/etc/crypto-policies/config", Config),
+            ("/etc/systemd/journald.conf", Config),
+            ("/etc/fstab", OwnedBy(InspectorId::Storage)),
+            ("/etc/crypttab", OwnedBy(InspectorId::Storage)),
+            ("/etc/shadow", OwnedBy(InspectorId::UsersGroups)),
+            ("/etc/selinux/config", OwnedBy(InspectorId::Selinux)),
+            ("/etc/locale.conf", OwnedBy(InspectorId::KernelBoot)),
+            ("/etc/yum.repos.d/redhat.repo", OwnedBy(InspectorId::Rpm)),
+            ("/etc/yum.repos.d/sub/x.repo", OwnedBy(InspectorId::Rpm)),
+            ("/etc/yum.repos.d.bak", Config),
+            ("/etc/chrony.keys", Credential),
+            ("/etc/rndc.key", Credential),
+            ("/etc/machine-id", MachineState),
+            ("/etc/krb5.keytab", MachineState),
+            ("/etc/authselect/nsswitch.conf", Generated),
+            ("/etc/crypto-policies/state/current", Generated),
+            ("/etc/crypto-policies/back-ends/nss.config", Generated),
+            ("/etc/audit/audit.rules", Generated),
+            ("/etc/audit/rules.d/audit.rules", Config),
+            ("/etc/vconsole.conf", Deferred),
+        ] {
+            assert_eq!(classify_ghost(path), class, "{path}");
+        }
+    }
+
+    /// The expected class of every ghost file in the measured lists. An
+    /// entry ending in `/` covers every path under it.
+    const MEASURED_CLASSES: &[(&str, GhostClass)] = {
+        use GhostClass::*;
+        &[
+            // Carried as configuration.
+            ("/etc/audit/rules.d/audit.rules", Config),
+            ("/etc/authselect/authselect.conf", Config),
+            ("/etc/authselect/user-nsswitch.conf", Config),
+            ("/etc/cockpit/disallowed-users", Config),
+            ("/etc/containers/containers.conf", Config),
+            ("/etc/containers/storage.conf", Config),
+            ("/etc/crypto-policies/config", Config),
+            ("/etc/default/grub", Config),
+            ("/etc/gai.conf", Config),
+            ("/etc/gnupg/gpgconf.conf", Config),
+            ("/etc/NetworkManager/VPN", Config),
+            ("/etc/npmignore", Config),
+            ("/etc/sssd/sssd.conf", Config),
+            ("/etc/systemd/coredump.conf", Config),
+            ("/etc/systemd/journald.conf", Config),
+            ("/etc/systemd/logind.conf", Config),
+            ("/etc/systemd/pstore.conf", Config),
+            ("/etc/systemd/resolved.conf", Config),
+            ("/etc/systemd/sleep.conf", Config),
+            ("/etc/systemd/system.conf", Config),
+            ("/etc/systemd/user.conf", Config),
+            ("/etc/udev/iocost.conf", Config),
+            ("/etc/udev/udev.conf", Config),
+            // Another section's.
+            ("/etc/crypttab", OwnedBy(InspectorId::Storage)),
+            ("/etc/fstab", OwnedBy(InspectorId::Storage)),
+            ("/etc/locale.conf", OwnedBy(InspectorId::KernelBoot)),
+            ("/etc/selinux/config", OwnedBy(InspectorId::Selinux)),
+            ("/etc/yum.repos.d/redhat.repo", OwnedBy(InspectorId::Rpm)),
+            // Key material.
+            ("/etc/chrony.keys", Credential),
+            // Machine state.
+            ("/etc/hostname", MachineState),
+            ("/etc/machine-id", MachineState),
+            // Written on the host.
+            ("/etc/audit/audit.rules", Generated),
+            ("/etc/authselect/dconf-db", Generated),
+            ("/etc/authselect/dconf-locks", Generated),
+            ("/etc/authselect/fingerprint-auth", Generated),
+            ("/etc/authselect/nsswitch.conf", Generated),
+            ("/etc/authselect/password-auth", Generated),
+            ("/etc/authselect/postlogin", Generated),
+            ("/etc/authselect/smartcard-auth", Generated),
+            ("/etc/authselect/system-auth", Generated),
+            ("/etc/avahi/etc/localtime", Generated),
+            ("/etc/cni/net.d/87-podman-bridge.conflist", Generated),
+            ("/etc/crypto-policies/back-ends/nss.config", Generated),
+            ("/etc/crypto-policies/state/", Generated),
+            ("/etc/foomatic/hashes.d/hashes.new", Generated),
+            ("/etc/ld.so.cache", Generated),
+            ("/etc/lvm/cache/.cache", Generated),
+            ("/etc/machine-info", Generated),
+            ("/etc/modprobe.d/kvm.rt.tuned.conf", Generated),
+            ("/etc/pki/ca-trust/extracted/", Generated),
+            ("/etc/selinux/targeted/contexts/files/", Generated),
+            ("/etc/udev/hwdb.bin", Generated),
+            // The locale item's.
+            ("/etc/vconsole.conf", Deferred),
+            ("/etc/X11/xorg.conf.d/00-keyboard.conf", Deferred),
+        ]
+    };
+
+    /// Every ghost file measured on the two test hosts lands in the class
+    /// the table above gives it. A ghost path a later measurement adds
+    /// fails here until it is placed in the table, so it is classified on
+    /// purpose, not by default.
+    #[test]
+    fn measured_ghost_files_land_in_known_classes() {
+        let lists = [
+            (
+                "rhel-9.8",
+                include_str!("../../../../../testdata/fixtures/config/ghost/rhel-9.8.txt"),
+            ),
+            (
+                "rhel-10.2",
+                include_str!("../../../../../testdata/fixtures/config/ghost/rhel-10.2.txt"),
+            ),
+        ];
+        let mut used = vec![false; MEASURED_CLASSES.len()];
+        for (release, list) in lists {
+            let records: Vec<&str> = list.lines().filter(|l| !l.starts_with('#')).collect();
+            assert!(records.len() > 150, "{release}: the whole list is read");
+            for record in records {
+                let path = record.split('|').next().expect("a path field");
+                let entry = MEASURED_CLASSES.iter().position(|(rule, _)| {
+                    rule == &path || (rule.ends_with('/') && path.starts_with(rule))
+                });
+                let Some(entry) = entry else {
+                    panic!("{release}: {path} is in no class; add it to MEASURED_CLASSES");
+                };
+                used[entry] = true;
+                assert_eq!(
+                    classify_ghost(path),
+                    MEASURED_CLASSES[entry].1,
+                    "{release}: {path}"
+                );
+            }
+        }
+        for ((rule, _), used) in MEASURED_CLASSES.iter().zip(used) {
+            assert!(used, "{rule} matches no measured path");
+        }
     }
 }

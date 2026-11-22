@@ -692,3 +692,65 @@ fn a_custom_profile_missing_a_file_is_a_fixme_not_a_select_line() {
         "{fixme}"
     );
 }
+
+/// `/etc/fstab` is a `%ghost` file of `setup` on RHEL 9.8 and 10.2, and
+/// `redhat.repo` one of `subscription-manager`. Storage and the repos
+/// section own them, so the ghost branch never copies either into the
+/// image. `/etc/chrony.keys` (a ghost of `chrony` on RHEL 10.2) is key
+/// material: withheld, named by a scan warning, its content nowhere.
+#[test]
+fn ghost_fstab_repo_and_key_files_are_never_copied_on_either_export_path() {
+    const CHRONY_KEY: &str = "HEX:4D6F6E6B65795365637265744B6579";
+    let snap = scan(
+        sssd_host()
+            .ghost("setup", "cmng", "/etc/fstab")
+            .file(
+                "/etc/fstab",
+                "UUID=0a1b2c3d-0000-4000-8000-000000000001 / xfs defaults 0 0\n",
+            )
+            .ghost("subscription-manager", "g", "/etc/yum.repos.d/redhat.repo")
+            .file(
+                "/etc/yum.repos.d/redhat.repo",
+                "[rhel-sub]\nname=Subscribed\nbaseurl=https://cdn.example.com/rhel\nenabled=0\n",
+            )
+            .ghost("chrony", "cg", "/etc/chrony.keys")
+            .file("/etc/chrony.keys", &format!("1 SHA1 {CHRONY_KEY}\n")),
+    );
+
+    for path in [
+        "/etc/fstab",
+        "/etc/yum.repos.d/redhat.repo",
+        "/etc/chrony.keys",
+    ] {
+        assert!(entry(&snap, path).is_none(), "{path} is not a config entry");
+    }
+    let json = serde_json::to_string(&snap).expect("the snapshot serializes");
+    assert!(
+        !json.contains(CHRONY_KEY),
+        "the key is nowhere in the snapshot"
+    );
+    assert!(
+        snap.warnings
+            .iter()
+            .any(|w| w.message.starts_with("/etc/chrony.keys holds key material")),
+        "{:?}",
+        snap.warnings
+    );
+
+    for (path, tree) in both_exports(&snap) {
+        for staged in [
+            "config/etc/fstab",
+            "config/etc/chrony.keys",
+            "config/etc/yum.repos.d/redhat.repo",
+        ] {
+            assert!(!tree.path().join(staged).exists(), "{path}: {staged}");
+        }
+        assert!(
+            tree.path().join("config/etc/sssd/sssd.conf").exists(),
+            "{path}: the control"
+        );
+        let containerfile = containerfile(tree.path());
+        assert!(!containerfile.contains("chrony.keys"), "{path}");
+        assert!(!containerfile.contains(CHRONY_KEY), "{path}");
+    }
+}

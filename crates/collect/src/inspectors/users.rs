@@ -33,6 +33,25 @@ pub const NON_SYSTEM_UID_MIN: u32 = 1000;
 /// bound sits below the `setup` package's `nobody` (65534, home `/`, also the
 /// kernel's default `overflowuid`) and the `(uid_t)-2` sentinel 4294967294.
 pub const NON_SYSTEM_UID_MAX: u32 = 60000;
+/// The account databases this inspector reads.
+const PASSWD_PATH: &str = "/etc/passwd";
+const SHADOW_PATH: &str = "/etc/shadow";
+const GROUP_PATH: &str = "/etc/group";
+const GSHADOW_PATH: &str = "/etc/gshadow";
+const SUBUID_PATH: &str = "/etc/subuid";
+const SUBGID_PATH: &str = "/etc/subgid";
+
+/// The files under `/etc` this section claims. The config inspector's
+/// `%ghost` branch leaves them to it and never copies them.
+pub(crate) const OWNED_ETC_FILES: &[&str] = &[
+    PASSWD_PATH,
+    SHADOW_PATH,
+    GROUP_PATH,
+    GSHADOW_PATH,
+    SUBUID_PATH,
+    SUBGID_PATH,
+];
+
 const NON_SYSTEM_GID_MIN: u32 = 1000;
 const NON_SYSTEM_GID_MAX: u32 = 60000; // exclusive
 
@@ -121,7 +140,7 @@ impl Inspector for UsersGroupsInspector {
         // -------------------------------------------------------------------
         let mut non_system_users: HashMap<String, bool> = HashMap::new();
         let passwd_text =
-            exec.read_file(Path::new("/etc/passwd"))
+            exec.read_file(Path::new(PASSWD_PATH))
                 .map_err(|e| InspectorError::Failed {
                     reason: format!("cannot read /etc/passwd: {e}"),
                 })?;
@@ -146,7 +165,7 @@ impl Inspector for UsersGroupsInspector {
         // -------------------------------------------------------------------
         // /etc/shadow — match by username from passwd
         // -------------------------------------------------------------------
-        match exec.read_file(Path::new("/etc/shadow")) {
+        match exec.read_file(Path::new(SHADOW_PATH)) {
             Ok(shadow_text) => {
                 parse_shadow(
                     &shadow_text,
@@ -171,7 +190,7 @@ impl Inspector for UsersGroupsInspector {
         // /etc/group — non-system groups (GID >= 1000 and < 60000)
         // -------------------------------------------------------------------
         let mut non_system_groups: HashMap<String, bool> = HashMap::new();
-        match exec.read_file(Path::new("/etc/group")) {
+        match exec.read_file(Path::new(GROUP_PATH)) {
             Ok(group_text) => {
                 parse_group(&group_text, &mut section, &mut non_system_groups);
             }
@@ -186,7 +205,7 @@ impl Inspector for UsersGroupsInspector {
         // -------------------------------------------------------------------
         // /etc/gshadow — match by group name
         // -------------------------------------------------------------------
-        if let Ok(gshadow_text) = exec.read_file(Path::new("/etc/gshadow")) {
+        if let Ok(gshadow_text) = exec.read_file(Path::new(GSHADOW_PATH)) {
             parse_gshadow(&gshadow_text, &mut section, &non_system_groups);
         }
 
@@ -195,13 +214,13 @@ impl Inspector for UsersGroupsInspector {
         // -------------------------------------------------------------------
         parse_subid_file(
             exec,
-            "/etc/subuid",
+            SUBUID_PATH,
             &mut section.subuid_entries,
             &non_system_users,
         );
         parse_subid_file(
             exec,
-            "/etc/subgid",
+            SUBGID_PATH,
             &mut section.subgid_entries,
             &non_system_users,
         );
@@ -223,7 +242,7 @@ impl Inspector for UsersGroupsInspector {
         // Collect supplementary groups from ALL group entries (including system
         // GIDs). parse_group only stores GID >= 1000, so we re-scan the raw
         // /etc/group text for membership across all GIDs.
-        if let Ok(group_text) = exec.read_file(Path::new("/etc/group")) {
+        if let Ok(group_text) = exec.read_file(Path::new(GROUP_PATH)) {
             enrich_supplementary_groups(&group_text, &mut section);
         }
 

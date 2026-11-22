@@ -389,9 +389,14 @@ const GHOST_QUERY_UNREADABLE: &str = "rpm file-flags query output could not be r
 const GHOST_PATH_REFUSED: &str = "is a %ghost file under /etc whose name holds a control \
      character; it was not read and is not carried";
 
-/// The `%ghost` branch (`ghost.rs`): every ghost file under `/etc` that
-/// exists on the host as a regular file is collected as a modified owned
-/// config, with its content, unless a skip below names it.
+/// The scan warning for a ghost file withheld as a credential; the path
+/// comes first.
+const GHOST_CREDENTIAL_WITHHELD: &str = "holds key material, so it was withheld: its content is \
+     not in the scan and the image does not carry it. Provision it on each deployed host.";
+
+/// The `%ghost` branch (`ghost.rs`): the ghost files under `/etc` that
+/// are general configuration no other section owns, collected as modified
+/// owned configs with their content.
 ///
 /// A ghost file's package ships no content, so whatever the file holds
 /// was written on the host: by an admin, or by a tool such as authselect.
@@ -406,12 +411,17 @@ const GHOST_PATH_REFUSED: &str = "is a %ghost file under /etc whose name holds a
 /// not a regular file by `lstat` ([`Executor::file_kind`]): absent, a
 /// symlink (its state is the link, not content), a directory (`%ghost
 /// %dir`), or a FIFO, socket or device, which is never opened because
-/// opening a FIFO with no writer blocks; every skip the unowned walk applies
-/// (`is_excluded_unowned`, dev artifacts, DHCP connections, the SELinux
-/// fcontext store); a machine-state member by path
-/// (`ghost::is_machine_state_member`); `ghost::is_ghost_skip`; and, once
-/// read, a file whose content is a keytab or a whole-file private key
-/// (`ghost::is_credential_content`), dropped before the content is kept.
+/// opening a FIFO with no writer blocks. Then every path
+/// [`ghost::classify_ghost`] does not call [`ghost::GhostClass::Config`]:
+/// a file another section records (fstab, crypttab, repo files, the
+/// SELinux config, the account databases, the locale), a machine-state
+/// member, a file the host generates, or a keymap file the locale item
+/// decides. A credential by path is never opened and is withheld with a
+/// scan warning naming it. Then the unowned walk's exclusions that need
+/// the host (`is_excluded_unowned`'s unit-link test, DHCP connections).
+/// Last, once read, a file whose content is a keytab or a whole-file
+/// private key (`ghost::is_credential_content`) is dropped before the
+/// content is kept, with the same warning.
 ///
 /// When the machine-state class lands, the member skip goes and each
 /// surviving candidate goes through `ConfigCollector::admit` with
@@ -466,18 +476,24 @@ fn collect_ghost_configs(
         if collected.contains(path) || !matches!(exec.file_kind(on_host), Ok(FileKind::Regular)) {
             continue;
         }
-        if is_excluded_unowned(exec, path)
-            || is_dev_artifact(path)
-            || dhcp_paths.contains(path)
-            || is_selinux_fcontext_store_file(path)
-            || ghost::is_machine_state_member(path)
-            || ghost::is_ghost_skip(path)
-        {
+        match ghost::classify_ghost(path) {
+            ghost::GhostClass::Config => {}
+            ghost::GhostClass::Credential => {
+                warnings.push(ghost_credential_warning(path));
+                continue;
+            }
+            ghost::GhostClass::OwnedBy(_)
+            | ghost::GhostClass::MachineState
+            | ghost::GhostClass::Generated
+            | ghost::GhostClass::Deferred => continue,
+        }
+        if is_excluded_unowned(exec, path) || dhcp_paths.contains(path) {
             continue;
         }
 
         let (content, disposition) = capture_config(exec, path, degraded_reasons);
         if ghost::is_credential_content(&content) {
+            warnings.push(ghost_credential_warning(path));
             continue;
         }
         section.files.push(ConfigFileEntry {
@@ -491,6 +507,15 @@ fn collect_ghost_configs(
             disposition,
             ..Default::default()
         });
+    }
+}
+
+/// The scan warning naming a ghost file withheld as a credential.
+fn ghost_credential_warning(path: &str) -> Warning {
+    Warning {
+        inspector: "config".into(),
+        message: format!("{path} {GHOST_CREDENTIAL_WITHHELD}"),
+        ..Default::default()
     }
 }
 

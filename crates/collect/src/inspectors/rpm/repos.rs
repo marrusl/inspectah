@@ -35,11 +35,15 @@ fn is_inspectah_repo(filename: &str, content: &str) -> bool {
     false
 }
 
+/// The directory the repo files are read from. Every file under it is the
+/// repos section's: the config inspector's `%ghost` branch leaves it alone.
+pub(crate) const REPO_DIR: &str = "/etc/yum.repos.d";
+
 /// Collect all .repo files from /etc/yum.repos.d/
 /// Excludes inspectah's own COPR repo from output.
 pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
     let mut repo_files = Vec::new();
-    let repo_dir = Path::new("/etc/yum.repos.d");
+    let repo_dir = Path::new(REPO_DIR);
 
     let entries = match exec.read_dir(repo_dir) {
         Ok(entries) => entries,
