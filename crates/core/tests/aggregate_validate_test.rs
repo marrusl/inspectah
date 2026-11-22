@@ -356,13 +356,14 @@ fn test_stale_scan_dates_warning() {
         .collect();
     assert_eq!(
         stale,
-        ["scans span 73 days, more than 7: from 2026-01-01T00:00:00Z to 2026-03-15T00:00:00Z"]
+        ["scans span 73 days, more than 7 days: from 2026-01-01T00:00:00Z to 2026-03-15T00:00:00Z"]
     );
 }
 
 /// Scans taken one after another are not stale: hosts scanned minutes
 /// apart, as the scan writes its timestamp, and a spread of exactly the
-/// threshold, raise no warning; a second past it does.
+/// threshold, raise no warning; a second past it does, and the text says
+/// by how much, so it never reads as a spread of exactly the threshold.
 #[test]
 fn stale_scan_dates_warn_only_past_the_threshold() {
     let stale = |first: &str, second: &str| {
@@ -372,26 +373,48 @@ fn stale_scan_dates_warn_only_past_the_threshold() {
         b.meta.insert("timestamp".into(), serde_json::json!(second));
         validate_snapshots(&[a, b])
             .warnings
-            .iter()
-            .any(|w| matches!(w, AggregateWarning::StaleScanDates { .. }))
+            .into_iter()
+            .find_map(|w| match w {
+                AggregateWarning::StaleScanDates { spread_description } => Some(spread_description),
+                _ => None,
+            })
     };
-    assert!(!stale(
-        "2026-11-05T04:26:03.552382773+00:00",
-        "2026-11-05T04:38:47.338375489+00:00"
-    ));
-    assert!(!stale(
-        "2026-11-01T00:00:00+00:00",
-        "2026-11-08T00:00:00+00:00"
-    ));
-    assert!(stale(
-        "2026-11-01T00:00:00+00:00",
-        "2026-11-08T00:00:01+00:00"
-    ));
+    assert_eq!(
+        stale(
+            "2026-11-05T04:26:03.552382773+00:00",
+            "2026-11-05T04:38:47.338375489+00:00"
+        ),
+        None
+    );
+    assert_eq!(
+        stale("2026-11-01T00:00:00+00:00", "2026-11-08T00:00:00+00:00"),
+        None
+    );
+    for (later, span) in [
+        ("2026-11-08T00:00:01+00:00", "7 days and 1 second"),
+        (
+            "2026-11-08T00:00:00.5+00:00",
+            "7 days and less than a second",
+        ),
+        ("2026-11-09T02:01:00+00:00", "8 days, 2 hours and 1 minute"),
+        ("2026-11-08T03:00:02+00:00", "7 days, 3 hours and 2 seconds"),
+    ] {
+        assert_eq!(
+            stale("2026-11-01T00:00:00+00:00", later).as_deref(),
+            Some(
+                format!(
+                    "scans span {span}, more than 7 days: from 2026-11-01T00:00:00+00:00 to {later}"
+                )
+                .as_str()
+            ),
+            "{later}"
+        );
+    }
     // Offsets are compared as instants, not as text.
-    assert!(!stale(
-        "2026-11-08T05:00:00+05:00",
-        "2026-11-01T01:00:00+00:00"
-    ));
+    assert_eq!(
+        stale("2026-11-08T05:00:00+05:00", "2026-11-01T01:00:00+00:00"),
+        None
+    );
 }
 
 #[test]

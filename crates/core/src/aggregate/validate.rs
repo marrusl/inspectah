@@ -259,8 +259,8 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
             if spread > chrono::Duration::days(STALE_SCAN_SPREAD_DAYS) {
                 result.warnings.push(AggregateWarning::StaleScanDates {
                     spread_description: format!(
-                        "scans span {} days, more than {STALE_SCAN_SPREAD_DAYS}: from {} to {}",
-                        spread.num_days(),
+                        "scans span {}, more than {STALE_SCAN_SPREAD_DAYS} days: from {} to {}",
+                        describe_spread(spread),
                         min.1,
                         max.1
                     ),
@@ -385,6 +385,33 @@ fn extract_meta_string(snap: &InspectionSnapshot, key: &str) -> Option<String> {
         .get(key)
         .and_then(|v| v.as_str())
         .map(String::from)
+}
+
+/// `spread`, a non-negative duration, in days and then whatever hours,
+/// minutes and seconds remain, so a spread just past
+/// [`STALE_SCAN_SPREAD_DAYS`] never reads as exactly that many days:
+/// "7 days and 1 second", "8 days, 2 hours and 1 minute". A remainder
+/// under a second is "less than a second".
+fn describe_spread(spread: chrono::Duration) -> String {
+    let days = spread.num_days();
+    let rest = spread - chrono::Duration::days(days);
+    let hours = rest.num_hours();
+    let minutes = rest.num_minutes() % 60;
+    let seconds = rest.num_seconds() % 60;
+    let unit = |n: i64, name: &str| format!("{n} {name}{}", if n == 1 { "" } else { "s" });
+    let mut parts = vec![unit(days, "day")];
+    for (n, name) in [(hours, "hour"), (minutes, "minute"), (seconds, "second")] {
+        if n > 0 {
+            parts.push(unit(n, name));
+        }
+    }
+    if parts.len() == 1 && rest > chrono::Duration::zero() {
+        parts.push("less than a second".to_string());
+    }
+    match parts.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => parts.join(""),
+    }
 }
 
 /// Infer the host hardware architecture from RPM package arch fields.
