@@ -1,0 +1,50 @@
+[Unit]
+Description=Security Audit Logging Service
+ConditionKernelCommandLine=!audit=0
+ConditionKernelCommandLine=!audit=off
+DefaultDependencies=no
+
+## The following is a "Wants" so that if rules don't load, it will
+## not fail starting the main service. This indicates a weaker dependency.
+Wants=audit-rules.service
+
+## If auditd is sending or receiving remote logging, copy this file to
+## /etc/systemd/system/auditd.service and comment out the first After and
+## uncomment the second so that network-online.target is part of After.
+## then comment the first Before and uncomment the second Before to remove
+## sysinit.target from "Before". Finish by removing everything else leaving
+## a minimal file that overrides only the necessary lines but inherits the
+## original settings in case they get updated by a distribution. Please check
+## systemd documentation if it's unclear how to override settings.
+## If using remote logging, ensure that the systemd-update-utmp.service file
+## is updated to remove the After=auditd.service directive to prevent a
+## boot-time ordering cycle.
+After=local-fs.target systemd-tmpfiles-setup.service
+#After=network-online.target local-fs.target systemd-tmpfiles-setup.service
+Before=sysinit.target shutdown.target audit-rules.service
+#Before=shutdown.target
+Conflicts=shutdown.target
+RefuseManualStop=yes
+
+Documentation=man:auditd(8) https://github.com/linux-audit/audit-documentation
+
+[Service]
+Type=forking
+PIDFile=/run/auditd.pid
+ExecStart=/usr/sbin/auditd
+Restart=on-failure
+## Do not restart for intentional exits. See EXIT CODES section in auditd(8).
+RestartPreventExitStatus=2 4 6
+
+### Security Settings ###
+MemoryDenyWriteExecute=true
+LockPersonality=true
+## The following control prevents rules on /proc so its off by default
+#ProtectControlGroups=true
+## The following control prevents rules on /usr/lib/modules/ its off by default
+#ProtectKernelModules=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target
+

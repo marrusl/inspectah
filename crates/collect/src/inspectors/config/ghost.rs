@@ -183,6 +183,10 @@ pub(crate) enum GhostClass {
     /// from other input that the image writes again, or excluded by the
     /// unowned walk's lists.
     Generated,
+    /// `/etc/audit/audit.rules`: generated when the host runs `augenrules`,
+    /// the administrator's input when it loads the file directly. How the
+    /// host loads its rules decides ([`super::audit_rules::source`]).
+    AuditRules,
     /// An open item decides how the image carries it ([`GHOST_DEFERRED`]).
     Deferred,
 }
@@ -237,10 +241,6 @@ const GHOST_CREDENTIAL_EXACT: &[&str] = &[
 ///   machine-state member that is never carried; the certificate alone
 ///   would not match the key the image generates. The `unbound_*.pem`
 ///   certificates are the same case for the unbound keys.
-/// - `/etc/audit/audit.rules`: `augenrules --load` writes it from
-///   `/etc/audit/rules.d/` (which is carried) whenever audit starts
-///   (`auditd.service` `ExecStartPost=` on RHEL 9.8, `audit-rules.service`
-///   on 10.2).
 /// - `/etc/avahi/etc/localtime`: `avahi`'s `%post` copies
 ///   `/etc/localtime` into the daemon's chroot.
 /// - `/etc/modprobe.d/kvm.rt.tuned.conf`: written by tuned's
@@ -253,7 +253,6 @@ const GHOST_GENERATED_EXACT: &[&str] = &[
     "/etc/pki/tls/certs/localhost.crt",
     "/etc/unbound/unbound_control.pem",
     "/etc/unbound/unbound_server.pem",
-    "/etc/audit/audit.rules",
     "/etc/avahi/etc/localtime",
     "/etc/modprobe.d/kvm.rt.tuned.conf",
     "/etc/lvm/cache/.cache",
@@ -301,6 +300,9 @@ pub(crate) fn classify_ghost(path: &str) -> GhostClass {
     }
     if GHOST_DEFERRED.contains(&path) {
         return GhostClass::Deferred;
+    }
+    if path == super::audit_rules::AUDIT_RULES_PATH {
+        return GhostClass::AuditRules;
     }
     GhostClass::Config
 }
@@ -1017,7 +1019,7 @@ setup cn '/etc/hosts'
             ("/etc/authselect/nsswitch.conf", Generated),
             ("/etc/crypto-policies/state/current", Generated),
             ("/etc/crypto-policies/back-ends/nss.config", Generated),
-            ("/etc/audit/audit.rules", Generated),
+            ("/etc/audit/audit.rules", AuditRules),
             ("/etc/audit/rules.d/audit.rules", Config),
             ("/etc/vconsole.conf", Deferred),
         ] {
@@ -1065,8 +1067,9 @@ setup cn '/etc/hosts'
             // Machine state.
             ("/etc/hostname", MachineState),
             ("/etc/machine-id", MachineState),
+            // Written by augenrules, or the admin's: the host decides.
+            ("/etc/audit/audit.rules", AuditRules),
             // Written on the host.
-            ("/etc/audit/audit.rules", Generated),
             ("/etc/authselect/dconf-db", Generated),
             ("/etc/authselect/dconf-locks", Generated),
             ("/etc/authselect/fingerprint-auth", Generated),

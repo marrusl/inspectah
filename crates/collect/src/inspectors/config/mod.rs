@@ -1,6 +1,7 @@
 use inspectah_core::types::symlink_allowlist::{crosses_tree_boundary, is_allowlisted};
 use inspectah_core::types::{AdvisoryType, FindingKind};
 pub(crate) mod admit;
+mod audit_rules;
 pub mod classify;
 mod ghost;
 pub mod rpmva;
@@ -466,7 +467,10 @@ const GHOST_CREDENTIAL_WITHHELD: &str = "holds key material, so it was withheld:
 /// the repos section reads, the SELinux config, the account databases,
 /// the locale), a machine-state member, a file the host generates, or a
 /// keymap file the locale item decides. A credential by path is never
-/// opened and is withheld with a scan warning naming it. Then the unowned walk's exclusions that need
+/// opened and is withheld with a scan warning naming it.
+/// `/etc/audit/audit.rules` is skipped when the host writes it with
+/// `augenrules`, carried when the host loads it directly, and carried
+/// with a scan warning when the scan cannot tell ([`audit_rules::source`]). Then the unowned walk's exclusions that need
 /// the host (`is_excluded_unowned`'s unit-link test, DHCP connections).
 /// Last, once read, a file whose content is a keytab or a whole-file
 /// private key (`ghost::is_credential_content`) is dropped before the
@@ -536,6 +540,17 @@ fn collect_ghost_configs(
         let path = path.as_str();
         match ghost::classify_ghost(path) {
             ghost::GhostClass::Config => {}
+            ghost::GhostClass::AuditRules => match audit_rules::source(exec) {
+                audit_rules::Source::Augenrules => continue,
+                audit_rules::Source::LoadedDirectly => {}
+                audit_rules::Source::Unknown(reason) => {
+                    warnings.push(Warning {
+                        inspector: "config".into(),
+                        message: format!("{requested} {AUDIT_RULES_UNCERTAIN} ({reason})."),
+                        ..Default::default()
+                    });
+                }
+            },
             ghost::GhostClass::Credential => {
                 warnings.push(ghost_credential_warning(requested));
                 continue;
@@ -580,6 +595,14 @@ const ALIASED_PATH_REFUSED: &str = "was not read and is not carried: a directory
 /// this section does not carry; the path and the target come first.
 const LINKED_FILE_WITHHELD: &str = "which is outside /etc, key material, host identity, or a file \
      another section records, so it was not read and is not carried.";
+
+/// The scan warning when `/etc/audit/audit.rules` is carried although the
+/// scan could not tell whether the host writes it again; the path comes
+/// first and the reason follows.
+const AUDIT_RULES_UNCERTAIN: &str = "is carried as it is on the host, because the scan could not \
+     establish whether augenrules writes it from /etc/audit/rules.d. In an image where augenrules \
+     loads the audit rules, it writes this file again at every audit start, so keep rules that \
+     must survive in /etc/audit/rules.d";
 
 /// Why a walked link whose target is outside `/etc` carries no content.
 const LINK_LEAVES_ETC_RATIONALE: &str = "Symlink points outside /etc: its target was not read and \
