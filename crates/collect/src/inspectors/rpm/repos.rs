@@ -35,9 +35,22 @@ fn is_inspectah_repo(filename: &str, content: &str) -> bool {
     false
 }
 
-/// The directory the repo files are read from. Every file under it is the
-/// repos section's: the config inspector's `%ghost` branch leaves it alone.
+/// The directory the repo files are read from.
 pub(crate) const REPO_DIR: &str = "/etc/yum.repos.d";
+
+/// The suffix a file in [`REPO_DIR`] needs for dnf, and this section, to
+/// read it.
+const REPO_SUFFIX: &str = ".repo";
+
+/// Whether `path` is a file this section reads: a `*.repo` file directly
+/// in [`REPO_DIR`]. The config inspector's `%ghost` branch leaves exactly
+/// these to it, so a nested file or another suffix there is general
+/// configuration, never dropped by both.
+pub(crate) fn is_repo_file_path(path: &str) -> bool {
+    path.strip_prefix(REPO_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|name| !name.contains('/') && name.ends_with(REPO_SUFFIX))
+}
 
 /// Collect all .repo files from /etc/yum.repos.d/
 /// Excludes inspectah's own COPR repo from output.
@@ -51,11 +64,10 @@ pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
     };
 
     for entry in entries {
-        if !entry.ends_with(".repo") {
+        let path = repo_dir.join(&entry);
+        if !is_repo_file_path(&path.to_string_lossy()) {
             continue;
         }
-
-        let path = repo_dir.join(&entry);
         let content = match exec.read_file(&path) {
             Ok(content) => content,
             Err(_) => continue,
@@ -442,6 +454,40 @@ mod tests {
         let epel_repo = repos.iter().find(|r| r.path.contains("epel.repo"));
         assert!(epel_repo.is_some());
         assert!(!epel_repo.unwrap().is_default_repo);
+    }
+
+    /// The reader reads exactly what the predicate claims: a `*.repo`
+    /// file directly in the directory, not one nested below it, another
+    /// suffix, or a sibling directory that only starts with its name.
+    #[test]
+    fn the_reader_reads_exactly_the_files_the_predicate_claims() {
+        for (path, claimed) in [
+            ("/etc/yum.repos.d/custom.repo", true),
+            ("/etc/yum.repos.d/sub/nested.repo", false),
+            ("/etc/yum.repos.d/custom.repo.bak", false),
+            ("/etc/yum.repos.d/repos.conf", false),
+            ("/etc/yum.repos.d.bak/old.repo", false),
+            ("/etc/yum.repos.d", false),
+        ] {
+            assert_eq!(is_repo_file_path(path), claimed, "{path}");
+        }
+
+        let mock = MockExecutor::new()
+            .with_dir(
+                "/etc/yum.repos.d",
+                vec!["custom.repo", "sub", "custom.repo.bak", "repos.conf"],
+            )
+            .with_file("/etc/yum.repos.d/custom.repo", "[custom]\nname=Custom\n")
+            .with_dir("/etc/yum.repos.d/sub", vec!["nested.repo"])
+            .with_file("/etc/yum.repos.d/sub/nested.repo", "[nested]\nname=N\n")
+            .with_file("/etc/yum.repos.d/custom.repo.bak", "[old]\nname=Old\n")
+            .with_file("/etc/yum.repos.d/repos.conf", "[conf]\nname=C\n");
+        let read: Vec<String> = collect_repo_files(&mock)
+            .into_iter()
+            .map(|r| r.path)
+            .collect();
+        assert_eq!(read, ["/etc/yum.repos.d/custom.repo"]);
+        assert!(read.iter().all(|path| is_repo_file_path(path)));
     }
 
     #[test]

@@ -754,3 +754,47 @@ fn ghost_fstab_repo_and_key_files_are_never_copied_on_either_export_path() {
         assert!(!containerfile.contains(CHRONY_KEY), "{path}");
     }
 }
+
+/// The repos section reads only `*.repo` files directly in
+/// `/etc/yum.repos.d`, and claims only those: a nested ghost file and one
+/// with another suffix are carried as configuration, never dropped by
+/// both.
+#[test]
+fn ghost_files_in_the_repo_directory_are_read_by_the_repos_section_or_carried() {
+    let snap = scan(
+        sssd_host()
+            .ghost("subscription-manager", "g", "/etc/yum.repos.d/redhat.repo")
+            .file(
+                "/etc/yum.repos.d/redhat.repo",
+                "[rhel-sub]\nname=Subscribed\nbaseurl=https://cdn.example.com/rhel\nenabled=0\n",
+            )
+            .ghost("app", "g", "/etc/yum.repos.d/sub/nested.repo")
+            .file("/etc/yum.repos.d/sub/nested.repo", "[nested]\nname=N\n")
+            .ghost("app", "g", "/etc/yum.repos.d/repos.conf")
+            .file("/etc/yum.repos.d/repos.conf", "[conf]\nname=C\n")
+            .ghost("app", "g", "/etc/yum.repos.d/redhat.repo.bak")
+            .file("/etc/yum.repos.d/redhat.repo.bak", "[old]\nname=Old\n"),
+    );
+    let repos: Vec<&str> = snap
+        .rpm
+        .as_ref()
+        .expect("an rpm section")
+        .repo_files
+        .iter()
+        .map(|r| r.path.as_str())
+        .collect();
+    assert_eq!(repos, ["/etc/yum.repos.d/redhat.repo"]);
+    assert!(entry(&snap, "/etc/yum.repos.d/redhat.repo").is_none());
+    for path in [
+        "/etc/yum.repos.d/sub/nested.repo",
+        "/etc/yum.repos.d/repos.conf",
+        "/etc/yum.repos.d/redhat.repo.bak",
+    ] {
+        let file = entry(&snap, path).unwrap_or_else(|| panic!("{path} is carried"));
+        assert!(file.disposition.is_included(), "{path}");
+        for (export, tree) in both_exports(&snap) {
+            let staged = tree.path().join("config").join(&path[1..]);
+            assert!(staged.exists(), "{export}: {path}");
+        }
+    }
+}

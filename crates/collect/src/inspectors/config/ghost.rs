@@ -199,8 +199,15 @@ const OWNED_ELSEWHERE: &[(&[&str], InspectorId)] = &[
     (&[kernelboot::LOCALE_CONF_PATH], InspectorId::KernelBoot),
 ];
 
-/// Directories whose every file another section claims.
-const OWNED_DIRS_ELSEWHERE: &[(&str, InspectorId)] = &[(repos::REPO_DIR, InspectorId::Rpm)];
+/// Files another section claims by a rule rather than by name, each with
+/// the claiming inspector. Each rule is the predicate that inspector reads
+/// by, so the claim covers exactly what it reads: a file the rule leaves
+/// out stays general configuration.
+const OWNED_BY_RULE_ELSEWHERE: &[(PathClaim, InspectorId)] =
+    &[(repos::is_repo_file_path, InspectorId::Rpm)];
+
+/// Whether a section claims a path, by the rule it reads files by.
+type PathClaim = fn(&str) -> bool;
 
 /// Ghost files whose content is a shared secret or a private key, at
 /// paths no machine-state rule names. Each is withheld by name and never
@@ -305,12 +312,9 @@ fn owner_elsewhere(path: &str) -> Option<InspectorId> {
         .find(|(paths, _)| paths.contains(&path))
         .map(|(_, owner)| *owner);
     by_file.or_else(|| {
-        OWNED_DIRS_ELSEWHERE
+        OWNED_BY_RULE_ELSEWHERE
             .iter()
-            .find(|(dir, _)| {
-                path.strip_prefix(dir)
-                    .is_some_and(|rest| rest.starts_with('/'))
-            })
+            .find(|(claims, _)| claims(path))
             .map(|(_, owner)| *owner)
     })
 }
@@ -1001,8 +1005,11 @@ setup cn '/etc/hosts'
             ("/etc/selinux/config", OwnedBy(InspectorId::Selinux)),
             ("/etc/locale.conf", OwnedBy(InspectorId::KernelBoot)),
             ("/etc/yum.repos.d/redhat.repo", OwnedBy(InspectorId::Rpm)),
-            ("/etc/yum.repos.d/sub/x.repo", OwnedBy(InspectorId::Rpm)),
+            ("/etc/yum.repos.d/sub/x.repo", Config),
+            ("/etc/yum.repos.d/redhat.repo.bak", Config),
+            ("/etc/yum.repos.d/repos.conf", Config),
             ("/etc/yum.repos.d.bak", Config),
+            ("/etc/yum.repos.d.bak/x.repo", Config),
             ("/etc/chrony.keys", Credential),
             ("/etc/rndc.key", Credential),
             ("/etc/machine-id", MachineState),
