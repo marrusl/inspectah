@@ -426,6 +426,29 @@ pub fn scan_exec(exec: &MockExecutor, inspectors: Vec<Box<dyn Inspector>>) -> In
     snapshot
 }
 
+/// [`scan_exec`] as `--no-redaction --ack-sensitive` runs it: no
+/// redaction pass, the snapshot marked raw and sensitive.
+pub fn scan_exec_raw(
+    exec: &MockExecutor,
+    inspectors: Vec<Box<dyn Inspector>>,
+) -> InspectionSnapshot {
+    let collected = collect(
+        &pkg_source(),
+        &inspectah_core::machine_state::ScreenedExecutor::new(exec),
+        &inspectors,
+        None,
+        &NullProgress,
+        &AtomicBool::new(false),
+    );
+    let mut snapshot = validate(collected)
+        .expect("the snapshot validates")
+        .state
+        .snapshot;
+    snapshot.sensitive_snapshot = true;
+    snapshot.redaction_state = Some(inspectah_core::types::redaction::RedactionState::Raw);
+    snapshot
+}
+
 /// The scan path with the RPM, config and kernel/boot inspectors.
 pub fn scan(host: SysctlHost) -> InspectionSnapshot {
     scan_with(
@@ -530,6 +553,22 @@ pub fn reload(snap: &InspectionSnapshot) -> InspectionSnapshot {
 /// The scan's export tree, as `render_all` writes it.
 pub fn render_export(snap: &InspectionSnapshot) -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
+    render::render_all(snap, &RenderContext { target: None }, dir.path()).expect("render");
+    dir
+}
+
+/// The scan command's export with `--include-unmanaged`: the payloads
+/// bundled from `host_root` through the read gate over `exec`, which
+/// records what redaction did to each in `snap`, then the render.
+pub fn bundled_export(
+    snap: &mut InspectionSnapshot,
+    exec: &MockExecutor,
+    host_root: &Path,
+) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = inspectah_core::machine_state::ScreenedExecutor::new(exec);
+    render::unmanaged::bundle_unmanaged_files(snap, dir.path(), host_root, &gate)
+        .expect("the payloads bundle");
     render::render_all(snap, &RenderContext { target: None }, dir.path()).expect("render");
     dir
 }

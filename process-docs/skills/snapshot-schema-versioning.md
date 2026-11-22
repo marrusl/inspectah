@@ -127,6 +127,9 @@ Seven bumps, two different arguments, all landing on "reject":
   hand-written fixture whose config row at a repo path is not shadowed, or
   whose ownerless key is included, fails to load: run
   `settle_repo_ownership` on it first.
+  `UnmanagedFile::payload_redaction` rides it too: a snapshot without it
+  came from a bundler that copied unmanaged text raw, and its tarball's
+  `unmanaged/` holds the credentials it does not mark.
 
 The second argument does not follow from the first. A renamed field
 would force the bump even if the data were recoverable, and stale

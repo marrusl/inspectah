@@ -1,7 +1,15 @@
-use inspectah_core::machine_state::{Screened, ScreenedExecutor};
+use inspectah_core::machine_state::{Screened, ScreenedExecutor, payload_credential};
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};
+use inspectah_core::types::destination::Destination;
+use inspectah_core::types::machine_state::MachineStateMember;
+use inspectah_core::types::nonrpm::{FileType, PayloadRedaction, UnmanagedFile};
+use inspectah_core::types::redaction::{
+    Confidence, DetectionMethod, FindingKind as RedactionFindingKind, RedactionFinding,
+    RedactionKind, RedactionState,
+};
 use std::collections::BTreeMap;
+
+use crate::redaction::engine::{record_late_findings, redact_payload};
 
 use super::configtree::{unmanaged_withheld, validate_path};
 use super::language_packages::sanitize_for_comment;
@@ -122,6 +130,14 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
         "# These files were copied directly from the source host. They have".into(),
         "# no upstream update path and must be manually maintained.".into(),
     ];
+    if included
+        .iter()
+        .any(|f| f.payload_redaction == PayloadRedaction::Redacted)
+    {
+        lines
+            .push("# Credentials in some were replaced with REDACTED_* placeholders before".into());
+        lines.push("# bundling: secrets-review.md says how to supply the real values.".into());
+    }
 
     // Group by parent directory
     let mut groups: BTreeMap<String, Vec<&UnmanagedFile>> = BTreeMap::new();
@@ -209,9 +225,115 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
     lines
 }
 
+/// Largest text payload the bundler reads whole to redact. A larger text
+/// file ships as the host had it, flagged for review.
+const PAYLOAD_REDACTION_LIMIT: u64 = 8 * 1024 * 1024;
+
+/// How much of a payload over [`PAYLOAD_REDACTION_LIMIT`] is read to tell
+/// text from binary.
+const PAYLOAD_SNIFF_LEN: usize = 8 * 1024;
+
+/// What the bundler writes for one regular payload, and why.
+enum PayloadCopy {
+    /// The bytes as read, which the bundler checked.
+    AsRead(Vec<u8>),
+    /// Redacted text, with its findings.
+    Redacted(String, Vec<RedactionFinding>),
+    /// Over the read limit: copied from the host unread, after the key
+    /// screening, and flagged for review when it is text.
+    Unread { text: bool },
+    /// The bytes read here hold what the key screening withholds: the
+    /// file changed after the screening passed it.
+    Withheld(MachineStateMember),
+}
+
+/// Make the snapshot's other copies of the file at `key` the bundle's
+/// redacted `text`: an `.env` file's content (written to `env-files/`)
+/// and a compose file's `raw_content`. Each was redacted from an earlier
+/// read with the scan's shared token numbers; after this the export holds
+/// one text for the file, the one the image gets.
+fn adopt_into_twins(snap: &mut InspectionSnapshot, key: &str, text: &str) {
+    let at_key = |path: &str| Destination::new(path).is_ok_and(|d| d.as_str() == key);
+    if let Some(nrs) = snap.non_rpm_software.as_mut() {
+        for env in nrs.env_files.iter_mut().filter(|e| at_key(&e.path)) {
+            if !env.content.trim().is_empty() {
+                env.content = text.to_owned();
+            }
+        }
+    }
+    if let Some(containers) = snap.containers.as_mut() {
+        for compose in containers
+            .compose_files
+            .iter_mut()
+            .filter(|c| at_key(&c.path))
+        {
+            if let Some(raw) = compose.raw_content.as_mut() {
+                *raw = text.to_owned();
+            }
+        }
+    }
+}
+
+/// Decide what to ship for the regular payload at `source`, host path
+/// `path`. Reads the file once; what was read is what ships, so the copy
+/// is the content that was checked even if the file changes afterwards.
+fn payload_copy(source: &std::path::Path, path: &str) -> std::io::Result<PayloadCopy> {
+    use std::io::Read;
+    let size = std::fs::metadata(source)?.len();
+    if size > PAYLOAD_REDACTION_LIMIT {
+        let mut head = Vec::with_capacity(PAYLOAD_SNIFF_LEN);
+        std::fs::File::open(source)?
+            .take(PAYLOAD_SNIFF_LEN as u64)
+            .read_to_end(&mut head)?;
+        return Ok(PayloadCopy::Unread {
+            text: !head.contains(&0),
+        });
+    }
+    let bytes = std::fs::read(source)?;
+    // The screening again, over the bytes that would ship.
+    if let Some(member) = payload_credential(&mut bytes.as_slice())? {
+        return Ok(PayloadCopy::Withheld(member));
+    }
+    // Binary, or text redaction cannot rewrite without changing bytes it
+    // did not match: shipped as read, after the key screening.
+    if bytes.contains(&0) {
+        return Ok(PayloadCopy::AsRead(bytes));
+    }
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return Ok(PayloadCopy::AsRead(bytes));
+    };
+    Ok(match redact_payload(text, path) {
+        Some((redacted, findings)) => PayloadCopy::Redacted(redacted, findings),
+        None => PayloadCopy::AsRead(bytes),
+    })
+}
+
+/// The finding that flags a text payload too large to check.
+fn too_large_finding(path: &str) -> RedactionFinding {
+    RedactionFinding {
+        path: path.to_owned(),
+        source: "unmanaged_payload".into(),
+        kind: RedactionKind::Flagged,
+        pattern: "unchecked_large_file".into(),
+        remediation: format!(
+            "Too large for inspectah to check for credentials (over {} MiB), so the export \
+             carries it as the host had it: review it, or exclude it in refine",
+            PAYLOAD_REDACTION_LIMIT / (1024 * 1024)
+        ),
+        line: None,
+        replacement: None,
+        detection_method: DetectionMethod::PathBased,
+        confidence: Some(Confidence::Low),
+        finding_kind: Some(RedactionFindingKind::GenericCredential),
+    }
+}
+
 /// Copy each included unmanaged file into `render_dir/unmanaged/`, for
-/// the scan tarball. `host_root` is where the host's filesystem is
-/// (`/` on a real scan); item paths are host paths below it.
+/// the scan tarball, and record in `snap` what redaction did to each.
+/// `host_root` is where the host's filesystem is (`/` on a real scan);
+/// item paths are host paths below it. Runs before the export renders,
+/// so the snapshot, the audit report and `secrets-review.md` describe
+/// the copies this wrote.
 ///
 /// Symlinks are recreated as symlinks, not followed, so nothing outside
 /// the scan roots is copied through one.
@@ -224,19 +346,38 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
 /// checked: either fails the bundle with an error naming the path, before
 /// anything is copied. A file is never skipped, which would leave a
 /// `COPY` with no source.
+///
+/// Then, unless the snapshot is raw (`--no-redaction`), each text file is
+/// redacted as a config file is ([`redact_payload`]), from the bytes read
+/// here, and the redacted text is what ships: the image gets the
+/// `REDACTED_*` placeholders a carried config file gets. A file the
+/// snapshot also holds (an `.env` file, a compose file) takes the same
+/// text there ([`adopt_into_twins`]), so the export has one text for it,
+/// and the bundle's findings replace that copy's inline ones. Binary
+/// files ship byte for byte; text over [`PAYLOAD_REDACTION_LIMIT`] ships
+/// unread and is flagged for review.
 pub fn bundle_unmanaged_files(
-    items: &[UnmanagedFile],
+    snap: &mut InspectionSnapshot,
     render_dir: &std::path::Path,
     host_root: &std::path::Path,
     gate: &ScreenedExecutor<'_>,
 ) -> anyhow::Result<()> {
     use anyhow::Context;
 
-    let payloads: Vec<&UnmanagedFile> = items
+    let redacting = !matches!(snap.redaction_state, Some(RedactionState::Raw));
+    let Some(section) = snap.unmanaged_files.as_mut() else {
+        return Ok(());
+    };
+    let payloads: Vec<usize> = section
+        .items
         .iter()
-        .filter(|item| item.disposition.is_included() && unmanaged_withheld(&item.path).is_none())
+        .enumerate()
+        .filter(|(_, item)| {
+            item.disposition.is_included() && unmanaged_withheld(&item.path).is_none()
+        })
+        .map(|(i, _)| i)
         .collect();
-    for item in &payloads {
+    for item in payloads.iter().map(|&i| &section.items[i]) {
         if item.file_type == FileType::Symlink {
             continue;
         }
@@ -255,7 +396,10 @@ pub fn bundle_unmanaged_files(
             ),
         }
     }
-    for item in payloads {
+    let mut findings = Vec::new();
+    let mut redacted: Vec<(String, String)> = Vec::new();
+    for i in payloads {
+        let item = &mut section.items[i];
         let rel_path = item.path.trim_start_matches('/');
         let dest = render_dir.join("unmanaged").join(rel_path);
         if let Some(parent) = dest.parent() {
@@ -277,11 +421,63 @@ pub fn bundle_unmanaged_files(
                 std::os::unix::fs::symlink(&target, &dest)
                     .with_context(|| format!("failed to recreate symlink {}", item.path))?;
             }
-        } else {
+            continue;
+        }
+        if !redacting {
             std::fs::copy(&source, &dest)
                 .with_context(|| format!("failed to copy {} to tarball", item.path))?;
+            continue;
+        }
+        let copy = payload_copy(&source, &item.path)
+            .with_context(|| format!("failed to read {} for the tarball", item.path))?;
+        let written = match copy {
+            PayloadCopy::AsRead(bytes) => std::fs::write(&dest, bytes),
+            PayloadCopy::Redacted(text, found) => {
+                item.payload_redaction = PayloadRedaction::Redacted;
+                findings.extend(found);
+                let written = std::fs::write(&dest, &text);
+                redacted.push((item.path.clone(), text));
+                written
+            }
+            PayloadCopy::Withheld(member) => anyhow::bail!(
+                "{} became a machine-state file ({}) after the scan walked it; re-run the scan",
+                item.path,
+                member.as_str()
+            ),
+            PayloadCopy::Unread { text } => {
+                if text {
+                    item.payload_redaction = PayloadRedaction::TooLargeToCheck;
+                    findings.push(too_large_finding(&item.path));
+                }
+                std::fs::copy(&source, &dest).map(|_| ())
+            }
+        };
+        written.with_context(|| format!("failed to copy {} to tarball", item.path))?;
+        // The mode `COPY` gives the image file, an executable bit included.
+        let mode = std::fs::metadata(&source)
+            .with_context(|| format!("failed to read the mode of {}", item.path))?
+            .permissions();
+        std::fs::set_permissions(&dest, mode)
+            .with_context(|| format!("failed to set the mode of {}", item.path))?;
+    }
+    // The bundle's findings are the record for each file it redacted:
+    // they replace the inline findings an earlier pass recorded for the
+    // file's other copies, whose text the bundle's now is.
+    let keys: std::collections::BTreeSet<String> = redacted
+        .iter()
+        .filter_map(|(path, _)| Destination::new(path).ok())
+        .map(|d| d.as_str().to_owned())
+        .collect();
+    for (path, text) in &redacted {
+        if let Ok(dest) = Destination::new(path) {
+            adopt_into_twins(snap, dest.as_str(), text);
         }
     }
+    snap.redactions.retain(|f| {
+        f.kind != RedactionKind::Inline
+            || !Destination::new(&f.path).is_ok_and(|d| keys.contains(d.as_str()))
+    });
+    record_late_findings(snap, findings);
     Ok(())
 }
 
@@ -601,8 +797,8 @@ mod tests {
             "/opt/app/gone",
         ] {
             let render = tempfile::tempdir().expect("a render directory");
-            let items = vec![payload(path, FileType::DataFile)];
-            let err = bundle_unmanaged_files(&items, render.path(), host_root.path(), &gate)
+            let mut snap = test_snapshot_with_unmanaged(vec![payload(path, FileType::DataFile)]);
+            let err = bundle_unmanaged_files(&mut snap, render.path(), host_root.path(), &gate)
                 .expect_err("the bundle fails");
             assert!(err.to_string().contains(path), "{err}");
             assert!(!render.path().join("unmanaged").exists(), "{path}");
@@ -627,7 +823,7 @@ mod tests {
         let gate = ScreenedExecutor::new(&host);
         let render = tempfile::tempdir().expect("a render directory");
 
-        let items = vec![
+        let mut snap = test_snapshot_with_unmanaged(vec![
             payload("/etc/systemd/system/backup.service", FileType::Script),
             payload("/etc/systemd/./system/dotted.service", FileType::Script),
             payload("/etc//systemd/system/doubled.service", FileType::Script),
@@ -642,8 +838,8 @@ mod tests {
             ),
             payload(CONTROL, FileType::ElfBinary),
             link("/opt/app/current", "/opt/app/releases/1"),
-        ];
-        bundle_unmanaged_files(&items, render.path(), host_root.path(), &gate)
+        ]);
+        bundle_unmanaged_files(&mut snap, render.path(), host_root.path(), &gate)
             .expect("bundling succeeds");
 
         let unmanaged = render.path().join("unmanaged");
@@ -657,5 +853,243 @@ mod tests {
                 .expect("the control symlink is bundled"),
             std::path::Path::new("/opt/app/releases/1")
         );
+    }
+
+    /// A host root on disk and a mock host holding the same files, for the
+    /// bundler: the gate screens the mock, the copy reads the disk.
+    fn bundle_host(
+        files: &[(&str, &[u8])],
+    ) -> (
+        tempfile::TempDir,
+        inspectah_collect::executor::mock::MockExecutor,
+    ) {
+        let root = tempfile::tempdir().expect("a host root");
+        let mut host = inspectah_collect::executor::mock::MockExecutor::new();
+        for (path, bytes) in files {
+            let on_disk = root.path().join(path.trim_start_matches('/'));
+            std::fs::create_dir_all(on_disk.parent().unwrap()).unwrap();
+            std::fs::write(&on_disk, bytes).unwrap();
+            host = host.with_file_bytes(path, bytes);
+        }
+        (root, host)
+    }
+
+    fn shipped(render: &std::path::Path, path: &str) -> Vec<u8> {
+        std::fs::read(render.join("unmanaged").join(path.trim_start_matches('/')))
+            .unwrap_or_else(|e| panic!("{path} ships: {e}"))
+    }
+
+    fn redaction_of(snap: &InspectionSnapshot, path: &str) -> PayloadRedaction {
+        snap.unmanaged_files
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap()
+            .payload_redaction
+    }
+
+    /// Text payloads ship redacted and are recorded so; text redaction
+    /// leaves nothing to do, binary, private-key delimiters in code and a
+    /// certificate ship byte for byte; the file mode is kept.
+    #[test]
+    fn bundling_redacts_text_payloads_and_ships_the_rest_as_read() {
+        use inspectah_core::machine_state::ScreenedExecutor;
+        use std::os::unix::fs::PermissionsExt;
+        const ENV: &[u8] = b"API_TOKEN=supersecretvalue123\nMODE=prod\n";
+        const SCRIPT: &[u8] =
+            b"#!/bin/sh\nexport DB_URL=postgres://app:pgsecret99@db/app\nexec /opt/app/run\n";
+        const PLAIN: &[u8] = b"[server]\nport = 8080\n";
+        const BINARY: &[u8] = b"\x7fELF\x00password=binarysecret\x00";
+        const DELIMITERS: &[u8] =
+            br#"{"begin":"-----BEGIN PRIVATE KEY-----","end":"-----END PRIVATE KEY-----"}"#;
+        const CERT: &[u8] =
+            b"-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----\n";
+        let files: &[(&str, &[u8])] = &[
+            ("/opt/app/.env", ENV),
+            ("/opt/app/start.sh", SCRIPT),
+            ("/opt/app/app.ini", PLAIN),
+            ("/opt/app/run", BINARY),
+            ("/opt/app/tmpl.json", DELIMITERS),
+            ("/opt/app/ca.pem", CERT),
+        ];
+        let (root, host) = bundle_host(files);
+        std::fs::set_permissions(
+            root.path().join("opt/app/start.sh"),
+            std::fs::Permissions::from_mode(0o750),
+        )
+        .unwrap();
+        let gate = ScreenedExecutor::new(&host);
+        let mut snap = test_snapshot_with_unmanaged(
+            files
+                .iter()
+                .map(|(p, _)| payload(p, FileType::DataFile))
+                .collect(),
+        );
+        let render = tempfile::tempdir().unwrap();
+        bundle_unmanaged_files(&mut snap, render.path(), root.path(), &gate).expect("bundles");
+
+        let env = String::from_utf8(shipped(render.path(), "/opt/app/.env")).unwrap();
+        assert!(!env.contains("supersecretvalue123"), "{env}");
+        assert!(
+            env.contains("REDACTED_") && env.contains("MODE=prod"),
+            "{env}"
+        );
+        let script = String::from_utf8(shipped(render.path(), "/opt/app/start.sh")).unwrap();
+        assert!(!script.contains("pgsecret99"), "{script}");
+        assert_eq!(
+            std::fs::metadata(render.path().join("unmanaged/opt/app/start.sh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o750
+        );
+        for (path, bytes) in [
+            ("/opt/app/app.ini", PLAIN),
+            ("/opt/app/run", BINARY),
+            ("/opt/app/tmpl.json", DELIMITERS),
+            ("/opt/app/ca.pem", CERT),
+        ] {
+            assert_eq!(shipped(render.path(), path), bytes, "{path}");
+            assert_eq!(
+                redaction_of(&snap, path),
+                PayloadRedaction::Unchanged,
+                "{path}"
+            );
+        }
+        for path in ["/opt/app/.env", "/opt/app/start.sh"] {
+            assert_eq!(
+                redaction_of(&snap, path),
+                PayloadRedaction::Redacted,
+                "{path}"
+            );
+            assert!(
+                snap.redactions
+                    .iter()
+                    .any(|f| f.path == path && f.kind == RedactionKind::Inline),
+                "a finding for {path}: {:?}",
+                snap.redactions
+            );
+        }
+        assert!(matches!(
+            snap.redaction_state,
+            Some(RedactionState::FullyRedacted { .. })
+        ));
+        let lines = unmanaged_file_lines(&snap);
+        assert!(
+            lines.iter().any(|l| l.contains("REDACTED_* placeholders")),
+            "{lines:?}"
+        );
+    }
+
+    /// `--no-redaction`: every payload ships as the host had it.
+    #[test]
+    fn bundling_a_raw_snapshot_ships_payloads_as_read() {
+        use inspectah_core::machine_state::ScreenedExecutor;
+        const ENV: &[u8] = b"API_TOKEN=supersecretvalue123\n";
+        let (root, host) = bundle_host(&[("/opt/app/.env", ENV)]);
+        let gate = ScreenedExecutor::new(&host);
+        let mut snap =
+            test_snapshot_with_unmanaged(vec![payload("/opt/app/.env", FileType::DataFile)]);
+        snap.redaction_state = Some(RedactionState::Raw);
+        let render = tempfile::tempdir().unwrap();
+        bundle_unmanaged_files(&mut snap, render.path(), root.path(), &gate).expect("bundles");
+        assert_eq!(shipped(render.path(), "/opt/app/.env"), ENV);
+        assert_eq!(
+            redaction_of(&snap, "/opt/app/.env"),
+            PayloadRedaction::Unchanged
+        );
+        assert!(snap.redactions.is_empty());
+    }
+
+    /// The `.env` file's `env-files/` copy takes the bundle's text, and
+    /// the bundle's findings replace that copy's inline ones.
+    #[test]
+    fn bundling_makes_the_env_file_twin_the_shipped_text() {
+        use inspectah_core::machine_state::ScreenedExecutor;
+        use inspectah_core::types::config::ConfigFileEntry;
+        use inspectah_core::types::nonrpm::NonRpmSoftwareSection;
+        const ENV: &[u8] = b"API_TOKEN=supersecretvalue123\n";
+        let (root, host) = bundle_host(&[("/opt/app/.env", ENV)]);
+        let gate = ScreenedExecutor::new(&host);
+        let mut snap =
+            test_snapshot_with_unmanaged(vec![payload("/opt/app/.env", FileType::DataFile)]);
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: Vec::new(),
+            env_files: vec![ConfigFileEntry {
+                path: "opt/app/.env".into(),
+                content: "API_TOKEN=REDACTED_PASSWORD_7\n".into(),
+                ..Default::default()
+            }],
+        });
+        snap.redactions = vec![RedactionFinding {
+            path: "opt/app/.env".into(),
+            source: "pattern".into(),
+            kind: RedactionKind::Inline,
+            pattern: "password".into(),
+            remediation: String::new(),
+            line: Some(1),
+            replacement: None,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Some(Confidence::High),
+            finding_kind: Some(RedactionFindingKind::Password),
+        }];
+        let render = tempfile::tempdir().unwrap();
+        bundle_unmanaged_files(&mut snap, render.path(), root.path(), &gate).expect("bundles");
+        let shipped = String::from_utf8(shipped(render.path(), "/opt/app/.env")).unwrap();
+        assert_eq!(
+            snap.non_rpm_software.as_ref().unwrap().env_files[0].content,
+            shipped
+        );
+        assert!(!snap.redactions.iter().any(|f| f.path == "opt/app/.env"));
+        assert!(snap.redactions.iter().any(|f| f.path == "/opt/app/.env"));
+    }
+
+    /// Text over the read limit ships unread and is flagged for review,
+    /// which leaves the snapshot partially redacted.
+    #[test]
+    fn bundling_flags_text_too_large_to_check() {
+        use inspectah_core::machine_state::ScreenedExecutor;
+        const PATH: &str = "/opt/app/huge.log";
+        let mut big = b"password=hunter2hunter2\n".to_vec();
+        big.resize(PAYLOAD_REDACTION_LIMIT as usize + 1, b'x');
+        let (root, host) = bundle_host(&[(PATH, &big)]);
+        let gate = ScreenedExecutor::new(&host);
+        let mut snap = test_snapshot_with_unmanaged(vec![payload(PATH, FileType::DataFile)]);
+        let render = tempfile::tempdir().unwrap();
+        bundle_unmanaged_files(&mut snap, render.path(), root.path(), &gate).expect("bundles");
+        assert_eq!(shipped(render.path(), PATH), big);
+        assert_eq!(redaction_of(&snap, PATH), PayloadRedaction::TooLargeToCheck);
+        assert!(
+            snap.redactions
+                .iter()
+                .any(|f| f.path == PATH && f.kind == RedactionKind::Flagged)
+        );
+        assert!(matches!(
+            snap.redaction_state,
+            Some(RedactionState::PartiallyRedacted { .. })
+        ));
+    }
+
+    /// A key in the bytes the bundler reads, after the gate passed the
+    /// file, fails the bundle as the gate's own refusal does.
+    #[test]
+    fn bundling_fails_on_a_key_in_the_bytes_it_would_ship() {
+        use inspectah_core::machine_state::ScreenedExecutor;
+        const PATH: &str = "/opt/app/app.conf";
+        const KEY: &str = "-----BEGIN PRIVATE KEY-----\n\
+            MC4CAQAwBQYDK2VwBCIEIBQh0WfR6aXEBHdgfX4ix5qDYmYRBZGZEmNFdzJ1Owlp\n\
+            -----END PRIVATE KEY-----\n";
+        let (root, host) = bundle_host(&[(PATH, b"a = 1\n")]);
+        std::fs::write(root.path().join("opt/app/app.conf"), KEY).unwrap();
+        let gate = ScreenedExecutor::new(&host);
+        let mut snap = test_snapshot_with_unmanaged(vec![payload(PATH, FileType::Config)]);
+        let render = tempfile::tempdir().unwrap();
+        let err = bundle_unmanaged_files(&mut snap, render.path(), root.path(), &gate)
+            .expect_err("the bundle fails");
+        assert!(err.to_string().contains(PATH), "{err}");
+        assert!(!render.path().join("unmanaged/opt/app/app.conf").exists());
     }
 }

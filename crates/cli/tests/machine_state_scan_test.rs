@@ -7,7 +7,8 @@
 //! a refine session's export of the scan tarball.
 
 use crate::sysctl_hosts::{
-    SysctlHost, export_session, reload, render_export, scan_exec, scan_with, session,
+    SysctlHost, bundled_export, export_session, reload, render_export, scan_exec, scan_with,
+    session,
 };
 use inspectah_collect::executor::mock::{MockExecutor, ReadKind};
 use inspectah_collect::inspectors::config::ConfigInspector;
@@ -1784,16 +1785,8 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
     );
     assert_never_opened(&exec, "/opt/app/k");
 
-    // The scan's export: render, then bundle from the host root.
-    let gate = inspectah_core::machine_state::ScreenedExecutor::new(&exec);
-    let scan_tree = render_export(&snap);
-    inspectah_pipeline::render::unmanaged::bundle_unmanaged_files(
-        &unmanaged.items,
-        scan_tree.path(),
-        host_root.path(),
-        &gate,
-    )
-    .expect("the ordinary payloads bundle");
+    // The scan's export: bundle from the host root, then render.
+    let scan_tree = bundled_export(&mut snap.clone(), &exec, host_root.path());
     // Refine, opened on the packed scan tarball, exports from it.
     let packed = tempfile::tempdir().unwrap();
     let tarball = packed.path().join("scan.tar.gz");

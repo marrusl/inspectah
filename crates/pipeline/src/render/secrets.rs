@@ -12,11 +12,15 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::machine_state::{ProvisioningNotice, ProvisioningStep};
 use inspectah_core::types::redaction::{DetectionMethod, RedactionFinding, RedactionKind};
 
+use inspectah_core::types::nonrpm::{FileType, PayloadRedaction};
+
 use super::configtree::{
     Destination, ETC_UNIT_DIR, KARGS_PATH, owed_kernel_arguments, staged_unit_file, staged_writes,
+    unmanaged_withheld,
 };
 use super::machine_state::class_rows;
 use super::md_literal::{md_code, md_code_cell};
+use super::unmanaged::UnmanagedDestination;
 
 /// The path kernel command line findings carry.
 const CMDLINE_PATH: &str = "/proc/cmdline";
@@ -71,15 +75,22 @@ enum SupplyAdvice {
     CarriedInUsr,
     /// A file the image carries anywhere else, `/etc` in practice.
     Carried,
+    /// An unmanaged file the export ships under `unmanaged/` with
+    /// placeholders in place; `var_srv` when it is under `/srv`, which the
+    /// Containerfile leaves to the `/var` strategy instead of copying.
+    UnmanagedRedacted { var_srv: bool },
+    /// An unmanaged file the export ships under `unmanaged/` as the scan
+    /// read it, with nothing replaced in that copy.
+    UnmanagedAsRead { var_srv: bool },
     /// A file not matched to anything the export stages. The image may
-    /// still carry it another way (an unmanaged file, for one), so the
-    /// line says what is not known instead of asserting it is absent.
+    /// still carry it another way, so the line says what is not known
+    /// instead of asserting it is absent.
     Unmatched,
 }
 
 impl SupplyAdvice {
-    /// The line, plain text a person would write.
-    fn line(self) -> String {
+    /// The line for the file at `key`, plain text a person would write.
+    fn line(self, key: &str) -> String {
         match self {
             Self::MachineStateOwed(step) => format!(
                 "Left out of the image as this host's own state (see Provisioning steps in \
@@ -152,6 +163,31 @@ impl SupplyAdvice {
                  one, a mounted secret, or a provisioning step. `/etc` keeps that local change \
                  across upgrades."
                 .into(),
+            Self::UnmanagedRedacted { var_srv: false } => format!(
+                "Shipped in this export as {}, with placeholders in place, and the \
+                 Containerfile copies it into the image, where it is read-only on a deployed \
+                 machine: configure the program to read the real value from a file under `/etc` \
+                 provisioned on each deployed machine, or from a mounted secret supplied at \
+                 deploy time.",
+                md_code(&shipped_copy(key))
+            ),
+            Self::UnmanagedRedacted { var_srv: true } => format!(
+                "Shipped in this export as {}, with placeholders in place, for your `/var` \
+                 strategy (the Containerfile does not copy it): put the real values in place \
+                 when you restore it on each machine.",
+                md_code(&shipped_copy(key))
+            ),
+            Self::UnmanagedAsRead { var_srv } => format!(
+                "Shipped in this export as {}, as the scan read it, with nothing replaced in \
+                 that copy{}. Check it, and supply any real value at deploy time with a mounted \
+                 secret or a provisioning step.",
+                md_code(&shipped_copy(key)),
+                if var_srv {
+                    ", for your `/var` strategy"
+                } else {
+                    ", and the Containerfile copies it into the image"
+                }
+            ),
             Self::Unmatched => "Not matched to a file inspectah stages for the image, so check \
                  whether the image carries it another way. Wherever a deployed machine needs the \
                  value, supply it at deploy time with a mounted secret or a provisioning step."
@@ -160,11 +196,20 @@ impl SupplyAdvice {
     }
 }
 
+/// Where the export ships the unmanaged file at `key`.
+fn shipped_copy(key: &str) -> String {
+    format!("unmanaged/{}", key.trim_start_matches('/'))
+}
+
 /// What the image knows about where findings land: the destinations it
-/// carries and the machine-state rows, both keyed by normalized path.
+/// carries, the machine-state rows and the unmanaged payloads it ships,
+/// each keyed by normalized path.
 struct Carriage {
     carried: std::collections::BTreeSet<String>,
     machine_state: BTreeMap<String, SupplyAdvice>,
+    /// Each regular unmanaged file the export ships under `unmanaged/`,
+    /// with where it lands and what redaction did to the shipped copy.
+    unmanaged: BTreeMap<String, (UnmanagedDestination, PayloadRedaction)>,
     /// The kargs file leaves out a kernel argument redaction replaced.
     owed_kargs: bool,
 }
@@ -204,9 +249,27 @@ impl Carriage {
                 Some((key, advice))
             })
             .collect();
+        let unmanaged = snap
+            .unmanaged_files
+            .iter()
+            .flat_map(|s| &s.items)
+            .filter(|f| {
+                f.disposition.is_included()
+                    && f.file_type != FileType::Symlink
+                    && unmanaged_withheld(&f.path).is_none()
+            })
+            .filter_map(|f| {
+                let key = Destination::new(&f.path).ok()?.as_str().to_owned();
+                Some((
+                    key,
+                    (UnmanagedDestination::of(&f.path), f.payload_redaction),
+                ))
+            })
+            .collect();
         Self {
             carried,
             machine_state,
+            unmanaged,
             owed_kargs: !owed_kernel_arguments(snap).is_empty(),
         }
     }
@@ -222,6 +285,10 @@ impl Carriage {
                 .is_some_and(|file| self.carried.contains(&format!("{ETC_UNIT_DIR}/{file}")));
         }
         self.carried.contains(key)
+            || self
+                .unmanaged
+                .get(key)
+                .is_some_and(|(dest, _)| *dest == UnmanagedDestination::Image)
     }
 
     /// The advice for the file at `key` holding `findings`, by the first
@@ -260,6 +327,14 @@ impl Carriage {
             .is_some_and(|name| !name.contains('/') && name.ends_with(".repo"))
         {
             return SupplyAdvice::RepoCredential;
+        }
+        if let Some((dest, redaction)) = self.unmanaged.get(key) {
+            let var_srv = *dest == UnmanagedDestination::VarSrv;
+            return if *redaction == PayloadRedaction::Redacted {
+                SupplyAdvice::UnmanagedRedacted { var_srv }
+            } else {
+                SupplyAdvice::UnmanagedAsRead { var_srv }
+            };
         }
         if self.is_carried(key) {
             if key.starts_with("/usr/") {
@@ -370,7 +445,7 @@ pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
         lines.push(String::new());
         lines.push(format!(
             "**At deploy time:** {}",
-            carriage.advice(key, findings).line()
+            carriage.advice(key, findings).line(key)
         ));
         lines.push(String::new());
         lines.push("| Line | Finding | Handling | Replaced with | Detection |".into());
@@ -544,7 +619,7 @@ mod tests {
             md.contains("| -- | `shadow_hash` | file excluded: `Regenerate on target` | whole file left out | pattern |"),
             "{md}"
         );
-        assert!(md.contains(&SupplyAdvice::NotInImage.line()), "{md}");
+        assert!(md.contains(&SupplyAdvice::NotInImage.line("")), "{md}");
     }
 
     /// The Line column is the line the secret is on, also when the key
@@ -787,7 +862,7 @@ mod tests {
             excluded.advice(&group_key(&svc.path), &[&svc]),
             SupplyAdvice::Unmatched
         );
-        assert!(!SupplyAdvice::Unmatched.line().contains("Not copied"));
+        assert!(!SupplyAdvice::Unmatched.line("").contains("Not copied"));
     }
 
     /// A file with only flagged findings says it ships as the host had it
@@ -817,15 +892,19 @@ mod tests {
         );
         let included = with_file(FindingKind::included()).advice(&f.path, &[&f]);
         assert_eq!(included, SupplyAdvice::ReviewOnly { carried: true });
-        assert!(included.line().contains("as the host had it"));
+        assert!(included.line("").contains("as the host had it"));
         let excluded = with_file(FindingKind::excluded()).advice(&f.path, &[&f]);
         assert_eq!(excluded, SupplyAdvice::ReviewOnly { carried: false });
         assert!(
-            !excluded.line().contains("as the host had it"),
+            !excluded.line("").contains("as the host had it"),
             "{}",
-            excluded.line()
+            excluded.line("")
         );
-        assert!(!excluded.line().contains("ships"), "{}", excluded.line());
+        assert!(
+            !excluded.line("").contains("ships"),
+            "{}",
+            excluded.line("")
+        );
     }
 
     /// A machine-state file the image does not need reads the way the
@@ -853,18 +932,22 @@ mod tests {
         assert_eq!(advice, SupplyAdvice::MachineStateNotNeeded);
         let table = super::super::machine_state::notice_text(ProvisioningNotice::None);
         assert!(
-            advice.line().contains(&table),
+            advice.line("").contains(&table),
             "{} / {table}",
-            advice.line()
+            advice.line("")
         );
-        assert!(!advice.line().contains("recreated"), "{}", advice.line());
+        assert!(
+            !advice.line("").contains("recreated"),
+            "{}",
+            advice.line("")
+        );
     }
 
     /// Mount credential advice names `credentials=` for SMB/CIFS only:
     /// other filesystems take their own helper's mechanism.
     #[test]
     fn test_mount_option_advice_is_scoped_to_cifs() {
-        let line = SupplyAdvice::MountOption.line();
+        let line = SupplyAdvice::MountOption.line("");
         assert!(
             line.contains("For SMB/CIFS, provision a mode-0600 file referenced by `credentials=`"),
             "{line}"
@@ -909,5 +992,68 @@ mod tests {
             let f = finding("/etc/x", source, kind.clone());
             assert_eq!(replaced_with(&f), *want, "{source} {kind:?}");
         }
+    }
+
+    /// An unmanaged file the export ships: the line names the shipped
+    /// copy, says whether placeholders are in it, and never calls it
+    /// unmatched. A `/srv` one is left to the `/var` strategy; an excluded
+    /// one is not shipped; a flagged-only one the image carries reads as
+    /// carried as the host had it.
+    #[test]
+    fn test_supply_advice_for_unmanaged_payloads() {
+        use inspectah_core::types::FindingKind as Disposition;
+        use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+        let item = |path: &str, redaction: PayloadRedaction, included: bool| UnmanagedFile {
+            path: path.into(),
+            file_type: FileType::DataFile,
+            disposition: if included {
+                Disposition::included()
+            } else {
+                Disposition::excluded()
+            },
+            payload_redaction: redaction,
+            ..Default::default()
+        };
+        let mut snap = InspectionSnapshot::new();
+        snap.unmanaged_files = Some(UnmanagedFileSection {
+            items: vec![
+                item("/opt/app/.env", PayloadRedaction::Redacted, true),
+                item("/srv/app/.env", PayloadRedaction::Redacted, true),
+                item("/opt/app/plain.conf", PayloadRedaction::Unchanged, true),
+                item("/opt/app/off.env", PayloadRedaction::Redacted, false),
+                item("/opt/app/huge.log", PayloadRedaction::TooLargeToCheck, true),
+            ],
+            ..Default::default()
+        });
+        let carriage = Carriage::of(&snap);
+        let advice = |path: &str, kind: RedactionKind| {
+            let f = finding(path, "pattern", kind);
+            carriage.advice(&group_key(path), &[&f])
+        };
+        let image = advice("opt/app/.env", RedactionKind::Inline);
+        assert_eq!(image, SupplyAdvice::UnmanagedRedacted { var_srv: false });
+        let line = image.line("/opt/app/.env");
+        assert!(line.contains("`unmanaged/opt/app/.env`"), "{line}");
+        assert!(line.contains("with placeholders in place"), "{line}");
+        assert!(line.contains("copies it into the image"), "{line}");
+        let srv = advice("/srv/app/.env", RedactionKind::Inline);
+        assert_eq!(srv, SupplyAdvice::UnmanagedRedacted { var_srv: true });
+        assert!(
+            srv.line("/srv/app/.env")
+                .contains("`unmanaged/srv/app/.env`")
+        );
+        assert!(srv.line("/srv/app/.env").contains("does not copy it"));
+        assert_eq!(
+            advice("/opt/app/plain.conf", RedactionKind::Inline),
+            SupplyAdvice::UnmanagedAsRead { var_srv: false }
+        );
+        assert_eq!(
+            advice("/opt/app/off.env", RedactionKind::Inline),
+            SupplyAdvice::Unmatched
+        );
+        assert_eq!(
+            advice("/opt/app/huge.log", RedactionKind::Flagged),
+            SupplyAdvice::ReviewOnly { carried: true }
+        );
     }
 }

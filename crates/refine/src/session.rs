@@ -2043,12 +2043,22 @@ impl RefineSession {
 
     /// Returns true if the PROJECTED state contains sensitive material.
     ///
-    /// Sensitive when `sensitive_snapshot` is true OR any user has
+    /// Sensitive when `sensitive_snapshot` is true, when an included
+    /// unmanaged file ships a copy redaction changed or could not check
+    /// (`PayloadRedaction::is_sensitive`), OR any user has
     /// `password_choice == "new"` with a non-empty `password_hash`.
     /// Based on projected state, not op history.
     pub fn is_sensitive(&self) -> bool {
         let projected = self.project_snapshot();
         if projected.sensitive_snapshot {
+            return true;
+        }
+        if projected.unmanaged_files.as_ref().is_some_and(|section| {
+            section
+                .items
+                .iter()
+                .any(|f| f.disposition.is_included() && f.payload_redaction.is_sensitive())
+        }) {
             return true;
         }
         if let Some(ug) = &projected.users_groups {

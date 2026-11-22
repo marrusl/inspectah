@@ -172,6 +172,41 @@ pub struct UnmanagedFile {
     /// different content hashes.
     #[serde(default)]
     pub variant_selection: VariantSelection,
+    /// What redaction did to the copy the export ships, recorded by the
+    /// scan's bundler when it writes the file into `unmanaged/`.
+    #[serde(default, skip_serializing_if = "PayloadRedaction::is_unchanged")]
+    pub payload_redaction: PayloadRedaction,
+}
+
+/// What redaction did to an unmanaged payload before it entered the
+/// scan tarball's `unmanaged/` directory, the copy the image's `COPY`
+/// reads and a refine export carries on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PayloadRedaction {
+    /// Shipped byte for byte: binary, text redaction found nothing in, or
+    /// a scan run with `--no-redaction`.
+    #[default]
+    Unchanged,
+    /// Text redaction changed: the shipped copy holds `REDACTED_*`
+    /// placeholders where the host's file held credentials.
+    Redacted,
+    /// Text too large for redaction to check, shipped as the host had it
+    /// and flagged for review.
+    TooLargeToCheck,
+}
+
+impl PayloadRedaction {
+    /// Whether the shipped copy is the host's file as read.
+    pub fn is_unchanged(&self) -> bool {
+        *self == Self::Unchanged
+    }
+
+    /// Whether the shipped copy holds, or may hold, a credential's place:
+    /// a session carrying it asks for the sensitive-data acknowledgment.
+    pub fn is_sensitive(self) -> bool {
+        self != Self::Unchanged
+    }
 }
 
 /// A collapsed directory (or single file) under /usr that is not owned

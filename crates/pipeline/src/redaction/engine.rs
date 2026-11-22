@@ -1,4 +1,6 @@
-use inspectah_core::redaction::{scrub_compose_secrets, scrub_repo_credentials};
+use inspectah_core::redaction::{
+    is_compose_file_name, scrub_compose_secrets, scrub_repo_credentials,
+};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::redaction::{
     Confidence, DetectionMethod, FindingKind, RedactionFinding, RedactionHint, RedactionKind,
@@ -1434,6 +1436,182 @@ fn scan_and_redact_field(
     findings
 }
 
+/// Redact compose file content in place and return the findings. Two
+/// passes, because neither alone covers the other's cases:
+///
+/// 1. `scrub_compose_secrets` keys on its own name list and rewrites
+///    credentials in a URL of any scheme, which the generic patterns do
+///    not (they cover postgres, mongodb, redis and jdbc only). It emits
+///    no finding of its own.
+/// 2. The generic pass detects and reports, and catches the case that
+///    defeats pass 1 entirely: a connection string whose key name carries
+///    no secret-like word, which also means the collector's hint never
+///    fires for it either.
+///
+/// Pass 1 runs first so the generic pass sees its output and can still
+/// report on a line it rewrote. Assigning only when the marker count
+/// rises keeps a secret-free compose file byte-identical, because
+/// `scrub_compose_secrets` normalizes trailing whitespace and appends a
+/// final newline regardless. `generic` is the pass-2 field redactor.
+fn redact_compose_content(
+    raw: &mut String,
+    path: &str,
+    registry: &mut CounterRegistry,
+    generic: FieldRedactor,
+) -> Vec<RedactionFinding> {
+    let scrubbed = scrub_compose_secrets(raw);
+    let compose_pass_fired = scrubbed.matches(COMPOSE_REDACTED_MARKER).count()
+        > raw.matches(COMPOSE_REDACTED_MARKER).count();
+    if compose_pass_fired {
+        *raw = scrubbed;
+    }
+
+    let mut findings = generic(raw, path, registry);
+    let generic_pass_fired = !findings.is_empty();
+
+    // Only when pass 1 found something pass 2 did not report, so one
+    // secret does not produce two findings. A file with both kinds is
+    // reported once rather than twice; it is never reported as clean.
+    if compose_pass_fired && !generic_pass_fired {
+        findings.push(RedactionFinding {
+            path: path.to_owned(),
+            source: "compose_env".into(),
+            kind: RedactionKind::Inline,
+            pattern: "compose_secret_value".into(),
+            remediation: "Move the secret out of the compose file: use a compose secret, an \
+                 env_file outside the image, or a systemd credential"
+                .to_string(),
+            line: None,
+            replacement: None,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Some(Confidence::High),
+            finding_kind: Some(FindingKind::Password),
+        });
+    }
+    findings
+}
+
+/// A field redactor: scrubs `content` in place under `path`, with tokens
+/// from the registry, and returns the findings.
+type FieldRedactor = fn(&mut String, &str, &mut CounterRegistry) -> Vec<RedactionFinding>;
+
+/// The finding kinds a payload pass leaves alone, each for a reason the
+/// pattern alone cannot see:
+///
+/// - A private key is the key screening's (`payload_credential`), which
+///   reads the block's body and withholds the whole file before any
+///   payload is read here. A PEM match left by then is a pair of
+///   delimiters in code or data (a script naming them, a JSON template),
+///   and a placeholder would break that file.
+/// - A certificate is public material, not a credential, and a payload
+///   the image runs from (a CA bundle, a server certificate) would break
+///   with a placeholder in its place.
+const PAYLOAD_EXEMPT_KINDS: &[FindingKind] = &[FindingKind::PrivateKey, FindingKind::Certificate];
+
+/// Whether a payload pass applies `pat` ([`PAYLOAD_EXEMPT_KINDS`]).
+fn is_payload_pattern(pat: &SecretPattern) -> bool {
+    !PAYLOAD_EXEMPT_KINDS.contains(&pat.finding_kind)
+}
+
+/// [`scan_and_redact_field`] for a payload: every pattern but those
+/// [`is_payload_pattern`] leaves out.
+fn redact_payload_field(
+    content: &mut String,
+    source_path: &str,
+    registry: &mut CounterRegistry,
+) -> Vec<RedactionFinding> {
+    let findings: Vec<RedactionFinding> = scan_content(content, source_path)
+        .into_iter()
+        .filter(|f| {
+            f.finding_kind
+                .as_ref()
+                .is_none_or(|kind| !PAYLOAD_EXEMPT_KINDS.contains(kind))
+        })
+        .collect();
+    if findings.is_empty() {
+        return findings;
+    }
+    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+    for (idx, pat) in PATTERNS.iter().enumerate() {
+        if !is_payload_pattern(pat) {
+            continue;
+        }
+        for em in collect_eligible_matches(pat, content, Some(source_path)) {
+            all_matches.push((idx, em));
+        }
+    }
+    dedup_overlapping_matches(&mut all_matches);
+    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+    for (pat_idx, em) in all_matches {
+        let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+        let replacement = build_replacement(&em, content, registry, &kind_label);
+        content.replace_range(em.start..em.end, &replacement);
+    }
+    findings
+}
+
+/// Redact one file's text the way `redact` treats a file at `path`: a
+/// compose file by name takes both compose passes, every other file the
+/// URL credential maskers and the generic pattern pass with `path`, so
+/// the path-scoped format rules apply as they do to a config file. Private keys and certificates are
+/// left in place ([`PAYLOAD_EXEMPT_KINDS`]). Returns the redacted text and its findings,
+/// or `None` when nothing in it changed.
+///
+/// For a file the snapshot does not hold, such as an unmanaged payload
+/// the scan bundles. Its tokens are numbered from 1 for this file alone,
+/// so the same secret elsewhere in the snapshot can carry another number.
+pub fn redact_payload(content: &str, path: &str) -> Option<(String, Vec<RedactionFinding>)> {
+    let mut registry = CounterRegistry::default();
+    let mut text = content.to_owned();
+    let is_compose = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(is_compose_file_name);
+    let findings = if is_compose {
+        redact_compose_content(&mut text, path, &mut registry, redact_payload_field)
+    } else {
+        let mut findings = mask_url_credentials(&mut text, path);
+        findings.extend(redact_payload_field(&mut text, path, &mut registry));
+        findings
+    };
+    (text != content).then_some((text, findings))
+}
+
+/// Mask a credential in a URL's user information on each line of `text`,
+/// as the git remote pass masks a remote: a password
+/// ([`mask_proxy_credentials`]), then a token standing as the user name
+/// ([`mask_token_username`]). The generic patterns cover such a password
+/// for a few schemes only. Returns one finding per masked line.
+fn mask_url_credentials(text: &mut String, path: &str) -> Vec<RedactionFinding> {
+    let mut findings = Vec::new();
+    let mut out = String::with_capacity(text.len());
+    for (number, line) in text.split_inclusive('\n').enumerate() {
+        let (masked, password) = mask_proxy_credentials(line, path);
+        let (masked, token) = mask_token_username(&masked, path);
+        for mut finding in password.into_iter().chain(token) {
+            finding.line = i32::try_from(number + 1).ok();
+            findings.push(finding);
+        }
+        out.push_str(&masked);
+    }
+    if !findings.is_empty() {
+        *text = out;
+    }
+    findings
+}
+
+/// Append findings recorded after `redact` ran, such as an unmanaged
+/// payload's, and settle `redaction_state` again over the whole list, as
+/// `redact` settles it.
+pub fn record_late_findings(snapshot: &mut InspectionSnapshot, findings: Vec<RedactionFinding>) {
+    if findings.is_empty() {
+        return;
+    }
+    let mut all_findings = std::mem::take(&mut snapshot.redactions);
+    all_findings.extend(findings);
+    settle_redaction_state(snapshot, all_findings);
+}
+
 /// The path a sysctl runtime value is scanned under: it came from the
 /// kernel's `/proc/sys` tree, not from a file.
 const SYSCTL_RUNTIME_PATH: &str = "/proc/sys";
@@ -1814,59 +1992,17 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             ));
         }
 
-        // Compose file content. Two passes, because neither alone covers
-        // the other's cases:
-        //
-        // 1. `scrub_compose_secrets` keys on its own name list and
-        //    rewrites credentials in a URL of any scheme, which the
-        //    generic patterns do not (they cover postgres, mongodb,
-        //    redis and jdbc only). It emits no finding of its own.
-        // 2. The generic pass detects and reports, and catches the case
-        //    that defeats pass 1 entirely: a connection string whose key
-        //    name carries no secret-like word, which also means the
-        //    collector's hint never fires for it either.
-        //
-        // Pass 1 runs first so the generic pass sees its output and can
-        // still report on a line it rewrote. Assigning only when the
-        // marker count rises keeps a secret-free compose file
-        // byte-identical, because `scrub_compose_secrets` normalizes
-        // trailing whitespace and appends a final newline regardless.
+        // Compose file content: see `redact_compose_content`.
         for compose in &mut containers.compose_files {
             let Some(raw) = compose.raw_content.as_mut() else {
                 continue;
             };
-            let scrubbed = scrub_compose_secrets(raw);
-            let compose_pass_fired = scrubbed.matches(COMPOSE_REDACTED_MARKER).count()
-                > raw.matches(COMPOSE_REDACTED_MARKER).count();
-            if compose_pass_fired {
-                *raw = scrubbed;
-            }
-
-            let generic_findings = scan_and_redact_field(raw, &compose.path, &mut registry);
-            let generic_pass_fired = !generic_findings.is_empty();
-            all_findings.extend(generic_findings);
-
-            // Only when pass 1 found something pass 2 did not report, so
-            // one secret does not produce two findings. A file with both
-            // kinds is reported once rather than twice; it is never
-            // reported as clean.
-            if compose_pass_fired && !generic_pass_fired {
-                all_findings.push(RedactionFinding {
-                    path: compose.path.clone(),
-                    source: "compose_env".into(),
-                    kind: RedactionKind::Inline,
-                    pattern: "compose_secret_value".into(),
-                    remediation:
-                        "Move the secret out of the compose file: use a compose secret, an \
-                         env_file outside the image, or a systemd credential"
-                            .to_string(),
-                    line: None,
-                    replacement: None,
-                    detection_method: DetectionMethod::Pattern,
-                    confidence: Some(Confidence::High),
-                    finding_kind: Some(FindingKind::Password),
-                });
-            }
+            all_findings.extend(redact_compose_content(
+                raw,
+                &compose.path,
+                &mut registry,
+                scan_and_redact_field,
+            ));
         }
     }
 
@@ -2388,7 +2524,12 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         });
     }
 
-    // Determine redaction state
+    settle_redaction_state(snapshot, all_findings);
+}
+
+/// Set `redaction_state` from `all_findings` and store them as the
+/// snapshot's `redactions`.
+fn settle_redaction_state(snapshot: &mut InspectionSnapshot, all_findings: Vec<RedactionFinding>) {
     let unresolved: Vec<&RedactionFinding> = all_findings
         .iter()
         .filter(|f| f.confidence != Some(Confidence::High))
@@ -6819,6 +6960,36 @@ baseurl = https://cdn.redhat.com
                 ),
                 (other, _) => panic!("{line:?}: resolved should be {resolved}, got {other:?}"),
             }
+        }
+    }
+
+    /// A payload is redacted by its path's rules: a compose file by both
+    /// compose passes, any other text by the URL maskers and the patterns.
+    /// Key delimiters and certificates are left alone, and a file with
+    /// nothing to redact gives `None`.
+    #[test]
+    fn redact_payload_follows_the_file_rules() {
+        let compose = "services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: pgsecret99\n";
+        let (text, findings) =
+            redact_payload(compose, "/opt/app/docker-compose.yml").expect("compose redacts");
+        assert!(!text.contains("pgsecret99"), "{text}");
+        assert!(!findings.is_empty());
+
+        let git = "[remote \"origin\"]\n\turl = https://deploy:gitsecret77@git.example.com/r.git\n";
+        let (text, findings) = redact_payload(git, "/opt/app/repo/.git/config").expect("masks");
+        assert!(!text.contains("gitsecret77"), "{text}");
+        assert_eq!(findings[0].line, Some(2));
+
+        let env = "API_TOKEN=supersecretvalue123\n";
+        let (text, _) = redact_payload(env, "/opt/app/.env").expect("env redacts");
+        assert!(!text.contains("supersecretvalue123"), "{text}");
+
+        for kept in [
+            "const begin = \"-----BEGIN PRIVATE KEY-----\", end = \"-----END PRIVATE KEY-----\";\n",
+            "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----\n",
+            "port = 8080\n",
+        ] {
+            assert!(redact_payload(kept, "/opt/app/x").is_none(), "{kept}");
         }
     }
 }

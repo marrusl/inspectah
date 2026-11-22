@@ -154,6 +154,31 @@ impl ScrubOutcome {
     }
 }
 
+/// File name globs the containers inspector reads as compose files, and
+/// the name rule redaction applies compose scrubbing by. Each pattern
+/// holds at most one `*`.
+pub const COMPOSE_FILE_PATTERNS: &[&str] = &[
+    "docker-compose*.yml",
+    "docker-compose*.yaml",
+    "compose*.yml",
+    "compose*.yaml",
+];
+
+/// Whether a file named `name` is a compose file by
+/// [`COMPOSE_FILE_PATTERNS`].
+pub fn is_compose_file_name(name: &str) -> bool {
+    COMPOSE_FILE_PATTERNS
+        .iter()
+        .any(|pattern| match pattern.split_once('*') {
+            Some((prefix, suffix)) => {
+                name.len() >= prefix.len() + suffix.len()
+                    && name.starts_with(prefix)
+                    && name.ends_with(suffix)
+            }
+            None => *pattern == name,
+        })
+}
+
 /// Scrubs secret-like values from compose YAML content.
 ///
 /// Targets two categories of secrets:
@@ -675,6 +700,21 @@ mod tests {
             ("RPM-GPG-KEY-x", "RPM-GPG-KEY-x"),
         ] {
             assert_eq!(scrub_reference_userinfo(input), want, "{input}");
+        }
+    }
+
+    #[test]
+    fn compose_file_names_follow_the_globs() {
+        for name in [
+            "docker-compose.yml",
+            "docker-compose.prod.yaml",
+            "compose.yml",
+            "compose.yaml",
+        ] {
+            assert!(is_compose_file_name(name), "{name}");
+        }
+        for name in ["docker-compose.json", "mycompose.yml", "compose", ".env"] {
+            assert!(!is_compose_file_name(name), "{name}");
         }
     }
 

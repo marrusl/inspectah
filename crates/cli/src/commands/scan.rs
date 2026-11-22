@@ -915,19 +915,18 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     // Step 7: Render all artifacts to a temp directory
     let render_dir = tempfile::tempdir().context("failed to create temp directory")?;
 
+    // Bundle unmanaged files first: the bundler redacts what it copies and
+    // records that in the snapshot, which the render then describes.
+    render::unmanaged::bundle_unmanaged_files(
+        &mut snapshot,
+        render_dir.path(),
+        executor.host_root(),
+        &executor,
+    )
+    .context("failed to bundle unmanaged files")?;
+
     let render_context = RenderContext { target: None };
     render::render_all(&snapshot, &render_context, render_dir.path()).context("render failed")?;
-
-    // Bundle unmanaged files into render directory if present
-    if let Some(ref unmanaged) = snapshot.unmanaged_files {
-        render::unmanaged::bundle_unmanaged_files(
-            &unmanaged.items,
-            render_dir.path(),
-            executor.host_root(),
-            &executor,
-        )
-        .context("failed to bundle unmanaged files")?;
-    }
 
     // Bundle repo-less RPMs from dnf cache into render directory, on the
     // route the Containerfile's repo-less block copies them by.
@@ -972,6 +971,9 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
             // notice points at the tarball's audit report and
             // Containerfile, so only this branch, which wrote them, prints it.
             if let Some(notice) = not_carried_notice(&snapshot) {
+                eprintln!("{notice}");
+            }
+            if let Some(notice) = unmanaged_redaction_notice(&snapshot) {
                 eprintln!("{notice}");
             }
             // The machine-state notice follows: enum text and a count.
@@ -1137,6 +1139,39 @@ fn build_sensitivity_notice(
     }
 
     Some(lines.join("\n"))
+}
+
+/// The line that says the unmanaged bundle ships changed or unchecked
+/// copies, by count, pointing at `secrets-review.md`; `None` when every
+/// payload shipped as read.
+fn unmanaged_redaction_notice(
+    snapshot: &inspectah_core::snapshot::InspectionSnapshot,
+) -> Option<String> {
+    use inspectah_core::types::nonrpm::PayloadRedaction;
+    let items = snapshot.unmanaged_files.as_ref().map(|s| &s.items)?;
+    let count =
+        |want: PayloadRedaction| items.iter().filter(|f| f.payload_redaction == want).count();
+    let redacted = count(PayloadRedaction::Redacted);
+    let unchecked = count(PayloadRedaction::TooLargeToCheck);
+    let mut parts = Vec::new();
+    if redacted > 0 {
+        parts.push(format!(
+            "{redacted} unmanaged {} redacted before bundling",
+            if redacted == 1 { "file" } else { "files" }
+        ));
+    }
+    if unchecked > 0 {
+        parts.push(format!(
+            "{unchecked} unmanaged {} too large to check, bundled as read",
+            if unchecked == 1 { "file" } else { "files" }
+        ));
+    }
+    (!parts.is_empty()).then(|| {
+        format!(
+            "Note: {}. The image gets the bundled copies; see secrets-review.md.",
+            parts.join("; ")
+        )
+    })
 }
 
 /// Print a minimal footer for `--quiet` mode (Null renderer swallows finalize).

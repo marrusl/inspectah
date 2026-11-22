@@ -29,12 +29,8 @@ const QUADLET_EXTENSIONS: &[&str] = &[
     ".build",
 ];
 
-const COMPOSE_PATTERNS: &[&str] = &[
-    "docker-compose*.yml",
-    "docker-compose*.yaml",
-    "compose*.yml",
-    "compose*.yaml",
-];
+/// The compose file names, shared with redaction's compose rule.
+const COMPOSE_PATTERNS: &[&str] = inspectah_core::redaction::COMPOSE_FILE_PATTERNS;
 
 const COMPOSE_SEARCH_DIRS: &[&str] = &["opt", "srv", "etc"];
 
