@@ -144,6 +144,19 @@ pub struct UnitHost {
     /// The leaf classification answers, when the host gives any. Without
     /// them every dependency query fails and the scan has no leaf data.
     classification: Option<Classification>,
+    /// Installed packages of an architecture other than `x86_64`.
+    other_arches: Vec<OtherArch>,
+}
+
+/// An installed package of an architecture other than `x86_64`
+/// ([`UnitHost::package_arch`]).
+#[derive(Debug)]
+struct OtherArch {
+    name: String,
+    arch: String,
+    repo: String,
+    /// The capabilities it provides besides its name.
+    caps: Vec<String>,
 }
 
 /// What the RPM inspector's leaf classification reads.
@@ -226,6 +239,29 @@ impl UnitHost {
             return self;
         }
         self.package(name)
+    }
+
+    /// A package only the target image ships: in the baseline, and not
+    /// installed on the source host, so nothing the scan reads there says
+    /// what it provides.
+    pub fn target_only_package(mut self, name: &str) -> Self {
+        self.base_packages.push(name.into());
+        self
+    }
+
+    /// An installed package `name.arch`, of an architecture other than
+    /// `x86_64`, installed from `repo` and providing the capabilities
+    /// `caps` besides its name. Its name may also be installed as `x86_64`
+    /// ([`package`](UnitHost::package) or
+    /// [`base_package`](UnitHost::base_package)).
+    pub fn package_arch(mut self, name: &str, arch: &str, repo: &str, caps: &[&str]) -> Self {
+        self.other_arches.push(OtherArch {
+            name: name.into(),
+            arch: arch.into(),
+            repo: repo.into(),
+            caps: caps.iter().map(|c| (*c).to_owned()).collect(),
+        });
+        self
     }
 
     /// An installed `x86_64` package named `name`, installed from `repo`.
@@ -456,18 +492,28 @@ impl UnitHost {
                         .iter()
                         .map(|name| format!("0:{name}-1.0-1.el9.x86_64")),
                 )
+                .chain(
+                    self.other_arches
+                        .iter()
+                        .map(|o| format!("0:{}-1.0-1.el9.{}", o.name, o.arch)),
+                )
                 .map(|nevra| format!("{nevra}\n"))
                 .collect();
+        // The query answers by name and the inspector keeps the first line
+        // for a name, so another architecture's repo is listed first: the
+        // `x86_64` package of that name is in the base image here, outside
+        // the added packages that answer is for.
         let source_repos: String = self
-            .packages
+            .other_arches
             .iter()
-            .map(|name| {
+            .map(|o| format!("{} {}\n", o.name, o.repo))
+            .chain(self.packages.iter().map(|name| {
                 let repo = self
                     .package_repos
                     .get(name)
                     .map_or(PACKAGE_REPO, String::as_str);
                 format!("{name} {repo}\n")
-            })
+            }))
             .collect();
         let this = self.file(PRESET_FILE, &presets);
 
@@ -526,6 +572,11 @@ impl UnitHost {
                         .chain(extra.map(String::as_str))
                         .map(move |cap| format!("{name}.x86_64\t0\t\t{cap}\n"))
                 })
+                .chain(this.other_arches.iter().flat_map(|o| {
+                    std::iter::once(&o.name)
+                        .chain(&o.caps)
+                        .map(move |cap| format!("{}.{}\t0\t\t{cap}\n", o.name, o.arch))
+                }))
                 .collect();
             mock = mock
                 .with_command(DNF_USERINSTALLED, userinstalled)

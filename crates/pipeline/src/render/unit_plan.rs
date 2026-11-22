@@ -156,8 +156,10 @@ pub(crate) fn installs_on_its_own_route(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Reach {
     /// What installing it certainly installs: its `dep_closures` entry.
-    /// A presence claim rests on this, since it is installed whatever
-    /// else the export leaves out.
+    /// The `/var` evidence's presence claim rests on this, since it is
+    /// installed whatever else the export leaves out. A unit command's
+    /// does not: only a package the export names is certain there
+    /// ([`ExportInstalls::certain`]).
     Certain,
     /// Everything installing it may install: its `dep_closures` and
     /// `dep_alternatives` entries. An absence claim rests on this, since
@@ -407,10 +409,10 @@ pub(crate) fn every_installed_package_has_a_closure(
 pub(crate) struct ExportInstalls {
     /// Certainly installed: every package the Containerfile names on an
     /// install line ([`named_on_install_line`], and the disabled-repo
-    /// transaction), and what one of those certainly pulls in
-    /// (`Reach::Certain`) that a repo can serve. On a fleet, only a
-    /// package every host has brings its closure in
-    /// ([`closure_is_certain`]).
+    /// transaction), and nothing else (Mark Russell, 2026-11-21). A
+    /// package present only as another's dependency is not: the base
+    /// image may provide what it is needed for through a package the
+    /// source host never had, and dnf then leaves it out.
     pub(crate) certain: std::collections::HashSet<String>,
     /// Possibly installed: `certain`, every included package, and
     /// everything one of them may pull in
@@ -443,24 +445,6 @@ pub(crate) fn export_installs(snap: &InspectionSnapshot, repos: &InstallRepos) -
         })
         .map(id_of)
         .collect();
-    let entries: BTreeMap<String, &PackageEntry> = rpm
-        .packages_added
-        .iter()
-        .map(|pkg| (id_of(pkg), pkg))
-        .collect();
-    // A dependency dnf can fetch: one a repo the image enables serves, or
-    // one the disabled-repo transaction names. A fleet keeps no entry for
-    // a dependency its merge dropped, so nothing says otherwise of it.
-    let fetchable = |dep: &String| {
-        from_disabled_repo.contains(dep)
-            || entries.get(dep).is_none_or(|pkg| {
-                is_package_installable(pkg)
-                    && matches!(
-                        route_for(rpm, repos, pkg, &VerifiedUploads::new()),
-                        PackageRoute::ByName
-                    )
-            })
-    };
     let selection = InstallLineSelection::of(snap, rpm, repos);
     let mut certain = std::collections::HashSet::new();
     for pkg in &rpm.packages_added {
@@ -471,17 +455,9 @@ pub(crate) fn export_installs(snap: &InspectionSnapshot, repos: &InstallRepos) -
         let named = from_disabled_repo.contains(&id)
             || (installs_on_its_own_route(rpm, repos, pkg)
                 && named_on_install_line(rpm, repos, pkg, &id, &selection));
-        if !named {
-            continue;
+        if named {
+            certain.insert(id);
         }
-        if rpm.dep_closures.is_some() && closure_is_certain(snap, rpm, pkg) {
-            certain.extend(
-                closure_of(rpm, &id, Reach::Certain)
-                    .into_iter()
-                    .filter(|dep| fetchable(dep)),
-            );
-        }
-        certain.insert(id);
     }
     possible.extend(certain.iter().cloned());
     ExportInstalls { certain, possible }
@@ -543,34 +519,6 @@ fn named_on_install_line(
                     .is_none_or(|leaves| leaves.contains(id))
         }
     }
-}
-
-/// Whether what `pkg` certainly pulls in is certainly in the image beside
-/// everything else the export installs.
-///
-/// On one host it is: the collector counts a dependency as certain only
-/// when nothing else installed there provides what it is needed for, and
-/// the export installs nothing the host lacked. A fleet's `dep_closures`
-/// entry is what the package certainly pulls in on every host that has
-/// it, so it holds beside every package the fleet image may install only
-/// when every host has the package and gave leaf data: then any package
-/// that could take a dependency's place was installed beside it on some
-/// host, and that host's closure already left the dependency out. A
-/// package only some hosts have cannot see a provider another host's
-/// package brings, so its closure is possible only.
-fn closure_is_certain(snap: &InspectionSnapshot, rpm: &RpmSection, pkg: &PackageEntry) -> bool {
-    if snap.aggregate_meta.is_none() {
-        return true;
-    }
-    let every_host = pkg
-        .aggregate
-        .as_ref()
-        .is_some_and(|prevalence| prevalence.total > 0 && prevalence.count >= prevalence.total);
-    let every_host_classified = matches!(
-        (rpm.leaf_authority_hosts, rpm.leaf_total_hosts),
-        (Some(authority), Some(total)) if total > 0 && authority == total
-    );
-    every_host && every_host_classified
 }
 
 // ---------------------------------------------------------------------------
@@ -3114,14 +3062,16 @@ fn lexically_under(path: &str, at: &Destination) -> bool {
 /// be. Evaluated in order:
 ///
 /// 1. `owning_package: None` → plain (an unknown owner).
-/// 2. The owner certainly in the image: the baseline ships it, the
-///    Containerfile names it, or a package it names certainly pulls it in
-///    ([`export_installs`]) → plain.
+/// 2. The owner certainly in the image: the baseline ships it, or the
+///    Containerfile names it on an install line ([`export_installs`]) →
+///    plain.
 /// 3. The owner possibly in the image: an entry is included but not
 ///    named (an auto package kept as one provider dnf may pick, one an
 ///    operator included by hand, one rendered only as a manual step), or
-///    an installed package may pull it in → guarded. When in doubt, a
-///    package is possible, never absent.
+///    an installed package may pull it in, its only provider on the
+///    source host included, since the base image may provide the same
+///    thing → guarded. When in doubt, a package is possible, never
+///    absent.
 /// 4. The owner in `packages_added`, every entry excluded and nothing
 ///    installed may pull it in → Omit with `OmissionReason::NotCarried`
 ///    when every entry of the name is in `not_carried`, else

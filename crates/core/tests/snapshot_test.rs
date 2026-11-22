@@ -740,6 +740,7 @@ const RPM_SECTION_KEYS: &[&str] = &[
     "packages_added",
     "repo_files",
     "rpm_va",
+    "unresolved_requirements",
     "version_changes",
     "version_locks",
     "versionlock_command_output",

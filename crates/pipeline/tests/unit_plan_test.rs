@@ -1180,8 +1180,8 @@ fn rhcd_renders_the_exact_not_carried_comment() {
 }
 
 /// The presence rules decide omission, not the list: `foo.i686` is not
-/// carried, but an included leaf pulls in `foo.x86_64`, so `foo` is in the
-/// image and its unit stays.
+/// carried, but an included leaf pulls in `foo.x86_64`, so `foo` may be in
+/// the image and its unit stays, guarded: no install line names it.
 #[test]
 fn a_not_carried_arch_does_not_omit_a_unit_another_arch_carries() {
     let mut snap = leaf_snapshot(
@@ -1213,7 +1213,11 @@ fn a_not_carried_arch_does_not_omit_a_unit_another_arch_carries() {
 
     let plan = render(&snap);
     assert!(plan.omissions.is_empty(), "{:?}", plan.omissions);
-    assert!(acted_on(&plan.lines, "foo.service"), "{:?}", plan.lines);
+    assert!(
+        guarded(&plan.lines, "enable", "foo.service", "foo.service"),
+        "{:?}",
+        plan.lines
+    );
 }
 
 /// Excluding a leaf makes its auto dependency unneeded, so the
@@ -1310,8 +1314,10 @@ fn an_owner_with_an_entry_outside_the_list_stays_excluded() {
     );
 }
 
-/// An auto package an included leaf pulls in is in the image: its unit
-/// keeps its `systemctl` line, excluded or not.
+/// An auto package an included leaf pulls in is in the image unless the
+/// base image provides what the leaf needs: its unit keeps its
+/// `systemctl` line, excluded or not, guarded, since no install line
+/// names it.
 #[test]
 fn a_pulled_in_auto_package_keeps_its_unit() {
     for disposition in [FindingKind::included(), FindingKind::excluded()] {
@@ -1337,7 +1343,11 @@ fn a_pulled_in_auto_package_keeps_its_unit() {
             "{disposition:?}: {:?}",
             plan.lines
         );
-        assert!(acted_on(&plan.lines, "cockpit.socket"), "{:?}", plan.lines);
+        assert!(
+            guarded(&plan.lines, "enable", "cockpit.socket", "cockpit.socket"),
+            "{disposition:?}: {:?}",
+            plan.lines
+        );
     }
 }
 
@@ -1353,7 +1363,8 @@ fn guarded(lines: &[String], verb: &str, unit: &str, file: &str) -> bool {
 /// A snapshot from before the collector recorded `dep_closures` has only
 /// the leaf tree, which holds every package a leaf may install, so a
 /// package it pulls in is possible, not certain: its unit's command runs
-/// only if the unit file is in the image. With the closures it is plain.
+/// only if the unit file is in the image. With the closures it is the
+/// same: only a package an install line names is certain.
 #[test]
 fn a_tree_only_snapshot_guards_a_pulled_in_packages_unit() {
     let mut snap = leaf_snapshot(
@@ -1371,7 +1382,12 @@ fn a_tree_only_snapshot_guards_a_pulled_in_packages_unit() {
             Some("cockpit-ws"),
         )],
     );
-    assert!(acted_on(&render(&snap).lines, "cockpit.socket"));
+    assert!(guarded(
+        &render(&snap).lines,
+        "disable",
+        "cockpit.socket",
+        "cockpit.socket"
+    ));
     let rpm = snap.rpm.as_mut().expect("rpm");
     rpm.dep_closures = None;
     rpm.dep_alternatives = None;

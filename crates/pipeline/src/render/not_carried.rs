@@ -41,7 +41,8 @@
 //! the host has disabled, or that may pull in a package only such a repo
 //! or no repo at all serves, is not carried by default ([`owner_hold`]):
 //! it is [`AutoCarriage::HeldOwner`], excluded by default like an
-//! [`AutoCarriage::Unneeded`] package, and listed with its reason. The
+//! [`AutoCarriage::Unneeded`] package, and listed with its reason. So is
+//! one whose closure may need a package the host did not have. The
 //! operator can include it in refine; it then installs as any auto package
 //! the operator includes does. "May pull in" is its whole recorded
 //! closure, every provider and branch included, and a requirement the
@@ -310,6 +311,10 @@ pub enum OwnerHold {
     /// to install it from by name: a local RPM, or one from a repo the
     /// export does not carry.
     NoRepo,
+    /// It, or a package installing it may pull in, has a requirement that
+    /// may need a package the host did not have
+    /// (`RpmSection::unresolved_requirements`).
+    Unresolved,
 }
 
 impl OwnerHold {
@@ -318,6 +323,7 @@ impl OwnerHold {
         match self {
             Self::DisabledRepo => "needs a repo disabled on the host",
             Self::NoRepo => "needs a package no enabled repo serves",
+            Self::Unresolved => "may need a package the host did not have",
         }
     }
 }
@@ -464,7 +470,7 @@ fn unit_owner_holds(snap: &InspectionSnapshot) -> HashMap<String, Option<OwnerHo
         .map(|pkg| (format!("{}.{}", pkg.name, pkg.arch), pkg))
         .filter(|(id, _)| auto.contains(id.as_str()) && !leaves.contains(id.as_str()))
         .map(|(id, pkg)| {
-            let hold = owner_hold(rpm, &repos, &existing.baseline, &added, pkg, &id);
+            let hold = owner_hold(rpm, &repos, &added, pkg, &id);
             (id, hold)
         })
         .collect()
@@ -477,19 +483,24 @@ fn unit_owner_holds(snap: &InspectionSnapshot) -> HashMap<String, Option<OwnerHo
 /// from a repo the image enables, and so must every package installing it
 /// may pull in ([`possible_closure`]): every provider dnf may pick and
 /// every branch the image may take, since dnf fails the transaction when a
-/// requirement it settles on cannot be fetched. A requirement the
-/// collector could not read already counts as pulling in every added
-/// package. A package named in the base image is there whatever the
-/// export does. [`OwnerHold::DisabledRepo`] wins over
-/// [`OwnerHold::NoRepo`]: it is the one the operator can act on by
-/// including the owner in refine.
+/// requirement it settles on cannot be fetched. Every entry of
+/// `packages_added` counts, whatever its name: the collector subtracts the
+/// base image by `name.arch`, so an entry whose name the base image also
+/// has is another architecture, which the base image does not provide.
+///
+/// The closure names installed packages only. When the owner, or a
+/// package in its closure, has a requirement that may need a package the
+/// host did not have (`unresolved_requirements`: one no installed package
+/// satisfies in some branch, or one the collector could not read), the
+/// owner is [`OwnerHold::Unresolved`] (Mark Russell, 2026-11-21).
+/// [`OwnerHold::DisabledRepo`] wins over the others: it is the one the
+/// operator can act on by including the owner in refine.
 ///
 /// A snapshot with no recorded closure for the owner, a hand-built one,
 /// is checked on the owner alone.
 fn owner_hold(
     rpm: &RpmSection,
     repos: &InstallRepos,
-    baseline: &HashSet<&str>,
     added: &HashMap<String, &PackageEntry>,
     pkg: &PackageEntry,
     id: &str,
@@ -501,14 +512,20 @@ fn owner_hold(
     ) {
         return Some(OwnerHold::DisabledRepo);
     }
-    let mut hold = None;
-    for dep in possible_closure(rpm, id) {
-        let Some(entry) = added.get(&dep) else {
+    let unresolved: HashSet<&str> = rpm
+        .unresolved_requirements
+        .iter()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    let closure = possible_closure(rpm, id);
+    let mut hold = (unresolved.contains(id)
+        || closure.iter().any(|dep| unresolved.contains(dep.as_str())))
+    .then_some(OwnerHold::Unresolved);
+    for dep in &closure {
+        let Some(entry) = added.get(dep) else {
             continue;
         };
-        if baseline.contains(entry.name.as_str()) {
-            continue;
-        }
         match route_for(rpm, repos, entry, &no_uploads) {
             PackageRoute::DisabledRepo(_) => return Some(OwnerHold::DisabledRepo),
             PackageRoute::ByName if is_package_installable(entry) => {}

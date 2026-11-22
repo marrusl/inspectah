@@ -378,6 +378,22 @@ impl DepExpr {
         out
     }
 
+    /// Whether satisfying this requirement in the image may need a package
+    /// no installed one is: in some branch the image may take, no
+    /// installed package provides what it asks for.
+    ///
+    /// [`possible`](Self::possible) names installed packages only, so it
+    /// cannot show such a need: `(vendor-runtime unless local-switch)`
+    /// needed nothing on a host with `local-switch`, and needs
+    /// `vendor-runtime`, which the host never had, in an image without
+    /// it. Every branch counts, as in `possible`, and conditions are never
+    /// read, since what the image ends up with decides them. An `or` needs
+    /// one only when none of its operands is installed: dnf can take an
+    /// installed one, which `possible` names.
+    pub(super) fn may_need_uninstalled(&self, index: &dyn Providers) -> bool {
+        self.root.may_need_uninstalled(index)
+    }
+
     /// The installed packages every way of satisfying this expression
     /// needs: the part of [`pulled`](Self::pulled) that is a requirement
     /// rather than one choice among several.
@@ -553,6 +569,26 @@ impl Node {
                 } else if let Some(o) = otherwise {
                     o.collect_pulled(index, out);
                 }
+            }
+        }
+    }
+
+    /// This node's part of [`DepExpr::may_need_uninstalled`].
+    fn may_need_uninstalled(&self, index: &dyn Providers) -> bool {
+        match self {
+            Self::Match(m) => m.matching(index).is_empty(),
+            Self::And(xs) => xs.iter().any(|x| x.may_need_uninstalled(index)),
+            Self::Or(xs) => xs.iter().all(|x| x.may_need_uninstalled(index)),
+            Self::If {
+                then, otherwise, ..
+            }
+            | Self::Unless {
+                then, otherwise, ..
+            } => {
+                then.may_need_uninstalled(index)
+                    || otherwise
+                        .as_ref()
+                        .is_some_and(|o| o.may_need_uninstalled(index))
             }
         }
     }
@@ -1058,6 +1094,33 @@ mod tests {
         for (input, expected) in cases {
             let expr = DepExpr::parse(input).expect("parses");
             assert_eq!(expr.pulled(&index), set(expected), "input: {input}");
+        }
+    }
+
+    #[test]
+    fn may_need_uninstalled_reads_every_branch_and_no_condition() {
+        // `local-switch` and `helper` are installed; `vendor-runtime` and
+        // `missing` are not.
+        let index = TestIndex(&[("local-switch", "local-switch"), ("helper", "helper")]);
+        let cases: &[(&str, bool)] = &[
+            ("helper", false),
+            ("missing", true),
+            ("(vendor-runtime unless local-switch)", true),
+            ("(helper unless local-switch)", false),
+            ("(helper if missing)", false),
+            ("(helper if local-switch else missing)", true),
+            ("(missing or helper)", false),
+            ("(missing or vendor-runtime)", true),
+            ("(helper and missing)", true),
+            ("(helper with missing)", true),
+        ];
+        for (input, expected) in cases {
+            let expr = DepExpr::parse(input).expect("parses");
+            assert_eq!(
+                expr.may_need_uninstalled(&index),
+                *expected,
+                "input: {input}"
+            );
         }
     }
 

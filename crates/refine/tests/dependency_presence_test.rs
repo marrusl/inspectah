@@ -1,8 +1,10 @@
 //! A package something included depends on is in the image, whatever its
-//! own disposition: dnf installs it with the package that needs it. So
-//! the unit it owns is enabled on both export paths, when refine leaves it
-//! excluded by its non-leaf default and when the operator excludes it
-//! outright. Only when nothing included pulls it in is the unit omitted.
+//! own disposition, unless the base image provides what it is needed for:
+//! dnf installs it with the package that needs it. So the unit it owns is
+//! enabled on both export paths, guarded by its unit file since no install
+//! line names it, when refine leaves it excluded by its non-leaf default
+//! and when the operator excludes it outright. Only when nothing included
+//! pulls it in is the unit omitted.
 
 use std::collections::HashMap;
 
@@ -17,7 +19,9 @@ use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp};
 
 const UNIT: &str = "cockpit.socket";
-const ENABLED: &str = "    cockpit.socket";
+/// The guarded enable: `cockpit-ws` is present only as a dependency.
+const ENABLED: &str =
+    "if [ -e /usr/lib/systemd/system/cockpit.socket ]; then systemctl enable -- cockpit.socket; fi";
 const OMITTED: &str = "# Omitted: cockpit.socket (package 'cockpit-ws' is not carried: not user-installed on the source host, and nothing this image installs needs it)";
 
 fn package(name: &str) -> PackageEntry {
@@ -154,7 +158,10 @@ fn cockpit_ws_included(session: &RefineSession) -> bool {
 #[test]
 fn a_dependency_of_an_included_leaf_keeps_its_unit_on_both_paths() {
     let scan = scan_containerfile(&snapshot());
-    assert!(scan.lines().any(|l| l == ENABLED), "scan tarball:\n{scan}");
+    assert!(
+        scan.lines().any(|l| l.contains(ENABLED)),
+        "scan tarball:\n{scan}"
+    );
 
     let session = RefineSession::new(snapshot());
     assert!(
@@ -163,7 +170,7 @@ fn a_dependency_of_an_included_leaf_keeps_its_unit_on_both_paths() {
     );
     let refine = export_containerfile(&session);
     assert!(
-        refine.lines().any(|l| l == ENABLED) && !refine.contains(OMITTED),
+        refine.lines().any(|l| l.contains(ENABLED)) && !refine.contains(OMITTED),
         "unchanged refine export:\n{refine}"
     );
 }
@@ -175,7 +182,7 @@ fn an_explicitly_excluded_dependency_of_an_included_leaf_keeps_its_unit() {
     set_include(&mut session, "cockpit-ws", false);
     let refine = export_containerfile(&session);
     assert!(
-        refine.lines().any(|l| l == ENABLED) && !refine.contains(OMITTED),
+        refine.lines().any(|l| l.contains(ENABLED)) && !refine.contains(OMITTED),
         "dnf installs cockpit-ws with cockpit, so its unit stays:\n{refine}"
     );
 }
@@ -186,7 +193,7 @@ fn a_dependency_whose_parent_is_excluded_too_loses_its_unit() {
     set_include(&mut session, "cockpit", false);
     let refine = export_containerfile(&session);
     assert!(
-        refine.contains(OMITTED) && !refine.lines().any(|l| l == ENABLED),
+        refine.contains(OMITTED) && !refine.lines().any(|l| l.contains(ENABLED)),
         "nothing included pulls cockpit-ws in:\n{refine}"
     );
 }

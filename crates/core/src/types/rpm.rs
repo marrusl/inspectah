@@ -334,6 +334,18 @@ pub struct RpmSection {
     /// `dep_closures` entry.
     #[serde(default)]
     pub dep_alternatives: Option<BTreeMap<String, Vec<String>>>,
+    /// The added `name.arch` identities, leaf and auto, with a requirement
+    /// that may need a package the host did not have, sorted: a Requires
+    /// that no installed package can satisfy in some branch the image may
+    /// take (`(vendor-runtime unless local-switch)` with only
+    /// `local-switch` installed), or a dependency line the collector could
+    /// not read. The recorded closures name installed packages only, so
+    /// they cannot show what such a package may need. The collector's dnf
+    /// fallback reads no requirement and lists every identity.
+    ///
+    /// `None` whenever `dep_closures` is, and for an aggregate.
+    #[serde(default)]
+    pub unresolved_requirements: Option<Vec<String>>,
     #[serde(default)]
     pub module_streams: Vec<EnabledModuleStream>,
     #[serde(default)]

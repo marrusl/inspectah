@@ -8,9 +8,11 @@
 //!
 //! - An enabled template instance credits its template's owner.
 //! - An owner that needs a repo the image does not enable, its own, a
-//!   dependency's, or none, is not carried by default and is listed with
-//!   the reason; included, it installs as released. A carried owner's
-//!   dependency keeps its recorded `systemctl disable`.
+//!   dependency's (another architecture of a base-image package among
+//!   them), or none, or that may need a package the host did not have,
+//!   is not carried by default and is listed with the reason; included,
+//!   it installs as released. A carried owner's dependency keeps its
+//!   recorded `systemctl disable`, guarded.
 //! - An auto package the operator includes brings its dependencies: their
 //!   unit commands survive, guarded. It installs as released.
 //! - The transaction that enables a disabled repo names what the leaf
@@ -19,17 +21,20 @@
 //!   never a provider only the image might pick, and nothing for a
 //!   requirement the collector cannot read.
 //! - An owner is carried when the collector could not tell leaves from
-//!   dependencies and fell back to the dependency graph, and that fallback
-//!   keeps the roots the host had: a dependency cycle nothing installs,
-//!   and a package only a branch the image may take would require.
+//!   dependencies and fell back to the dependency graph. That fallback
+//!   classifies as released: a dependency cycle nothing installs is auto,
+//!   and a package only a branch the image may take would require stays a
+//!   root.
 //! - What the image may install counts every `or` operand and both
 //!   branches of a conditional, and a recommended package is never
 //!   certain: each keeps its unit command, guarded.
 //! - A unit whose package dnf may or may not install keeps its command,
 //!   run only if the unit file is in the image: an excluded or included
 //!   one of several providers, a dependency a conditional requirement
-//!   brings, on one host and on a fleet. Excluding the only provider an
-//!   included package requires keeps it plain.
+//!   brings, on one host and on a fleet. Only a package the export names
+//!   is certain: excluding the only provider the host had of what an
+//!   included package requires guards its command, since the base image
+//!   may provide it too.
 //! - A fleet names an owner one host enabled whatever the hostname order,
 //!   and does not name one a kept leaf pulls in on some host. A package
 //!   only some hosts have, once included, keeps its dependency's unit
@@ -401,6 +406,105 @@ fn an_owner_needing_a_repo_the_image_does_not_enable_is_not_carried_by_default()
     }
 }
 
+/// The reason a unit owner that may need a package the host did not have
+/// is not carried by default.
+const UNRESOLVED_HOLD: &str = "may need a package the host did not have";
+
+/// Both paths install `app` alone, as released, enable no disabled repo,
+/// and list `agent` as not carried with `reason`.
+fn assert_agent_held(run: &Exports, case: &str, reason: &str) {
+    let (block_line, _, _) = held_agent_surfaces(reason);
+    for (label, surfaces) in &run.paths {
+        let ctx = format!("{case}, {label}");
+        assert_eq!(
+            surfaces.install_names(),
+            ["app"],
+            "{ctx}: the install line is beta.6's:\n{}",
+            surfaces.containerfile
+        );
+        assert_eq!(
+            partner_install(&surfaces.containerfile),
+            None,
+            "{ctx}:\n{}",
+            surfaces.containerfile
+        );
+        assert!(
+            surfaces.not_carried_block().contains(&block_line.as_str()),
+            "{ctx}: {block_line:?}:\n{}",
+            surfaces.containerfile
+        );
+    }
+}
+
+/// The base image has `libvendor.x86_64`, and the host also has
+/// `libvendor.i686`, the only provider of the `libvendor.so.1` that
+/// `agent` requires, installed from a local RPM path or from the host's
+/// disabled `partner` repo. The collector subtracts the base image by
+/// `name.arch`, so `libvendor.i686` is an added package, and the plain
+/// install line cannot fetch it: `agent` is held, though its name is the
+/// base image's.
+#[test]
+fn another_arch_of_a_base_image_package_holds_its_owner() {
+    for (repo, reason) in [
+        ("@commandline", NO_REPO_HOLD),
+        ("partner", DISABLED_REPO_HOLD),
+    ] {
+        let host = agent_host(|h| {
+            h.package("agent")
+                .base_package("libvendor")
+                .package_arch("libvendor", "i686", repo, &["libvendor.so.1"])
+                .requires("agent", &["libvendor.so.1"])
+        });
+        let run = exports(host);
+        let rpm = run.snapshot.rpm.as_ref().expect("the rpm section");
+        assert!(
+            rpm.packages_added
+                .iter()
+                .any(|p| p.name == "libvendor" && p.arch == "i686" && p.source_repo == repo),
+            "{repo}: {:?}",
+            rpm.packages_added
+        );
+        assert_eq!(
+            rpm.dep_closures.as_ref().expect("closures")["agent.x86_64"],
+            ["libvendor.i686"],
+            "{repo}"
+        );
+        assert_agent_held(&run, repo, reason);
+    }
+}
+
+/// `agent` requires `(vendor-runtime unless local-switch)`. The host has
+/// `local-switch`, from a local RPM path, so it needs no `vendor-runtime`,
+/// which it never had; the image has neither, and needs `vendor-runtime`.
+/// Or `agent` has a requirement nested deeper than the collector reads.
+/// Either way it may need a package the host did not have: held.
+#[test]
+fn a_requirement_the_host_could_not_resolve_holds_its_owner() {
+    let nested = format!(
+        "{}vendor-runtime{}",
+        "(bash and ".repeat(17),
+        ")".repeat(17)
+    );
+    let cases = [
+        (
+            "unless",
+            agent_host(|h| {
+                h.package("agent")
+                    .package_from("local-switch", "@commandline")
+                    .requires("agent", &["(vendor-runtime unless local-switch)"])
+            }),
+        ),
+        (
+            "unread",
+            agent_host(|h| h.package("agent").requires("agent", &[&nested])),
+        ),
+    ];
+    for (case, host) in cases {
+        let run = exports(host);
+        assert_agent_held(&run, case, UNRESOLVED_HOLD);
+    }
+}
+
 /// `agent` owns the user-enabled `agent.service` and needs `agent-helper`,
 /// which only the host's disabled `partner` repo serves. Once the operator
 /// includes `agent` in refine, it installs as any auto package an operator
@@ -469,8 +573,9 @@ fn including_an_owner_that_needs_a_disabled_repo_installs_it_as_released() {
 
 /// `daemon` owns the user-enabled `daemon.service` and needs `helper`,
 /// whose `helper.service` the host disabled against its enabling preset.
-/// dnf installs `helper` with the carried `daemon`, preset and all, so
-/// both paths keep the recorded `systemctl disable`.
+/// dnf installs `helper` with the carried `daemon`, preset and all,
+/// unless the base image provides what `daemon` needs, so both paths keep
+/// the recorded `systemctl disable`, guarded: no line names `helper`.
 #[test]
 fn a_carried_owners_dependency_keeps_its_disable() {
     let host = base_host()
@@ -487,8 +592,8 @@ fn a_carried_owners_dependency_keeps_its_disable() {
 
     for (label, surfaces) in &run.paths {
         assert!(
-            acts(&surfaces.containerfile, "disable", "helper.service"),
-            "{label}: the recorded disable survives:\n{}",
+            guards(&surfaces.containerfile, "disable", "helper.service"),
+            "{label}: the recorded disable survives, guarded:\n{}",
             surfaces.containerfile
         );
         assert!(
@@ -1132,10 +1237,10 @@ fn including_an_auto_package_by_hand_routes_as_released() {
 // ── No leaf data from dnf ────────────────────────────────────────────
 
 /// dnf cannot say what the operator installed, and the two added packages
-/// need each other with nothing needing either, so one of them was
-/// installed by someone and which is not known: the dependency graph keeps
-/// both as leaves. `beta` owns an enabled unit: both paths install it and
-/// enable its unit, and list nothing.
+/// need each other with nothing needing either, so the dependency graph
+/// makes both auto, as released. `beta` owns an enabled unit, which
+/// carries it whatever the leaves: both paths install it and enable its
+/// unit, and list nothing.
 #[test]
 fn the_graph_fallback_still_carries_a_unit_owner() {
     let host = UnitHost::new()
@@ -1152,10 +1257,11 @@ fn the_graph_fallback_still_carries_a_unit_owner() {
     let run = exports(host);
 
     let rpm = run.snapshot.rpm.as_ref().expect("the rpm section");
+    assert_eq!(rpm.leaf_packages.as_deref(), Some(&[][..]));
     assert_eq!(
-        rpm.leaf_packages.as_deref(),
+        rpm.auto_packages.as_deref(),
         Some(&["alpha.x86_64".to_owned(), "beta.x86_64".to_owned()][..]),
-        "the unrooted cycle is kept"
+        "the unrooted cycle is auto"
     );
 
     for (label, surfaces) in &run.paths {
@@ -1172,6 +1278,41 @@ fn the_graph_fallback_still_carries_a_unit_owner() {
         assert!(
             surfaces.not_carried_block().is_empty(),
             "{label}:\n{}",
+            surfaces.containerfile
+        );
+    }
+}
+
+/// No leaf data. `alpha` and `beta` need each other with nothing needing
+/// either, and `beta` requires `vendor-runtime`, installed from a local
+/// RPM path the export carries nothing for. As released, the dependency
+/// graph makes the root the package nothing needs, `app`, and the cycle
+/// auto: both paths install `app` alone.
+#[test]
+fn the_graph_fallback_leaves_an_unrooted_cycle_auto() {
+    let host = UnitHost::new()
+        .base_package("bash")
+        .base_package("glibc")
+        .package("app")
+        .package("alpha")
+        .package("beta")
+        .package_from("vendor-runtime", "@commandline")
+        .userinstalled_unavailable()
+        .requires("alpha", &["beta"])
+        .requires("beta", &["alpha", "vendor-runtime"])
+        .preset("disable *");
+    let run = exports(host);
+
+    let rpm = run.snapshot.rpm.as_ref().expect("the rpm section");
+    assert_eq!(
+        rpm.leaf_packages.as_deref(),
+        Some(&["app.x86_64".to_owned()][..])
+    );
+    for (label, surfaces) in &run.paths {
+        assert_eq!(
+            surfaces.install_names(),
+            ["app"],
+            "{label}: the install line is beta.6's:\n{}",
             surfaces.containerfile
         );
     }
@@ -1302,17 +1443,59 @@ fn excluding_one_of_several_providers_guards_its_unit() {
     }
 }
 
-/// The inverse: `alternate` is the only provider of the `transport` that
-/// the included `app` requires, so dnf installs it with `app` although the
-/// operator excluded it, and its enable survives.
+/// `alternate` is the only provider on the host of the `transport` that
+/// the included `app` requires, and the operator excluded it. dnf
+/// installs it with `app` unless the image already provides `transport`,
+/// which the host cannot show, so its enable survives, guarded: only a
+/// package the export names is certain. The install line is beta.6's.
 #[test]
-fn excluding_the_only_provider_keeps_its_unit() {
+fn excluding_the_only_provider_guards_its_unit() {
     let mut session = RefineSession::new(collected(transport_host(None)));
     set_package(&mut session, "alternate", "x86_64", false);
     let excluded = surfaces_of(&session);
     assert!(
-        acts(&excluded.containerfile, "enable", "alternate.service"),
-        "app requires it, so dnf installs it:\n{}",
+        guards(&excluded.containerfile, "enable", "alternate.service"),
+        "app requires it, so dnf may install it:\n{}",
+        excluded.containerfile
+    );
+    assert!(
+        !acts(&excluded.containerfile, "enable", "alternate.service"),
+        "{}",
+        excluded.containerfile
+    );
+    assert_eq!(
+        excluded.install_names(),
+        ["app"],
+        "{}",
+        excluded.containerfile
+    );
+}
+
+/// The base image has `base-provider`, which provides `transport`, and the
+/// source host never had it, so the host's only provider is `alternate`.
+/// With `alternate` excluded, dnf installs `app` alone, as beta.6 did, and
+/// `alternate.service` is not in the image: its enable is guarded, never
+/// plain.
+#[test]
+fn a_target_only_provider_leaves_an_excluded_dependency_guarded() {
+    let host = transport_host(None).target_only_package("base-provider");
+    let mut session = RefineSession::new(collected(host));
+    set_package(&mut session, "alternate", "x86_64", false);
+    let excluded = surfaces_of(&session);
+    assert_eq!(
+        excluded.install_names(),
+        ["app"],
+        "the install line is beta.6's:\n{}",
+        excluded.containerfile
+    );
+    assert!(
+        guards(&excluded.containerfile, "enable", "alternate.service"),
+        "{}",
+        excluded.containerfile
+    );
+    assert!(
+        !acts(&excluded.containerfile, "enable", "alternate.service"),
+        "a plain enable fails on the missing unit:\n{}",
         excluded.containerfile
     );
 }

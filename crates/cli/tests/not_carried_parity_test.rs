@@ -693,13 +693,15 @@ fn the_fixture_is_baseline_backed_and_has_a_not_carried_list() {
     assert_eq!(scan.config_count_lines().len(), 1, "{}", scan.containerfile);
 }
 
-/// The common path writes no guarded command. Every unit this host
-/// carries belongs to a package the export certainly installs: a leaf, a
-/// carried unit owner, or one an installed leaf requires, as `httpd`
-/// requires `httpd-core`. So each command is a plain `RUN systemctl`, on
-/// the scan and both refine exports, and no guard comment is written.
+/// Only a package the export names is certain, so the common path guards
+/// one command. `rhc` is a carried unit owner, named on the install line,
+/// and `rhcd.service` is enabled plainly. `httpd.service` belongs to
+/// `httpd-core`, which the leaf `httpd` requires and no line names: the
+/// base image could provide what `httpd` needs through a package the host
+/// never had, so its enable runs only if the unit file is in the image.
+/// The same on the scan and both refine exports.
 #[test]
-fn the_fixture_writes_no_guarded_command() {
+fn the_fixture_guards_only_a_dependencys_command() {
     let run = run();
     let surfaces =
         std::iter::once(("scan", &run.scan)).chain(run.refine.iter().map(|(l, s)| (*l, s)));
@@ -707,16 +709,17 @@ fn the_fixture_writes_no_guarded_command() {
         let cf = &surfaces.containerfile;
         assert_eq!(
             crate::unit_hosts::guarded_commands(cf),
-            [],
+            [(
+                "enable".to_owned(),
+                "httpd.service".to_owned(),
+                "/usr/lib/systemd/system/httpd.service".to_owned()
+            )],
             "{label}:\n{cf}"
         );
-        assert!(!cf.contains("RUN if "), "{label}:\n{cf}");
-        for unit in ["httpd.service", "rhcd.service"] {
-            assert!(
-                crate::unit_hosts::acts(cf, "enable", unit),
-                "{label}: {unit} is enabled plainly:\n{cf}"
-            );
-        }
+        assert!(
+            crate::unit_hosts::acts(cf, "enable", "rhcd.service"),
+            "{label}: rhcd.service is enabled plainly:\n{cf}"
+        );
     }
 }
 

@@ -6614,8 +6614,9 @@ fn t37_packaged_trigger_host(competing: bool) -> UnitHost {
 /// package file it is. With `base-provider` there too, dnf need not
 /// install `alt`, so the timer's enable runs only if the trigger's file is
 /// in the image: a plain enable would start a timer whose unit is missing.
-/// Control: with `alt` the only provider, `app` certainly brings it, and
-/// the enable is plain.
+/// With `alt` the only provider on the host the enable is guarded too:
+/// only a package an install line names is certain, and the base image
+/// may provide `transport` through a package the host never had.
 #[test]
 fn t37_a_trigger_whose_package_may_be_absent_guards_the_enable() {
     let trigger = etc_path("report.service");
@@ -6659,7 +6660,12 @@ fn t37_a_trigger_whose_package_may_be_absent_guards_the_enable() {
         &only,
         &[(config_item(&trigger), false), (package_item("alt"), false)],
     ));
-    assert!(acts(&cf, "enable", "report.timer"), "alt is certain:\n{cf}");
+    assert!(!acts(&cf, "enable", "report.timer"), "not plain:\n{cf}");
+    assert_eq!(
+        unit_hosts::guarded_commands(&cf),
+        [("enable".to_owned(), "report.timer".to_owned(), trigger)],
+        "{cf}"
+    );
 }
 
 /// T37, a vendor trigger with a state change: `report.timer` names

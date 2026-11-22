@@ -69,6 +69,7 @@ struct LeafClassification {
     leaf_dep_tree: serde_json::Value,
     dep_closures: Option<BTreeMap<String, Vec<String>>>,
     dep_alternatives: Option<BTreeMap<String, Vec<String>>>,
+    unresolved_requirements: Option<Vec<String>>,
 }
 
 impl LeafClassification {
@@ -78,6 +79,7 @@ impl LeafClassification {
         leaf_dep_tree: serde_json::Value,
         dep_closures: BTreeMap<String, Vec<String>>,
         dep_alternatives: BTreeMap<String, Vec<String>>,
+        unresolved_requirements: Vec<String>,
     ) -> Self {
         Self {
             leaf_packages: Some(leaf_packages),
@@ -85,6 +87,7 @@ impl LeafClassification {
             leaf_dep_tree,
             dep_closures: Some(dep_closures),
             dep_alternatives: Some(dep_alternatives),
+            unresolved_requirements: Some(unresolved_requirements),
         }
     }
 
@@ -95,6 +98,7 @@ impl LeafClassification {
             leaf_dep_tree: empty_leaf_dep_tree(),
             dep_closures: None,
             dep_alternatives: None,
+            unresolved_requirements: None,
         }
     }
 }
@@ -549,6 +553,7 @@ impl Inspector for RpmInspector {
             leaf_dep_tree: leaf_classification.leaf_dep_tree,
             dep_closures: leaf_classification.dep_closures,
             dep_alternatives: leaf_classification.dep_alternatives,
+            unresolved_requirements: leaf_classification.unresolved_requirements,
             baseline_suppressed,
             installed_groups,
             ..Default::default()
@@ -787,6 +792,10 @@ struct DepGraphResult {
     /// Supplements that need several added packages at once. Always empty
     /// for the dnf graph, which does not follow Supplements.
     joint: Vec<JointSupplement>,
+    /// The packages with a requirement that may need a package the host
+    /// did not have (`RpmDepGraph::unresolved`). Every package for the
+    /// dnf graph, which reads no requirement.
+    unresolved: HashSet<String>,
     transitive: bool,
 }
 
@@ -816,6 +825,11 @@ struct RpmDepGraph {
     requires: HashMap<String, HashSet<String>>,
     /// Supplements no single edge can express (`JointSupplement`).
     joint: Vec<JointSupplement>,
+    /// The packages with a Requires that may need a package no installed
+    /// one is (`DepExpr::may_need_uninstalled`), or a dependency line
+    /// the parser could not read (`PackageDeps::unread`). What installing
+    /// one may need is then more than `depends_on` can name.
+    unresolved: HashSet<String>,
 }
 
 /// A Supplements that pulls `package` in only when added packages from
@@ -954,6 +968,7 @@ fn classify_deps_rpm(
             held: HashMap::new(),
             requires: HashMap::new(),
             joint,
+            unresolved: HashSet::new(),
         });
     }
 
@@ -966,6 +981,7 @@ fn classify_deps_rpm(
     }
     let mut held = depends_on.clone();
     let mut requires = depends_on.clone();
+    let mut unresolved: HashSet<String> = HashSet::new();
 
     // Build name→canonical-id map for sentinel header → package_id lookup.
     let name_to_ids: HashMap<&str, Vec<&String>> = {
@@ -1019,6 +1035,7 @@ fn classify_deps_rpm(
                         .filter(|id| name_from_id(id) != *pkg_name)
                         .cloned(),
                 );
+                unresolved.insert((*package_id).clone());
             }
             for (relation, dep) in deps {
                 match relation {
@@ -1039,6 +1056,11 @@ fn classify_deps_rpm(
                         // A Recommends is never certain: dnf skips a weak
                         // dependency it cannot install.
                         if *relation == Relation::Requires {
+                            // dnf fails the transaction on a requirement it
+                            // cannot satisfy; it skips a weak dependency.
+                            if dep.may_need_uninstalled(&index) {
+                                unresolved.insert((*package_id).clone());
+                            }
                             // A base-image package, or this package itself,
                             // is there whenever this package is installed.
                             let assured =
@@ -1103,6 +1125,7 @@ fn classify_deps_rpm(
         held,
         requires,
         joint,
+        unresolved,
     })
 }
 
@@ -1355,6 +1378,7 @@ fn classify_leaf_auto(
             held: rpm_graph.held,
             requires: rpm_graph.requires,
             joint: rpm_graph.joint,
+            unresolved: rpm_graph.unresolved,
             transitive: false,
         }
     } else if let Some(dnf_deps) = classify_deps_dnf(exec, &added_ids) {
@@ -1363,6 +1387,7 @@ fn classify_leaf_auto(
             depends_on: dnf_deps,
             requires: HashMap::new(),
             joint: Vec::new(),
+            unresolved: added_ids.clone(),
             transitive: true,
         }
     } else {
@@ -1459,6 +1484,12 @@ fn classify_leaf_auto(
             (lf.clone(), serde_json::json!(auto_deps))
         })
         .collect();
+    let unresolved: BTreeSet<String> = graph
+        .unresolved
+        .iter()
+        .filter(|id| classified.contains(id.as_str()))
+        .cloned()
+        .collect();
 
     LeafClassification::authoritative(
         leaf,
@@ -1466,6 +1497,7 @@ fn classify_leaf_auto(
         serde_json::Value::Object(dep_tree),
         dep_closures,
         dep_alternatives,
+        unresolved.into_iter().collect(),
     )
 }
 
@@ -1514,11 +1546,9 @@ fn leaf_closure(
 /// install: an edge drawn only because a branch could apply in the image
 /// would turn a root into a dependency of what it requires.
 ///
-/// A dependency cycle no leaf reaches, such as two packages that require
-/// each other with nothing requiring either, was installed by someone, but
-/// which member is not known. Each member of such a cycle that nothing
-/// outside the cycle reaches becomes a leaf, so the export carries what
-/// the host had rather than dropping both.
+/// A dependency cycle no root reaches, such as two packages that require
+/// each other with nothing requiring either, is auto, as released: one of
+/// its members was installed by someone, but which is not known.
 fn graph_based_split(
     added_ids: &HashSet<String>,
     held: &HashMap<String, HashSet<String>>,
@@ -1531,34 +1561,10 @@ fn graph_based_split(
             depended_on.insert(dep.clone());
         }
     }
-    let mut reached: HashSet<String> = HashSet::new();
-    for root in added_ids.iter().filter(|id| !depended_on.contains(*id)) {
-        reached.extend(leaf_closure(root, held, joint));
-    }
-    let unrooted: Vec<&String> = added_ids
-        .iter()
-        .filter(|id| depended_on.contains(*id) && !reached.contains(*id))
-        .collect();
-    let reaches: HashMap<&str, HashSet<String>> = unrooted
-        .iter()
-        .map(|id| (id.as_str(), leaf_closure(id, held, joint)))
-        .collect();
-    // A member of an unrooted cycle that every unrooted package reaching
-    // it is reached by in turn: nothing outside its cycle installs it.
-    let cycle_roots: HashSet<&str> = unrooted
-        .iter()
-        .map(|id| id.as_str())
-        .filter(|id| {
-            reaches
-                .iter()
-                .filter(|(other, from)| *other != id && from.contains(*id))
-                .all(|(other, _)| reaches[id].contains(*other))
-        })
-        .collect();
     let mut leaf = Vec::new();
     let mut auto = Vec::new();
     for package_id in added_ids {
-        if depended_on.contains(package_id) && !cycle_roots.contains(package_id.as_str()) {
+        if depended_on.contains(package_id) {
             auto.push(package_id.clone());
         } else {
             leaf.push(package_id.clone());
@@ -4026,12 +4032,10 @@ R\t(alternate if (missing-cap if switch))
     }
 
     #[test]
-    fn the_graph_fallback_keeps_a_cycle_nothing_installs() {
+    fn the_graph_fallback_leaves_a_cycle_nothing_installs_auto() {
         // No leaf data. alpha and beta require each other and nothing
-        // requires either, so one of them was installed by someone; which
-        // is not known, so both are roots. gamma, which beta requires, is
-        // their dependency, and delta, which nothing reaches, is a root
-        // as before.
+        // requires either: as released, both are auto, as gamma, which
+        // beta requires, is. delta, which nothing reaches, is the root.
         let exec = dep_graph_executor(
             "alpha beta delta gamma",
             "@@alpha\nR\tbeta\n@@beta\nR\talpha\nR\tgamma\n@@delta\n@@gamma\n",
@@ -4046,15 +4050,15 @@ R\t(alternate if (missing-cap if switch))
             .map(|n| make_test_entry(n, "noarch"))
             .collect();
         let result = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
+        assert_eq!(result.leaf_packages, Some(vec!["delta.noarch".into()]));
         assert_eq!(
-            result.leaf_packages,
+            result.auto_packages,
             Some(vec![
                 "alpha.noarch".into(),
                 "beta.noarch".into(),
-                "delta.noarch".into()
+                "gamma.noarch".into()
             ])
         );
-        assert_eq!(result.auto_packages, Some(vec!["gamma.noarch".into()]));
     }
 
     #[test]

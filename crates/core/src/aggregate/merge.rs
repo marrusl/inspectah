@@ -1569,6 +1569,7 @@ pub fn merge_rpm_sections(
             leaf_dep_tree,
             dep_closures,
             dep_alternatives,
+            unresolved_requirements: None,
             module_streams,
             version_locks,
             module_stream_conflicts,
