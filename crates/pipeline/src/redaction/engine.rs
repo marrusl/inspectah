@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 
 use crate::redaction::patterns::{PATTERNS, SECRET_GROUP, SecretPattern, scan_shadow};
 use crate::render::language_packages::scrub_manifest_auth;
+use crate::render::safety::kernel_args;
 use inspectah_core::types::destination::Destination;
 use inspectah_core::types::repo::{SectionId, is_repo_id, parse_repo_sections};
 
@@ -920,13 +921,78 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
 /// raised for each sensitive parameter.
 const KERNEL_CMDLINE_PATH: &str = "/proc/cmdline";
 
+/// Redacts a kernel command line one kernel argument at a time.
+///
+/// The generic patterns find where a secret is, but a pattern's secret can
+/// stop short of what the kernel reads as the value: in
+/// `"rd.iscsi.password=alpha bravo"` the whole argument is quoted, so the
+/// value is `alpha bravo` while the pattern stops at `alpha`. So each
+/// argument ([`kernel_args`]) a secret falls in has its whole parsed value
+/// replaced by one token, or, when the secret reaches into the name or
+/// the argument has no value, the whole argument. Quoting around a value
+/// stays. No part of a secret argument's value survives, whatever the
+/// quoting.
+fn redact_kernel_cmdline(cmdline: &str, registry: &mut CounterRegistry) -> String {
+    let mut matches: Vec<(usize, EligibleMatch)> = Vec::new();
+    for (idx, pat) in PATTERNS.iter().enumerate() {
+        for em in collect_eligible_matches(pat, cmdline, Some(KERNEL_CMDLINE_PATH)) {
+            matches.push((idx, em));
+        }
+    }
+    dedup_overlapping_matches(&mut matches);
+
+    let args = kernel_args(cmdline);
+    let overlaps = |a: &Range<usize>, b: &Range<usize>| a.start < b.end && b.start < a.end;
+    // Each span to replace, with the pattern that found its secret.
+    let mut spans: Vec<(Range<usize>, usize)> = Vec::new();
+    for (pat_idx, em) in &matches {
+        let secret = em.start..em.end;
+        let mut in_an_arg = false;
+        for arg in args.iter().filter(|arg| overlaps(&arg.raw_span(), &secret)) {
+            in_an_arg = true;
+            // A secret that reaches past the name (into the `=` or the
+            // value's quotes) still takes only the value.
+            let span = match arg.value_span() {
+                Some(v) if !overlaps(&arg.name_span(), &secret) => v,
+                _ => arg.raw_span(),
+            };
+            spans.push((span, *pat_idx));
+        }
+        // Only whitespace lies between arguments; a secret there is
+        // still replaced as found.
+        if !in_an_arg {
+            spans.push((secret, *pat_idx));
+        }
+    }
+
+    // A value span lies inside its argument's span, and two arguments
+    // never overlap, so merging overlaps leaves one span per argument.
+    spans.sort_by_key(|(span, _)| (span.start, std::cmp::Reverse(span.end)));
+    let mut merged: Vec<(Range<usize>, usize)> = Vec::new();
+    for (span, pat_idx) in spans {
+        match merged.last_mut() {
+            Some((last, _)) if span.start < last.end => last.end = last.end.max(span.end),
+            _ => merged.push((span, pat_idx)),
+        }
+    }
+
+    let mut content = cmdline.to_string();
+    for (span, pat_idx) in merged.into_iter().rev() {
+        let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+        let token = registry.token_for(&kind_label, &cmdline[span.clone()]);
+        content.replace_range(span, &token);
+    }
+    content
+}
+
 /// Where a hinted value ends, which is what must have been replaced for the
 /// hint to count as handled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HintValueEnd {
-    /// At the next whitespace: the kernel command line, whose parameters
-    /// are separated by whitespace.
-    Whitespace,
+    /// At the end of the kernel argument, less the double quotes around
+    /// it: the kernel command line, whose arguments are separated by
+    /// whitespace outside quotes ([`kernel_args`]).
+    KernelArgument,
     /// At the end of the line, or at a `#` comment after whitespace: a
     /// `.env` file, where the value runs to the end of the line.
     EndOfLine,
@@ -934,11 +1000,12 @@ enum HintValueEnd {
 
 impl HintValueEnd {
     /// The end that applies to content collected at `path`. Only the
-    /// kernel command line is known to end a value at whitespace; anywhere
-    /// else the conservative end is the end of the line.
+    /// kernel command line is known to end a value at the end of its
+    /// argument; anywhere else the conservative end is the end of the
+    /// line.
     fn for_path(path: &str) -> Self {
         if path == KERNEL_CMDLINE_PATH {
-            Self::Whitespace
+            Self::KernelArgument
         } else {
             Self::EndOfLine
         }
@@ -952,11 +1019,13 @@ impl HintValueEnd {
 /// (`password`, `DB_PASSWORD`, `key=`) survives a successful pass. An
 /// occurrence counts as handled only when its value, past optional spacing
 /// and one `=` or `:`, is a token in `issued` (one this run's registry
-/// handed out) up to the next whitespace, and, under
-/// [`HintValueEnd::EndOfLine`], nothing but whitespace or a `#` comment
-/// follows it on the line. A value that only starts with a token
-/// (`REDACTED_PASSWORD_1/hunter2`, `REDACTED_PASSWORD_1 still-secret` in a
-/// `.env` file) or is only spelled like one is the host's, and so is
+/// handed out) up to the next whitespace (under
+/// [`HintValueEnd::KernelArgument`], to the end of the kernel argument,
+/// quotes aside), and, under [`HintValueEnd::EndOfLine`], nothing but whitespace
+/// or a `#` comment follows it on the line. A value that only starts with
+/// a token (`REDACTED_PASSWORD_1/hunter2`, `REDACTED_PASSWORD_1
+/// still-secret` in a `.env` file or inside a quoted kernel argument) or
+/// is only spelled like one is the host's, and so is
 /// anything else (a value left in place, a longer identifier such as
 /// `tokenizer`, a comment mentioning the word); any of these leaves the
 /// hint unresolved.
@@ -972,12 +1041,33 @@ fn keyword_survives_with_its_value(
             .strip_prefix(['=', ':'])
             .unwrap_or(rest)
             .trim_start_matches([' ', '\t']);
-        let token_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-        if !issued.contains(&rest[..token_end]) {
+        let token_end = match value_end {
+            // The value runs to the end of the kernel argument it starts
+            // in, which whitespace inside quotes does not end.
+            HintValueEnd::KernelArgument => {
+                let at = content.len() - rest.len();
+                kernel_args(content)
+                    .iter()
+                    .find(|arg| arg.raw_span().contains(&at))
+                    .map_or(0, |arg| arg.raw_span().end - at)
+            }
+            HintValueEnd::EndOfLine => rest.find(char::is_whitespace).unwrap_or(rest.len()),
+        };
+        let value = &rest[..token_end];
+        let value = match value_end {
+            // The double quotes around a kernel argument or its value are
+            // quoting, not value: `"password=TOKEN"`, `password="TOKEN"`.
+            HintValueEnd::KernelArgument => {
+                let value = value.strip_prefix('"').unwrap_or(value);
+                value.strip_suffix('"').unwrap_or(value)
+            }
+            HintValueEnd::EndOfLine => value,
+        };
+        if !issued.contains(value) {
             return true;
         }
         match value_end {
-            HintValueEnd::Whitespace => false,
+            HintValueEnd::KernelArgument => false,
             HintValueEnd::EndOfLine => {
                 let after = &rest[token_end..];
                 let line_rest = after[..after.find('\n').unwrap_or(after.len())].trim_start();
@@ -1549,23 +1639,9 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // Scan the kernel cmdline in the kernelboot section
     if let Some(ref mut kernelboot) = snapshot.kernel_boot {
         // Scan cmdline for password=, key=, secret= etc.
-        let cmdline_findings = scan_content(&kernelboot.cmdline, "/proc/cmdline");
+        let cmdline_findings = scan_content(&kernelboot.cmdline, KERNEL_CMDLINE_PATH);
         if !cmdline_findings.is_empty() {
-            let mut content = kernelboot.cmdline.clone();
-            let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-            for (idx, pat) in PATTERNS.iter().enumerate() {
-                for em in collect_eligible_matches(pat, &content, Some("/proc/cmdline")) {
-                    all_matches.push((idx, em));
-                }
-            }
-            dedup_overlapping_matches(&mut all_matches);
-            all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-            for (pat_idx, em) in all_matches {
-                let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                let token = registry.token_for(&kind_label, em.secret(&content));
-                content.replace_range(em.start..em.end, &token);
-            }
-            kernelboot.cmdline = content;
+            kernelboot.cmdline = redact_kernel_cmdline(&kernelboot.cmdline, &mut registry);
             all_findings.extend(cmdline_findings);
         }
 
@@ -2630,7 +2706,7 @@ baseurl = https://cdn.redhat.com
         registry.token_for("password", "a");
         registry.token_for("password", "b");
         // (content, keyword, survives to the end of the line, survives to
-        // the next whitespace)
+        // the end of the kernel argument)
         let cases = [
             (
                 "proxy_password = REDACTED_PASSWORD_1",
@@ -2695,14 +2771,33 @@ baseurl = https://cdn.redhat.com
                 true,
                 false,
             ),
+            // Kernel argument quoting around a token is not more value.
+            (
+                "ro \"rd.iscsi.password=REDACTED_PASSWORD_1\" quiet",
+                "rd.iscsi.password",
+                true,
+                false,
+            ),
+            (
+                "ro rd.iscsi.password=\"REDACTED_PASSWORD_1\"",
+                "rd.iscsi.password",
+                true,
+                false,
+            ),
+            (
+                "ro \"rd.iscsi.password=REDACTED_PASSWORD_1 bravo\"",
+                "rd.iscsi.password",
+                true,
+                true,
+            ),
             // Spelled like a token, but this run never issued it.
             ("DB_KEY=REDACTED_PASSWORD_3", "DB_KEY", true, true),
             ("DB_KEY=REDACTED_COMPANY_2026", "DB_KEY", true, true),
         ];
-        for (content, kw, to_line_end, to_whitespace) in cases {
+        for (content, kw, to_line_end, to_arg_end) in cases {
             for (end, survives) in [
                 (HintValueEnd::EndOfLine, to_line_end),
-                (HintValueEnd::Whitespace, to_whitespace),
+                (HintValueEnd::KernelArgument, to_arg_end),
             ] {
                 assert_eq!(
                     keyword_survives_with_its_value(content, kw, &registry.issued, end),
@@ -2713,7 +2808,7 @@ baseurl = https://cdn.redhat.com
         }
         assert_eq!(
             HintValueEnd::for_path(KERNEL_CMDLINE_PATH),
-            HintValueEnd::Whitespace
+            HintValueEnd::KernelArgument
         );
         assert_eq!(
             HintValueEnd::for_path("opt/app/.env"),
@@ -3987,6 +4082,63 @@ baseurl = https://cdn.redhat.com
             other => {
                 panic!("expected FullyRedacted when password= is regex-handled, got {other:?}")
             }
+        }
+    }
+
+    /// A secret on the kernel command line loses its whole kernel-parsed
+    /// value, however the argument is quoted, so no fragment of it
+    /// survives; the hint the collector raises for it counts as handled.
+    #[test]
+    fn cmdline_redaction_replaces_the_whole_kernel_value() {
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        let cases: &[(&str, &str)] = &[
+            (
+                "ro \"rd.iscsi.password=alpha bravo\"",
+                "ro \"rd.iscsi.password=REDACTED_PASSWORD_1\"",
+            ),
+            (
+                "ro rd.iscsi.password=\"alpha bravo\"",
+                "ro rd.iscsi.password=\"REDACTED_PASSWORD_1\"",
+            ),
+            (
+                "ro \"rd.iscsi.password=alpha\" quiet",
+                "ro \"rd.iscsi.password=REDACTED_PASSWORD_1\" quiet",
+            ),
+            (
+                "quiet password=hunter2 rd.lvm.lv=vg/root",
+                "quiet password=REDACTED_PASSWORD_1 rd.lvm.lv=vg/root",
+            ),
+        ];
+        for (cmdline, want) in cases {
+            let mut snapshot = InspectionSnapshot::new();
+            snapshot.kernel_boot = Some(KernelBootSection {
+                cmdline: (*cmdline).into(),
+                ..Default::default()
+            });
+            let name = cmdline
+                .split_whitespace()
+                .find(|p| p.contains("password="))
+                .and_then(|p| p.split('=').next())
+                .expect("each case has a password parameter");
+            snapshot.redaction_hints = vec![RedactionHint {
+                path: KERNEL_CMDLINE_PATH.into(),
+                reason: format!("kernel cmdline contains sensitive parameter: {name}"),
+                confidence: Some(Confidence::High),
+            }];
+            redact(&mut snapshot, &RedactOptions::default());
+            let got = &snapshot.kernel_boot.as_ref().unwrap().cmdline;
+            assert_eq!(got, want, "{cmdline}");
+            for fragment in ["alpha", "bravo", "hunter2"] {
+                assert!(!got.contains(fragment), "{cmdline}: {got}");
+            }
+            assert!(
+                matches!(
+                    snapshot.redaction_state,
+                    Some(RedactionState::FullyRedacted { .. })
+                ),
+                "{cmdline}: {:?}",
+                snapshot.redaction_state
+            );
         }
     }
 

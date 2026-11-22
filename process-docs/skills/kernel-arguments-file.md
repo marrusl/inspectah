@@ -30,16 +30,35 @@ paths' files with `toml`. `toml` is a dev-dependency only; production
 builds the array with `users::toml_string`, the TOML basic-string escaper
 the blueprint fragment uses.
 
-## Which arguments
+## One model of a kernel argument
 
-`safety::operator_kargs` splits the command line the way the kernel
-does: on whitespace except inside double quotes, so
-`dyndbg="file x.c +p"` is one argument and is carried with its quotes.
-It drops boot loader and installer arguments (`is_bootloader_karg`) and
-any argument holding a line break or other control character. It does
-not apply the shell filter: the file is TOML, not a `RUN` line, and
-escaping is the escaper's job. Refusing `"` or a space there silently
-dropped real arguments.
+`safety::kernel_args` parses the command line the way the kernel's
+`next_arg` (`lib/cmdline.c`) does, into `KernelArg` values with spans
+into the line: the raw argument, the name before the first `=`, and the
+value after it. A double quote opening the whole argument
+(`"rd.iscsi.password=a b"`) and one opening the value
+(`dyndbg="file x.c +p"`) are both quoting; whitespace inside quotes does
+not end the argument. Every consumer reads arguments through it, never
+by splitting on whitespace or matching raw text:
+
+- **The boot loader filter** (`is_bootloader_karg`) compares the parsed
+  name against `KARGS_BOOTLOADER_NAMES`, with `-` equal to `_` as the
+  kernel's `parameq` has it, so `"root=UUID=x"` and `root="UUID=x"` are
+  dropped like `root=UUID=x`. A raw prefix check let a quoted `root=`
+  into kargs.d, where it can redirect root selection.
+- **`operator_kargs`** also drops an argument holding a control
+  character, or the byte `0xA0`, which the kernel's `isspace` counts as
+  whitespace inside a UTF-8 character where `kernel_args` cannot split.
+  It does not apply the shell filter: the file is TOML, and a retained
+  argument is written in its original spelling through the escaper.
+- **Redaction** (`redact_kernel_cmdline` in `redaction/engine.rs`) runs
+  the generic patterns to find a secret, then replaces the whole parsed
+  value of each argument a secret falls in (the whole argument when the
+  secret touches the name), keeping the quotes. A pattern can stop at
+  the first space, so replacing only its match left
+  `"rd.iscsi.password=REDACTED_PASSWORD_1 bravo"` in the snapshot. The
+  cmdline hint check reads the value to the end of the argument, quotes
+  aside, for the same reason.
 
 ## A redacted argument is owed, never written
 
@@ -47,13 +66,16 @@ Redaction rewrites `/proc/cmdline` in the snapshot, so an argument such
 as `rd.iscsi.password=secret` arrives as
 `rd.iscsi.password=REDACTED_PASSWORD_1`. A placeholder is not a usable
 value, and on an iSCSI root it can stop the machine booting. So
-`split_operator_kargs` sets aside every argument matching
+`split_operator_kargs` sets aside every argument whose raw text matches
 `REDACTION_TOKEN_RE` (`REDACTED_<KIND>_<N>`, as `token_for` writes it):
 the file never holds one, and when all operator arguments are redacted
 no file is written at all.
 
-`owed_kernel_arguments` names each set-aside argument with its
-placeholders shown as `<value>` (`rd.iscsi.password=<value>`), and the
+`owed_kernel_arguments` names each set-aside argument from its parsed
+name with the whole value shown as `<value>`
+(`rd.iscsi.password=<value>`), never from the raw text, so nothing of
+the value is repeated whatever redaction left; an argument whose name
+holds a placeholder, or that has no value, is `<value>` alone. The
 provisioning surfaces in `render/machine_state.rs` carry it beside the
 machine-state steps: the Containerfile's Provisioning section
 (`# bootc install to-disk --karg rd.iscsi.password=<value>`), the
@@ -64,6 +86,12 @@ the web view's machine-state notices. The `/proc/cmdline` line in
 `secrets-review.md` points at those steps. The web view's
 `machine_state_steps` list is machine-state rows only and does not carry
 it.
+
+Tests for this cover both quoting forms from the collector to both
+export paths (`kargs_file_export_test.rs`) and assert each word of a
+multi-word secret absent on its own, not only the whole value. Pick
+words no export holds otherwise: the report's stylesheet contains
+`alpha`.
 
 A new redaction form on the command line (a marker other than
 `REDACTED_<KIND>_<N>`) needs `REDACTION_TOKEN_RE` widened, or its

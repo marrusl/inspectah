@@ -1,6 +1,7 @@
 //! Shell and HTML safety functions for renderer output.
 
 use regex::Regex;
+use std::ops::Range;
 use std::sync::LazyLock;
 
 use super::comment::LINE_TERMINATORS;
@@ -609,68 +610,184 @@ pub fn html_escape(input: &str) -> String {
     output
 }
 
-/// Exact bare-word kernel parameters managed by bootloader/base image.
-const KARGS_BOOTLOADER_EXACT: &[&str] =
-    &["ro", "rhgb", "quiet", "splash", "nosplash", "noplymouth"];
-
-/// Prefixes whose matching kargs are bootloader/installer-owned.
-const KARGS_BOOTLOADER_PREFIXES: &[&str] = &[
-    "root=",
-    "rd.lvm.lv=",
-    "rd.luks.uuid=",
-    "resume=",
-    "BOOT_IMAGE=",
-    "initrd=",
-    "LANG=",
-    "console=",
-    "crashkernel=",
+/// Kernel parameter names the boot loader, installer or base image owns.
+/// An argument with one of these names is never carried, whatever its
+/// value or quoting.
+const KARGS_BOOTLOADER_NAMES: &[&str] = &[
+    "ro",
+    "rhgb",
+    "quiet",
+    "splash",
+    "nosplash",
+    "noplymouth",
+    "root",
+    "rd.lvm.lv",
+    "rd.luks.uuid",
+    "resume",
+    "BOOT_IMAGE",
+    "initrd",
+    "LANG",
+    "console",
+    "crashkernel",
 ];
 
-/// Returns true if karg is a bootloader-managed parameter.
-pub fn is_bootloader_karg(karg: &str) -> bool {
-    if KARGS_BOOTLOADER_EXACT.contains(&karg) {
-        return true;
-    }
-    KARGS_BOOTLOADER_PREFIXES
-        .iter()
-        .any(|prefix| karg.starts_with(prefix))
+/// One argument of a kernel command line, read the way the kernel's
+/// parameter parser reads it (`next_arg` in the kernel's
+/// `lib/cmdline.c`).
+///
+/// An argument ends at whitespace outside double quotes. A double quote
+/// opening the whole argument (`"name=a b"`) and one opening the value
+/// (`name="a b"`) are both quoting: neither is part of the name or the
+/// value, and one closing quote at the argument's end is dropped with
+/// them. The name runs to the first `=`; the value is everything after
+/// it. Every span points into the command line the argument was parsed
+/// from, so a caller can replace exactly the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelArg<'a> {
+    cmdline: &'a str,
+    raw: Range<usize>,
+    name: Range<usize>,
+    value: Option<Range<usize>>,
 }
 
-/// Splits a kernel command line into its arguments the way the kernel
-/// does: on whitespace, except inside double quotes, which stay part of
-/// the argument (`dyndbg="file x.c +p"` is one argument).
-pub fn cmdline_args(cmdline: &str) -> Vec<&str> {
-    let mut args = Vec::new();
-    let mut start = None;
-    let mut in_quote = false;
-    for (i, c) in cmdline.char_indices() {
-        if c == '"' {
-            in_quote = !in_quote;
-        }
-        if c.is_ascii_whitespace() && !in_quote {
-            if let Some(s) = start.take() {
-                args.push(&cmdline[s..i]);
-            }
-        } else if start.is_none() {
-            start = Some(i);
-        }
+impl<'a> KernelArg<'a> {
+    /// The argument as written, quotes included.
+    pub fn raw(&self) -> &'a str {
+        &self.cmdline[self.raw.clone()]
     }
-    if let Some(s) = start {
-        args.push(&cmdline[s..]);
+
+    /// Where [`Self::raw`] sits in the command line.
+    pub fn raw_span(&self) -> Range<usize> {
+        self.raw.clone()
     }
-    args
+
+    /// The parameter name the kernel reads.
+    pub fn name(&self) -> &'a str {
+        &self.cmdline[self.name.clone()]
+    }
+
+    /// Where [`Self::name`] sits in the command line.
+    pub fn name_span(&self) -> Range<usize> {
+        self.name.clone()
+    }
+
+    /// The value the kernel reads, or `None` for an argument with no `=`.
+    pub fn value(&self) -> Option<&'a str> {
+        self.value.clone().map(|v| &self.cmdline[v])
+    }
+
+    /// Where [`Self::value`] sits in the command line.
+    pub fn value_span(&self) -> Option<Range<usize>> {
+        self.value.clone()
+    }
 }
+
+/// The ASCII whitespace the kernel's `isspace` counts, which ends an
+/// unquoted argument. Unlike `u8::is_ascii_whitespace` it includes the
+/// vertical tab. The kernel also counts one non-ASCII byte
+/// ([`KERNEL_LATIN1_SPACE`]), which [`operator_kargs`] refuses instead.
+fn is_kernel_space(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\x0b' | b'\x0c' | b'\r')
+}
+
+/// The kernel's parameter name comparison (`parameq`): `-` and `_` are
+/// the same character.
+fn kernel_name_eq(a: &str, b: &str) -> bool {
+    let norm = |c: u8| if c == b'-' { b'_' } else { c };
+    a.len() == b.len() && a.bytes().zip(b.bytes()).all(|(x, y)| norm(x) == norm(y))
+}
+
+/// Splits a kernel command line into its arguments the way the kernel's
+/// `next_arg` does. Quotes and whitespace are ASCII, so every span is on
+/// a character boundary.
+pub fn kernel_args(cmdline: &str) -> Vec<KernelArg<'_>> {
+    let bytes = cmdline.as_bytes();
+    let mut args = Vec::new();
+    let mut pos = 0;
+    loop {
+        while pos < bytes.len() && is_kernel_space(bytes[pos]) {
+            pos += 1;
+        }
+        if pos == bytes.len() {
+            return args;
+        }
+        let start = pos;
+        let quoted = bytes[pos] == b'"';
+        let body = if quoted { pos + 1 } else { pos };
+        let mut in_quote = quoted;
+        // The kernel takes the first `=` past the argument's first
+        // character, quoted or not.
+        let mut equals = None;
+        let mut end = body;
+        while end < bytes.len() && (in_quote || !is_kernel_space(bytes[end])) {
+            if equals.is_none() && end != body && bytes[end] == b'=' {
+                equals = Some(end);
+            }
+            if bytes[end] == b'"' {
+                in_quote = !in_quote;
+            }
+            end += 1;
+        }
+        let closing_quote = end > body && bytes[end - 1] == b'"';
+        let (name, value) = match equals {
+            None => {
+                let name_end = if quoted && closing_quote {
+                    end - 1
+                } else {
+                    end
+                };
+                (body..name_end, None)
+            }
+            Some(eq) => {
+                let mut value_start = eq + 1;
+                let value_quoted = value_start < end && bytes[value_start] == b'"';
+                if value_quoted {
+                    value_start += 1;
+                }
+                let value_end = if (value_quoted || quoted) && closing_quote {
+                    (end - 1).max(value_start)
+                } else {
+                    end
+                };
+                (body..eq, Some(value_start..value_end))
+            }
+        };
+        args.push(KernelArg {
+            cmdline,
+            raw: start..end,
+            name,
+            value,
+        });
+        pos = end;
+    }
+}
+
+/// Returns true if `arg` names a parameter the boot loader, installer or
+/// base image owns. The parsed name decides, so quoting cannot hide one.
+pub fn is_bootloader_karg(arg: &KernelArg<'_>) -> bool {
+    KARGS_BOOTLOADER_NAMES
+        .iter()
+        .any(|name| kernel_name_eq(arg.name(), name))
+}
+
+/// The byte the kernel's `isspace` also counts as whitespace (Latin-1
+/// no-break space). In UTF-8 it is a continuation byte (`à` is `C3 A0`),
+/// so the kernel splits an argument holding one inside a character, where
+/// [`kernel_args`] cannot.
+const KERNEL_LATIN1_SPACE: u8 = 0xa0;
 
 /// Extracts operator-defined kargs from a cmdline string, filtering out
-/// bootloader-managed ones and any holding a line break or other control
-/// character. The arguments go into a TOML string array, which escapes
-/// quotes and backslashes itself, so no shell character is refused.
-pub fn operator_kargs(cmdline: &str) -> Vec<String> {
-    cmdline_args(cmdline)
+/// bootloader-managed ones, any holding a line break or other control
+/// character, and any the kernel would split where [`kernel_args`] does
+/// not ([`KERNEL_LATIN1_SPACE`]). The arguments go into a TOML string
+/// array, which escapes quotes and backslashes itself, so no shell
+/// character is refused.
+pub fn operator_kargs(cmdline: &str) -> Vec<KernelArg<'_>> {
+    kernel_args(cmdline)
         .into_iter()
-        .filter(|karg| !is_bootloader_karg(karg))
-        .filter(|karg| !has_line_break_or_control(karg))
-        .map(str::to_owned)
+        .filter(|arg| !is_bootloader_karg(arg))
+        .filter(|arg| !has_line_break_or_control(arg.raw()))
+        .filter(|arg| !arg.raw().as_bytes().contains(&KERNEL_LATIN1_SPACE))
         .collect()
 }
 
@@ -932,29 +1049,36 @@ mod tests {
         }
     }
 
+    /// The raw text of each operator argument on `cmdline`.
+    fn operator_raws(cmdline: &str) -> Vec<&str> {
+        operator_kargs(cmdline).iter().map(KernelArg::raw).collect()
+    }
+
     #[test]
     fn test_operator_kargs() {
-        let result = operator_kargs("quiet crashkernel=auto nosmt=force");
-        assert!(!result.contains(&"quiet".to_string()));
-        assert!(!result.contains(&"crashkernel=auto".to_string()));
-        assert!(result.contains(&"nosmt=force".to_string()));
+        assert_eq!(
+            operator_raws("quiet crashkernel=auto nosmt=force"),
+            vec!["nosmt=force"]
+        );
     }
 
     #[test]
     fn test_operator_kargs_filters_bootloader() {
-        let result = operator_kargs("ro rhgb quiet root=/dev/sda1 BOOT_IMAGE=/vmlinuz nosmt=force");
+        let result = operator_raws("ro rhgb quiet root=/dev/sda1 BOOT_IMAGE=/vmlinuz nosmt=force");
         assert_eq!(result, vec!["nosmt=force"]);
     }
 
     /// A quoted value with spaces is one argument, as the kernel reads it;
     /// characters a shell would treat specially are kept, and an argument
-    /// with a control character is refused.
+    /// with a control character, or a byte the kernel splits on inside a
+    /// UTF-8 character, is refused.
     #[test]
     fn operator_kargs_split_like_the_kernel() {
         let cases: &[(&str, &[&str])] = &[
             ("", &[]),
             ("  quiet  ", &[]),
             ("a=1\tb=2", &["a=1", "b=2"]),
+            ("a=1\u{b}b=2", &["a=1", "b=2"]),
             (
                 "quiet dyndbg=\"file x.c +p\" nosmt",
                 &["dyndbg=\"file x.c +p\"", "nosmt"],
@@ -963,9 +1087,85 @@ mod tests {
             ("x=$y;z back\\slash", &["x=$y;z", "back\\slash"]),
             ("unclosed=\"a b", &["unclosed=\"a b"]),
             ("bell=\u{7} ok=1", &["ok=1"]),
+            ("x\u{e0}root=UUID=old ok=1", &["ok=1"]),
         ];
         for (cmdline, want) in cases {
-            assert_eq!(operator_kargs(cmdline), *want, "{cmdline:?}");
+            assert_eq!(operator_raws(cmdline), *want, "{cmdline:?}");
+        }
+    }
+
+    /// Each argument's raw text, name and value, as the kernel's
+    /// `next_arg` reads them.
+    #[test]
+    fn kernel_args_read_name_and_value_like_next_arg() {
+        type Case<'a> = (&'a str, &'a [(&'a str, &'a str, Option<&'a str>)]);
+        let cases: &[Case] = &[
+            ("nosmt", &[("nosmt", "nosmt", None)]),
+            ("a=b=c", &[("a=b=c", "a", Some("b=c"))]),
+            ("a=", &[("a=", "a", Some(""))]),
+            ("=a=b", &[("=a=b", "=a", Some("b"))]),
+            ("\"quiet\"", &[("\"quiet\"", "quiet", None)]),
+            ("\"quiet", &[("\"quiet", "quiet", None)]),
+            ("\"", &[("\"", "", None)]),
+            (
+                "ro \"root=UUID=old-host\" nosmt=force",
+                &[
+                    ("ro", "ro", None),
+                    ("\"root=UUID=old-host\"", "root", Some("UUID=old-host")),
+                    ("nosmt=force", "nosmt", Some("force")),
+                ],
+            ),
+            (
+                "\"rd.iscsi.password=alpha bravo\"",
+                &[(
+                    "\"rd.iscsi.password=alpha bravo\"",
+                    "rd.iscsi.password",
+                    Some("alpha bravo"),
+                )],
+            ),
+            (
+                "rd.iscsi.password=\"alpha bravo\"",
+                &[(
+                    "rd.iscsi.password=\"alpha bravo\"",
+                    "rd.iscsi.password",
+                    Some("alpha bravo"),
+                )],
+            ),
+            ("x=\"", &[("x=\"", "x", Some(""))]),
+            ("\"x=\"", &[("\"x=\"", "x", Some(""))]),
+            ("\"a=\"b\"\"", &[("\"a=\"b\"\"", "a", Some("b\""))]),
+            ("\"a b\"=c", &[("\"a b\"=c", "a b\"", Some("c"))]),
+            (
+                "x=\"a b\"c d",
+                &[("x=\"a b\"c", "x", Some("a b\"c")), ("d", "d", None)],
+            ),
+        ];
+        for (cmdline, want) in cases {
+            let got: Vec<(&str, &str, Option<&str>)> = kernel_args(cmdline)
+                .iter()
+                .map(|a| (a.raw(), a.name(), a.value()))
+                .collect();
+            assert_eq!(got, *want, "{cmdline:?}");
+        }
+    }
+
+    /// A boot loader parameter is dropped by its parsed name, however it
+    /// is quoted, and `-` matches `_` as the kernel compares names.
+    #[test]
+    fn bootloader_kargs_drop_by_parsed_name() {
+        for cmdline in [
+            "root=UUID=old-host",
+            "\"root=UUID=old-host\"",
+            "root=\"UUID=old-host\"",
+            "\"rd.lvm.lv=rhel/root\"",
+            "rd.lvm.lv=\"rhel/root\"",
+            "\"rd.luks.uuid=luks-1\"",
+            "\"crashkernel=1G-4G:192M\"",
+            "\"BOOT-IMAGE=/vmlinuz\"",
+            "\"quiet\"",
+            "root",
+        ] {
+            assert_eq!(operator_raws(cmdline), Vec::<&str>::new(), "{cmdline:?}");
         }
     }
 }

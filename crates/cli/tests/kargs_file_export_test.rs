@@ -134,3 +134,99 @@ fn both_export_paths_write_bootc_kargs_and_name_the_redacted_one() {
         "{notices:?}"
     );
 }
+
+/// Parameter names the kargs file must never carry, however they are
+/// quoted on the source host.
+const FILTERED_NAMES: &[&str] = &["root", "rd.lvm.lv", "rd.luks.uuid", "console"];
+
+/// The words of the password on the quoted hosts' command lines, each of
+/// which must be absent on its own, not only the whole value. Spelled to
+/// appear nowhere else: the report's stylesheet holds `alpha`.
+const PASSWORD_WORDS: &[&str] = &["alpha7k", "bravo7k"];
+
+/// Hosts whose kernel command line quotes its arguments both ways the
+/// kernel reads quotes: around the whole argument and around the value.
+/// Each carries only `nosmt=force` and owes `rd.iscsi.password=<value>`.
+const QUOTED_CMDLINES: &[(&str, &str)] = &[
+    (
+        "whole-argument quotes",
+        "BOOT_IMAGE=/vmlinuz ro \"root=UUID=old-host\" \"rd.lvm.lv=rhel/root\" \
+         \"rd.luks.uuid=luks-old\" \"console=ttyS0,115200\" nosmt=force \
+         \"rd.iscsi.password=alpha7k bravo7k\"\n",
+    ),
+    (
+        "value quotes",
+        "BOOT_IMAGE=/vmlinuz ro root=\"UUID=old-host\" rd.lvm.lv=\"rhel/root\" \
+         rd.luks.uuid=\"luks-old\" console=\"ttyS0,115200\" nosmt=force \
+         rd.iscsi.password=\"alpha7k bravo7k\"\n",
+    ),
+];
+
+/// One quoted host's export tree: the kargs file carries no filtered
+/// name, and no word of the password reaches any file in it.
+fn assert_quoted_export(label: &str, tree: &tempfile::TempDir) {
+    let kargs = read(tree, KARGS_FILE);
+    assert_eq!(
+        parse_kargs(&kargs),
+        vec!["nosmt=force"],
+        "{label}:\n{kargs}"
+    );
+    for name in FILTERED_NAMES {
+        assert!(!kargs.contains(name), "{label}: {name} in\n{kargs}");
+    }
+    let containerfile = read(tree, "Containerfile");
+    assert!(
+        containerfile.contains(&format!("#   bootc install to-disk --karg {OWED}\n")),
+        "{label}:\n{containerfile}"
+    );
+    let audit = read(tree, "audit-report.md");
+    assert!(
+        [
+            "rd.iscsi.password=REDACTED_PASSWORD_1\"",
+            "rd.iscsi.password=\"REDACTED_PASSWORD_1\""
+        ]
+        .iter()
+        .any(|whole| audit.contains(whole)),
+        "{label}: the audit's command line shows the whole value redacted:\n{audit}"
+    );
+    for entry in walk(tree.path()) {
+        let Ok(text) = std::fs::read_to_string(&entry) else {
+            continue;
+        };
+        for word in PASSWORD_WORDS {
+            assert!(
+                !text.contains(word),
+                "{label}: {} holds {word:?}",
+                entry.display()
+            );
+        }
+    }
+}
+
+/// A quoted boot loader argument stays out of the kargs file, and a
+/// quoted password with a space is redacted whole: neither word of it
+/// reaches the snapshot, the notices or any file of either export.
+#[test]
+fn quoted_kernel_arguments_are_read_as_the_kernel_reads_them() {
+    for (label, cmdline) in QUOTED_CMDLINES {
+        let snap = reload(&scan(SysctlHost::new().file("/proc/cmdline", cmdline)));
+        let json = serde_json::to_string(&snap).expect("the snapshot serializes");
+        let notices: Vec<String> = inspectah_pipeline::render::machine_state::export_notices(&snap)
+            .iter()
+            .map(|n| n.text().to_owned())
+            .collect();
+        for word in PASSWORD_WORDS {
+            assert!(!json.contains(word), "{label}: the snapshot holds {word:?}");
+            assert!(
+                notices.iter().all(|n| !n.contains(word)),
+                "{label}: {notices:?}"
+            );
+        }
+        assert_eq!(notices.len(), 1, "{label}: {notices:?}");
+
+        let from_scan = render_export(&snap);
+        assert_quoted_export(&format!("{label}, scan export"), &from_scan);
+        let from_refine = export_session(&session(&snap));
+        assert_quoted_export(&format!("{label}, refine export"), &from_refine);
+    }
+}

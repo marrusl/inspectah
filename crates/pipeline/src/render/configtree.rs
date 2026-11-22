@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use super::safety::{BareWord, has_line_break_or_control, operator_kargs};
+use super::safety::{BareWord, KernelArg, has_line_break_or_control, operator_kargs};
 use super::users::toml_string;
 use crate::build::extract::is_single_normal_component;
 
@@ -1220,16 +1220,19 @@ fn flatpak_provision_service(apps: &[&inspectah_core::types::containers::Flatpak
 /// in cmdline order.
 fn split_operator_kargs(
     kb: &inspectah_core::types::kernelboot::KernelBootSection,
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<KernelArg<'_>>, Vec<KernelArg<'_>>) {
     operator_kargs(&kb.cmdline)
         .into_iter()
-        .partition(|karg| !REDACTION_TOKEN_RE.is_match(karg))
+        .partition(|karg| !REDACTION_TOKEN_RE.is_match(karg.raw()))
 }
 
 /// The kernel arguments a deployed machine owes at install time: each
 /// operator argument whose value redaction replaced, which the kargs file
-/// therefore leaves out, with every placeholder shown as `<value>`
-/// (`rd.iscsi.password=<value>`). Empty when there are none.
+/// therefore leaves out. Each is named by its parsed parameter name with
+/// the whole value shown as `<value>` (`rd.iscsi.password=<value>`), so
+/// no part of the argument's text beyond its name is repeated; one whose
+/// name redaction touched, or that has no value, is `<value>` alone.
+/// Empty when there are none.
 pub fn owed_kernel_arguments(snap: &InspectionSnapshot) -> Vec<String> {
     let Some(kb) = &snap.kernel_boot else {
         return Vec::new();
@@ -1237,10 +1240,11 @@ pub fn owed_kernel_arguments(snap: &InspectionSnapshot) -> Vec<String> {
     split_operator_kargs(kb)
         .1
         .iter()
-        .map(|karg| {
-            REDACTION_TOKEN_RE
-                .replace_all(karg, KARGS_VALUE_HOLE)
-                .into_owned()
+        .map(|karg| match karg.value() {
+            Some(_) if !REDACTION_TOKEN_RE.is_match(karg.name()) => {
+                format!("{}={KARGS_VALUE_HOLE}", karg.name())
+            }
+            _ => KARGS_VALUE_HOLE.to_string(),
         })
         .collect()
 }
@@ -1257,7 +1261,7 @@ fn kargs_toml(kb: &inspectah_core::types::kernelboot::KernelBootSection) -> Opti
     if carried.is_empty() {
         return None;
     }
-    let items: Vec<String> = carried.iter().map(|k| toml_string(k)).collect();
+    let items: Vec<String> = carried.iter().map(|k| toml_string(k.raw())).collect();
     Some(format!("{KARGS_HEADER}kargs = [{}]\n", items.join(", ")))
 }
 
@@ -1684,6 +1688,30 @@ mod tests {
                 None,
                 &["rd.iscsi.password=<value>"],
             ),
+            // Quoting does not hide a boot loader name or a redacted value,
+            // and an owed argument repeats only its parsed name.
+            (
+                "ro \"root=UUID=old-host\" root=\"UUID=x\" nosmt=force",
+                Some(&["nosmt=force"]),
+                &[],
+            ),
+            (
+                "\"rd.lvm.lv=rhel/root\" rd.lvm.lv=\"rhel/swap\" \"rd.luks.uuid=luks-1\" nosmt",
+                Some(&["nosmt"]),
+                &[],
+            ),
+            (
+                "\"rd.iscsi.password=REDACTED_PASSWORD_1\" \
+                 rd.iscsi.password=\"REDACTED_PASSWORD_2\" \"a=b\"",
+                Some(&["\"a=b\""]),
+                &["rd.iscsi.password=<value>", "rd.iscsi.password=<value>"],
+            ),
+            (
+                "\"rd.iscsi.password=REDACTED_PASSWORD_1 bravo\"",
+                None,
+                &["rd.iscsi.password=<value>"],
+            ),
+            ("REDACTED_GITHUBTOKEN_1", None, &["<value>"]),
         ];
         for (cmdline, carried, owed) in cases {
             let mut snap = InspectionSnapshot::new();
