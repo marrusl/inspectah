@@ -339,16 +339,19 @@ export function MainContent({
     [viewData, machineStatePaths],
   );
 
-  // The item id a link to a Configuration path reveals.
+  // The item id a link to a Configuration path reveals, and the hash the
+  // units section's link writes.
+  const configItemId = useCallback(
+    (configPath: string) =>
+      machineStatePaths.has(configPath)
+        ? machineStateItemId(configPath)
+        : `configs:${configPath}`,
+    [machineStatePaths],
+  );
   const navigateToConfig = useCallback(
     (configPath: string) =>
-      onNavigateToItem?.(
-        "config",
-        machineStatePaths.has(configPath)
-          ? machineStateItemId(configPath)
-          : `configs:${configPath}`,
-      ),
-    [onNavigateToItem, machineStatePaths],
+      onNavigateToItem?.("config", configItemId(configPath)),
+    [onNavigateToItem, configItemId],
   );
 
   // A config entry whose path is also carried by Service Drop-ins is
@@ -996,6 +999,7 @@ export function MainContent({
           onFocusSearch={handleFocusUnitsSearch}
           registerFocusFirstRow={registerFocusFirstUnitRow}
           configPaths={configPaths}
+          configItemId={configItemId}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
           pendingGuard={serviceGuard}

@@ -307,6 +307,8 @@ describe("MainContent: the machine-state block", () => {
     ).getByTestId("required-config-path");
     expect(link.tagName).toBe("A");
     expect(link).toHaveTextContent(KEY);
+    // The hash names the target the click reveals.
+    expect(link).toHaveAttribute("href", `#machine-state:${KEY}`);
     await userEvent.click(link);
     expect(onNavigateToItem).toHaveBeenCalledWith(
       "config",

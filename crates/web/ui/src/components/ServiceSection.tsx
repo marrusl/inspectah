@@ -80,6 +80,13 @@ export interface ServiceSectionProps {
    * links to its config row (§ 6.6 item 7).
    */
   configPaths?: ReadonlySet<string>;
+  /**
+   * The item id a navigation to a Configuration path reveals, which a
+   * `required_config` link also writes as its hash, so the two name the
+   * same target: `configs:<path>` for a config row, the machine-state
+   * row's id for a class path.
+   */
+  configItemId?: (path: string) => string;
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
   /**
@@ -148,6 +155,11 @@ const CLEAR_QUERY_LABEL = "Clear filter";
 
 /** No config row to link to. */
 const NO_CONFIG_PATHS: ReadonlySet<string> = new Set();
+
+/** A config row's item id, the one `DecisionItem` gives it. */
+function configRowItemId(path: string): string {
+  return `configs:${path}`;
+}
 
 /** The section id an `Also=` member link navigates to (§ 6.11). */
 const UNITS_SECTION_ID = "units";
@@ -544,6 +556,7 @@ function InstancePaths({
   pathTestId,
   paths,
   onNavigateToConfig,
+  configItemId = configRowItemId,
 }: {
   id: string;
   testId: string;
@@ -552,6 +565,8 @@ function InstancePaths({
   /** Each path, and whether it links to its config row (§ 6.6 item 7). */
   paths: RowPath[];
   onNavigateToConfig?: (path: string) => void;
+  /** The item id a link's hash names, as `ServiceSectionProps.configItemId`. */
+  configItemId?: (path: string) => string;
 }) {
   return (
     <div id={id} role="gridcell" data-testid={testId} className="inspectah-unit-paths">
@@ -565,7 +580,7 @@ function InstancePaths({
           {" "}
           {onNavigateToConfig && linked ? (
             <a
-              href={`#configs:${p}`}
+              href={`#${configItemId(p)}`}
               data-testid={pathTestId}
               onClick={(e) => {
                 e.preventDefault();
@@ -823,6 +838,7 @@ interface UnitBranchViewProps {
   onNavigateToItem?: (sectionId: string, itemId: string) => void;
   configPaths: ReadonlySet<string>;
   onNavigateToConfig?: (path: string) => void;
+  configItemId?: (path: string) => string;
 }
 
 /** A unit row and the drop-ins nested under it (§ 6.2, § 6.12). */
@@ -838,6 +854,7 @@ function UnitBranchView({
   onNavigateToItem,
   configPaths,
   onNavigateToConfig,
+  configItemId,
 }: UnitBranchViewProps) {
   const svc = branch.head.record.data;
   const p = unitRowPresentation(svc, { groupId, unitRowKeys, configPaths });
@@ -1027,6 +1044,7 @@ function UnitBranchView({
             pathTestId="required-config-path"
             paths={p.requiredConfig}
             onNavigateToConfig={onNavigateToConfig}
+            configItemId={configItemId}
           />
         )}
         {p.dataPaths.length > 0 && (
@@ -1108,6 +1126,7 @@ export function ServiceSection({
   onFocusSearch,
   registerFocusFirstRow,
   configPaths = NO_CONFIG_PATHS,
+  configItemId,
   onViewUpdate,
   onMutationError,
   pendingGuard,
@@ -1275,6 +1294,7 @@ export function ServiceSection({
               onNavigateToItem={onNavigateToItem}
               configPaths={configPaths}
               onNavigateToConfig={onNavigateToConfig}
+              configItemId={configItemId}
             />
           ))}
 
