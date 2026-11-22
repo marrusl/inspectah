@@ -25,8 +25,9 @@ to date, all found by hand on a real host rather than by the suite:
 2. `quadlet/` — written by `write_config_tree` on **both** paths, then
    deleted on the web path by the step-`2h` allowlist. The comment
    justifying the deletion claimed the Containerfile reached quadlets
-   through `config/` paths; it never did, and `configtree.rs` skips the
-   quadlet prefix precisely so that it cannot.
+   through `config/` paths; it never did, and `configtree.rs` leaves
+   every recorded quadlet to the containers section precisely so that it
+   cannot.
 3. `language-packages/<eco>/<hash>/…` — the mirror image. The manifest
    writer lived in the refine crate, so the **CLI** tarball emitted the
    `COPY` and wrote nothing. Moved to

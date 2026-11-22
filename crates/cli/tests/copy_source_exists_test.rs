@@ -765,3 +765,159 @@ fn a_withheld_flatpak_service_is_no_copy_source_on_either_path() {
     assert_every_copy_source_exists("refine web export, service withheld", &root);
     assert_every_staged_file_is_copied("refine web export, service withheld", &root);
 }
+
+// ── Files under the quadlet directory that are not quadlets ──────────
+
+/// A file under `/etc/containers/systemd/` the containers inspector does
+/// not record as a quadlet unit: a stray `.conf`, read by nothing.
+const QUADLET_DIR_STRAY: &str = "/etc/containers/systemd/notes.conf";
+const QUADLET_DIR_STRAY_CONTENT: &str = "# local notes for webapp\n";
+/// A quadlet drop-in. Quadlet reads `<unit>.d/*.conf`, the inspector
+/// scans only the directory's top level, so the config walk carries it.
+const QUADLET_DROP_IN: &str = "/etc/containers/systemd/webapp.container.d/limits.conf";
+const QUADLET_DROP_IN_CONTENT: &str = "[Container]\nMemory=512m\n";
+/// A whole-file private key under the prefix: a machine-state member,
+/// withheld whatever directory it sits in.
+const QUADLET_DIR_KEY: &str = "/etc/containers/systemd/certs/registry.key";
+const QUADLET_DIR_KEY_CONTENT: &str = "-----BEGIN PRIVATE KEY-----\n\
+     MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj\n\
+     MzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDuictGeurT8jNbvJZHtCSuYEvu\n\
+     -----END PRIVATE KEY-----\n";
+/// Container configuration outside the quadlet directory, which no
+/// section other than Configuration ever claimed: the control case.
+const REGISTRIES_DROP_IN: &str = "/etc/containers/registries.conf.d/50-local.conf";
+const REGISTRIES_DROP_IN_CONTENT: &str =
+    "[[registry]]\nlocation = \"registry.example.com\"\ninsecure = false\n";
+
+/// The populated host with non-quadlet files beside its quadlet.
+fn quadlet_dir_host_mock(cache_dir: &Path) -> MockExecutor {
+    populated_host_mock(cache_dir)
+        .with_dir("/etc/containers", vec!["systemd", "registries.conf.d"])
+        .with_dir("/etc/containers/registries.conf.d", vec!["50-local.conf"])
+        .with_file(REGISTRIES_DROP_IN, REGISTRIES_DROP_IN_CONTENT)
+        .with_dir(
+            QUADLET_DIR,
+            vec![
+                "webapp.container",
+                "webapp.container.d",
+                "notes.conf",
+                "certs",
+            ],
+        )
+        .with_dir(
+            "/etc/containers/systemd/webapp.container.d",
+            vec!["limits.conf"],
+        )
+        .with_file(QUADLET_DROP_IN, QUADLET_DROP_IN_CONTENT)
+        .with_file(QUADLET_DIR_STRAY, QUADLET_DIR_STRAY_CONTENT)
+        .with_dir("/etc/containers/systemd/certs", vec!["registry.key"])
+        .with_file(QUADLET_DIR_KEY, QUADLET_DIR_KEY_CONTENT)
+}
+
+/// Every file `/etc/containers/systemd/` and `/etc/containers/` hold on
+/// the host is carried by exactly one section of `root`, and the key
+/// is carried by none.
+fn assert_quadlet_dir_carried_once(path_label: &str, root: &Path) {
+    let files = staged_files(root);
+    // A quadlet is staged by name under `quadlet/`; configuration at its
+    // own path under `config/`. Every place one host file can land.
+    let staged_at = |host_path: &str| -> Vec<&String> {
+        let as_config = format!("config/{}", host_path.trim_start_matches('/'));
+        let as_quadlet = format!("quadlet/{}", file_name(host_path));
+        files
+            .iter()
+            .filter(|f| **f == as_config || **f == as_quadlet)
+            .collect()
+    };
+    for (host_path, content) in [
+        (QUADLET_DIR_STRAY, QUADLET_DIR_STRAY_CONTENT),
+        (QUADLET_DROP_IN, QUADLET_DROP_IN_CONTENT),
+        (REGISTRIES_DROP_IN, REGISTRIES_DROP_IN_CONTENT),
+    ] {
+        let rel = format!("config/{}", host_path.trim_start_matches('/'));
+        assert_eq!(
+            staged_at(host_path),
+            vec![&rel],
+            "{path_label}: {host_path} is carried once, as configuration"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(&rel)).expect("the staged file reads"),
+            content,
+            "{path_label}: {host_path} keeps its content"
+        );
+    }
+    assert_eq!(
+        staged_at(QUADLET_UNIT),
+        vec!["quadlet/webapp.container"],
+        "{path_label}: the quadlet is carried once, by the containers section"
+    );
+    let key_name = file_name(QUADLET_DIR_KEY);
+    assert!(
+        !files.iter().any(|f| f.ends_with(key_name)),
+        "{path_label}: the private key is withheld, got {files:?}"
+    );
+    assert_every_copy_source_exists(path_label, root);
+    assert_every_staged_file_is_copied(path_label, root);
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// The containers section claims only the quadlet units it records. A
+/// file under the quadlet directory it does not record is configuration,
+/// carried through `config/` on both export paths, and a machine-state
+/// member there stays withheld. The stager used to drop every
+/// configuration entry under the prefix, so these files reached the image
+/// in no form, with no COPY naming them and no line saying so.
+#[test]
+fn non_quadlet_files_under_the_quadlet_directory_are_carried_on_both_paths() {
+    let cache = tempfile::tempdir().expect("tempdir");
+    let snapshot = scan_like(&quadlet_dir_host_mock(cache.path()));
+
+    let config = snapshot.config.as_ref().expect("the config section");
+    for host_path in [QUADLET_DIR_STRAY, QUADLET_DROP_IN, REGISTRIES_DROP_IN] {
+        assert!(
+            config
+                .files
+                .iter()
+                .any(|f| f.path == host_path && f.disposition.is_included()),
+            "the config walk admits {host_path}: {:?}",
+            config.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        config.withheld.iter().any(|w| w.path == QUADLET_DIR_KEY),
+        "the key is a withheld row: {:?}",
+        config.withheld
+    );
+    let quadlets: Vec<&str> = snapshot
+        .containers
+        .as_ref()
+        .expect("the containers section")
+        .quadlet_units
+        .iter()
+        .map(|q| q.path.as_str())
+        .collect();
+    assert_eq!(quadlets, vec![QUADLET_UNIT.trim_start_matches('/')]);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let staged = dir.path().join("scan");
+    scan_export(&snapshot, &staged);
+    assert_quadlet_dir_carried_once("CLI scan export", &staged);
+
+    let source = dir.path().join("scan.tar.gz");
+    pack(&staged, &source);
+    let mut session = RefineSession::new(snapshot);
+    session.set_tarball_path(source);
+    let tarball = dir.path().join("export.tar.gz");
+    session
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball)
+        .expect("the export writes");
+    let unpacked = dir.path().join("unpacked");
+    std::fs::create_dir_all(&unpacked).expect("mkdir");
+    let root = unpack(&tarball, &unpacked);
+    assert_quadlet_dir_carried_once("refine web export", &root);
+}

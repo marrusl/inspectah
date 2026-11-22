@@ -28,9 +28,6 @@ use std::path::{Path, PathBuf};
 use super::safety::{BareWord, MAX_EXPORT_PATH_LEN, has_line_break_or_control, operator_kargs};
 use crate::build::extract::is_single_normal_component;
 
-/// Path prefix for quadlet unit files — excluded from config tree copy.
-const QUADLET_PREFIX: &str = "/etc/containers/systemd/";
-
 /// The directory systemd reads the administrator's unit files from. A
 /// zero-length unit file directly in it is a mask.
 pub(crate) const ETC_UNIT_DIR: &str = "/etc/systemd/system";
@@ -428,7 +425,10 @@ impl PathError {
 /// - every `units.drop_ins` path: the units section stages those under
 ///   `drop-ins/` on the drop-in's own decision;
 /// - every quadlet unit path: the containers section stages those under
-///   `quadlet/`;
+///   `quadlet/`. Only the paths it records: any other file under
+///   `/etc/containers/systemd/` (a drop-in, a stray `.conf`, a file in a
+///   subdirectory, or every file there when the containers section was
+///   not collected) is configuration, because nothing else carries it;
 /// - every NetworkManager connection that uses DHCP (`method=auto`);
 /// - authselect's [`AUTHSELECT_CONF_PATH`]: the Containerfile carries the
 ///   selection as an `authselect select` line ([`super::authselect`]).
@@ -943,8 +943,8 @@ fn generated_name_collisions(
 ///
 /// 1. A path that is not a [`Destination`] is refused.
 /// 2. A config entry at a destination another section carries
-///    ([`owned_elsewhere`]) or under `/etc/containers/systemd/` is left to
-///    that section, as before.
+///    ([`owned_elsewhere`]) is left to that section. Where a file lives is
+///    never proof that another section carries it.
 /// 3. A unit inspectah generates whose name is also a collected unit's
 ///    (an included state change, an included config entry or drop-in row
 ///    at its path, or an inventory entry or mount finding with no state
@@ -1018,9 +1018,7 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
                 .push((dest, offer.kind, WithheldWhy::MachineState { member }));
             continue;
         }
-        if offer.kind == StagedFileKind::ConfigFile
-            && (owned.contains(&dest) || dest.as_str().starts_with(QUADLET_PREFIX))
-        {
+        if offer.kind == StagedFileKind::ConfigFile && owned.contains(&dest) {
             continue;
         }
         resolved.push((dest, offer.kind, offer.content));
@@ -2057,8 +2055,11 @@ mod tests {
         );
     }
 
+    /// With no containers section, nothing records a quadlet, so a file
+    /// under the quadlet directory is carried as configuration rather
+    /// than left to a section that is not there.
     #[test]
-    fn test_quadlet_prefix_excluded_from_config() {
+    fn test_quadlet_dir_file_with_no_containers_section_is_config() {
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
             withheld: Vec::new(),
@@ -2073,7 +2074,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
         assert!(
-            !dir.path()
+            dir.path()
                 .join("config/etc/containers/systemd/myapp.container")
                 .exists()
         );

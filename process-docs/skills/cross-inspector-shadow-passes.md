@@ -41,6 +41,17 @@ disposition becomes a control that lies:
   plus drop-in included shipped it anyway. Measured end to end on a RHEL
   9.8 host, 2026-11-01, with `x-export-warnings: []` in every case.
 
+`owned_elsewhere` subtracts a path only because another section records
+that path. Never subtract by directory: a prefix is not proof that
+anything writes the file. The stager used to drop every config entry
+under `/etc/containers/systemd/`, while the containers inspector records
+only top-level files with a quadlet extension, so quadlet drop-ins
+(`<unit>.d/*.conf`), files in subdirectories and stray files reached the
+image in no form on both export paths, as did every file there when the
+containers section was not collected. Only `quadlet_units` paths are
+subtracted now; the rest is configuration. Tested in
+`copy_source_exists_test.rs`.
+
 ## The rule
 
 The section that materializes the file owns the decision. Every other
@@ -197,8 +208,8 @@ has already set it false. Measured through `/api/view`.
 
 Only the service case above has been measured. A read of the source
 suggests the same or related failures for quadlets
-(`containers.quadlet_units` plus the unconditional `QUADLET_PREFIX`
-skip), and repo files and GPG keys (an **OR** rule rather than a
+(`containers.quadlet_units`, subtracted from the config tree whatever
+the quadlet's own disposition), and repo files and GPG keys (an **OR** rule rather than a
 subtraction: either inclusion stages the file). None of these has a host
 measurement. Local systemd timers are no longer on this list: the stager
 has no local-timer writer, so a local timer's file is staged only by its
