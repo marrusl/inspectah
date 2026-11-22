@@ -1,0 +1,25 @@
+{
+  "aggregate": null,
+  "completeness": "complete",
+  "host": {
+    "hostname": "web-01.example.com",
+    "os_id": "rhel",
+    "os_name": "Red Hat Enterprise Linux",
+    "os_version": "9.4",
+    "schema_version": 31,
+    "system_type": "package-mode"
+  },
+  "policy": {
+    "distro_repos": [
+      "baseos",
+      "appstream",
+      "fedora",
+      "updates",
+      "updates-testing",
+      "extras",
+      "anaconda"
+    ]
+  },
+  "session_is_sensitive": false,
+  "status": "ok"
+}

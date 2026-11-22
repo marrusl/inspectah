@@ -1,0 +1,138 @@
+[
+  {
+    "has_actionable_sections": true,
+    "label": "Packages",
+    "sections": [
+      {
+        "id": "packages",
+        "is_triage": true,
+        "label": "Packages"
+      }
+    ],
+    "slug": "packages-group"
+  },
+  {
+    "has_actionable_sections": true,
+    "label": "System Configuration",
+    "sections": [
+      {
+        "id": "config",
+        "is_triage": true,
+        "label": "Configuration Files"
+      },
+      {
+        "id": "kernel_boot",
+        "is_triage": true,
+        "label": "Kernel & Boot"
+      },
+      {
+        "id": "system_tuning",
+        "is_triage": true,
+        "label": "System Tuning"
+      },
+      {
+        "id": "selinux",
+        "is_triage": true,
+        "label": "Security & Access Control"
+      }
+    ],
+    "slug": "system-config"
+  },
+  {
+    "has_actionable_sections": true,
+    "label": "Services & Scheduling",
+    "sections": [
+      {
+        "id": "units",
+        "is_triage": true,
+        "label": "Systemd units"
+      },
+      {
+        "id": "scheduled_tasks",
+        "is_triage": true,
+        "label": "Scheduled Tasks"
+      },
+      {
+        "id": "containers",
+        "is_triage": true,
+        "label": "Containers"
+      }
+    ],
+    "slug": "services-scheduling"
+  },
+  {
+    "has_actionable_sections": true,
+    "label": "Users & Identity",
+    "sections": [
+      {
+        "id": "users_groups",
+        "is_triage": true,
+        "label": "Users & Groups"
+      }
+    ],
+    "slug": "identity"
+  },
+  {
+    "has_actionable_sections": false,
+    "label": "Network",
+    "sections": [
+      {
+        "id": "network",
+        "is_triage": false,
+        "label": "Network"
+      }
+    ],
+    "slug": "network-group"
+  },
+  {
+    "has_actionable_sections": false,
+    "label": "Storage",
+    "sections": [
+      {
+        "id": "storage",
+        "is_triage": false,
+        "label": "Storage"
+      }
+    ],
+    "slug": "storage-group"
+  },
+  {
+    "has_actionable_sections": true,
+    "label": "Software & Files",
+    "sections": [
+      {
+        "id": "non_rpm_software",
+        "is_triage": true,
+        "label": "Non-RPM Software"
+      },
+      {
+        "id": "language_packages",
+        "is_triage": true,
+        "label": "Language Packages"
+      },
+      {
+        "id": "unmanaged_files",
+        "is_triage": true,
+        "label": "Unmanaged Files"
+      }
+    ],
+    "slug": "software"
+  },
+  {
+    "has_actionable_sections": false,
+    "label": "Secrets & Subscription",
+    "sections": [
+      {
+        "id": "secrets",
+        "is_triage": false,
+        "label": "Secrets"
+      },
+      {
+        "id": "subscription",
+        "is_triage": false,
+        "label": "Subscription"
+      }
+    ],
+    "slug": "secrets"
+  }
+]

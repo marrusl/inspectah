@@ -218,3 +218,54 @@ async fn aggregate_of_two_hosts() {
     let merged = reload(&merged);
     record("aggregate", session(&merged), AGGREGATE_ENDPOINTS).await;
 }
+
+/// A host with one machine-state file per override level and per notice
+/// kind, for the refine UI's machine-state block: the hostname (`plain`,
+/// set at provisioning), the iSCSI IQN (`warn`, first boot), a keytab and
+/// an SSH host key (`never`, one owed step and one first-boot), the
+/// Insights machine-id (`never`, owed) and `00_tuned` (`plain`, no notice).
+fn machine_state_snapshot() -> InspectionSnapshot {
+    reload(&scan(
+        SysctlHost::new()
+            .file("/etc/hostname", "web-01.example.com\n")
+            .file(
+                "/etc/iscsi/initiatorname.iscsi",
+                "InitiatorName=iqn.1994-05.com.redhat:web01\n",
+            )
+            .file_bytes("/etc/krb5.keytab", &[0x05, 0x02, 0, 0, 0, 0x40])
+            .file("/etc/ssh/ssh_host_ed25519_key", "not a real key\n")
+            .file("/etc/insights-client/machine-id", "0f3c\n")
+            .file("/etc/grub.d/00_tuned", "#!/bin/sh\n")
+            .file("/etc/sysctl.d/90-x.conf", "vm.swappiness = 10\n")
+            .sysctl_a("vm.swappiness = 10\n"),
+    ))
+}
+
+/// The machine-state host as scanned: every class row left out.
+#[tokio::test]
+async fn machine_state_host() {
+    record(
+        "machine-state",
+        session(&machine_state_snapshot()),
+        SINGLE_HOST_ENDPOINTS,
+    )
+    .await;
+}
+
+/// The machine-state host after the operator included the IQN (`warn`)
+/// and the hostname (`plain`): the rows the UI shows as included by the
+/// operator, and the `warn` notice the export adds.
+#[tokio::test]
+async fn machine_state_host_with_overrides() {
+    use inspectah_refine::types::{ItemId, RefinementOp};
+    let mut session = session(&machine_state_snapshot());
+    for path in ["/etc/iscsi/initiatorname.iscsi", "/etc/hostname"] {
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Config { path: path.into() },
+                include: true,
+            })
+            .expect("a carriable machine-state row is included");
+    }
+    record("machine-state-included", session, &[("view", "/api/view")]).await;
+}

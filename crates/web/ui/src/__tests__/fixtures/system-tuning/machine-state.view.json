@@ -1,0 +1,279 @@
+{
+  "baseline_summary": null,
+  "config_files": [
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "sysctl",
+        "content": "vm.swappiness = 10\n",
+        "diff_against_rpm": null,
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/sysctl.d/90-x.conf",
+        "rpm_va_flags": null,
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    }
+  ],
+  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'bash.x86_64' has no recorded repository source. Verify how to reinstall it in the image.\n\n# === Configuration Files ===\n# 1 config file(s) captured\n\nCOPY config/etc/ /etc/\n\n# === Provisioning ===\n# Not in the image: this host's identity. At provisioning:\n#   realm join (or ipa-client-install, adcli join)\n#   insights-client --register (or rhc connect)\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "declined_generated": [],
+  "flatpaks": [],
+  "generated_timers": [],
+  "generation": 0,
+  "has_unmanaged_scan": false,
+  "machine_state": [
+    {
+      "content_captured": true,
+      "include": false,
+      "item_id": {
+        "key": {
+          "path": "/etc/grub.d/00_tuned"
+        },
+        "kind": "Config"
+      },
+      "member": "grub_tuned",
+      "mode": null,
+      "notice": {
+        "kind": "none"
+      },
+      "override": "plain",
+      "path": "/etc/grub.d/00_tuned",
+      "reason": "generated",
+      "size": null
+    },
+    {
+      "content_captured": true,
+      "include": false,
+      "item_id": {
+        "key": {
+          "path": "/etc/hostname"
+        },
+        "kind": "Config"
+      },
+      "member": "hostname",
+      "mode": null,
+      "notice": {
+        "by": "provisioning",
+        "kind": "automatic"
+      },
+      "override": "plain",
+      "path": "/etc/hostname",
+      "reason": "host_identity",
+      "size": null
+    },
+    {
+      "content_captured": false,
+      "include": false,
+      "member": "insights_state",
+      "mode": "0644",
+      "notice": {
+        "command": "insights-client --register or rhc connect",
+        "kind": "owed",
+        "step": "insights_register"
+      },
+      "override": "never",
+      "path": "/etc/insights-client/machine-id",
+      "reason": "host_identity",
+      "size": 5
+    },
+    {
+      "content_captured": true,
+      "include": false,
+      "item_id": {
+        "key": {
+          "path": "/etc/iscsi/initiatorname.iscsi"
+        },
+        "kind": "Config"
+      },
+      "member": "iscsi_initiator_name",
+      "mode": null,
+      "notice": {
+        "by": "first_boot",
+        "kind": "automatic"
+      },
+      "override": "warn",
+      "path": "/etc/iscsi/initiatorname.iscsi",
+      "reason": "host_identity",
+      "size": null
+    },
+    {
+      "content_captured": false,
+      "include": false,
+      "member": "kerberos_keytab",
+      "mode": "0644",
+      "notice": {
+        "command": "ipa-client-install, realm join or adcli join",
+        "kind": "owed",
+        "step": "realm_join"
+      },
+      "override": "never",
+      "path": "/etc/krb5.keytab",
+      "reason": "host_credential",
+      "size": 6
+    },
+    {
+      "content_captured": false,
+      "include": false,
+      "member": "ssh_host_key",
+      "mode": "0644",
+      "notice": {
+        "by": "first_boot",
+        "kind": "automatic"
+      },
+      "override": "never",
+      "path": "/etc/ssh/ssh_host_ed25519_key",
+      "reason": "host_credential",
+      "size": 15
+    }
+  ],
+  "machine_state_notices": [
+    {
+      "kind": "notice",
+      "text": "6 machine-state files left out. At provisioning: realm join, insights-client --register."
+    }
+  ],
+  "machine_state_steps": [
+    {
+      "command": "ipa-client-install, realm join or adcli join",
+      "paths": [
+        "/etc/krb5.keytab"
+      ],
+      "step": "realm_join"
+    },
+    {
+      "command": "insights-client --register or rhc connect",
+      "paths": [
+        "/etc/insights-client/machine-id"
+      ],
+      "step": "insights_register"
+    }
+  ],
+  "manual_links": [],
+  "mount_findings": [],
+  "not_carried_notice": null,
+  "not_carried_packages": [],
+  "package_groups": [],
+  "packages": [
+    {
+      "entry": {
+        "aggregate": null,
+        "arch": "x86_64",
+        "disposition": {
+          "include": false,
+          "kind": "actionable"
+        },
+        "epoch": "0",
+        "name": "bash",
+        "release": "3.el9",
+        "repo_attribution": {
+          "kind": "unrecorded"
+        },
+        "source_repo": "",
+        "state": "added",
+        "version": "5.2.26"
+      },
+      "triage": {
+        "primary_reason": "package_no_repo_source",
+        "triage": {
+          "investigate": null,
+          "mode": "single_host"
+        }
+      }
+    }
+  ],
+  "quadlets": [],
+  "repo_groups": [
+    {
+      "effective_included": 0,
+      "effective_member_count": 0,
+      "effective_unlisted": 0,
+      "enabled": true,
+      "is_distro": false,
+      "package_count": 1,
+      "provenance": "unknown",
+      "section_id": "",
+      "tier": "none"
+    }
+  ],
+  "session_is_sensitive": false,
+  "stats": {
+    "baseline_available": false,
+    "can_redo": false,
+    "can_undo": false,
+    "needs_review_count": 1,
+    "ops_applied": 0,
+    "sections": [
+      {
+        "advisory": 0,
+        "excluded": 1,
+        "included": 0,
+        "kind": "package",
+        "total": 1
+      },
+      {
+        "advisory": 0,
+        "excluded": 0,
+        "included": 1,
+        "kind": "config",
+        "total": 1
+      }
+    ]
+  },
+  "sysctl": {
+    "as_written": [],
+    "explanation": {
+      "drift": [],
+      "settings": [
+        {
+          "key": "vm.swappiness",
+          "outcome": {
+            "from": {
+              "line": 1,
+              "link_target": null,
+              "path": "/etc/sysctl.d/90-x.conf"
+            },
+            "kind": "writes",
+            "runtime": {
+              "kind": "matches"
+            },
+            "value": "10"
+          },
+          "overwritten": []
+        }
+      ],
+      "state": "resolved"
+    },
+    "files": [
+      {
+        "body": {
+          "kind": "read",
+          "link_target": null
+        },
+        "config_path": "/etc/sysctl.d/90-x.conf",
+        "dir": "etc",
+        "path": "/etc/sysctl.d/90-x.conf"
+      }
+    ],
+    "not_carried": [],
+    "state": "host",
+    "tuned_active": null,
+    "vendor_replacements": []
+  },
+  "tuned": [],
+  "undetermined_installs": [],
+  "unit_dropins": [],
+  "unit_states": [],
+  "users_groups_decisions": [],
+  "version_changes": []
+}
