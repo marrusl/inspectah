@@ -855,8 +855,9 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
 
     // If --inspect-only, write JSON and exit
     if args.inspect_only {
-        let json =
-            serde_json::to_string_pretty(&snapshot).context("failed to serialize snapshot")?;
+        let json = snapshot
+            .to_validated_json()
+            .context("failed to write the snapshot")?;
 
         match &args.output {
             Some(path) => {

@@ -5,13 +5,14 @@ use inspectah_collect::executor::mock::{MockExecutor, ReadKind};
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::nonrpm::scan_unmanaged_files;
 use inspectah_core::machine_state::{
-    KEYTAB_HEADER_LEN, ScreenBypass, Screened, ScreenedExecutor, refusal,
+    KEYTAB_HEADER_LEN, ScreenBypass, Screened, ScreenedExecutor, refusal, validate,
 };
+use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::{ExecResult, Executor};
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError, RpmState};
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
-use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::config::{ConfigFileKind, ConfigSection};
 use inspectah_core::types::machine_state::{CarriableMember, MachineStateMember};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
@@ -177,6 +178,7 @@ fn an_unreadable_carriable_member_is_withheld() {
         MachineStateMember::Carriable(CarriableMember::IscsiInitiatorName)
     );
     assert_eq!(row.mode, Some(0o600));
+    assert_snapshot_validates(section);
 }
 
 /// Collect cases 4 and 5: the unowned walk reaches a removed package's
@@ -237,6 +239,7 @@ fn the_walk_and_orphan_branches_withhold_members_once() {
     );
     assert!(!exec.was_read("/etc/alternatives/example.keytab"));
     assert!(!exec.was_read("/etc/rhsm/facts/insights-client.facts"));
+    assert_snapshot_validates(section);
 }
 
 /// Collect case 31, the collect half: a hard link in `/opt` to a private
@@ -288,4 +291,18 @@ fn the_unmanaged_walk_withholds_a_hard_link_to_a_key() {
         "{:?}",
         exec.command_log()
     );
+
+    let snap = InspectionSnapshot {
+        unmanaged_files: Some(section),
+        ..InspectionSnapshot::new()
+    };
+    validate(&snap).expect("the snapshot validates");
+}
+
+fn assert_snapshot_validates(config: ConfigSection) {
+    let snap = InspectionSnapshot {
+        config: Some(config),
+        ..InspectionSnapshot::new()
+    };
+    validate(&snap).expect("a collector-produced snapshot validates");
 }

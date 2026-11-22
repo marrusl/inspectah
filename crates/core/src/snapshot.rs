@@ -143,7 +143,9 @@ impl InspectionSnapshot {
     ///
     /// The version is read before the rest, so a payload from another
     /// version is refused as one even when its fields no longer
-    /// deserialize.
+    /// deserialize. A loaded snapshot passes machine-state validation
+    /// ([`crate::machine_state::validate`]): one holding a credential, or a
+    /// file row at a machine-state path, is refused.
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
         #[derive(Deserialize)]
         struct VersionOnly {
@@ -153,7 +155,18 @@ impl InspectionSnapshot {
         if !(Self::MIN_SCHEMA..=SCHEMA_VERSION).contains(&version) {
             return Err(SnapshotError::UnsupportedVersion(version));
         }
-        Ok(serde_json::from_str(json)?)
+        let snap: Self = serde_json::from_str(json)?;
+        crate::machine_state::validate(&snap)?;
+        Ok(snap)
+    }
+
+    /// The snapshot as the JSON every export writes, after machine-state
+    /// validation: the only way a snapshot is written. A snapshot that
+    /// fails is a defect, reported with the path and section, and nothing
+    /// is written.
+    pub fn to_validated_json(&self) -> Result<String, SnapshotError> {
+        crate::machine_state::validate(self)?;
+        Ok(serde_json::to_string_pretty(self)?)
     }
 }
 
@@ -165,6 +178,17 @@ pub enum SnapshotError {
     Json(#[from] serde_json::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// The snapshot holds a credential, or a file row at a machine-state
+    /// path. Never repaired: re-scan the host.
+    #[error(
+        "machine-state check failed at {path} ({section}): {why}; re-scan the host to produce a \
+         snapshot that can be refined or rendered"
+    )]
+    MachineState {
+        path: String,
+        section: String,
+        why: String,
+    },
 }
 
 #[cfg(test)]

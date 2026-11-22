@@ -805,6 +805,13 @@ impl RefineSession {
         session.cached_decisions = None;
         session.recompute_view();
 
+        // Restore skipped per-op validation, so an edited session file can
+        // carry an op the op check would refuse. The projection it gives
+        // must pass machine-state validation, or the session file is
+        // refused as a stale tarball hash is.
+        inspectah_core::machine_state::validate(&session.snapshot_projected())
+            .map_err(|e| RefineError::SnapshotLoad(e.to_string()))?;
+
         // Single autosave to confirm restored state
         session.try_autosave();
 
@@ -4552,6 +4559,12 @@ pub fn render_refine_export(
     source_tarball: Option<&Path>,
     upload_dir_canon: Option<&Path>,
 ) -> Result<Vec<ExportWarning>, RefineError> {
+    // Machine-state validation before anything is written, the aggregate
+    // variant files and the Compose tree included: a projection holding a
+    // credential or a file row at a class path is never exported.
+    let snap_json = snap
+        .to_validated_json()
+        .map_err(|e| RefineError::RenderFailed(e.to_string()))?;
     let tempdir = tempfile::tempdir().map_err(|e| RefineError::TarballError(e.to_string()))?;
     let out = tempdir.path();
 
@@ -4746,9 +4759,7 @@ pub fn render_refine_export(
     //    here and nowhere else, which is exactly how the scan path came
     //    to ship them raw. A second scrubber on one of two export paths
     //    is the structure that produces that defect, so there is now
-    //    none rather than one with a comment on it.
-    let snap_json =
-        serde_json::to_string_pretty(snap).map_err(|e| RefineError::TarballError(e.to_string()))?;
+    //    none rather than one with a comment on it. Validated at the top.
     std::fs::write(out.join("inspection-snapshot.json"), snap_json)?;
 
     // 6. schema/snapshot.schema.json (placeholder -- same as scan.rs)

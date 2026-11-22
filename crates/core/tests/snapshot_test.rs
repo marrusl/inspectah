@@ -144,6 +144,15 @@ fn schema_30_snapshot_is_refused() {
         Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 30),
         other => panic!("expected UnsupportedVersion(30), got {other:?}"),
     }
+
+    // At the current version the same payload is refused by the class:
+    // its keytab is a config entry with content.
+    let mut current: serde_json::Value = serde_json::from_str(SCHEMA_30_SNAPSHOT).unwrap();
+    current["schema_version"] = SCHEMA_VERSION.into();
+    match InspectionSnapshot::load(&current.to_string()) {
+        Err(SnapshotError::MachineState { path, .. }) => assert_eq!(path, "/etc/krb5.keytab"),
+        other => panic!("expected a machine-state refusal, got {other:?}"),
+    }
 }
 
 /// A persistent boolean is `{"name", "value"}` on the wire, `value` a bool.

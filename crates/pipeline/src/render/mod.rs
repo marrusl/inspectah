@@ -82,6 +82,14 @@ pub fn render_all(
     context: &RenderContext,
     output_dir: &Path,
 ) -> Result<(), RenderError> {
+    // 0. Machine-state validation before anything is written: a snapshot
+    //    holding a credential, or a file row at a class path, is a defect
+    //    and no export is produced. The string is the snapshot step 7
+    //    writes.
+    let snapshot_json = snap
+        .to_validated_json()
+        .map_err(|e| RenderError::Failed(e.to_string()))?;
+
     std::fs::create_dir_all(output_dir)?;
 
     // 8. config/ tree — materialize FIRST so the Containerfile can use
@@ -140,10 +148,8 @@ pub fn render_all(
     users::stage_ssh_keys(snap, output_dir)
         .map_err(|e| RenderError::Failed(format!("stage SSH keys: {e}")))?;
 
-    // 7. inspection-snapshot.json
-    let json = serde_json::to_string_pretty(snap)
-        .map_err(|e| RenderError::Failed(format!("serialize snapshot: {e}")))?;
-    std::fs::write(output_dir.join("inspection-snapshot.json"), json)?;
+    // 7. inspection-snapshot.json, validated at step 0
+    std::fs::write(output_dir.join("inspection-snapshot.json"), snapshot_json)?;
 
     Ok(())
 }

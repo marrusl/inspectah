@@ -7140,24 +7140,16 @@ fn machine_id_fixme(route: T33Route) -> String {
     )
 }
 
-/// Every file under the export's staged trees (`config/`, `drop-ins/`,
-/// `unmanaged/`, `flatpak/`) whose content holds `needle`.
-fn staged_files_holding(tree: &tempfile::TempDir, needle: &str) -> Vec<String> {
-    ["config", "drop-ins", "unmanaged", "flatpak"]
-        .iter()
-        .flat_map(|root| files_holding(&tree.path().join(root), needle))
-        .collect()
-}
-
-/// T33 through the scan export and the refine export: a snapshot that
+/// T33 through the export boundary and the stager: a snapshot that
 /// offers `/etc/machine-id` through two config entries, and separately
 /// through two drop-in rows, one at each odd spelling and one at the
-/// plain path, stages nothing there; the Containerfile names each in a
-/// FIXME; each offering row shows `withheld` with `MachineId`, both rows of
-/// the one destination included. No staged file and no instruction holds
-/// `uninitialized`, and the scan export's README holds the two first-boot
-/// sentences (the refine export writes no README). Control: `/etc/machine-info`, offered in each of the same ways, is
-/// staged and its rows are not withheld.
+/// plain path, is a defect no export writes: `render_all` and the refine
+/// export refuse it before writing anything (machine-state validation).
+/// A render that writes no snapshot, the Containerfile preview, still
+/// stages nothing there and names each row in a FIXME, and each offering
+/// row shows `withheld` with the machine-state member, both rows of the
+/// one destination included. Control: `/etc/machine-info`, offered in
+/// each of the same ways, is staged and its rows are not withheld.
 #[test]
 fn t33_the_machine_id_is_never_staged() {
     let snap = scan(t5_host());
@@ -7165,40 +7157,39 @@ fn t33_the_machine_id_is_never_staged() {
         for spelling in t33_spellings(MACHINE_ID) {
             let label = format!("{route:?} at {spelling:?}");
             let imported = offering(&snap, route, MACHINE_ID, &spelling);
-            let refine = session(&imported);
-            for (via, tree) in [
-                ("scan", render_export(&imported)),
-                ("refine", export_session(&refine)),
-            ] {
-                assert!(!staged_at(&tree, MACHINE_ID), "{label}, {via}");
-                assert!(
-                    staged_files_holding(&tree, UNINITIALIZED).is_empty(),
-                    "{label}, {via}: {:?}",
-                    staged_files_holding(&tree, UNINITIALIZED)
-                );
-                let cf = containerfile_in(&tree);
-                assert_eq!(
-                    cf.lines().filter(|l| *l == machine_id_fixme(route)).count(),
-                    2,
-                    "{label}, {via}: one FIXME per row:\n{cf}"
-                );
-                assert!(
-                    cf.lines()
-                        .filter(|l| !l.trim_start().starts_with('#'))
-                        .all(|l| !l.contains(UNINITIALIZED) && !l.contains("machine-id")),
-                    "{label}, {via}:\n{cf}"
-                );
-                // The refine export's file set has no README (its
-                // contract, `render_refine_export`).
-                if via == "scan" {
-                    let readme =
-                        std::fs::read_to_string(tree.path().join("README.md")).expect("README.md");
-                    assert!(
-                        readme.contains(README_FIRST_BOOT),
-                        "{label}, {via}:\n{readme}"
-                    );
-                }
-            }
+
+            let out = tempfile::tempdir().expect("tempdir");
+            let refused =
+                render::render_all(&imported, &RenderContext { target: None }, out.path());
+            assert!(refused.is_err(), "{label}: render_all refuses");
+            assert!(
+                std::fs::read_dir(out.path()).unwrap().next().is_none(),
+                "{label}: nothing written"
+            );
+            let tarball = out.path().join("refine.tar.gz");
+            assert!(
+                inspectah_refine::session::render_refine_export(
+                    &imported, &tarball, None, None, None, None
+                )
+                .is_err(),
+                "{label}: the refine export refuses"
+            );
+            assert!(!tarball.exists(), "{label}: no refine tarball");
+
+            let cf = render::containerfile::render_containerfile(&imported, None, None);
+            assert_eq!(
+                cf.lines().filter(|l| *l == machine_id_fixme(route)).count(),
+                2,
+                "{label}: one FIXME per row:\n{cf}"
+            );
+            assert!(
+                cf.lines()
+                    .filter(|l| !l.trim_start().starts_with('#'))
+                    .all(|l| !l.contains(UNINITIALIZED) && !l.contains("machine-id")),
+                "{label}:\n{cf}"
+            );
+
+            let refine = RefineSession::new(imported.clone());
             for row in [spelling.as_str(), MACHINE_ID] {
                 assert!(
                     matches!(

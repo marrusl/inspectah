@@ -781,3 +781,138 @@ fn a_two_host_drop_in_at_a_class_path_is_withheld_for_the_fleet() {
     }
     assert_marker_nowhere(&merged);
 }
+
+/// Collect case 16: snapshots edited by hand, as another tool or an
+/// edited file would, are refused at load naming the path, and the same
+/// values built in process are refused by the one writer. The unedited
+/// collector snapshots and an ordinary multi-variant aggregate load.
+#[test]
+fn validation_refuses_edited_snapshots_and_accepts_collected_ones() {
+    use inspectah_core::snapshot::SnapshotError;
+    let keytab = scan_with(
+        SysctlHost::new().file_bytes("/etc/krb5.keytab", &binary_keytab()),
+        std_inspectors(),
+    );
+    let iqn = scan_with(
+        SysctlHost::new()
+            .rpm_owned(IQN, "iscsi-initiator-utils")
+            .rpm_va("S.5....T.", IQN)
+            .file(IQN, "InitiatorName=iqn.1994-05.com.redhat:h\n"),
+        std_inspectors(),
+    );
+    let ec_key = "-----BEGIN EC PARAMETERS-----\nBggq\n-----END EC PARAMETERS-----\n\
+                  -----BEGIN EC PRIVATE KEY-----\nMHcC\n-----END EC PRIVATE KEY-----\n";
+    for snap in [&keytab, &iqn] {
+        reload(snap);
+        snap.to_validated_json()
+            .expect("a collected snapshot writes");
+    }
+
+    let entry = |path: &str, content: &str, include: bool| {
+        serde_json::json!({
+            "path": path, "kind": "unowned", "category": "other", "content": content,
+            "rpm_va_flags": null, "package": null, "diff_against_rpm": null,
+            "disposition": {"kind": "actionable", "include": include},
+            "variant_selection": "Only", "aggregate": null
+        })
+    };
+    let mut cases: Vec<(&str, serde_json::Value)> = Vec::new();
+    for spelling in [
+        "etc/ssh/ssh_host_ed25519_key",
+        "/etc/ssh/./ssh_host_ed25519_key",
+        "/etc//ssh/ssh_host_ed25519_key",
+    ] {
+        for include in [true, false] {
+            let mut v = serde_json::to_value(&keytab).unwrap();
+            v["config"]["files"].as_array_mut().unwrap().push(entry(
+                spelling,
+                "ssh key text",
+                include,
+            ));
+            cases.push((spelling, v));
+        }
+    }
+    for include in [true, false] {
+        let mut v = serde_json::to_value(&keytab).unwrap();
+        v["config"]["files"].as_array_mut().unwrap().push(entry(
+            "/etc/myapp/server.pem",
+            ec_key,
+            include,
+        ));
+        cases.push(("/etc/myapp/server.pem", v));
+    }
+    let mut v = serde_json::to_value(&keytab).unwrap();
+    v["units"] = units_with_drop_in("/etc/systemd/system/app.service.d/k.conf", ec_key);
+    cases.push(("/etc/systemd/system/app.service.d/k.conf", v));
+    let mut v = serde_json::to_value(&iqn).unwrap();
+    v["config"]["files"][0]["path"] = "/etc/myapp/x".into();
+    cases.push(("/etc/myapp/x", v));
+    let mut v = serde_json::to_value(&keytab).unwrap();
+    v["config"]["files"]
+        .as_array_mut()
+        .unwrap()
+        .push(entry("/etc/krb5.keytab", "x", false));
+    cases.push(("/etc/krb5.keytab", v));
+    let mut v = serde_json::to_value(&keytab).unwrap();
+    let row = v["config"]["withheld"][0].clone();
+    v["config"]["withheld"].as_array_mut().unwrap().push(row);
+    cases.push(("/etc/krb5.keytab", v));
+    let mut v = serde_json::to_value(&keytab).unwrap();
+    v["units"] = units_with_drop_in("/etc/krb5.keytab", "[Service]\n");
+    cases.push(("/etc/krb5.keytab", v));
+
+    for (path, value) in cases {
+        match inspectah_core::snapshot::InspectionSnapshot::load(&value.to_string()) {
+            Err(SnapshotError::MachineState { path: named, .. }) => assert_eq!(
+                inspectah_core::machine_state::normal_path(&named),
+                inspectah_core::machine_state::normal_path(path),
+                "{path}"
+            ),
+            other => panic!("{path}: expected a machine-state refusal, got {other:?}"),
+        }
+        let in_process: InspectionSnapshot = serde_json::from_value(value).unwrap();
+        assert!(
+            matches!(
+                in_process.to_validated_json(),
+                Err(SnapshotError::MachineState { .. })
+            ),
+            "{path}: the writer refuses it too"
+        );
+    }
+
+    // An ordinary multi-variant aggregate repeats a path within
+    // config.files, a selected entry and an alternative: accepted.
+    let merged = aggregate(vec![
+        fleet_host("host-a", |h| h.file("/etc/myapp/app.conf", "a = 1\n")),
+        fleet_host("host-b", |h| h.file("/etc/myapp/app.conf", "a = 2\n")),
+    ]);
+    let at_path = merged
+        .config
+        .as_ref()
+        .unwrap()
+        .files
+        .iter()
+        .filter(|f| f.path == "/etc/myapp/app.conf")
+        .count();
+    assert_eq!(at_path, 2);
+    merged
+        .to_validated_json()
+        .expect("an ordinary aggregate writes");
+}
+
+/// A units section holding one excluded drop-in at `path`.
+fn units_with_drop_in(path: &str, content: &str) -> serde_json::Value {
+    use inspectah_core::types::units::{SystemdDropIn, UnitSection};
+    let drop_in = SystemdDropIn {
+        unit: "app.service".into(),
+        path: path.into(),
+        content: content.into(),
+        disposition: FindingKind::excluded(),
+        ..Default::default()
+    };
+    serde_json::to_value(UnitSection {
+        drop_ins: vec![drop_in],
+        ..Default::default()
+    })
+    .unwrap()
+}

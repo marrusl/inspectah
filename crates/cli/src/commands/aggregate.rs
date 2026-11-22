@@ -174,8 +174,9 @@ fn run_aggregate(args: &AggregateArgs) -> Result<()> {
 
     // --- Step 5: JSON-only output mode ---
     if args.json_only {
-        let json =
-            serde_json::to_string_pretty(&merged).context("failed to serialize merged snapshot")?;
+        let json = merged
+            .to_validated_json()
+            .context("failed to write the merged snapshot")?;
 
         if let Some(path) = &args.output_file {
             if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {

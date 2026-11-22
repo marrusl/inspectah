@@ -613,6 +613,208 @@ impl Executor for ScreenedExecutor<'_> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Snapshot validation
+// ---------------------------------------------------------------------------
+
+use crate::snapshot::{InspectionSnapshot, SnapshotError};
+use crate::types::FindingKind;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// The top-level section validation leaves alone: `--preserve
+/// subscription --ack-sensitive` stores certificates and keys there on
+/// purpose.
+const UNCHECKED_SECTION: &str = "subscription";
+
+fn violation(path: &str, section: &str, why: &str) -> SnapshotError {
+    SnapshotError::MachineState {
+        path: path.to_string(),
+        section: section.to_string(),
+        why: why.to_string(),
+    }
+}
+
+/// Checks a whole snapshot against the class, whatever any include flag
+/// or variant selection says:
+///
+/// 1. no `config.files` entry sits at a withheld rule's path;
+/// 2. a `config.files` entry at a carriable rule's path is a
+///    `MachineState` entry for that member, and a `MachineState` entry
+///    sits at its member's path;
+/// 3. no string anywhere outside `subscription` is a keytab or a
+///    whole-file private key ([`credential_content`]);
+/// 4. a file row (any object holding a string `path` beside a string
+///    `content` or `raw_content`, in any section) is never at a withheld
+///    class path, and a carriable class path has exactly one, its own
+///    `MachineState` entry; no path is in both `config.files` and
+///    `config.withheld`, and none is in `config.withheld` twice;
+/// 5. a path in `unmanaged_files.withheld` is in no `items` entry and is
+///    listed once.
+///
+/// Because rules 3 and 4 walk the serialized value, a field or section
+/// added later is checked with no list to update.
+pub fn validate(snap: &InspectionSnapshot) -> Result<(), SnapshotError> {
+    let norm = |p: &str| normal_path(p).unwrap_or_else(|| p.to_string());
+    let mut withheld_paths: BTreeSet<String> = BTreeSet::new();
+    let mut carriable_paths: BTreeSet<String> = BTreeSet::new();
+
+    if let Some(config) = &snap.config {
+        let mut ordinary: BTreeSet<String> = BTreeSet::new();
+        for entry in &config.files {
+            let path = norm(&entry.path);
+            match (classify_path(&path), &entry.disposition) {
+                (Some(RuleTarget::Withheld(m)), _) => {
+                    return Err(violation(
+                        &entry.path,
+                        "config.files",
+                        &format!("a {} file is never held with content", m.as_str()),
+                    ));
+                }
+                (Some(RuleTarget::Carriable(m)), FindingKind::MachineState { member, .. })
+                    if *member == m => {}
+                (Some(RuleTarget::Carriable(m)), _) => {
+                    return Err(violation(
+                        &entry.path,
+                        "config.files",
+                        &format!("a {} file must be a machine_state entry", m.as_str()),
+                    ));
+                }
+                (None, FindingKind::MachineState { member, .. }) => {
+                    return Err(violation(
+                        &entry.path,
+                        "config.files",
+                        &format!("a machine_state {} entry at another path", member.as_str()),
+                    ));
+                }
+                (None, _) => {}
+            }
+            if entry.disposition.is_machine_state() {
+                carriable_paths.insert(path.clone());
+            }
+            ordinary.insert(path);
+        }
+        for row in &config.withheld {
+            let path = norm(&row.path);
+            if ordinary.contains(&path) {
+                return Err(violation(
+                    &row.path,
+                    "config",
+                    "the path is both withheld and a config entry",
+                ));
+            }
+            if !withheld_paths.insert(path) {
+                return Err(violation(&row.path, "config.withheld", "listed twice"));
+            }
+        }
+    }
+
+    if let Some(unmanaged) = &snap.unmanaged_files {
+        let items: BTreeSet<String> = unmanaged.items.iter().map(|i| norm(&i.path)).collect();
+        let mut seen = BTreeSet::new();
+        for row in &unmanaged.withheld {
+            let path = norm(&row.path);
+            if items.contains(&path) {
+                return Err(violation(
+                    &row.path,
+                    "unmanaged_files",
+                    "the path is both withheld and an item",
+                ));
+            }
+            if !seen.insert(path.clone()) {
+                return Err(violation(
+                    &row.path,
+                    "unmanaged_files.withheld",
+                    "listed twice",
+                ));
+            }
+            withheld_paths.insert(path);
+        }
+    }
+
+    let value = serde_json::to_value(snap)?;
+    let mut file_rows: BTreeMap<String, Vec<(String, bool)>> = BTreeMap::new();
+    if let serde_json::Value::Object(sections) = &value {
+        for (section, body) in sections {
+            if section == UNCHECKED_SECTION {
+                continue;
+            }
+            walk_value(body, section, None, &mut file_rows)?;
+        }
+    }
+
+    for (path, rows) in &file_rows {
+        let (section, _) = &rows[0];
+        if withheld_paths.contains(path)
+            || matches!(classify_path(path), Some(RuleTarget::Withheld(_)))
+        {
+            return Err(violation(
+                path,
+                section,
+                "a file row at a withheld machine-state path",
+            ));
+        }
+        if carriable_paths.contains(path)
+            && (rows.len() != 1 || !rows[0].1 || rows[0].0 != "config")
+        {
+            return Err(violation(
+                path,
+                section,
+                "a machine-state path held by a row other than its own entry",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Rule 3 over every string under `value`, and the file rows rule 4
+/// checks: `(section, is a machine_state entry)` by normalized path.
+fn walk_value(
+    value: &serde_json::Value,
+    section: &str,
+    near_path: Option<&str>,
+    file_rows: &mut BTreeMap<String, Vec<(String, bool)>>,
+) -> Result<(), SnapshotError> {
+    match value {
+        serde_json::Value::String(text) => {
+            if let Some(member) = credential_content(text.as_bytes()) {
+                return Err(violation(
+                    near_path.unwrap_or("(no path)"),
+                    section,
+                    &format!("holds a credential ({})", member.as_str()),
+                ));
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                walk_value(item, section, near_path, file_rows)?;
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            let own_path = fields.get("path").and_then(|p| p.as_str());
+            let holds_text = ["content", "raw_content"]
+                .iter()
+                .any(|k| fields.get(*k).is_some_and(|v| v.is_string()));
+            if let (Some(path), true) = (own_path, holds_text) {
+                let is_class = fields
+                    .get("disposition")
+                    .and_then(|d| d.get("kind"))
+                    .and_then(|k| k.as_str())
+                    == Some("machine_state");
+                let key = normal_path(path).unwrap_or_else(|| path.to_string());
+                file_rows
+                    .entry(key)
+                    .or_default()
+                    .push((section.to_string(), is_class));
+            }
+            for field in fields.values() {
+                walk_value(field, section, own_path.or(near_path), file_rows)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
