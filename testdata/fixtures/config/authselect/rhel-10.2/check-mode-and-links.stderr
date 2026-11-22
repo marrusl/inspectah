@@ -1,0 +1,5 @@
+[error] [/etc/authselect/password-auth] has wrong mode [0600], expected [0644]!
+[error] [/etc/pam.d/smartcard-auth] is not a symbolic link!
+[error] [/etc/pam.d/smartcard-auth] was not created by authselect!
+[error] [/etc/nsswitch.conf] is not a symbolic link!
+[error] [/etc/nsswitch.conf] was not created by authselect!

@@ -144,112 +144,220 @@ fn an_excluded_sssd_conf_gets_no_chmod() {
     assert!(!containerfile(tree.path()).contains("chmod 0600 /etc/sssd"));
 }
 
-/// The profile and features authselect recorded.
-const AUTHSELECT_CONF: &str = "sssd\nwith-faillock\nwith-mkhomedir\n";
-
-/// The line both exports render [`AUTHSELECT_CONF`] as.
+/// The line both exports render the measured `authselect.conf`
+/// (`sssd`, `with-faillock`, `with-mkhomedir`) as.
 const SELECT_LINE: &str = "RUN authselect select sssd with-faillock with-mkhomedir --force\n";
 
-/// What `authselect check` prints for a hand-edited `system-auth`.
-const CHECK_EDITED: &str = "[error] [/etc/authselect/system-auth] has unexpected content!\n\
-     Current configuration is not valid. It was probably modified outside authselect.\n";
+/// A file measured in a rhel-bootc base image after `authselect select
+/// sssd with-faillock with-mkhomedir --force`, from
+/// `testdata/fixtures/config/authselect/<release>/`.
+fn measured(release: &str, name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/fixtures/config/authselect")
+        .join(release)
+        .join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// The releases measured, with the exit code `authselect check` gave
+/// after a line was appended to `system-auth`, mode and owner kept:
+/// authselect 1.2.6 exits 3 and names the file, 1.5.2 exits 0.
+const RELEASES: [(&str, i32); 2] = [("rhel-9.8", 3), ("rhel-10.2", 0)];
 
 /// [`sssd_host`] with authselect's `%ghost` files (flag `g`, measured on
-/// RHEL 9.8 and 10.2) and `authselect check` exiting `check_exit` with
-/// `check_stderr`.
-fn authselect_host(check_exit: i32, check_stderr: &str) -> SysctlHost {
+/// RHEL 9.8 and 10.2) as `release` generated them, `system-auth` with the
+/// appended line when `edited`, and `authselect check` and `authselect
+/// test` answering with the measured output.
+fn authselect_host(release: &str, edited: bool, check: (i32, &str, &str)) -> SysctlHost {
+    let system_auth = if edited {
+        "system-auth.edited"
+    } else {
+        "system-auth"
+    };
     sssd_host()
         .ghost("authselect-libs", "g", "/etc/authselect/authselect.conf")
-        .file("/etc/authselect/authselect.conf", AUTHSELECT_CONF)
+        .file(
+            "/etc/authselect/authselect.conf",
+            &measured(release, "authselect.conf"),
+        )
         .ghost("authselect-libs", "g", "/etc/authselect/nsswitch.conf")
         .file(
             "/etc/authselect/nsswitch.conf",
-            "passwd: sss files systemd\ngroup: sss files systemd\n",
+            &measured(release, "nsswitch.conf"),
         )
         .ghost("authselect-libs", "g", "/etc/authselect/system-auth")
         .file(
             "/etc/authselect/system-auth",
-            "auth required pam_env.so\nauth sufficient pam_unix.so\n# local edit\n",
+            &measured(release, system_auth),
         )
-        .command("authselect check", check_exit, "", check_stderr)
+        .command("authselect check", check.0, check.1, check.2)
+        .command(
+            "authselect test --system-auth sssd with-faillock with-mkhomedir",
+            0,
+            &measured(release, "test-system-auth.stdout"),
+            "",
+        )
+        .command(
+            "authselect test --nsswitch sssd with-faillock with-mkhomedir",
+            0,
+            &measured(release, "test-nsswitch.stdout"),
+            "",
+        )
 }
+
+/// What `authselect check` printed for a configuration as it wrote it.
+const CHECK_VALID: (i32, &str, &str) = (0, "Current configuration is valid.\n", "");
 
 /// authselect's selection is rendered as `authselect select` on both
 /// export paths and never copied; the generated `nsswitch.conf` is not
-/// collected; a generated file `authselect check` reports as hand-edited
-/// is an advisory that neither export copies.
+/// collected; a hand-edited generated file is an advisory that neither
+/// export copies. On RHEL 9 `authselect check` names the edit; on RHEL 10
+/// it calls the edited configuration valid, and the comparison with
+/// `authselect test` finds it.
 #[test]
 fn authselect_files_render_as_authselect_select_on_both_export_paths() {
-    let snap = scan(authselect_host(1, CHECK_EDITED));
+    for (release, content_edit_exit) in RELEASES {
+        let check_out = measured(release, "check-content-edit.stdout");
+        let check_err = measured(release, "check-content-edit.stderr");
+        let snap = scan(authselect_host(
+            release,
+            true,
+            (content_edit_exit, &check_out, &check_err),
+        ));
 
-    let conf = entry(&snap, "/etc/authselect/authselect.conf").expect("the selection is collected");
-    assert!(conf.disposition.is_included());
-    assert_eq!(conf.package.as_deref(), Some("authselect-libs"));
-    assert!(
-        entry(&snap, "/etc/authselect/nsswitch.conf").is_none(),
-        "authselect select writes nsswitch.conf again; it is not collected"
-    );
-    let edited = entry(&snap, "/etc/authselect/system-auth")
-        .expect("the hand-edited generated file is named");
-    assert!(edited.disposition.is_advisory(), "{:?}", edited.disposition);
-    assert!(!edited.disposition.is_included());
-    assert!(edited.content.contains("# local edit"));
+        let conf = entry(&snap, "/etc/authselect/authselect.conf")
+            .unwrap_or_else(|| panic!("{release}: the selection is collected"));
+        assert!(conf.disposition.is_included(), "{release}");
+        assert_eq!(conf.package.as_deref(), Some("authselect-libs"));
+        assert!(
+            entry(&snap, "/etc/authselect/nsswitch.conf").is_none(),
+            "{release}: authselect select writes nsswitch.conf again; it is not collected"
+        );
+        let edited = entry(&snap, "/etc/authselect/system-auth")
+            .unwrap_or_else(|| panic!("{release}: the hand-edited generated file is named"));
+        assert!(
+            edited.disposition.is_advisory(),
+            "{release}: {:?}",
+            edited.disposition
+        );
+        assert!(!edited.disposition.is_included());
+        assert!(edited.content.contains("# hand edit"), "{release}");
+        assert!(
+            !snap
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("authselect")),
+            "{release}: {:?}",
+            snap.warnings
+        );
 
-    for (path, tree) in both_exports(&snap) {
-        for staged in ["authselect.conf", "nsswitch.conf", "system-auth"] {
+        for (path, tree) in both_exports(&snap) {
+            for staged in ["authselect.conf", "nsswitch.conf", "system-auth"] {
+                assert!(
+                    !tree
+                        .path()
+                        .join("config/etc/authselect")
+                        .join(staged)
+                        .exists(),
+                    "{release} {path}: {staged} is not copied"
+                );
+            }
+            let cf = containerfile(tree.path());
+            let copy = cf
+                .find("COPY config/etc/ /etc/")
+                .unwrap_or_else(|| panic!("{release} {path}: the config tree is copied:\n{cf}"));
+            let select = cf
+                .find(SELECT_LINE)
+                .unwrap_or_else(|| panic!("{release} {path}: the profile is selected:\n{cf}"));
             assert!(
-                !tree
-                    .path()
-                    .join("config/etc/authselect")
-                    .join(staged)
-                    .exists(),
-                "{path}: {staged} is not copied"
+                copy < select,
+                "{release} {path}: select runs after the COPY"
+            );
+            assert_eq!(
+                cf.matches("authselect select").count(),
+                2,
+                "{release} {path}: one line and its comment"
             );
         }
-        let cf = containerfile(tree.path());
-        let copy = cf
-            .find("COPY config/etc/ /etc/")
-            .unwrap_or_else(|| panic!("{path}: the config tree is copied:\n{cf}"));
-        let select = cf
-            .find(SELECT_LINE)
-            .unwrap_or_else(|| panic!("{path}: the profile is selected:\n{cf}"));
-        assert!(copy < select, "{path}: select runs after the COPY");
-        assert_eq!(
-            cf.matches("authselect select").count(),
-            2,
-            "{path}: one line and its comment"
-        );
     }
 }
 
-/// A clean `authselect check` adds nothing; excluding the selection in
-/// refine removes the line.
+/// Generated files as authselect wrote them add nothing on either
+/// release; excluding the selection in refine removes the line.
 #[test]
-fn a_clean_authselect_check_adds_no_advisory_and_exclusion_drops_the_line() {
+fn a_clean_authselect_configuration_adds_no_advisory_and_exclusion_drops_the_line() {
     use inspectah_refine::types::{ItemId, RefinementOp};
 
-    let snap = scan(authselect_host(0, ""));
-    assert!(entry(&snap, "/etc/authselect/system-auth").is_none());
-    assert!(
-        !snap
-            .warnings
-            .iter()
-            .any(|w| w.message.contains("authselect")),
-        "{:?}",
-        snap.warnings
-    );
+    for (release, _) in RELEASES {
+        let snap = scan(authselect_host(release, false, CHECK_VALID));
+        assert!(
+            entry(&snap, "/etc/authselect/system-auth").is_none(),
+            "{release}"
+        );
+        assert!(
+            !snap
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("authselect")),
+            "{release}: {:?}",
+            snap.warnings
+        );
 
-    let mut refine = session(&snap);
-    refine
-        .apply(RefinementOp::SetInclude {
-            item_id: ItemId::Config {
-                path: "/etc/authselect/authselect.conf".into(),
-            },
-            include: false,
-        })
-        .expect("the exclude applies");
-    let tree = export_session(&refine);
-    assert!(!containerfile(tree.path()).contains("authselect select"));
+        let mut refine = session(&snap);
+        refine
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Config {
+                    path: "/etc/authselect/authselect.conf".into(),
+                },
+                include: false,
+            })
+            .expect("the exclude applies");
+        let tree = export_session(&refine);
+        assert!(!containerfile(tree.path()).contains("authselect select"));
+    }
+}
+
+/// With no `authselect` command to answer, nothing is known about the
+/// generated files. That is a scan warning naming why, never a clean
+/// result, and no file is made an advisory on a guess.
+#[test]
+fn an_authselect_that_cannot_answer_is_a_warning_not_a_clean_result() {
+    let host = sssd_host()
+        .ghost("authselect-libs", "g", "/etc/authselect/authselect.conf")
+        .file(
+            "/etc/authselect/authselect.conf",
+            &measured("rhel-9.8", "authselect.conf"),
+        )
+        .ghost("authselect-libs", "g", "/etc/authselect/system-auth")
+        .file(
+            "/etc/authselect/system-auth",
+            &measured("rhel-9.8", "system-auth.edited"),
+        );
+    let snap = scan(host);
+
+    assert!(entry(&snap, "/etc/authselect/system-auth").is_none());
+    let warning = snap
+        .warnings
+        .iter()
+        .find(|w| w.message.contains("could not all be checked"))
+        .unwrap_or_else(|| {
+            panic!(
+                "a warning says the files were not checked: {:?}",
+                snap.warnings
+            )
+        });
+    assert!(
+        warning.message.contains("authselect check exited 127"),
+        "{}",
+        warning.message
+    );
+    assert!(
+        warning
+            .message
+            .contains("authselect test --system-auth exited 127"),
+        "{}",
+        warning.message
+    );
 }
 
 /// An admin's `/etc/default/grub`, edited as driftify edits it.

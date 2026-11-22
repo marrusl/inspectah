@@ -173,26 +173,27 @@ const GHOST_SKIP_EXACT: &[&str] = &[
 /// `/etc/crypto-policies/config`, which the crypto policy line renders.
 const GHOST_SKIP_PREFIX: &[&str] = &["/etc/crypto-policies/state/"];
 
-/// The files `authselect select` writes from the selected profile. Each
-/// is a `%ghost` file of `authselect-libs`. The export carries the
-/// selection itself
-/// ([`AUTHSELECT_CONF_PATH`](inspectah_core::types::config::AUTHSELECT_CONF_PATH)) as an `authselect select`
-/// line, which writes these again in the image, so copying them would
-/// only give authselect files it then reports as changed. An edit made to
-/// one outside authselect is reported by `authselect check` and becomes
-/// an advisory (`authselect_edit_advisories` in `mod.rs`).
+/// The files `authselect select` writes from the selected profile, each
+/// with the `authselect test` option that prints what it would write
+/// there. Each is a `%ghost` file of `authselect-libs`. The export
+/// carries the selection itself
+/// ([`AUTHSELECT_CONF_PATH`](inspectah_core::types::config::AUTHSELECT_CONF_PATH))
+/// as an `authselect select` line, which writes these again in the
+/// image, so copying them would only give authselect files it then
+/// reports as changed. An edit made to one outside authselect becomes an
+/// advisory (`authselect_edit_advisories` in `mod.rs`).
 ///
 /// `user-nsswitch.conf` is not here: it is the admin's input to the
 /// generated `nsswitch.conf`, and is collected like any config file.
-const AUTHSELECT_GENERATED: &[&str] = &[
-    "/etc/authselect/nsswitch.conf",
-    "/etc/authselect/system-auth",
-    "/etc/authselect/password-auth",
-    "/etc/authselect/fingerprint-auth",
-    "/etc/authselect/smartcard-auth",
-    "/etc/authselect/postlogin",
-    "/etc/authselect/dconf-db",
-    "/etc/authselect/dconf-locks",
+pub(crate) const AUTHSELECT_GENERATED: &[(&str, &str)] = &[
+    ("/etc/authselect/nsswitch.conf", "--nsswitch"),
+    ("/etc/authselect/system-auth", "--system-auth"),
+    ("/etc/authselect/password-auth", "--password-auth"),
+    ("/etc/authselect/fingerprint-auth", "--fingerprint-auth"),
+    ("/etc/authselect/smartcard-auth", "--smartcard-auth"),
+    ("/etc/authselect/postlogin", "--postlogin"),
+    ("/etc/authselect/dconf-db", "--dconf-db"),
+    ("/etc/authselect/dconf-locks", "--dconf-lock"),
 ];
 
 /// Whether the ghost branch leaves `path` alone on [`GHOST_SKIP_EXACT`],
@@ -200,12 +201,24 @@ const AUTHSELECT_GENERATED: &[&str] = &[
 pub(crate) fn is_ghost_skip(path: &str) -> bool {
     GHOST_SKIP_EXACT.contains(&path)
         || GHOST_SKIP_PREFIX.iter().any(|p| path.starts_with(p))
-        || AUTHSELECT_GENERATED.contains(&path)
+        || AUTHSELECT_GENERATED
+            .iter()
+            .any(|(generated, _)| *generated == path)
 }
 
 // ---------------------------------------------------------------------------
-// authselect check
+// authselect check and authselect test
 // ---------------------------------------------------------------------------
+//
+// `authselect check` does not find every hand edit. Measured on
+// rhel-bootc 9.8 (authselect 1.2.6) and 10.2 (1.5.2), 2026-11-21, after
+// `authselect select sssd with-faillock with-mkhomedir --force` and a
+// line appended to `/etc/authselect/system-auth` with its mode and owner
+// kept: 1.2.6 exits 3 and names the file; 1.5.2 exits 0 and prints
+// `Current configuration is valid.`, since it checks the generated
+// files' metadata and links but not their content. Both name a changed
+// mode and a replaced link. So the content is compared as well, against
+// what `authselect test` prints for the selected profile.
 
 /// What `authselect check` prints when the files it generated were
 /// changed outside it: "Current configuration is not valid. It was
@@ -215,24 +228,29 @@ const AUTHSELECT_NOT_VALID: &str = "not valid";
 /// What `authselect check` found, from its output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AuthselectCheck {
-    /// The configuration is as authselect wrote it, or authselect could
-    /// not say (not installed, no configuration).
-    Clean,
+    /// authselect reports the configuration as it wrote it. On 1.5 that
+    /// covers metadata and links only, never content.
+    Valid,
     /// Changed outside authselect; the files it named, which may be none.
     Edited { paths: Vec<String> },
+    /// The check did not give either answer: authselect is missing, or it
+    /// failed. Nothing is known about the files.
+    Failed { exit_code: i32, message: String },
 }
 
 /// Read `authselect check`'s exit code and output. authselect names each
-/// file it finds changed in brackets (`[/etc/authselect/system-auth] has
-/// unexpected content!`), on stdout or stderr depending on the version,
-/// so both are read and every bracketed absolute path is taken.
+/// file it finds changed in brackets (`[error] [/etc/authselect/system-auth]
+/// has unexpected content!`, on stderr in 1.2.6 and 1.5.2), so both
+/// streams are read and every bracketed absolute path is taken. A
+/// non-zero exit that names no file and does not say "not valid" is a
+/// failure, not an answer.
 pub(crate) fn parse_authselect_check(
     exit_code: i32,
     stdout: &str,
     stderr: &str,
 ) -> AuthselectCheck {
     if exit_code == 0 {
-        return AuthselectCheck::Clean;
+        return AuthselectCheck::Valid;
     }
     let mut paths: Vec<String> = Vec::new();
     for text in [stdout, stderr] {
@@ -252,10 +270,63 @@ pub(crate) fn parse_authselect_check(
     let said_not_valid =
         stdout.contains(AUTHSELECT_NOT_VALID) || stderr.contains(AUTHSELECT_NOT_VALID);
     if paths.is_empty() && !said_not_valid {
-        AuthselectCheck::Clean
+        let message = [stderr, stdout]
+            .iter()
+            .flat_map(|text| text.lines())
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("no output")
+            .to_string();
+        AuthselectCheck::Failed { exit_code, message }
     } else {
         AuthselectCheck::Edited { paths }
     }
+}
+
+/// The first line of every file authselect generates, in 1.2.6 (`# Generated
+/// by authselect on <date>`) and 1.5.2 (`# Generated by authselect`). The
+/// header runs to the first blank line.
+const GENERATED_HEADER: &str = "# Generated by authselect";
+
+/// What `authselect test` prints before a file's content: `File <path>:`,
+/// where the path is where the file is linked from (`/etc/pam.d/...`).
+const TEST_FILE_PREFIX: &str = "File ";
+const TEST_FILE_SUFFIX: &str = ":";
+
+/// The content of a file authselect generated, without its header and
+/// trailing line breaks: what `authselect test` prints for it.
+pub(crate) fn generated_body(content: &str) -> &str {
+    let body = if content.starts_with(GENERATED_HEADER) {
+        content.split_once("\n\n").map_or("", |(_, body)| body)
+    } else {
+        content
+    };
+    body.trim_end_matches('\n')
+}
+
+/// The file content `authselect test --<file>` printed, without its
+/// `File <path>:` line and trailing line breaks; `None` when the output
+/// does not start with that line.
+pub(crate) fn test_body(stdout: &str) -> Option<&str> {
+    let (first, body) = stdout.split_once('\n')?;
+    (first.starts_with(TEST_FILE_PREFIX) && first.ends_with(TEST_FILE_SUFFIX))
+        .then(|| body.trim_end_matches('\n'))
+}
+
+/// The profile and features `authselect.conf` records, as arguments for
+/// `authselect test`: the profile on the first line that is not blank or
+/// a `#` comment, a feature on each line after it. `None` when the file
+/// names no profile or a word could be read as an option or is not one
+/// word, so host text never reaches authselect as anything but a
+/// profile or feature name.
+pub(crate) fn selection_args(authselect_conf: &str) -> Option<Vec<&str>> {
+    let words: Vec<&str> = authselect_conf
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    let plain = |word: &&str| !word.starts_with('-') && !word.contains(char::is_whitespace);
+    (!words.is_empty() && words.iter().all(plain)).then_some(words)
 }
 
 // ---------------------------------------------------------------------------
@@ -608,41 +679,179 @@ setup cn '/etc/hosts'
         }
     }
 
+    /// Bytes measured in rhel-bootc 9.8 (authselect 1.2.6) and 10.2
+    /// (1.5.2) on 2026-11-21, after `authselect select sssd with-faillock
+    /// with-mkhomedir --force`: the generated files, `authselect test`
+    /// output, and `authselect check` after edits.
+    mod measured {
+        macro_rules! fixture {
+            ($release:literal, $name:literal) => {
+                include_str!(concat!(
+                    "../../../../../testdata/fixtures/config/authselect/",
+                    $release,
+                    "/",
+                    $name
+                ))
+            };
+        }
+        pub(super) struct Release {
+            pub conf: &'static str,
+            pub system_auth: &'static str,
+            pub system_auth_edited: &'static str,
+            pub nsswitch: &'static str,
+            pub test_system_auth: &'static str,
+            pub test_nsswitch: &'static str,
+            /// Exit code, stdout and stderr after a line was appended to
+            /// `system-auth`, mode and owner kept.
+            pub check_content_edit: (i32, &'static str, &'static str),
+            /// The same after that, a `passwd:` edit through
+            /// `/etc/nsswitch.conf` (`sed -i`, which replaces the link), a
+            /// `chmod 0600` of `password-auth`, and a regular file copied
+            /// over the `/etc/pam.d/smartcard-auth` link.
+            pub check_mode_and_links: (i32, &'static str, &'static str),
+        }
+        macro_rules! release {
+            ($release:literal, $content_exit:literal) => {
+                Release {
+                    conf: fixture!($release, "authselect.conf"),
+                    system_auth: fixture!($release, "system-auth"),
+                    system_auth_edited: fixture!($release, "system-auth.edited"),
+                    nsswitch: fixture!($release, "nsswitch.conf"),
+                    test_system_auth: fixture!($release, "test-system-auth.stdout"),
+                    test_nsswitch: fixture!($release, "test-nsswitch.stdout"),
+                    check_content_edit: (
+                        $content_exit,
+                        fixture!($release, "check-content-edit.stdout"),
+                        fixture!($release, "check-content-edit.stderr"),
+                    ),
+                    check_mode_and_links: (
+                        3,
+                        fixture!($release, "check-mode-and-links.stdout"),
+                        fixture!($release, "check-mode-and-links.stderr"),
+                    ),
+                }
+            };
+        }
+        pub(super) const EL9: Release = release!("rhel-9.8", 3);
+        pub(super) const EL10: Release = release!("rhel-10.2", 0);
+    }
+
+    /// 1.2.6 names a content edit; 1.5.2 calls the same edit valid. Both
+    /// name a changed mode and replaced links.
     #[test]
-    fn authselect_check_output() {
+    fn authselect_check_on_both_releases() {
+        let (code, out, err) = measured::EL9.check_content_edit;
         assert_eq!(
-            parse_authselect_check(0, "Current configuration is valid.\n", ""),
-            AuthselectCheck::Clean
+            parse_authselect_check(code, out, err),
+            AuthselectCheck::Edited {
+                paths: vec!["/etc/authselect/system-auth".into()]
+            }
         );
+        let (code, out, err) = measured::EL10.check_content_edit;
         assert_eq!(
-            parse_authselect_check(127, "", "authselect: command not found\n"),
-            AuthselectCheck::Clean,
-            "no authselect is nothing to report"
+            parse_authselect_check(code, out, err),
+            AuthselectCheck::Valid,
+            "1.5.2 does not compare content"
         );
+
+        let (code, out, err) = measured::EL9.check_mode_and_links;
         assert_eq!(
-            parse_authselect_check(
-                1,
-                "",
-                "[error] [/etc/authselect/system-auth] has unexpected content!\n\
-                 [error] [/etc/nsswitch.conf] has unexpected content!\n\
-                 [error] [/etc/authselect/system-auth] has unexpected content!\n\
-                 Current configuration is not valid. It was probably modified outside authselect.\n",
-            ),
+            parse_authselect_check(code, out, err),
             AuthselectCheck::Edited {
                 paths: vec![
                     "/etc/authselect/system-auth".into(),
-                    "/etc/nsswitch.conf".into()
+                    "/etc/authselect/password-auth".into(),
+                    "/etc/pam.d/smartcard-auth".into(),
+                    "/etc/nsswitch.conf".into(),
                 ]
+            }
+        );
+        let (code, out, err) = measured::EL10.check_mode_and_links;
+        assert_eq!(
+            parse_authselect_check(code, out, err),
+            AuthselectCheck::Edited {
+                paths: vec![
+                    "/etc/authselect/password-auth".into(),
+                    "/etc/pam.d/smartcard-auth".into(),
+                    "/etc/nsswitch.conf".into(),
+                ]
+            }
+        );
+    }
+
+    /// A check that does not answer is a failure, never a clean result.
+    #[test]
+    fn authselect_check_failures_are_not_valid_results() {
+        assert_eq!(
+            parse_authselect_check(127, "", "command not found: authselect check"),
+            AuthselectCheck::Failed {
+                exit_code: 127,
+                message: "command not found: authselect check".into()
+            }
+        );
+        assert_eq!(
+            parse_authselect_check(2, "System was not configured with authselect.\n", ""),
+            AuthselectCheck::Failed {
+                exit_code: 2,
+                message: "System was not configured with authselect.".into()
             }
         );
         assert_eq!(
             parse_authselect_check(
-                1,
+                3,
                 "Current configuration is not valid. It was probably modified outside authselect.\n",
                 ""
             ),
             AuthselectCheck::Edited { paths: vec![] }
         );
+    }
+
+    /// What `authselect test` prints equals the generated file once the
+    /// header and trailing line breaks are set aside, on both releases;
+    /// the edited file does not.
+    #[test]
+    fn generated_files_match_authselect_test_output() {
+        for (name, release) in [("EL9", measured::EL9), ("EL10", measured::EL10)] {
+            assert_eq!(
+                test_body(release.test_system_auth),
+                Some(generated_body(release.system_auth)),
+                "{name} system-auth"
+            );
+            assert_eq!(
+                test_body(release.test_nsswitch),
+                Some(generated_body(release.nsswitch)),
+                "{name} nsswitch.conf"
+            );
+            assert_ne!(
+                test_body(release.test_system_auth),
+                Some(generated_body(release.system_auth_edited)),
+                "{name} edited system-auth"
+            );
+            assert_eq!(
+                selection_args(release.conf),
+                Some(vec!["sssd", "with-faillock", "with-mkhomedir"]),
+                "{name}"
+            );
+        }
+        assert_eq!(test_body("auth required pam_env.so\n"), None);
+    }
+
+    #[test]
+    fn selection_args_refuse_option_like_words() {
+        assert_eq!(selection_args("local\n\n"), Some(vec!["local"]));
+        assert_eq!(
+            selection_args("# c\ncustom/corp\nwith-sudo\n"),
+            Some(vec!["custom/corp", "with-sudo"])
+        );
+        for conf in [
+            "",
+            "# only\n",
+            "sssd\n--all\n",
+            "-sssd\n",
+            "sssd\nwith faillock\n",
+        ] {
+            assert_eq!(selection_args(conf), None, "{conf:?}");
+        }
     }
 
     #[test]

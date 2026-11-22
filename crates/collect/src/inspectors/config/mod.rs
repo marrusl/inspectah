@@ -492,26 +492,45 @@ fn collect_ghost_configs(
     }
 }
 
-/// Why a file `authselect check` names is an advisory and not copied.
-const AUTHSELECT_EDITED_RATIONALE: &str = "authselect check reports this file was changed outside \
-     authselect. The image runs authselect select, which writes it again from the profile, so the \
-     change is not carried. To keep it, put it in a custom profile (authselect create-profile), or \
-     for nsswitch, in /etc/authselect/user-nsswitch.conf.";
+/// Why a file authselect generates is an advisory and not copied.
+const AUTHSELECT_EDITED_RATIONALE: &str = "This file differs from what authselect generates for the \
+     selected profile, so it was changed outside authselect. The image runs authselect select, \
+     which writes it again from the profile, so the change is not carried. To keep it, put it in a \
+     custom profile (authselect create-profile), or for nsswitch, in \
+     /etc/authselect/user-nsswitch.conf.";
 
 /// The scan warning when `authselect check` reports a changed
-/// configuration without naming a file.
+/// configuration and no file is found to name.
 const AUTHSELECT_EDITED_WARNING: &str = "authselect check reports the authentication configuration \
      was changed outside authselect, without naming the files. The image runs authselect select, \
      which writes those files again from the profile, so the change is not carried.";
 
-/// When the selected authselect profile is collected, run `authselect
-/// check` and make each file it reports changed outside authselect an
+/// The scan warning when the generated files could not be checked; the
+/// reasons follow.
+const AUTHSELECT_UNCHECKED_WARNING: &str = "The files authselect generates could not all be \
+     checked for hand edits. The image runs authselect select, which writes them again from the \
+     profile, so compare them with authselect test on the host before relying on the image";
+
+/// When the selected authselect profile is collected, find every file
+/// authselect generates that was changed outside it, and make each an
 /// advisory: the export renders the profile as an `authselect select`
 /// line, which writes those files again, so a hand edit to one is lost
-/// and must be named. An entry already collected at that path (the
-/// `rpm -Va` branch reports `/etc/nsswitch.conf`, for one) becomes the
+/// and must be named. Two sources, since neither is enough alone:
+///
+/// - `authselect check`, for a changed mode, owner or link, which it
+///   names on both releases, and content on 1.2.6;
+/// - for each generated file under `/etc/authselect/` that is a regular
+///   file, its content against what `authselect test` prints for the
+///   recorded profile and features ([`ghost::AUTHSELECT_GENERATED`]),
+///   because authselect 1.5.2's check passes a content edit.
+///
+/// An entry already collected at a named path (the ghost branch collects
+/// `/etc/nsswitch.conf` when it is a regular file, for one) becomes the
 /// advisory, so the export does not copy a file over what `authselect
-/// select` writes. A report that names no file is a scan warning.
+/// select` writes. A check that reports a change but no file is found
+/// is a scan warning, and so is a check or a comparison that could not
+/// run ([`ghost::AuthselectCheck::Failed`]): an unknown is never read
+/// as clean.
 fn authselect_edit_advisories(
     exec: &dyn Executor,
     rpm_state: &RpmState,
@@ -521,34 +540,90 @@ fn authselect_edit_advisories(
 ) {
     use inspectah_core::types::config::AUTHSELECT_CONF_PATH;
 
-    if !section.files.iter().any(|f| f.path == AUTHSELECT_CONF_PATH) {
-        return;
-    }
-    let result = exec.run("authselect", &["check"]);
-    let ghost::AuthselectCheck::Edited { paths } =
-        ghost::parse_authselect_check(result.exit_code, &result.stdout, &result.stderr)
+    let Some(selection) = section
+        .files
+        .iter()
+        .find(|f| f.path == AUTHSELECT_CONF_PATH)
+        .map(|f| f.content.clone())
     else {
         return;
     };
-    if paths.is_empty() {
+    let mut edited: Vec<String> = Vec::new();
+    let mut unchecked: Vec<String> = Vec::new();
+    let mut check_said_edited = false;
+
+    let check = exec.run("authselect", &["check"]);
+    match ghost::parse_authselect_check(check.exit_code, &check.stdout, &check.stderr) {
+        ghost::AuthselectCheck::Valid => {}
+        ghost::AuthselectCheck::Edited { paths } => {
+            check_said_edited = true;
+            edited.extend(paths);
+        }
+        ghost::AuthselectCheck::Failed { exit_code, message } => {
+            unchecked.push(format!("authselect check exited {exit_code}: {message}"));
+        }
+    }
+
+    match ghost::selection_args(&selection) {
+        None => unchecked.push(format!(
+            "{AUTHSELECT_CONF_PATH} does not name a profile and features authselect test can take"
+        )),
+        Some(selection) => {
+            for (path, option) in ghost::AUTHSELECT_GENERATED {
+                if !matches!(exec.file_kind(Path::new(path)), Ok(FileKind::Regular)) {
+                    continue;
+                }
+                let Ok(on_host) = exec.read_file(Path::new(path)) else {
+                    unchecked.push(format!("{path} could not be read"));
+                    continue;
+                };
+                let mut args = vec!["test", *option];
+                args.extend(selection.iter().copied());
+                let expected = exec.run("authselect", &args);
+                match ghost::test_body(&expected.stdout) {
+                    Some(body) if expected.success() => {
+                        if body != ghost::generated_body(&on_host) {
+                            edited.push(path.to_string());
+                        }
+                    }
+                    _ => unchecked.push(format!(
+                        "authselect test {option} exited {}",
+                        expected.exit_code
+                    )),
+                }
+            }
+        }
+    }
+
+    if !unchecked.is_empty() {
         warnings.push(Warning {
             inspector: "config".into(),
-            message: AUTHSELECT_EDITED_WARNING.into(),
+            message: format!("{AUTHSELECT_UNCHECKED_WARNING} ({}).", unchecked.join("; ")),
             ..Default::default()
         });
+    }
+    let mut seen = HashSet::new();
+    edited.retain(|path| {
+        path != AUTHSELECT_CONF_PATH && path.starts_with("/etc/") && seen.insert(path.clone())
+    });
+    if edited.is_empty() {
+        if check_said_edited {
+            warnings.push(Warning {
+                inspector: "config".into(),
+                message: AUTHSELECT_EDITED_WARNING.into(),
+                ..Default::default()
+            });
+        }
         return;
     }
     let advisory =
         || FindingKind::advisory(AdvisoryType::Modernization, AUTHSELECT_EDITED_RATIONALE);
-    for path in paths {
-        if path == AUTHSELECT_CONF_PATH || !path.starts_with("/etc/") {
-            continue;
-        }
+    for path in edited {
         if let Some(existing) = section.files.iter_mut().find(|f| f.path == path) {
             existing.disposition = with_modernization(&existing.disposition, advisory());
             continue;
         }
-        if !exec.file_exists(Path::new(&path)) {
+        if !matches!(exec.file_kind(Path::new(&path)), Ok(FileKind::Regular)) {
             continue;
         }
         let (content, captured) = capture_config(exec, &path, degraded_reasons);
