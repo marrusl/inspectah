@@ -168,18 +168,33 @@ The UI (`MachineStateGroup.tsx`) takes a row's control from `override`
 alone, never from its path, member or reason: `never` shows the text
 "Not carried" and no control, `plain` an Include button, `warn` an
 Include… button behind a confirm dialog. The block sits at the foot of
-Configuration in both modes and stays under that section's empty
-states; on a fleet every row is `never`. A row's item id is
+Configuration in both modes; on a fleet every row is `never`. Single-host
+Configuration renders one tree in every state: the heading, the section
+search and the block keep their places, and an empty state ("all
+excluded", "no match") replaces only the decision list. A separate tree
+for an empty state drops the search while its query still filters the
+block, and remounts the block, which collapses it. A row's item id is
 `machine-state:<path>`: it is the GlobalSearch id, the `ServiceSection`
-`required_config` link target (MainContent maps a class path to it), the
-pending-guard key for include and exclude, and the `useItemFailures` key.
-Its `<li>` carries `data-testid="machine-state-row-<path>"` and
-`tabIndex={-1}`; `App.tsx` reveal finds it by that exact string and
-focuses the row's button, or the `<li>` when it has none. A 422
-`not carried:` is shown on the row as an `info` statement, anything else
-as "not saved", and the row keeps the server's state. The UI fixtures are
-the recorded `machine-state` and `machine-state-included` sessions in
-`system_tuning_fixtures_test.rs`; record any new case there, never by
-hand. The export dialog lists `machine_state_steps` and drops the
-`machine_state_notices` entries after download
+`required_config` link's reveal target and its `href` hash (MainContent
+passes the one `configItemId` function to both), the pending-guard key
+for include and exclude, and the `useItemFailures` key. Its `<li>`
+carries `data-testid="machine-state-row-<path>"` and `tabIndex={-1}`;
+reveal finds it by that exact string and focuses the row's button, or
+the `<li>` when it has none: `App.tsx` on a single host,
+`revealMachineStateRow` from `AggregateApp` on a fleet, which clears its
+reveal once the row has focus so the same pick works again, and keeps
+the section-change focus off the first ordinary row meanwhile. The
+Export dialog's "Review machine state" link clears the section query
+first (`AppShell` bumps `filterClearCounter`), since Configuration may
+already be the active section. A 422 `not carried:` or `nothing to
+change:` is shown on the row as an `info` statement; `nothing to
+change:` means the view was stale, so the row also refetches it.
+Anything else shows as "not saved", and the row keeps the server's
+state. The UI fixtures are the recorded `machine-state`,
+`machine-state-included`, `machine-state-configs-excluded` and
+`machine-state-unit` sessions in `system_tuning_fixtures_test.rs` (the
+last scans a unit host whose `tls-proxy@web.service` requires a private
+key path); record any new case there, never by hand. The export dialog
+lists `machine_state_steps` and drops the `machine_state_notices` entries
+after download
 ([refine-export-warnings-header](refine-export-warnings-header.md)).
