@@ -182,16 +182,17 @@ fallback reads no requirement, so it lists every package and holds
 every owner.
 
 A package whose repo the export drops is no better than one no repo
-serves. An owner that is, or whose possible closure holds, a package
-installed from a host-enabled section of a captured custom `.repo` file
-that the build's repo files no longer carry enabled
-(`repos_lost_in_export`, an export question asked of
-`InstallRepos::effective`) is `OwnerHold::RepoExcluded` (Mark Russell,
-2026-11-21; `excluding_a_dependencys_repo_holds_its_owner`). An `or`
-does not save it: `agent` requiring `(vendor-runtime or helper)` with
-`helper` from an excluded `vendor` has neither operand at build time.
-Distro repos, sections a default repo file defines and host-disabled
-sections are never lost. A file that still stages, because another of
+serves. An owner that is, or whose possible closure holds, a package the
+build cannot install from its repo (`loses_its_repo`: the route-loss
+decision `InstallRepos::lost_route`, or a repo-enabling package's lost
+proof, the same answers routing and the Containerfile read) is
+`OwnerHold::RepoExcluded` (Mark Russell, 2026-11-21;
+`excluding_a_dependencys_repo_holds_its_owner`). An `or` does not save
+it: `agent` requiring `(vendor-runtime or helper)` with `helper` from an
+excluded `vendor` has neither operand at build time. A repo the base
+image supplies and a host-disabled section are never lost; a distro name
+is no exemption, so `helper` from `company.repo`'s `[baseos]` mirror
+holds `agent` like `vendor` does. A file that still stages, because another of
 its sections is kept or an included config entry writes the same path,
 still carries the repo, and dnf can fetch from it. This hold is decided
 by the export, so it follows refine's repo selection: refine's defaults

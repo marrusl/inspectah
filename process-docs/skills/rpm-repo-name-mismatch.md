@@ -93,9 +93,12 @@ the scan left repo-less can install from its own repo with
 once per export from `staged_writes`), by the same exact-first spelling
 rule (`section_spelling`, which is what `normalize_source_repos` already
 rewrote `source_repo` by), returns the id as that section spells it,
-and accepts only a section that is disabled, defines a source, and names
-only `gpgkey=file://` keys the image has when it installs
-(`keys_included`, shared with the repo-enabling proof): a key the base
+and accepts only a section that is disabled, defines a source, and whose
+keys dnf needs (`RepoSectionDef::required_keys`: every local key it
+names while `gpgcheck`, `pkg_gpgcheck` or `repo_gpgcheck` is on, an unset
+`gpgcheck` counting as on, and none when the host turned checking off)
+are in the image when it installs (`keys_included`, shared with the
+repo-enabling proof and the route-loss decision): a key the base
 image ships, or one the GPG Keys section copies, which is an included
 key the stager actually writes (`InstallRepos::copies_key`). An included
 key the stager withholds or refuses is not copied, and dnf cannot verify
@@ -210,9 +213,9 @@ of the two questions that ask it. Never resolve an id by walking
   repo files.
 - **Export questions** (what the image build's dnf uses: the
   disabled-repo route, the repo-enabling proof, its demotion FIXME, the
-  unit-owner hold for a repo the export drops
-  (`not_carried::repos_lost_in_export`) and the audit's "Carried by
-  Export") ask `InstallRepos::effective`, which is
+  route-loss decision and the audit's "Carried by Export") ask
+  `InstallRepos::effective`, or `effective_section` for a section whose
+  exact spelling the caller already holds, which is
   `effective_definition` over the staged files and nothing when the
   Custom Repositories `COPY` does not render. The repo-enabling proof
   accepts that definition only when it is enabled, keyed and has a
@@ -230,9 +233,11 @@ of the two questions that ask it. Never resolve an id by walking
   can bring back what it owns (`control`: a full switch for a toggleable
   repo, not distro and enabled where the host's dnf reads it, which the
   FIXME says also re-includes the repo's packages; or a carriage-only
-  switch, for a distro or host-disabled repo that owns a carriable entry
-  and is enabled in a file that defines it or has an attributed package,
-  which the FIXME says brings back its repo files and keys) and
+  switch, by both clauses of the ownership spec's § 5.2: a distro or
+  host-disabled repo that owns a carriable entry and is enabled in a file
+  that defines it or has a package attributed to it by exact spelling
+  first, or one that owns a carriable entry no such repo owns; the FIXME
+  says it brings back its repo files and keys) and
   `toggle_restores` says re-including it serves the package:
   it re-stages the whole export as the toggle leaves it (every unlocked
   repo file defining that exact section, every key its sections name that
@@ -247,17 +252,26 @@ of the two questions that ask it. Never resolve an id by walking
   Adding a file to the staged set by hand is not enough to judge a
   candidate: a config entry at `a.repo/stray` makes the stager withhold
   both it and an included `a.repo`.
-- **A package installed by name loses its route the same way.** When the
-  host's dnf read the package's repo from a captured `.repo` file that is
-  not a default repo file (a `company.repo` defining `[baseos]` for a
-  mirror counts; `redhat.repo` is the base image's), and the export's
-  definition of it does not serve (dropped by a carriage-only switch, or
-  its key narrowed out of an aggregate), `route_for` returns
-  `PackageRoute::LostRepo` (`InstallRepos::lost_route`, computed once per
-  export in `routes_lost`). It is not installed by name: it gets the
-  demotion FIXME in the repo-less advice, from `lost_route_loss`, asked
-  once per repo, and takes an upload. Its disposition never changes; the
-  route is read from the repo files and the staging, never from
+- **A package installed by name loses its route by one decision.**
+  `repoless::route_lost` decides it for a section by exact spelling
+  (`SectionId`), and package routing (`InstallRepos::lost_route`), the
+  restoring-switch advice (`lost_route_loss`) and unit-owner holds
+  (`not_carried::loses_its_repo`) all read it through
+  `InstallRepos::is_lost`. Never write a second rule beside it: three
+  rules disagreed on the base image's repos, case variants and keys. Lost
+  exactly when (1) the host's dnf installed by name from the section (its
+  stored definition enabled with a source, or no stored file defines it
+  and the collector attributed the package to it before redaction), (2)
+  the base image does not supply it (`base_supplies`: a default repo
+  file, or a file a baseline package owns unmodified per `rpm -Va`, as
+  `fedora-repos` owns `fedora.repo`; a `company.repo` defining `[baseos]`
+  is not supplied by its name), and (3) the build's definition of that
+  exact spelling does not serve, a key counting only when dnf checks
+  signatures for it. A package resolves exact spelling first, so `[site]`
+  losing its key never demotes `[SITE]`'s package. It is not installed
+  by name: it gets the demotion FIXME, worked out once per exact section,
+  and takes an upload. Its disposition never changes; the route is read
+  from the repo files, the attribution and the staging, never from
   `repoless_annotation`, which refine's `demote_lost_routes` writes for
   the upload control.
 

@@ -64,11 +64,27 @@ only, so `https://user:pass@host/` passes the generic pass untouched.
 Every place that holds URLs a host can embed a credential in needs a
 dedicated scrub in `redact()`: manifests use `scrub_manifest_auth`, proxy
 lines `mask_proxy_credentials`, and `.repo` files and their Configuration
-rows `scrub_repo_urls`, which applies `scrub_url_auth` to every URL of a
-value (split on whitespace and commas, as dnf splits it), continuation
-lines included. A repo URL's credential becomes `REDACTED` in the
-authority, so the operator can see where to supply it. A raw
+rows `scrub_repo_urls`, which applies core's `scrub_url_userinfo`: a URL
+begins at each `scheme://`, and its userinfo runs to the last `@` before
+the first `/`, `?` or `#`, or the line's end. Never cut a URL at a comma
+or other sub-delimiter first: RFC 3986 allows them in userinfo, and
+splitting `mirrorlist=` values on commas, as dnf splits list options,
+kept `orchid,92`'s tail. A repo URL's credential becomes `REDACTED` in
+the authority, so the operator can see where to supply it. A raw
 (`--no-redaction`) scan keeps it, by design.
+
+**Diagnostics are not redacted, so name them clean.** A warning, notice
+or degraded reason is written at collection, before `redact()` runs, and
+`redact()` never reads it. Any repo or key reference formatted into one
+goes through `scrub_reference_userinfo` first; the RPM collector's
+`DiagnosticNames` also names `REDACTED` a reference dnf's list split cut
+out of a comma-holding userinfo, which has no `@` to recognize.
+
+**A `.repo` file's `[section]` headers are never searched.** A repo id
+can spell a key (`[copr:...:token:vendor]`), and rewriting it leaves a
+file that defines no repo. The engine skips matches on a header line of
+a `.repo` file dnf reads (`is_repo_file_path`), and only there: a YAML
+flow sequence `[token: x]` elsewhere is a real secret.
 
 ## Search forward from the key, never from the start of the line
 
