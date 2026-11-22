@@ -428,6 +428,20 @@ fn build_scan_roots(
     Ok((roots, home_users, extra_paths))
 }
 
+/// Wraps `host` in the machine-state read gate, or refuses with the
+/// gap's message when the gate's inventory could not list every
+/// machine-state file: it could not then recognize a hard link or bind
+/// mount of one it missed, so the scan does not run on it.
+fn open_gate(
+    host: &dyn inspectah_core::traits::executor::HostRead,
+) -> Result<inspectah_core::machine_state::ScreenedExecutor<'_>> {
+    let gate = inspectah_core::machine_state::ScreenedExecutor::new(host);
+    if let Some(gap) = gate.gap() {
+        anyhow::bail!("{gap}");
+    }
+    Ok(gate)
+}
+
 pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     // Require root: scanning reads system state that needs elevated privileges.
     // SAFETY: geteuid() is a simple syscall with no preconditions or invariants.
@@ -448,13 +462,7 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     // The only production executor, wrapped at once: every host read the
     // scan makes goes through the machine-state read gate.
     let real_executor = RealExecutor::new();
-    let executor = inspectah_core::machine_state::ScreenedExecutor::new(&real_executor);
-    // A screen that could not list every machine-state file cannot
-    // recognize a hard link or bind mount of one it missed, so the scan
-    // does not run on it.
-    if let Some(gap) = executor.gap() {
-        anyhow::bail!("{gap}");
-    }
+    let executor = open_gate(&real_executor)?;
 
     // Build effective scan roots from defaults + CLI flags.
     let (effective_roots, home_users, extra_paths) =
@@ -1640,6 +1648,37 @@ VARIANT_ID="workstation"
                 "not found",
             ))
         }
+    }
+
+    /// The scan's gate refuses to open on an inventory gap, before any
+    /// file is read: here a name that is not UTF-8 in the private-key
+    /// directory, which the rule takes whatever it is called. A Latin-1
+    /// name directly under `/etc`, which no rule can match, opens the
+    /// gate and the scan reads on.
+    #[test]
+    fn the_scan_gate_refuses_only_a_real_inventory_gap() {
+        use inspectah_collect::executor::mock::MockExecutor;
+        let gap_host = MockExecutor::new()
+            .with_dir("/etc/pki/tls/private", vec![])
+            .with_raw_dir_entry("/etc/pki/tls/private", b"key\xff.pem")
+            .with_file("/etc/os-release", "ID=rhel\n");
+        let message = match open_gate(&gap_host) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("the gate opened over an inventory gap"),
+        };
+        assert!(message.contains("/etc/pki/tls/private"), "{message}");
+        assert!(message.contains("re-run the scan"), "{message}");
+        assert!(gap_host.read_log().is_empty(), "{:?}", gap_host.read_log());
+
+        let unrelated = MockExecutor::new()
+            .with_dir("/etc", vec!["os-release"])
+            .with_raw_dir_entry("/etc", b"\xe9quipe.conf")
+            .with_file("/etc/os-release", "ID=rhel\n");
+        let gate = open_gate(&unrelated).expect("an unrelated name leaves no gap");
+        assert_eq!(
+            gate.read_file(Path::new("/etc/os-release")).unwrap(),
+            "ID=rhel\n"
+        );
     }
 
     // --- Test 1: --scan-home bare flag (no argument) is rejected by clap ---
