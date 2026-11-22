@@ -11,9 +11,6 @@
 //! UPDATE_SYSTEM_TUNING_FIXTURES=1 cargo test -p inspectah-web --test integration system_tuning_fixtures_test::
 //! ```
 
-#[path = "../../cli/tests/support/sysctl_hosts.rs"]
-mod sysctl_hosts;
-
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -26,7 +23,7 @@ use inspectah_refine::session::RefineSession;
 use inspectah_web::handlers::AppState;
 use tower::ServiceExt;
 
-use sysctl_hosts::{SysctlHost, reload, scan, session};
+use crate::sysctl_hosts::{SysctlHost, reload, scan, session};
 
 /// Set to write the fixtures instead of comparing against them.
 const UPDATE_VAR: &str = "UPDATE_SYSTEM_TUNING_FIXTURES";

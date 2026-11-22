@@ -1497,6 +1497,19 @@ impl RefineSession {
             self.check_repo_noop(section_id, *include)?;
         }
 
+        // A machine-state row's decision is refused when it already holds
+        // (§ 8 of the machine-state spec), before the shortcut below
+        // silently accepts it: its control is a button whose direction
+        // the client derives from `include`, so a 200 that records
+        // nothing hides a stale view.
+        if let RefinementOp::SetInclude {
+            item_id: ItemId::Config { path },
+            include,
+        } = &op
+        {
+            self.check_machine_state_noop(path, *include)?;
+        }
+
         // Check idempotency
         if self.is_op_noop(&op) {
             return Ok(());
@@ -2631,6 +2644,25 @@ impl RefineSession {
             }
         }
         state
+    }
+
+    /// `NoopTarget` when `path` is a carriable machine-state entry whose
+    /// `include` already equals `include`; nothing to say otherwise.
+    fn check_machine_state_noop(&self, path: &str, include: bool) -> Result<(), RefineError> {
+        let projected = self.project_snapshot();
+        let held = projected
+            .config
+            .as_ref()
+            .and_then(|c| c.files.iter().find(|e| e.path == path))
+            .filter(|e| e.disposition.is_machine_state())
+            .is_some_and(|e| e.disposition.is_included() == include);
+        if held {
+            let state = if include { "included" } else { "left out" };
+            return Err(RefineError::NoopTarget(format!(
+                "machine-state file {path} is already {state}"
+            )));
+        }
+        Ok(())
     }
 
     fn is_op_noop(&self, op: &RefinementOp) -> bool {
