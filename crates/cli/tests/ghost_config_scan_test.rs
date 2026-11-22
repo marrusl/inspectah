@@ -1356,3 +1356,186 @@ fn config_under_a_linked_directory_is_carried_at_the_path_the_application_reads(
         }
     }
 }
+
+/// A credential whose first line passes the policy-name check.
+const POLICY_SHAPED_PASSWORD: &str = "ROOTONLYSECRET2026";
+
+/// `/etc/crypto-policies/config` linked to an admin's credentials file
+/// under `/etc`: both admission checks pass it as configuration, and its
+/// first line, `PASSWORD:<secret>`, passes the policy-name check. The
+/// non-default warning used to quote it, and redaction never scans
+/// warnings. No warning quotes the policy file, so the secret is in no
+/// part of the snapshot JSON or of either export.
+#[test]
+fn no_warning_quotes_the_crypto_policy_value() {
+    let snap = scan(
+        sssd_host()
+            .file(
+                "/etc/app/credentials",
+                &format!("PASSWORD:{POLICY_SHAPED_PASSWORD}\n"),
+            )
+            .link(CRYPTO_POLICY_PATH, "/etc/app/credentials"),
+    );
+    for (where_, text) in everywhere(&snap) {
+        assert!(!text.contains(POLICY_SHAPED_PASSWORD), "{where_}");
+    }
+    assert!(
+        snap.warnings
+            .iter()
+            .any(|w| w.message.starts_with(CRYPTO_POLICY_PATH)),
+        "the non-default policy is still named by path: {:?}",
+        snap.warnings
+    );
+
+    let snap = scan(sssd_host().file(CRYPTO_POLICY_PATH, "FUTURE\n"));
+    let warning = snap
+        .warnings
+        .iter()
+        .find(|w| w.message.starts_with(CRYPTO_POLICY_PATH))
+        .unwrap_or_else(|| panic!("a warning names the policy file: {:?}", snap.warnings));
+    assert!(!warning.message.contains("FUTURE"), "{}", warning.message);
+}
+
+/// `authselect check` failing with a diagnostic that quotes what it read
+/// from `authselect.conf`, as its unknown-profile error does. The scan
+/// warning gives the exit code only, so the quoted text is in no part of
+/// the snapshot JSON or of either export.
+#[test]
+fn no_warning_quotes_an_authselect_diagnostic() {
+    let snap = scan(
+        sssd_host()
+            .ghost("authselect-libs", "g", "/etc/authselect/authselect.conf")
+            .file(
+                "/etc/authselect/authselect.conf",
+                &measured("rhel-9.8", "authselect.conf"),
+            )
+            .command(
+                "authselect check",
+                1,
+                "",
+                &format!("[error] Unable to find profile [PASSWORD:{POLICY_SHAPED_PASSWORD}]\n"),
+            ),
+    );
+    for (where_, text) in everywhere(&snap) {
+        assert!(!text.contains(POLICY_SHAPED_PASSWORD), "{where_}");
+    }
+    assert!(
+        snap.warnings
+            .iter()
+            .any(|w| w.message.contains("authselect check exited 1")),
+        "{:?}",
+        snap.warnings
+    );
+}
+
+/// A rule kept only in `audit.rules`, where `rules.d` does not have it.
+const ADMIN_ONLY_RULE: &str = "-w /etc/sudoers -p wa -k admin-only-rule\n";
+
+/// The packaged RHEL 9 `auditd.service` edited in place to load
+/// `audit.rules` directly, and `rpm -Va` failing, so nothing says the
+/// unit changed. Failed verification is not "unmodified":
+/// `audit.rules` is carried with a warning, and the rule only it holds
+/// is in the snapshot and staged by both exports.
+#[test]
+fn audit_rules_are_carried_when_verification_failed() {
+    let direct = audit_unit("rhel-9.8", "auditd.service")
+        .replace(
+            "ExecStartPost=-/sbin/augenrules --load",
+            "#ExecStartPost=-/sbin/augenrules --load",
+        )
+        .replace(
+            "#ExecStartPost=-/sbin/auditctl -R /etc/audit/audit.rules",
+            "ExecStartPost=-/sbin/auditctl -R /etc/audit/audit.rules",
+        );
+    let rules = format!("{AUDIT_RULES}{ADMIN_ONLY_RULE}");
+    for (case, exit_code) in [("rpm -Va exited 2", 2), ("rpm -Va killed", -1)] {
+        let snap = scan(
+            audit_host_el9()
+                .file(&format!("{UNIT_DIR}/auditd.service"), &direct)
+                .file("/etc/audit/audit.rules", &rules)
+                .command("rpm -Va", exit_code, "", ""),
+        );
+        let carried = entry(&snap, "/etc/audit/audit.rules")
+            .unwrap_or_else(|| panic!("{case}: audit.rules is collected"));
+        assert!(carried.content.contains(ADMIN_ONLY_RULE), "{case}");
+        assert!(carried.disposition.is_included(), "{case}");
+        assert!(
+            snap.warnings.iter().any(|w| w
+                .message
+                .starts_with("/etc/audit/audit.rules is carried as it is")),
+            "{case}: {:?}",
+            snap.warnings
+        );
+        for (export, tree) in both_exports(&snap) {
+            let staged = std::fs::read_to_string(tree.path().join("config/etc/audit/audit.rules"))
+                .unwrap_or_default();
+            assert!(staged.contains(ADMIN_ONLY_RULE), "{case} {export}");
+        }
+    }
+}
+
+/// Whether both exports stage `path` holding `content`.
+fn assert_staged_everywhere(snap: &InspectionSnapshot, path: &str, content: &str) {
+    let file = entry(snap, path).unwrap_or_else(|| panic!("{path} is collected"));
+    assert_eq!(file.content, content, "{path}");
+    assert!(file.disposition.is_included(), "{path}");
+    for (export, tree) in both_exports(snap) {
+        let staged = std::fs::read_to_string(tree.path().join("config").join(&path[1..]));
+        assert_eq!(staged.ok().as_deref(), Some(content), "{export}: {path}");
+    }
+}
+
+/// `/etc/httpd/live.d -> conf.d`, and httpd told to read `live.d`. The
+/// physical files are already carried by another branch: a modified
+/// `mod_ssl` file by `rpm -Va`, an admin's `%ghost` file by the ghost
+/// branch. The directory link is never carried, so each is carried under
+/// the alias as well, the path httpd reads, with the same content.
+#[test]
+fn an_alias_of_config_another_branch_carries_is_carried_too() {
+    const SSL: &str = "Listen 8443 https\nSSLProtocol -all +TLSv1.3\n";
+    const GHOST: &str = "Header always set X-Site live\n";
+    let snap = scan(
+        sssd_host()
+            .rpm_owned("/etc/httpd/conf/httpd.conf", "httpd")
+            .rpm_va("S.5....T.", "/etc/httpd/conf/httpd.conf")
+            .file(
+                "/etc/httpd/conf/httpd.conf",
+                "IncludeOptional live.d/*.conf\n",
+            )
+            .rpm_owned("/etc/httpd/conf.d/ssl.conf", "mod_ssl")
+            .rpm_va("S.5....T.", "/etc/httpd/conf.d/ssl.conf")
+            .file("/etc/httpd/conf.d/ssl.conf", SSL)
+            .ghost("httpd", "g", "/etc/httpd/conf.d/headers.conf")
+            .file("/etc/httpd/conf.d/headers.conf", GHOST)
+            .link("/etc/httpd/live.d", "conf.d"),
+    );
+    for (path, content) in [
+        ("/etc/httpd/conf.d/ssl.conf", SSL),
+        ("/etc/httpd/live.d/ssl.conf", SSL),
+        ("/etc/httpd/conf.d/headers.conf", GHOST),
+        ("/etc/httpd/live.d/headers.conf", GHOST),
+    ] {
+        assert_staged_everywhere(&snap, path, content);
+    }
+}
+
+/// `/etc/httpd/conf.d -> .`: a link to the directory holding it, and
+/// httpd reading `conf.d/site.conf`. The walk enters the link once, so
+/// the site file is carried at the path httpd reads and under its own
+/// name, and does not go through the same link again inside it.
+#[test]
+fn a_link_to_its_own_directory_is_walked_once() {
+    const SITE: &str = "<VirtualHost *:80>\n    ServerName self.example.com\n</VirtualHost>\n";
+    let snap = scan(
+        sssd_host()
+            .file(
+                "/etc/httpd/conf/httpd.conf",
+                "IncludeOptional conf.d/site.conf\n",
+            )
+            .file("/etc/httpd/site.conf", SITE)
+            .link("/etc/httpd/conf.d", "."),
+    );
+    for path in ["/etc/httpd/site.conf", "/etc/httpd/conf.d/site.conf"] {
+        assert_staged_everywhere(&snap, path, SITE);
+    }
+}

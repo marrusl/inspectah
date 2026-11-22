@@ -121,7 +121,7 @@ fn mock_rpm_state() -> RpmState {
 
     RpmState {
         owned_paths: owned,
-        verification_results,
+        verification_results: Some(verification_results),
         ..Default::default()
     }
 }
@@ -296,7 +296,7 @@ fn test_config_inspector_excludes_selinux_fcontext_store_file() {
         .with_file("/etc/ssh/sshd_config", "Port 22\n");
 
     let rpm_state = RpmState {
-        verification_results: vec![
+        verification_results: Some(vec![
             RpmVaEntry {
                 path: "/etc/selinux/targeted/contexts/files/file_contexts.local".into(),
                 flags: "S.5....T.".into(),
@@ -307,7 +307,7 @@ fn test_config_inspector_excludes_selinux_fcontext_store_file() {
                 flags: "S.5....T.".into(),
                 package: Some("openssh-server".into()),
             },
-        ],
+        ]),
         ..Default::default()
     };
 
@@ -359,7 +359,7 @@ fn a_content_changed_rpm_config_is_included_at_collect() {
         .with_file("/etc/ssh/sshd_config", "Port 2222\n")
         .with_file("/etc/httpd/conf/httpd.conf", HTTPD_CONF);
     let rpm_state = RpmState {
-        verification_results: parse_rpm_va(RPM_VA),
+        verification_results: Some(parse_rpm_va(RPM_VA)),
         ..Default::default()
     };
     let source = pkg_source();
@@ -426,7 +426,7 @@ fn a_config_whose_content_was_not_captured_is_an_advisory() {
         .with_file_error("/etc/vendor/agent.db", std::io::ErrorKind::InvalidData)
         .with_file("/etc/vendor/empty.conf", "");
     let rpm_state = RpmState {
-        verification_results: parse_rpm_va(RPM_VA),
+        verification_results: Some(parse_rpm_va(RPM_VA)),
         ..Default::default()
     };
     let source = pkg_source();
@@ -801,11 +801,11 @@ fn an_authselect_symlink_is_not_a_local_pam_file() {
         .with_file("/etc/pam.d/custom-sshd", "auth required pam_faillock.so\n");
 
     let rpm_state = RpmState {
-        verification_results: vec![RpmVaEntry {
+        verification_results: Some(vec![RpmVaEntry {
             path: "/etc/pam.d/system-auth".into(),
             flags: "....L....".into(),
             package: Some("authselect-libs".into()),
-        }],
+        }]),
         ..Default::default()
     };
 
@@ -1028,10 +1028,12 @@ fn an_rpm_owned_link_re_pointed_to_dev_null_is_a_modified_config() {
             exec = exec.with_link(link, target);
         }
         let rpm_state = RpmState {
-            verification_results: parse_rpm_va(case.rpm_va),
+            verification_results: Some(parse_rpm_va(case.rpm_va)),
             ..Default::default()
         };
-        let flags = rpm_state.verification_results[0].flags.clone();
+        let flags = rpm_state.verification_results().expect("rpm -Va ran")[0]
+            .flags
+            .clone();
         let source = pkg_source();
         let ctx = InspectionContext {
             source_system: &source,
@@ -1228,11 +1230,11 @@ fn ghost_rpm_state() -> RpmState {
     ];
     RpmState {
         owned_paths: owned.iter().map(PathBuf::from).collect(),
-        verification_results: vec![RpmVaEntry {
+        verification_results: Some(vec![RpmVaEntry {
             path: "/etc/myapp/edited.conf".into(),
             flags: "S.5....T.".into(),
             package: Some("myapp".into()),
-        }],
+        }]),
         ..Default::default()
     }
 }
@@ -1472,10 +1474,13 @@ fn a_ghost_file_rpm_reports_for_metadata_only_is_still_collected() {
     );
     let rpm_state = RpmState {
         owned_paths: [PathBuf::from("/etc/sssd/sssd.conf")].into_iter().collect(),
-        verification_results: parse_rpm_va(".M.......  c /etc/sssd/sssd.conf\n"),
+        verification_results: Some(parse_rpm_va(".M.......  c /etc/sssd/sssd.conf\n")),
         ..Default::default()
     };
-    assert_eq!(rpm_state.verification_results.len(), 1);
+    assert_eq!(
+        rpm_state.verification_results().expect("rpm -Va ran").len(),
+        1
+    );
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,

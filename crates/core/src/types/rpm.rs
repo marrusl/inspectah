@@ -277,6 +277,13 @@ pub struct RpmSection {
     pub base_image_only: Vec<PackageEntry>,
     #[serde(default)]
     pub rpm_va: Vec<RpmVaEntry>,
+    /// Whether `rpm -Va` ran to the end on this scan, so `rpm_va` is every
+    /// file that does not verify. `false` when it failed, was killed, or
+    /// did not run (an image-based host), and then an empty `rpm_va`
+    /// proves nothing unmodified. Not in the snapshot: only the scan's
+    /// later inspectors read it, through `RpmState::verification_results`.
+    #[serde(skip)]
+    pub rpm_va_complete: bool,
     #[serde(default)]
     pub repo_files: Vec<RepoFile>,
     #[serde(default)]

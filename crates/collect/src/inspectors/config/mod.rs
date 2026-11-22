@@ -121,7 +121,9 @@ impl Inspector for ConfigInspector {
         });
         let mut rpm_va_paths: HashSet<String> = HashSet::new();
         let mut va_entries: Vec<(&str, &str, Option<&str>)> = Vec::new();
-        for entry in rpm_state.verification_results() {
+        // Without a completed `rpm -Va` no row is known; this branch then
+        // collects nothing, and the walk below still skips owned paths.
+        for entry in rpm_state.verification_results().unwrap_or_default() {
             if entry.path.starts_with("/etc") {
                 rpm_va_paths.insert(entry.path.clone());
                 va_entries.push((&entry.path, &entry.flags, entry.package.as_deref()));
@@ -229,15 +231,18 @@ impl Inspector for ConfigInspector {
                     // Under a directory link, the file it names is
                     // outside /etc or withheld: not collected, and an
                     // unowned path is not named by a warning. Every
-                    // check below applies to both spellings.
+                    // exclusion below applies to both spellings.
                     let Ok(located) = admit::locate(exec, &abs_path) else {
                         continue;
                     };
                     // Skip already captured rpm -Va paths, and RPM-owned
-                    // ones (not modified).
-                    if located
-                        .spellings()
-                        .any(|p| rpm_va_paths.contains(p) || rpm_state.is_rpm_owned(Path::new(p)))
+                    // ones (not modified), by the walked spelling only.
+                    // An alias whose physical file another branch
+                    // carries, or a package owns, is carried as well: the
+                    // directory link is never carried, and the
+                    // application reads the file by the alias.
+                    if rpm_va_paths.contains(&located.path)
+                        || rpm_state.is_rpm_owned(Path::new(&located.path))
                     {
                         continue;
                     }
@@ -466,8 +471,9 @@ const GHOST_CREDENTIAL_WITHHELD: &str = "holds key material, so it was withheld:
 /// keymap file the locale item decides. A credential by path is never
 /// opened and is withheld with a scan warning naming it.
 /// `/etc/audit/audit.rules` is skipped when the audit loader units are
-/// exactly as packaged, so `augenrules` writes it, and otherwise carried
-/// with a scan warning ([`audit_rules::source`]). Then the unowned walk's
+/// exactly as packaged, verified by a completed `rpm -Va`, so `augenrules`
+/// writes it, and otherwise carried with a scan warning
+/// ([`audit_rules::source`]). Then the unowned walk's
 /// exclusions that need the host (`is_excluded_unowned`'s unit-link
 /// test, DHCP connections), on both spellings of a path under a
 /// directory link, which is collected at the spelling it was found by.
@@ -726,8 +732,10 @@ fn authselect_edit_advisories(
             check_said_edited = true;
             edited.extend(paths);
         }
-        ghost::AuthselectCheck::Failed { exit_code, message } => {
-            unchecked.push(format!("authselect check exited {exit_code}: {message}"));
+        ghost::AuthselectCheck::Failed { exit_code } => {
+            unchecked.push(format!(
+                "authselect check exited {exit_code} without naming a file"
+            ));
         }
     }
 
@@ -1068,12 +1076,18 @@ const CRYPTO_POLICY_UNEXPECTED: &str = "does not start with a policy name (capit
      digits, `_`, `:`, `.` and `-`), so the Containerfile update-crypto-policies command will be \
      skipped";
 
+/// The scan warning when the crypto policy is not `DEFAULT`; the path
+/// comes first. It never names the policy: a value that passes the name
+/// check can still be a secret (`PASSWORD:<value>` does), and redaction
+/// does not scan warnings. The collected file carries the name.
+const CRYPTO_POLICY_NOT_DEFAULT: &str = "names a crypto policy other than DEFAULT, which the base \
+     image may use";
+
 /// Detects the system crypto policy and adds a warning if non-default.
 ///
 /// The file is opened only as a capture would open it
-/// ([`admit::may_read_to_decide`]). The policy name a warning quotes
-/// has passed the name check; a first line that does not is named by
-/// path with a fixed reason.
+/// ([`admit::may_read_to_decide`]). Every warning here is fixed text and
+/// the path, never a value read from the file.
 fn detect_crypto_policy(exec: &dyn Executor, warnings: &mut Vec<Warning>) {
     if !admit::may_read_to_decide(exec, CRYPTO_POLICY_CONFIG) {
         return;
@@ -1115,9 +1129,7 @@ fn detect_crypto_policy(exec: &dyn Executor, warnings: &mut Vec<Warning>) {
     if policy != "DEFAULT" {
         warnings.push(Warning {
             inspector: "config".into(),
-            message: format!(
-                "System crypto policy is set to {policy} \u{2014} base image may use DEFAULT"
-            ),
+            message: format!("{CRYPTO_POLICY_CONFIG} {CRYPTO_POLICY_NOT_DEFAULT}"),
             ..Default::default()
         });
     }
@@ -1169,11 +1181,11 @@ fn detect_orphaned_configs(
             let Ok(located) = admit::locate(exec, &abs_path) else {
                 continue;
             };
-            if located.spellings().any(|p| {
-                rpm_state.is_rpm_owned(Path::new(p))
-                    || rpm_va_paths.contains(p)
-                    || dhcp_paths.contains(p)
-            }) {
+            // Ownership by the walked spelling only, as the walk above.
+            if rpm_state.is_rpm_owned(Path::new(&located.path))
+                || rpm_va_paths.contains(&located.path)
+                || located.spellings().any(|p| dhcp_paths.contains(p))
+            {
                 continue;
             }
             if is_rpm_owned_via_symlink(exec, rpm_state, &abs_path) {
@@ -1384,7 +1396,7 @@ mod tests {
         RpmState {
             owned_paths,
             packages,
-            verification_results: va_entries,
+            verification_results: Some(va_entries),
             path_to_package,
             ..Default::default()
         }
@@ -1808,9 +1820,15 @@ mod tests {
 
         let result = inspector.inspect(&ctx, &NullProgress);
         let output = result.expect("should succeed");
+        let warning = output
+            .warnings
+            .iter()
+            .find(|w| w.message.starts_with(CRYPTO_POLICY_CONFIG))
+            .expect("should warn about non-DEFAULT crypto policy");
         assert!(
-            output.warnings.iter().any(|w| w.message.contains("FUTURE")),
-            "should warn about non-DEFAULT crypto policy"
+            !warning.message.contains("FUTURE"),
+            "the warning never quotes the file: {}",
+            warning.message
         );
     }
 

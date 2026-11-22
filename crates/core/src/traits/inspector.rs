@@ -47,7 +47,8 @@ pub struct RpmState {
     pub installed_packages: HashSet<String>,
     pub owned_paths: HashSet<PathBuf>,
     pub packages: Vec<PackageEntry>,
-    pub verification_results: Vec<RpmVaEntry>,
+    /// `rpm -Va`'s rows; `None` when it did not run to the end.
+    pub verification_results: Option<Vec<RpmVaEntry>>,
     pub module_streams: Vec<EnabledModuleStream>,
     pub path_to_package: HashMap<PathBuf, usize>,
 }
@@ -81,9 +82,12 @@ impl RpmState {
             .and_then(|&idx| self.packages.get(idx))
     }
 
-    /// Access RPM verification results (rpm -Va output).
-    pub fn verification_results(&self) -> &[RpmVaEntry] {
-        &self.verification_results
+    /// Access RPM verification results (rpm -Va output). `None` when
+    /// `rpm -Va` failed, was killed, or did not run: then no file is known
+    /// to be unmodified, and a caller that needs "unmodified" must not
+    /// read the absence of a row as that.
+    pub fn verification_results(&self) -> Option<&[RpmVaEntry]> {
+        self.verification_results.as_deref()
     }
 
     /// Access enabled DNF module streams.
@@ -197,11 +201,11 @@ mod tests {
             installed_packages: installed,
             owned_paths,
             packages,
-            verification_results: vec![RpmVaEntry {
+            verification_results: Some(vec![RpmVaEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 flags: "S.5....T.".into(),
                 package: Some("httpd".into()),
-            }],
+            }]),
             module_streams: vec![],
             path_to_package,
         }
@@ -279,7 +283,7 @@ mod tests {
         assert!(state.packages().is_empty());
         assert!(state.owned_paths().is_empty());
         assert!(state.installed_packages().is_empty());
-        assert!(state.verification_results().is_empty());
+        assert!(state.verification_results().is_none());
         assert!(state.module_streams().is_empty());
         assert!(!state.is_rpm_owned(Path::new("/etc/anything")));
         assert!(state.package_for_path(Path::new("/etc/anything")).is_none());

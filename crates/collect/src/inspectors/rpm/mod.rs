@@ -541,6 +541,7 @@ impl Inspector for RpmInspector {
             packages_added,
             base_image_only,
             version_changes,
+            rpm_va_complete: supp.rpm_va.is_some(),
             rpm_va: supp.rpm_va.unwrap_or_default(),
             repo_files: supp.repo_files,
             gpg_keys,
@@ -1742,6 +1743,7 @@ mod tests {
             // rpm -Va collected for package-mode
             assert_eq!(rpm.rpm_va.len(), 1);
             assert_eq!(rpm.rpm_va[0].path, "/etc/httpd/conf/httpd.conf");
+            assert!(rpm.rpm_va_complete, "rpm -Va exited 1 with its report");
 
             // File ownership collected
             assert!(
@@ -1789,6 +1791,7 @@ mod tests {
         let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Rpm(rpm) = &output.section {
             assert!(rpm.rpm_va.is_empty(), "bootc should skip rpm -Va");
+            assert!(!rpm.rpm_va_complete, "a skipped rpm -Va verified nothing");
         } else {
             panic!("expected SectionData::Rpm");
         }

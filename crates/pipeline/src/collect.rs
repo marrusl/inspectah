@@ -517,7 +517,7 @@ fn handle_result(
 fn extract_rpm_state(rpm: &inspectah_core::types::rpm::RpmSection, state: &mut RpmState) {
     state.installed_packages = rpm.packages_added.iter().map(|p| p.name.clone()).collect();
     state.packages = rpm.packages_added.clone();
-    state.verification_results = rpm.rpm_va.clone();
+    state.verification_results = rpm.rpm_va_complete.then(|| rpm.rpm_va.clone());
     state.module_streams = rpm.module_streams.clone();
 
     // Build owned_paths and path_to_package from file ownership data.
@@ -553,7 +553,7 @@ fn extract_rpm_state(rpm: &inspectah_core::types::rpm::RpmSection, state: &mut R
     // Annotate RpmVaEntry.package from file ownership data.
     // rpm -Va output has paths but not package names; cross-reference
     // against the ownership index to fill in the owning package.
-    for va in &mut state.verification_results {
+    for va in state.verification_results.iter_mut().flatten() {
         if va.package.is_none()
             && let Some(&pkg_name) = path_to_name.get(va.path.as_str())
         {
@@ -1776,6 +1776,7 @@ mod tests {
         // rpm -Va entry for httpd.conf should have package attribution
         let httpd_va = rpm_state
             .verification_results()
+            .expect("rpm -Va ran to the end")
             .iter()
             .find(|v| v.path == "/etc/httpd/conf/httpd.conf")
             .expect("httpd.conf should be in verification results");

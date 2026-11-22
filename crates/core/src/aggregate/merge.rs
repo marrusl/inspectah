@@ -1563,6 +1563,9 @@ pub fn merge_rpm_sections(
             packages_added,
             base_image_only,
             rpm_va,
+            // A scan-time fact no snapshot records; no inspector reads a
+            // fleet section.
+            rpm_va_complete: false,
             repo_files,
             gpg_keys,
             dnf_history_removed,

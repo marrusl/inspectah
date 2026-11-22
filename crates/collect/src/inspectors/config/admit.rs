@@ -18,7 +18,10 @@
 //!   the spelling it was found by, the one the application reads: with
 //!   `/etc/httpd/conf.d -> ../httpd-live`, httpd reads
 //!   `/etc/httpd/conf.d/site.conf`, and the image needs it there, since
-//!   the directory link itself is never carried.
+//!   the directory link itself is never carried. Package ownership and
+//!   an `rpm -Va` row are not exclusions: the walk checks them on the
+//!   spelling it reached, so an alias of a file a package owns or another
+//!   branch carries is carried under the alias as well.
 //! - **The path itself is a symlink.** A read returns its target's
 //!   content. [`readable`] reads through a link only to a regular file
 //!   under `/etc` that the section would carry at its own path.

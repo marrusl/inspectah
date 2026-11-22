@@ -84,6 +84,9 @@ pub(super) enum Reason {
     NoPackagedLoader,
     /// `rpm -Va` reports this packaged unit changed.
     ChangedPackagedUnit(String),
+    /// `rpm -Va` did not run to the end, so nothing says this packaged
+    /// unit is unchanged.
+    UnverifiedPackagedUnit(String),
     /// A unit file in the packaged directory no package lists.
     UnpackagedUnit(String),
     /// A unit file, mask or drop-in directory for a loader unit, at this
@@ -109,6 +112,10 @@ impl fmt::Display for Reason {
                 LOADER_UNITS.join(", ")
             ),
             Self::ChangedPackagedUnit(path) => write!(f, "rpm reports {path} changed"),
+            Self::UnverifiedPackagedUnit(path) => write!(
+                f,
+                "rpm -Va did not complete, so {path} is not known to be as packaged"
+            ),
             Self::UnpackagedUnit(path) => write!(f, "no package installs {path}"),
             Self::Override(path) => write!(f, "{path} overrides or extends an audit loader unit"),
             Self::Alias(path) => write!(f, "{path} is another name for an audit loader unit"),
@@ -119,11 +126,12 @@ impl fmt::Display for Reason {
 
 /// How the scan treats `/etc/audit/audit.rules`. `packaged` is every path
 /// under [`PACKAGED_UNIT_DIR`] some package lists, and `verified` the
-/// `rpm -Va` rows. Only what is present is looked at; no unit is read.
+/// `rpm -Va` rows, `None` when `rpm -Va` did not run to the end. Only what
+/// is present is looked at; no unit is read.
 pub(super) fn source(
     exec: &dyn Executor,
     packaged: &BTreeSet<String>,
-    verified: &[RpmVaEntry],
+    verified: Option<&[RpmVaEntry]>,
 ) -> Source {
     match exactly_as_packaged(exec, packaged, verified) {
         Ok(()) => Source::Augenrules,
@@ -132,12 +140,13 @@ pub(super) fn source(
 }
 
 /// `Ok` when at least one loader unit is installed by a package and
-/// unchanged, nothing else anywhere in [`UNIT_SEARCH_PATH`] names, masks,
-/// aliases or extends a loader unit, and [`RULES_DIR`] is a directory.
+/// verified unchanged, nothing else anywhere in [`UNIT_SEARCH_PATH`]
+/// names, masks, aliases or extends a loader unit, and [`RULES_DIR`] is a
+/// directory. A failed verification is never "unchanged".
 fn exactly_as_packaged(
     exec: &dyn Executor,
     packaged: &BTreeSet<String>,
-    verified: &[RpmVaEntry],
+    verified: Option<&[RpmVaEntry]>,
 ) -> Result<(), Reason> {
     let mut any_loader = false;
     for unit in LOADER_UNITS {
@@ -150,6 +159,9 @@ fn exactly_as_packaged(
                     if kind != FileKind::Regular || !packaged.contains(&unit_file) {
                         return Err(Reason::UnpackagedUnit(unit_file));
                     }
+                    let Some(verified) = verified else {
+                        return Err(Reason::UnverifiedPackagedUnit(unit_file));
+                    };
                     if verified.iter().any(|row| row.path == unit_file) {
                         return Err(Reason::ChangedPackagedUnit(unit_file));
                     }
@@ -256,7 +268,7 @@ mod tests {
     #[test]
     fn the_packaged_units_are_augenrules() {
         for (exec, packaged) in [el9(), el10()] {
-            assert_eq!(source(&exec, &packaged, &[]), Source::Augenrules);
+            assert_eq!(source(&exec, &packaged, Some(&[])), Source::Augenrules);
         }
     }
 
@@ -272,8 +284,9 @@ mod tests {
         );
     }
 
-    /// Anything present beside the packaged units carries the file, with
-    /// the path that was found; nothing is read.
+    /// Anything present beside the packaged units, or a verification that
+    /// did not complete, carries the file, with the path that was found;
+    /// nothing is read.
     #[test]
     fn anything_beside_the_packaged_units_is_carried() {
         let changed = |path: &str| RpmVaEntry {
@@ -282,11 +295,11 @@ mod tests {
             package: None,
         };
         let override_at = |p: &str| Source::Carried(Reason::Override(p.into()));
-        let cases: Vec<(&str, MockExecutor, Vec<RpmVaEntry>, Source)> = vec![
+        let cases: Vec<(&str, MockExecutor, Option<Vec<RpmVaEntry>>, Source)> = vec![
             (
                 "an /etc unit",
                 el9().0.with_file("/etc/systemd/system/auditd.service", "x"),
-                vec![],
+                Some(vec![]),
                 override_at("/etc/systemd/system/auditd.service"),
             ),
             (
@@ -294,7 +307,7 @@ mod tests {
                 el9()
                     .0
                     .with_link("/etc/systemd/system/auditd.service", "/dev/null"),
-                vec![],
+                Some(vec![]),
                 override_at("/etc/systemd/system/auditd.service"),
             ),
             (
@@ -302,7 +315,7 @@ mod tests {
                 el10()
                     .0
                     .with_dir("/run/systemd/system/audit-.service.d", vec![".x.conf"]),
-                vec![],
+                Some(vec![]),
                 override_at("/run/systemd/system/audit-.service.d"),
             ),
             (
@@ -310,7 +323,7 @@ mod tests {
                 el9()
                     .0
                     .with_dir("/usr/lib/systemd/system/service.d", vec!["10-x.conf"]),
-                vec![],
+                Some(vec![]),
                 override_at("/usr/lib/systemd/system/service.d"),
             ),
             (
@@ -319,31 +332,37 @@ mod tests {
                     .0
                     .with_link("/etc/systemd/system/audit.service", EL9_AUDITD)
                     .with_dir("/etc/systemd/system", vec!["audit.service"]),
-                vec![],
+                Some(vec![]),
                 Source::Carried(Reason::Alias("/etc/systemd/system/audit.service".into())),
             ),
             (
                 "a changed packaged unit",
                 el9().0,
-                vec![changed(EL9_AUDITD)],
+                Some(vec![changed(EL9_AUDITD)]),
                 Source::Carried(Reason::ChangedPackagedUnit(EL9_AUDITD.into())),
+            ),
+            (
+                "verification that did not complete",
+                el9().0,
+                None,
+                Source::Carried(Reason::UnverifiedPackagedUnit(EL9_AUDITD.into())),
             ),
             (
                 "an unlisted unit in the packaged directory",
                 el9().0.with_file(EL10_AUDIT_RULES, "x"),
-                vec![],
+                Some(vec![]),
                 Source::Carried(Reason::UnpackagedUnit(EL10_AUDIT_RULES.into())),
             ),
             (
                 "no packaged loader",
                 MockExecutor::new().with_dir(RULES_DIR, vec![]),
-                vec![],
+                Some(vec![]),
                 Source::Carried(Reason::NoPackagedLoader),
             ),
             (
                 "no rules.d",
                 MockExecutor::new().with_file(EL9_AUDITD, "x"),
-                vec![],
+                Some(vec![]),
                 Source::Carried(Reason::NoRulesDir),
             ),
             (
@@ -351,7 +370,7 @@ mod tests {
                 el9()
                     .0
                     .with_dir_error("/etc/systemd/system", std::io::ErrorKind::PermissionDenied),
-                vec![],
+                Some(vec![]),
                 Source::Carried(Reason::Unchecked(
                     "/etc/systemd/system".into(),
                     "/etc/systemd/system".into(),
@@ -360,7 +379,11 @@ mod tests {
         ];
         let packaged = el9().1;
         for (case, exec, verified, expected) in cases {
-            assert_eq!(source(&exec, &packaged, &verified), expected, "{case}");
+            assert_eq!(
+                source(&exec, &packaged, verified.as_deref()),
+                expected,
+                "{case}"
+            );
         }
     }
 }

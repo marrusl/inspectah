@@ -384,8 +384,11 @@ pub(crate) enum AuthselectCheck {
     /// Changed outside authselect; the files it named, which may be none.
     Edited { paths: Vec<String> },
     /// The check did not give either answer: authselect is missing, or it
-    /// failed. Nothing is known about the files.
-    Failed { exit_code: i32, message: String },
+    /// failed. Nothing is known about the files. Only the exit code is
+    /// kept: authselect's diagnostics can quote what it read from
+    /// `authselect.conf` (an unknown profile name, in brackets), and the
+    /// warning this becomes is never redacted.
+    Failed { exit_code: i32 },
 }
 
 /// Read `authselect check`'s exit code and output. authselect names each
@@ -420,14 +423,7 @@ pub(crate) fn parse_authselect_check(
     let said_not_valid =
         stdout.contains(AUTHSELECT_NOT_VALID) || stderr.contains(AUTHSELECT_NOT_VALID);
     if paths.is_empty() && !said_not_valid {
-        let message = [stderr, stdout]
-            .iter()
-            .flat_map(|text| text.lines())
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .unwrap_or("no output")
-            .to_string();
-        AuthselectCheck::Failed { exit_code, message }
+        AuthselectCheck::Failed { exit_code }
     } else {
         AuthselectCheck::Edited { paths }
     }
@@ -934,17 +930,11 @@ setup cn '/etc/hosts'
     fn authselect_check_failures_are_not_valid_results() {
         assert_eq!(
             parse_authselect_check(127, "", "command not found: authselect check"),
-            AuthselectCheck::Failed {
-                exit_code: 127,
-                message: "command not found: authselect check".into()
-            }
+            AuthselectCheck::Failed { exit_code: 127 }
         );
         assert_eq!(
             parse_authselect_check(2, "System was not configured with authselect.\n", ""),
-            AuthselectCheck::Failed {
-                exit_code: 2,
-                message: "System was not configured with authselect.".into()
-            }
+            AuthselectCheck::Failed { exit_code: 2 }
         );
         assert_eq!(
             parse_authselect_check(

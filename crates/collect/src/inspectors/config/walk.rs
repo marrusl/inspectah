@@ -1,6 +1,6 @@
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::units::UNIT_TYPE_SUFFIXES;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
 // Dev-artifact filtering
@@ -397,7 +397,14 @@ pub fn walk_etc_with_reasons(
 ) -> Result<Vec<String>, std::io::Error> {
     let mut files = Vec::new();
     let before = degraded_reasons.len();
-    walk_recursive_inner(exec, root, "", &mut files, degraded_reasons);
+    walk_recursive_inner(
+        exec,
+        root,
+        "",
+        &mut Vec::new(),
+        &mut files,
+        degraded_reasons,
+    );
 
     if files.is_empty() && degraded_reasons.len() > before {
         // No files and a permission error: the error was on `root` itself,
@@ -418,10 +425,13 @@ pub fn walk_etc_recursive(exec: &dyn Executor, root: &str) -> Result<Vec<String>
     walk_etc_with_reasons(exec, root, &mut Vec::new())
 }
 
+/// `entered` holds each directory link the walk is inside, by where the
+/// link itself is ([`link_location`]).
 fn walk_recursive_inner(
     exec: &dyn Executor,
     root: &str,
     rel: &str,
+    entered: &mut Vec<PathBuf>,
     files: &mut Vec<String>,
     degraded_reasons: &mut Vec<String>,
 ) {
@@ -468,13 +478,23 @@ fn walk_recursive_inner(
                     if is_symlink_outside_root(exec, &child_path, root) {
                         continue;
                     }
-                    // A link back to a directory the walk is already in
-                    // would list every file again under a longer name,
-                    // and again inside that.
-                    if is_symlink_to_ancestor(exec, &dir, &child_path) {
-                        continue;
+                    // A directory link is entered, and its files listed
+                    // under the name the walk reached them by: an
+                    // application reads them there. Inside it, the same
+                    // link is not entered again, so a link to a directory
+                    // above it (`conf.d -> .`) is walked once instead of
+                    // without end.
+                    let link = link_location(exec, &dir, name);
+                    if let Some(link) = &link {
+                        if entered.contains(link) {
+                            continue;
+                        }
+                        entered.push(link.clone());
                     }
-                    walk_recursive_inner(exec, root, &child_rel, files, degraded_reasons);
+                    walk_recursive_inner(exec, root, &child_rel, entered, files, degraded_reasons);
+                    if link.is_some() {
+                        entered.pop();
+                    }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -510,20 +530,18 @@ pub fn is_symlink_outside_root(exec: &dyn Executor, path: &str, root: &str) -> b
     }
 }
 
-/// Whether `path` is a directory link whose target is `dir`, the
-/// directory holding it, or a directory above that, all resolved: a
-/// loop, such as `/etc/app/state -> /etc`.
-fn is_symlink_to_ancestor(exec: &dyn Executor, dir: &str, path: &str) -> bool {
-    if exec.read_link(Path::new(path)).is_err() {
-        return false;
-    }
-    let (Ok(target), Ok(here)) = (
-        exec.resolve_final_target(Path::new(path)),
-        exec.resolve_final_target(Path::new(dir)),
-    ) else {
-        return false;
-    };
-    here.starts_with(&target)
+/// Where the link `name` in `dir` is, with `dir` resolved, when it is a
+/// link: the same for every spelling the walk reaches it by, so
+/// `/etc/httpd/conf.d/conf.d` under `conf.d -> .` is `/etc/httpd/conf.d`.
+/// `None` for anything that is not a link. A directory that does not
+/// resolve keeps its spelling.
+fn link_location(exec: &dyn Executor, dir: &str, name: &str) -> Option<PathBuf> {
+    let path = Path::new(dir).join(name);
+    exec.read_link(&path).ok()?;
+    let here = exec
+        .resolve_final_target(Path::new(dir))
+        .unwrap_or_else(|_| PathBuf::from(dir));
+    Some(here.join(name))
 }
 
 /// Returns DHCP-managed NetworkManager connection file paths.
@@ -896,27 +914,39 @@ mod tests {
         assert!(is_symlink_outside_root(&exec, "/etc/broken", "/etc"));
     }
 
-    /// A link to a directory above it is not entered, so the walk lists
-    /// each file once under its own name; a link to a sibling directory
-    /// is, so the file is also listed under the name it is read by.
+    /// A link to a directory above it is entered once, so each file
+    /// under it is listed under that name as well, and the link is not
+    /// entered again inside itself; a link to a sibling directory is
+    /// entered, inside the ancestor link as well. The mock lists each
+    /// spelling a real `readdir` would follow.
     #[test]
-    fn walk_skips_a_link_to_an_ancestor_and_enters_one_to_a_sibling() {
+    fn walk_enters_a_link_to_an_ancestor_once_and_one_to_a_sibling() {
+        let etc = vec!["app", "httpd", "httpd-live"];
         let exec = MockExecutor::new()
-            .with_dir("/etc", vec!["app", "httpd", "httpd-live"])
+            .with_dir("/etc", etc.clone())
             .with_dir("/etc/app", vec!["app.conf", "state"])
-            .with_dir("/etc/app/state", vec!["app", "httpd", "httpd-live"])
+            .with_dir("/etc/app/state", etc.clone())
+            .with_dir("/etc/app/state/app", vec!["app.conf", "state"])
+            .with_dir("/etc/app/state/app/state", etc)
+            .with_dir("/etc/app/state/httpd", vec!["conf.d"])
+            .with_dir("/etc/app/state/httpd/conf.d", vec!["site.conf"])
+            .with_dir("/etc/app/state/httpd-live", vec!["site.conf"])
             .with_link("/etc/app/state", "/etc")
             .with_dir("/etc/httpd", vec!["conf.d"])
             .with_dir("/etc/httpd/conf.d", vec!["site.conf"])
             .with_link("/etc/httpd/conf.d", "../httpd-live")
             .with_dir("/etc/httpd-live", vec!["site.conf"]);
-        let files = walk_etc_recursive(&exec, "/etc").expect("the walk succeeds");
+        let mut files = walk_etc_recursive(&exec, "/etc").expect("the walk succeeds");
+        files.sort();
         assert_eq!(
             files,
             [
                 "app/app.conf",
+                "app/state/app/app.conf",
+                "app/state/httpd-live/site.conf",
+                "app/state/httpd/conf.d/site.conf",
+                "httpd-live/site.conf",
                 "httpd/conf.d/site.conf",
-                "httpd-live/site.conf"
             ]
         );
     }
@@ -1000,5 +1030,24 @@ mod tests {
             !files.iter().any(|f| f.contains("httpd.pid")),
             "should skip files under run symlink"
         );
+    }
+
+    /// A link to a directory above it is entered once and not again
+    /// inside itself. The mock lists each spelling a real `readdir`
+    /// would follow, three passes deep, so a walk that went through the
+    /// link again would find `site.conf` under a longer name.
+    #[test]
+    fn a_link_to_a_directory_above_it_is_walked_once() {
+        let entries = vec!["conf.d", "site.conf"];
+        let self_link = MockExecutor::new()
+            .with_dir("/etc", vec!["httpd"])
+            .with_dir("/etc/httpd", entries.clone())
+            .with_dir("/etc/httpd/conf.d", entries.clone())
+            .with_dir("/etc/httpd/conf.d/conf.d", entries.clone())
+            .with_dir("/etc/httpd/conf.d/conf.d/conf.d", entries)
+            .with_link("/etc/httpd/conf.d", ".");
+        let mut files = walk_etc_recursive(&self_link, "/etc").unwrap();
+        files.sort();
+        assert_eq!(files, ["httpd/conf.d/site.conf", "httpd/site.conf"]);
     }
 }
