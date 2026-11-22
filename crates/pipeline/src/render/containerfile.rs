@@ -649,12 +649,17 @@ fn packages_section_lines(
 
         const STANDARD_GPG_DIR: &str = "etc/pki/rpm-gpg";
 
-        // Classify keys: safe vs unsafe, standard-dir vs non-standard vs root
-        let mut standard_keys: Vec<&inspectah_core::types::rpm::RepoFile> = Vec::new();
-        let mut nonstandard_keys: Vec<&inspectah_core::types::rpm::RepoFile> = Vec::new();
-        let mut root_keys: Vec<&inspectah_core::types::rpm::RepoFile> = Vec::new();
+        // Classify keys: safe vs unsafe, standard-dir vs non-standard vs
+        // root. Each is placed, copied and imported by its destination
+        // (`Destination`, the path the stager writes), never by the path as
+        // a `gpgkey=` value spelled it: `/etc/pki/rpm-gpg//K` is the
+        // standard directory's `K`, and is one key with `/etc/pki/rpm-gpg/K`.
+        let mut standard_keys: Vec<String> = Vec::new();
+        let mut nonstandard_keys: Vec<String> = Vec::new();
+        let mut root_keys: Vec<String> = Vec::new();
         let mut nonstandard_dirs: std::collections::BTreeSet<String> =
             std::collections::BTreeSet::new();
+        let mut placed: std::collections::BTreeSet<Destination> = std::collections::BTreeSet::new();
 
         for key in &included_gpg {
             // Host paths are absolute — check for traversal, NUL, and whitespace
@@ -678,13 +683,16 @@ fn packages_section_lines(
             // A key whose path the stager refuses (an empty path, one
             // longer than a filesystem allows) is named here, since the
             // config section leaves refused keys to this one.
-            if let Err(e) = Destination::new(&key.path) {
-                gpg_body.push(format!(
-                    "# FIXME: GPG key {} not copied: {e}",
-                    language_packages::sanitize_for_comment(&key.path)
-                ));
-                continue;
-            }
+            let dest = match Destination::new(&key.path) {
+                Ok(dest) => dest,
+                Err(e) => {
+                    gpg_body.push(format!(
+                        "# FIXME: GPG key {} not copied: {e}",
+                        language_packages::sanitize_for_comment(&key.path)
+                    ));
+                    continue;
+                }
+            };
             // A key the stager withholds is named in the config section's
             // FIXME; neither a COPY nor an import may name it here.
             if !is_staged(&staged, &key.path) {
@@ -709,20 +717,24 @@ fn packages_section_lines(
                 ));
                 continue;
             }
-            let rel = key.path.trim_start_matches('/');
+            if !placed.insert(dest.clone()) {
+                continue;
+            }
+            let path = dest.as_str().to_owned();
+            let rel = path.trim_start_matches('/');
             match rel.rsplit_once('/') {
                 Some((dir, _)) if !dir.is_empty() => {
                     if dir == STANDARD_GPG_DIR {
-                        standard_keys.push(key);
+                        standard_keys.push(path);
                     } else {
                         nonstandard_dirs.insert(dir.to_string());
-                        nonstandard_keys.push(key);
+                        nonstandard_keys.push(path);
                     }
                 }
                 _ => {
                     // Root-level key (e.g., /good-key) — stage the file directly
-                    root_keys.push(key);
-                    nonstandard_keys.push(key);
+                    root_keys.push(path.clone());
+                    nonstandard_keys.push(path);
                 }
             }
         }
@@ -747,14 +759,14 @@ fn packages_section_lines(
         }
 
         // COPY root-level keys directly (no parent directory)
-        for key in &root_keys {
-            let rel = key.path.trim_start_matches('/');
-            gpg_body.push(format!("COPY config/{rel} {}", key.path));
+        for path in &root_keys {
+            let rel = path.trim_start_matches('/');
+            gpg_body.push(format!("COPY config/{rel} {path}"));
         }
 
         // rpm --import only for non-standard keys (standard-dir keys are auto-imported)
-        for key in &nonstandard_keys {
-            gpg_body.push(format!("RUN rpm --import {}", key.path));
+        for path in &nonstandard_keys {
+            gpg_body.push(format!("RUN rpm --import {path}"));
         }
         for (path, reason) in &base_shipped {
             gpg_body.push(format!(
@@ -768,12 +780,14 @@ fn packages_section_lines(
             &staged,
             inspectah_core::repo_ownership::OwnedKind::GpgKey,
         ));
-        // Counted from what the stager writes: a key it withholds or
-        // refuses is named in a FIXME, not carried.
+        // Counted from what the stager writes, once per destination: a key
+        // it withholds or refuses is named in a FIXME, not carried.
         let staged_gpg = included_gpg
             .iter()
             .filter(|k| is_staged(&staged, &k.path))
-            .count();
+            .filter_map(|k| Destination::new(&k.path).ok())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
         lines.extend(section(&format!("GPG Keys ({staged_gpg})"), gpg_body));
     }
 
@@ -5362,6 +5376,49 @@ RUN dnf install -y \
                 );
             }
         }
+    }
+
+    /// A key is placed, copied and imported by its destination, never by
+    /// the spelling a `gpgkey=` value gave it: a doubled slash or a `./`
+    /// in the standard directory is still the directory `COPY` with no
+    /// import, elsewhere it is one clean `COPY` and import, and two
+    /// spellings of one key are one key.
+    #[test]
+    fn test_containerfile_gpg_keys_by_destination() {
+        let key = |path: &str| inspectah_core::types::rpm::RepoFile {
+            path: path.into(),
+            content: "key-data".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            gpg_keys: vec![
+                key("/etc/pki/rpm-gpg//RPM-GPG-KEY-shared"),
+                key("/etc/pki/rpm-gpg/RPM-GPG-KEY-shared"),
+                key("/etc/pki/rpm-gpg/./RPM-GPG-KEY-dot"),
+                key("/opt//custom/keys/signing-key.asc"),
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None, None);
+        let gpg: Vec<&str> = output
+            .lines()
+            .skip_while(|l| !l.contains("GPG Keys"))
+            .take_while(|l| !l.is_empty())
+            .collect();
+        assert!(gpg[0].contains("GPG Keys (3)"), "{output}");
+        assert_eq!(
+            gpg[1..],
+            [
+                "COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/",
+                "COPY config/opt/custom/keys/ /opt/custom/keys/",
+                "RUN rpm --import /opt/custom/keys/signing-key.asc",
+            ],
+            "{output}"
+        );
+        assert!(!output.contains("//"), "{output}");
+        assert!(!output.contains("/./"), "{output}");
     }
 
     #[test]
