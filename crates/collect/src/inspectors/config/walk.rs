@@ -190,20 +190,38 @@ pub(crate) const UNOWNED_EXCLUDE_PREFIX: &[&str] = &[
 /// the new default it did not install (`.rpmnew`), the file it replaced
 /// (`.rpmorig`). The live file is the config; these are leftovers no
 /// application reads, at any depth.
+///
+/// A discovery filter only, so not part of [`is_excluded_unowned_path`]:
+/// `classify_ghost` reads that list to decide whether a link may be read
+/// through, and a live name an admin linked to one of these copies is the
+/// config the application reads ([`is_rpm_backup_copy`]).
 pub(crate) const UNOWNED_EXCLUDE_SUFFIX: &[&str] = &[".rpmsave", ".rpmnew", ".rpmorig"];
 
 /// Returns `true` if the path should be excluded from unowned file detection.
 ///
-/// Checks: exact match, glob match, subtree prefix exclusion, and the
-/// systemd unit symlink test, which needs `exec` to read link metadata.
+/// Checks: exact match, glob match, subtree prefix exclusion, rpm's
+/// backup copies, and the systemd unit symlink test, which needs `exec`
+/// to read link metadata.
 pub fn is_excluded_unowned(exec: &dyn Executor, path: &str) -> bool {
     // Systemd unit links and masks directly under /etc/systemd/system/:
     // state the units inspector records.
-    is_excluded_unowned_path(path) || is_systemd_unit_symlink(exec, path)
+    is_excluded_unowned_path(path)
+        || is_rpm_backup_copy(path)
+        || is_systemd_unit_symlink(exec, path)
 }
 
-/// The part of [`is_excluded_unowned`] decided by the path alone: the
-/// exact, glob, subtree and suffix exclusion lists.
+/// Whether `path` is a copy rpm left beside a config file
+/// ([`UNOWNED_EXCLUDE_SUFFIX`]): never a row of its own, but readable
+/// through a live link that names it.
+fn is_rpm_backup_copy(path: &str) -> bool {
+    UNOWNED_EXCLUDE_SUFFIX
+        .iter()
+        .any(|suffix| path.ends_with(suffix))
+}
+
+/// The part of [`is_excluded_unowned`] decided by the path alone that
+/// also decides what a link may be read through: the exact, glob and
+/// subtree exclusion lists.
 pub(super) fn is_excluded_unowned_path(path: &str) -> bool {
     UNOWNED_EXCLUDE_EXACT.contains(&path)
         || UNOWNED_EXCLUDE_GLOBS
@@ -213,9 +231,6 @@ pub(super) fn is_excluded_unowned_path(path: &str) -> bool {
         || UNOWNED_EXCLUDE_PREFIX
             .iter()
             .any(|prefix| path.starts_with(prefix))
-        || UNOWNED_EXCLUDE_SUFFIX
-            .iter()
-            .any(|suffix| path.ends_with(suffix))
 }
 
 /// Returns `true` if the path is unit state rather than a unit file: a

@@ -1564,3 +1564,28 @@ fn a_link_to_its_own_directory_is_walked_once() {
         assert_staged_everywhere(&snap, path, SITE);
     }
 }
+
+/// `/etc/app/live.conf -> active.conf.<suffix>`: an admin who activated
+/// rpm's copy by linking the live name to it. The application reads the
+/// live name, so it is carried with the copy's content; the copy's own
+/// row stays out, as every rpm leftover does.
+#[test]
+fn a_live_link_to_an_rpm_backup_copy_is_carried() {
+    const ACTIVE: &str = "listen = 0.0.0.0:8080\n";
+    for suffix in ["rpmsave", "rpmnew", "rpmorig"] {
+        let copy = format!("/etc/app/active.conf.{suffix}");
+        let snap = scan(
+            sssd_host()
+                .file(&copy, ACTIVE)
+                .link("/etc/app/live.conf", &format!("active.conf.{suffix}")),
+        );
+        assert_staged_everywhere(&snap, "/etc/app/live.conf", ACTIVE);
+        assert!(entry(&snap, &copy).is_none(), "{copy} is not a config row");
+        for (export, tree) in both_exports(&snap) {
+            assert!(
+                !tree.path().join("config").join(&copy[1..]).exists(),
+                "{export}: {copy}"
+            );
+        }
+    }
+}
