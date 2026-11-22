@@ -64,21 +64,32 @@ only, so `https://user:pass@host/` passes the generic pass untouched.
 Every place that holds URLs a host can embed a credential in needs a
 dedicated scrub in `redact()`: manifests use `scrub_manifest_auth`, proxy
 lines `mask_proxy_credentials`, and `.repo` files and their Configuration
-rows `scrub_repo_urls`, which applies core's `scrub_url_userinfo`: a URL
-begins at each `scheme://`, and its userinfo runs to the last `@` before
-the first `/`, `?` or `#`, or the line's end. Never cut a URL at a comma
-or other sub-delimiter first: RFC 3986 allows them in userinfo, and
-splitting `mirrorlist=` values on commas, as dnf splits list options,
-kept `orchid,92`'s tail. A repo URL's credential becomes `REDACTED` in
-the authority, so the operator can see where to supply it. A raw
-(`--no-redaction`) scan keeps it, by design.
+rows `scrub_repo_urls`, which applies core's `scrub_repo_credentials`: a
+URL begins at each `scheme://`, and its credential runs to the last `@`
+before the first `/` or `?` of its option value, reading on through the
+value's continuation lines. Never cut a value at a comma, `#`, `;`,
+whitespace or a continuation line first: RFC 3986 allows sub-delimiters
+in userinfo, and the parser cuts at all of those, so a password holding
+one becomes pieces, and a piece with no `@` (`keys:orchid92` from
+`file://keys:orchid92;tail@host/KEY`) reads as a plain path. Splitting
+`mirrorlist=` values on commas first kept `orchid,92`'s tail. The rule
+over-redacts syntax (`https://host # mail admin@x` loses `host # mail
+admin`), never a credential byte. A repo URL's credential becomes
+`REDACTED` in the authority, so the operator can see where to supply it.
+A raw (`--no-redaction`) scan keeps it, by design.
 
-**Diagnostics are not redacted, so name them clean.** A warning, notice
-or degraded reason is written at collection, before `redact()` runs, and
-`redact()` never reads it. Any repo or key reference formatted into one
-goes through `scrub_reference_userinfo` first; the RPM collector's
-`DiagnosticNames` also names `REDACTED` a reference dnf's list split cut
-out of a comma-holding userinfo, which has no `@` to recognize.
+**Diagnostics are not redacted, so name them from the raw value.** A
+warning, notice or degraded reason is written at collection, before
+`redact()` runs, and `redact()` never reads it. Sanitizing a reference
+after the parser cut it is too late: the cut has already hidden which
+bytes were a credential. So `parse_repo_sections` names each key
+reference as it parses (`KeyRef::named`): the piece with every byte of a
+`repo_credential_spans` span of the raw content replaced, spans found
+before the comment cut, the list split and the continuation join. The
+collector formats only that form, and a path only as that form expanded
+with the host's variables, never the reference it reads; a variable
+written inside a credential is not named either. `t6_no_separator_leaves_a_piece_of_a_key_reference_password`
+holds it over each separator, inside a userinfo and after it.
 
 **A `.repo` file's `[section]` headers are never searched.** A repo id
 can spell a key (`[copr:...:token:vendor]`), and rewriting it leaves a

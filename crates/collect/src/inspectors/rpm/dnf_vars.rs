@@ -89,6 +89,19 @@ pub enum ExpandError {
     UnsupportedSyntax,
 }
 
+impl ExpandError {
+    /// The same error naming no variable, for a reference whose variable
+    /// may be written inside a credential: its name is then a piece of it.
+    pub fn unnamed(self) -> Self {
+        let placeholder = || inspectah_core::redaction::URL_USERINFO_PLACEHOLDER.to_owned();
+        match self {
+            Self::UnknownVariable(_) => Self::UnknownVariable(placeholder()),
+            Self::UnsafeValue(_) => Self::UnsafeValue(placeholder()),
+            Self::UnsupportedSyntax => Self::UnsupportedSyntax,
+        }
+    }
+}
+
 impl fmt::Display for ExpandError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

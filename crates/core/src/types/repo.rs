@@ -1,6 +1,9 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
+
+use crate::redaction::{repo_credential_spans, scrub_reference_userinfo, without_repo_credentials};
 
 /// Repo section IDs considered part of the base distribution.
 pub const DISTRO_REPOS: &[&str] = &[
@@ -271,6 +274,46 @@ impl GpgKeyRef {
             Some(GpgKeyRef::Local(reference.to_owned()))
         }
     }
+
+    /// The reference as written, `file://` removed from a local one.
+    pub fn as_str(&self) -> &str {
+        match self {
+            GpgKeyRef::Local(text) | GpgKeyRef::Remote(text) => text,
+        }
+    }
+}
+
+/// One reference in a section's final `gpgkey=` value, with the only
+/// form of it a diagnostic may print.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyRef {
+    /// The reference, as dnf reads it.
+    pub target: GpgKeyRef,
+    /// The reference with every byte of a URL credential in the raw
+    /// option value replaced ([`repo_credential_spans`], read before the
+    /// value's comment was cut, its list split or its continuation lines
+    /// joined), `file://` removed like `target`'s, then
+    /// [`scrub_reference_userinfo`] over the rest. A reference dnf's split
+    /// cut out of a password (`keys:orchid92` from
+    /// `file://keys:orchid92;tail@host/KEY`) holds no `@`, and only the
+    /// raw value says it is a credential. Collection, where diagnostics
+    /// are written before redaction runs, names a reference by this and
+    /// never by `target`.
+    pub named: String,
+}
+
+impl KeyRef {
+    /// The reference at `offset` of the content whose credential spans
+    /// are `spans`. `None` for a `file://` reference with no path.
+    fn parse(piece: &str, offset: usize, spans: &[Range<usize>]) -> Option<KeyRef> {
+        let target = GpgKeyRef::parse(piece)?;
+        let masked = without_repo_credentials(piece, offset, spans);
+        let masked = masked.strip_prefix("file://").unwrap_or(&masked);
+        Some(KeyRef {
+            target,
+            named: scrub_reference_userinfo(masked).into_owned(),
+        })
+    }
 }
 
 /// One parsed `[section]` of a `.repo` file.
@@ -288,7 +331,7 @@ pub struct RepoSectionDef {
     pub has_source: bool,
     /// Every reference in the final `gpgkey=` value, split on whitespace
     /// and commas, in order.
-    pub gpg_keys: Vec<GpgKeyRef>,
+    pub gpg_keys: Vec<KeyRef>,
     /// Whether dnf checks signatures for this section, so the keys it
     /// names must be in the image before it installs from it
     /// ([`Self::required_keys`]): its final `gpgcheck=` (or dnf 5's
@@ -305,8 +348,14 @@ impl RepoSectionDef {
     /// ([`GpgKeyRef::Local`]). Every consumer that asks which keys a
     /// section names reads this.
     pub fn local_keys(&self) -> impl Iterator<Item = &str> {
-        self.gpg_keys.iter().filter_map(|r| match r {
-            GpgKeyRef::Local(path) => Some(path.as_str()),
+        self.local_keys_named().map(|(path, _)| path)
+    }
+
+    /// [`Self::local_keys`], each with the form a diagnostic names it by
+    /// ([`KeyRef::named`]).
+    pub fn local_keys_named(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.gpg_keys.iter().filter_map(|r| match &r.target {
+            GpgKeyRef::Local(path) => Some((path.as_str(), r.named.as_str())),
             GpgKeyRef::Remote(_) => None,
         })
     }
@@ -367,20 +416,27 @@ impl RepoOption {
 }
 
 /// The last value each option a [`RepoSectionDef`] is derived from was
-/// assigned, across every block of one section.
+/// assigned, across every block of one section: each value's lines, comment
+/// cut and trimmed, as slices of the content parsed, so a piece of one
+/// still knows where in the raw content it was written.
 #[derive(Default)]
-struct SectionValues {
-    enabled: Option<String>,
-    baseurl: Option<String>,
-    metalink: Option<String>,
-    mirrorlist: Option<String>,
-    gpgkey: Option<String>,
-    gpgcheck: Option<String>,
-    repo_gpgcheck: Option<String>,
+struct SectionValues<'c> {
+    enabled: Option<Vec<&'c str>>,
+    baseurl: Option<Vec<&'c str>>,
+    metalink: Option<Vec<&'c str>>,
+    mirrorlist: Option<Vec<&'c str>>,
+    gpgkey: Option<Vec<&'c str>>,
+    gpgcheck: Option<Vec<&'c str>>,
+    repo_gpgcheck: Option<Vec<&'c str>>,
 }
 
-impl SectionValues {
-    fn slot(&mut self, option: RepoOption) -> &mut Option<String> {
+/// An option's value, its lines joined as dnf joins a continued value.
+fn joined(lines: &Option<Vec<&str>>) -> Option<String> {
+    lines.as_ref().map(|lines| lines.join("\n"))
+}
+
+impl<'c> SectionValues<'c> {
+    fn slot(&mut self, option: RepoOption) -> &mut Option<Vec<&'c str>> {
         match option {
             RepoOption::Enabled => &mut self.enabled,
             RepoOption::Baseurl => &mut self.baseurl,
@@ -393,7 +449,23 @@ impl SectionValues {
     }
 
     /// Derive the section dnf ends up with from the final option values.
-    fn into_def(self, id: SectionId) -> RepoSectionDef {
+    /// `content` is what the values are slices of, and `spans` its
+    /// [`repo_credential_spans`].
+    fn into_def(self, id: SectionId, content: &str, spans: &[Range<usize>]) -> RepoSectionDef {
+        let gpg_keys = self
+            .gpgkey
+            .iter()
+            .flatten()
+            .flat_map(|line| line.split(|c: char| c == ',' || c.is_whitespace()))
+            .filter(|part| !part.is_empty())
+            .filter_map(|part| KeyRef::parse(part, offset_in(content, part), spans))
+            .collect();
+        let enabled = joined(&self.enabled);
+        let baseurl = joined(&self.baseurl);
+        let metalink = joined(&self.metalink);
+        let mirrorlist = joined(&self.mirrorlist);
+        let gpgcheck = joined(&self.gpgcheck);
+        let repo_gpgcheck = joined(&self.repo_gpgcheck);
         let defined = |v: &Option<String>| v.as_deref().is_some_and(|v| !v.trim().is_empty());
         let flag = |v: &Option<String>, unset: bool| {
             v.as_deref()
@@ -402,24 +474,20 @@ impl SectionValues {
                 .map_or(unset, is_enabled_value)
         };
         RepoSectionDef {
-            verifies_signatures: flag(&self.gpgcheck, true) || flag(&self.repo_gpgcheck, false),
+            verifies_signatures: flag(&gpgcheck, true) || flag(&repo_gpgcheck, false),
             id,
-            enabled: self
-                .enabled
+            enabled: enabled
                 .as_deref()
                 .is_none_or(|v| is_enabled_value(v.trim())),
-            has_source: defined(&self.baseurl)
-                || defined(&self.metalink)
-                || defined(&self.mirrorlist),
-            gpg_keys: self
-                .gpgkey
-                .unwrap_or_default()
-                .split(|c: char| c == ',' || c.is_whitespace())
-                .filter(|part| !part.is_empty())
-                .filter_map(GpgKeyRef::parse)
-                .collect(),
+            has_source: defined(&baseurl) || defined(&metalink) || defined(&mirrorlist),
+            gpg_keys,
         }
     }
+}
+
+/// Where `part`, a slice of `content`, starts in it.
+fn offset_in(content: &str, part: &str) -> usize {
+    part.as_ptr() as usize - content.as_ptr() as usize
 }
 
 /// Parse `.repo`-style INI content into one [`RepoSectionDef`] per
@@ -449,6 +517,7 @@ impl SectionValues {
 /// The header match is on the exact spelling, since dnf keys repos
 /// case-sensitively; [`RepoId`]'s folded equality is not used here.
 pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
+    let spans = repo_credential_spans(content);
     let mut sections: Vec<(SectionId, SectionValues)> = Vec::new();
     let mut current: Option<usize> = None;
     // The option the previous line assigned, when it is one this parser
@@ -473,10 +542,11 @@ pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
         {
             if let (Some(option), Some(idx)) = (item, current) {
                 let piece = strip_trailing_comment(trimmed).trim();
-                let slot = sections[idx].1.slot(option);
-                let value = slot.get_or_insert_with(String::new);
-                value.push('\n');
-                value.push_str(piece);
+                sections[idx]
+                    .1
+                    .slot(option)
+                    .get_or_insert_with(Vec::new)
+                    .push(piece);
             }
             continue;
         }
@@ -506,13 +576,13 @@ pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
         in_item = Some(option);
         if let Some(option) = option {
             let value = strip_trailing_comment(value).trim();
-            *sections[idx].1.slot(option) = Some(value.to_owned());
+            *sections[idx].1.slot(option) = Some(vec![value]);
         }
     }
 
     sections
         .into_iter()
-        .map(|(id, values)| values.into_def(id))
+        .map(|(id, values)| values.into_def(id, content, &spans))
         .collect()
 }
 
@@ -1004,7 +1074,7 @@ enabled=1
             let remote: Vec<&str> = got[0]
                 .gpg_keys
                 .iter()
-                .filter_map(|r| match r {
+                .filter_map(|r| match &r.target {
                     GpgKeyRef::Remote(url) => Some(url.as_str()),
                     GpgKeyRef::Local(_) => None,
                 })
@@ -1012,6 +1082,58 @@ enabled=1
             assert_eq!(remote, case.remote, "{}", case.name);
         }
         assert!(parse_repo_sections("# comments only\n; and more\n").is_empty());
+    }
+
+    /// A key reference's diagnostic name holds no byte of a credential in
+    /// the raw value, however the parser cut the value: at a trailing
+    /// comment, at a comma or whitespace, or at a continuation line.
+    #[test]
+    fn a_key_reference_is_named_without_any_piece_of_a_credential() {
+        let cases: &[(&str, &[(&str, &str)])] = &[
+            (
+                "gpgkey=file://keys:orchid92;tulip17@h.example/K",
+                &[("keys:orchid92", "REDACTED")],
+            ),
+            (
+                "gpgkey=file://keys:orchid92#tulip17@h.example/K",
+                &[("keys:orchid92", "REDACTED")],
+            ),
+            (
+                "gpgkey=file://keys:orchid92,tulip17@h.example/K",
+                &[
+                    ("keys:orchid92", "REDACTED"),
+                    ("tulip17@h.example/K", "REDACTED@h.example/K"),
+                ],
+            ),
+            (
+                "gpgkey=file://keys:orchid92 tulip17@h.example/K",
+                &[
+                    ("keys:orchid92", "REDACTED"),
+                    ("tulip17@h.example/K", "REDACTED@h.example/K"),
+                ],
+            ),
+            (
+                "gpgkey=file://keys:orchid92\n  tulip17@h.example/K",
+                &[
+                    ("keys:orchid92", "REDACTED"),
+                    ("tulip17@h.example/K", "REDACTED@h.example/K"),
+                ],
+            ),
+            (
+                "gpgkey=file://keys:orchid92@h.example/K;tail",
+                &[("keys:orchid92@h.example/K", "REDACTED@h.example/K")],
+            ),
+            (
+                "gpgkey=file:///etc/pki/rpm-gpg/a@b",
+                &[("/etc/pki/rpm-gpg/a@b", "/etc/pki/rpm-gpg/a@b")],
+            ),
+        ];
+        for (value, want) in cases {
+            let content = format!("[r]\nbaseurl=https://r.example/\n{value}\n");
+            let got = parse_repo_sections(&content);
+            let named: Vec<(&str, &str)> = got[0].local_keys_named().collect();
+            assert_eq!(named, *want, "{value:?}");
+        }
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use inspectah_core::redaction::{scrub_compose_secrets, scrub_url_userinfo};
+use inspectah_core::redaction::{scrub_compose_secrets, scrub_repo_credentials};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::redaction::{
     Confidence, DetectionMethod, FindingKind, RedactionFinding, RedactionHint, RedactionKind,
@@ -48,18 +48,21 @@ fn is_repo_file_path(path: &str) -> bool {
 }
 
 /// `text`, a `.repo` file or its Configuration row, with the userinfo of
-/// every URL in it replaced by `REDACTED` ([`scrub_url_userinfo`]):
+/// every URL in it replaced by `REDACTED` ([`scrub_repo_credentials`]):
 /// `https://user:pass@host/` and `https://token@host/` both become
 /// `https://REDACTED@host/`, a placeholder the operator fills in with the
-/// credential at build time. A userinfo runs through every character RFC
-/// 3986 allows in it, commas included, whichever option holds the URL.
-/// `None` when no URL held a credential.
+/// credential at build time. A userinfo runs to the last `@` before the
+/// first `/` or `?` of its option value, through commas, `#`, `;`,
+/// whitespace and continuation lines, whichever option holds the URL: the
+/// same rule the collector names key references by, so no piece of a
+/// password a list split or comment cut is left in either. `None` when no
+/// URL held a credential.
 ///
 /// `PATTERNS` has no rule for a password in an arbitrary URL's authority,
 /// so without this an ordinary redacted scan kept a repo's password in
 /// both snapshot copies and in the staged `.repo` file.
 fn scrub_repo_urls(text: &str, path: &str) -> Option<(String, RedactionFinding)> {
-    let Cow::Owned(scrubbed) = scrub_url_userinfo(text) else {
+    let Cow::Owned(scrubbed) = scrub_repo_credentials(text) else {
         return None;
     };
     let finding = RedactionFinding {

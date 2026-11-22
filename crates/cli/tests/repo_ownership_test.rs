@@ -718,8 +718,9 @@ fn t6_a_comma_in_a_url_password_leaks_nothing() {
 /// A `gpgkey=` reference that names no readable key is named in the
 /// scan's warning, which the snapshot holds before redaction runs, with
 /// its credential replaced: `file://keys:pass@host/KEY` reads as the
-/// path `keys:pass@host/KEY`, and a reference dnf's list split cut out
-/// of a userinfo with a comma in it is named `REDACTED` whole. No part of
+/// path `keys:pass@host/KEY`, and of a userinfo with commas in it, which
+/// dnf's list split cuts into pieces, each piece is named `REDACTED`, with
+/// what follows the credential kept. No part of
 /// either credential reaches the snapshot JSON and its warnings, the scan
 /// tree's reports, or refine's view and export.
 #[test]
@@ -757,11 +758,13 @@ fn t6_a_failed_key_reference_is_named_without_its_credential() {
         "{cred:?}"
     );
     let split = warned(SPLIT);
-    assert!(
-        !split.is_empty()
-            && split
-                .iter()
-                .all(|w| w.starts_with(&format!("GPG key REDACTED named in {SPLIT} "))),
+    let named: BTreeSet<&str> = split
+        .iter()
+        .filter_map(|w| w.strip_prefix("GPG key ")?.split(" named in ").next())
+        .collect();
+    assert_eq!(
+        named,
+        BTreeSet::from(["REDACTED", "REDACTED@keys.example.invalid/K"]),
         "{split:?}"
     );
 
@@ -774,6 +777,89 @@ fn t6_a_failed_key_reference_is_named_without_its_credential() {
     all.extend(refine_artifacts(&session(&loaded)));
     for secret in ["orchid92", "tulip", ",17,", "17,x"] {
         assert_absent_from(secret, &all);
+    }
+}
+
+/// A password cut by the parser before anything names it leaks no piece.
+/// The parser cuts a `gpgkey=` value at a trailing `#` or `;` comment,
+/// splits it at commas and whitespace, and starts a new piece at each
+/// continuation line, so a separator inside a userinfo left a piece with
+/// no `@` (`keys:orchid92` from `file://keys:orchid92;tulip17@host/KEY`)
+/// that the warning printed whole. For every separator, inside the
+/// userinfo and after it, no piece of either half of the password reaches
+/// the snapshot JSON and its warnings, the scan tree (Containerfile,
+/// audit, report, README), refine's view and export, or a fleet
+/// aggregate, its warnings and its exports.
+#[test]
+fn t6_no_separator_leaves_a_piece_of_a_key_reference_password() {
+    const CRED: &str = "/etc/yum.repos.d/cred.repo";
+    const HOST: &str = "keys.example.invalid/RPM-GPG-KEY";
+    let separators = [
+        ("semicolon", ";"),
+        ("hash", "#"),
+        ("comma", ","),
+        ("space", " "),
+        ("tab", "\t"),
+        ("continuation", "\n  "),
+    ];
+    for (what, sep) in separators {
+        for (position, gpgkey) in [
+            ("inside", format!("file://keys:orchid92{sep}tulip17@{HOST}")),
+            (
+                "after",
+                format!("file://keys:orchid92tulip17@{HOST}{sep}trailer"),
+            ),
+        ] {
+            let ctx = format!("{what}, {position}");
+            let content = format!(
+                "[cred]\nname=Credentialed\nbaseurl=https://repo.example.invalid/rpm/\n\
+                 enabled=1\ngpgkey={gpgkey}\n"
+            );
+            let host = || {
+                base_host()
+                    .file(CRED, &content)
+                    .package_from("cred-tool", "cred")
+            };
+            let snap = scan_finished(host());
+            assert!(
+                snap.warnings
+                    .iter()
+                    .any(|w| w.message.contains(&format!("named in {CRED} "))),
+                "{ctx}: the key warning is raised: {:?}",
+                snap.warnings
+            );
+            let loaded = reload(&snap);
+            let mut all = vec![(
+                "snapshot".to_string(),
+                serde_json::to_vec(&snap).expect("the snapshot serializes"),
+            )];
+            all.extend(tree_files(render_export(&loaded).path()));
+            all.extend(refine_artifacts(&session(&loaded)));
+            let (merged, _) =
+                merge_snapshots(vec![named(host(), "h1"), named(host(), "h2")], None, None)
+                    .unwrap();
+            assert!(
+                merged
+                    .warnings
+                    .iter()
+                    .any(|w| w.message.contains(&format!("named in {CRED} "))),
+                "{ctx}: the fleet keeps the warning"
+            );
+            all.push((
+                "aggregate".to_string(),
+                serde_json::to_vec(&merged).expect("the aggregate serializes"),
+            ));
+            all.extend(tree_files(render_export(&merged).path()));
+            all.extend(refine_artifacts(&session(&reload(&merged))));
+            for piece in ["orchid", "tulip"] {
+                for (name, bytes) in &all {
+                    assert!(
+                        !bytes.windows(piece.len()).any(|w| w == piece.as_bytes()),
+                        "{ctx}: {piece} is in {name}"
+                    );
+                }
+            }
+        }
     }
 }
 

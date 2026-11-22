@@ -350,7 +350,54 @@ const AUTHORITY_END: [char; 3] = ['/', '?', '#'];
 /// replaced whole too, at the cost of a list entry whose host is followed
 /// by whitespace and a schemeless `x@y`.
 pub fn scrub_url_userinfo(text: &str) -> Cow<'_, str> {
-    let spans = url_userinfo_spans(text);
+    replace_spans(text, &url_userinfo_spans(text))
+}
+
+/// Which bytes end a URL's authority when its userinfo is looked for.
+#[derive(Clone, Copy)]
+enum AuthorityRule {
+    /// RFC 3986: `/`, `?`, `#` or a line break.
+    Rfc3986,
+    /// A `.repo` option value ([`repo_credential_spans`]): `/` or `?`, or
+    /// the end of the value, whose continuation lines it reads through.
+    RepoValue,
+}
+
+/// Where each URL's userinfo is in `text`, in order: the one rule of
+/// [`scrub_url_userinfo`].
+fn url_userinfo_spans(text: &str) -> Vec<Range<usize>> {
+    userinfo_spans(text, AuthorityRule::Rfc3986)
+}
+
+/// Where a credential may sit in the URLs of `.repo` content: for each
+/// `scheme://`, everything from there to the last `@` before the first
+/// `/` or `?` of the option value holding it, which runs on through its
+/// continuation lines (an indented line that is not a `[section]`
+/// header), as dnf's ini reader reads a value.
+///
+/// Wider than [`scrub_url_userinfo`]'s rule on purpose: dnf splits a
+/// `gpgkey=` or `baseurl=` value at a comma or whitespace, the scan cuts a
+/// trailing `#` or `;` comment, and a continuation line starts another
+/// list entry, so a password holding any of those
+/// (`file://keys:orchid92;tail@host/KEY`) reaches the parser as pieces,
+/// one of which holds no `@` to recognize it by. This rule reads the raw
+/// value before any of that, so the whole credential is one span. The
+/// cost is syntax: `https://host # mail admin@example.com` loses
+/// `host # mail admin` to the placeholder.
+pub fn repo_credential_spans(content: &str) -> Vec<Range<usize>> {
+    userinfo_spans(content, AuthorityRule::RepoValue)
+}
+
+/// `content`, a `.repo` file or its Configuration row, with every span of
+/// [`repo_credential_spans`] replaced by [`URL_USERINFO_PLACEHOLDER`].
+/// Borrowed when there is none.
+pub fn scrub_repo_credentials(content: &str) -> Cow<'_, str> {
+    replace_spans(content, &repo_credential_spans(content))
+}
+
+/// `text` with each of `spans`, in order and apart, replaced by
+/// [`URL_USERINFO_PLACEHOLDER`].
+fn replace_spans<'a>(text: &'a str, spans: &[Range<usize>]) -> Cow<'a, str> {
     if spans.is_empty() {
         return Cow::Borrowed(text);
     }
@@ -365,19 +412,31 @@ pub fn scrub_url_userinfo(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// The userinfo of every URL in `text`, as [`scrub_url_userinfo`] finds
-/// it, for a caller that must know what a credential was: a diagnostic
-/// that names a fragment of a value dnf split at a comma inside one.
-pub fn url_userinfos(text: &str) -> Vec<&str> {
-    url_userinfo_spans(text)
-        .into_iter()
-        .map(|span| &text[span])
-        .collect()
+/// `text`, which starts at byte `offset` of content whose
+/// [`repo_credential_spans`] are `spans`, with every byte inside one of
+/// them replaced: each run of such bytes becomes one
+/// [`URL_USERINFO_PLACEHOLDER`]. What a diagnostic may name of a piece
+/// cut from a repo value, whatever cut it.
+pub fn without_repo_credentials(text: &str, offset: usize, spans: &[Range<usize>]) -> String {
+    let end = offset + text.len();
+    let inside: Vec<Range<usize>> = spans
+        .iter()
+        .filter(|s| s.start < end && s.end > offset)
+        .map(|s| s.start.max(offset) - offset..s.end.min(end) - offset)
+        .collect();
+    replace_spans(text, &inside).into_owned()
 }
 
-/// Where each URL's userinfo is in `text`, in order: the one rule of
-/// [`scrub_url_userinfo`].
-fn url_userinfo_spans(text: &str) -> Vec<Range<usize>> {
+/// Where a line break at `at` (the `\n`) is followed by a continuation
+/// line of a `.repo` value: one that starts with a space or tab and is not
+/// a `[section]` header.
+fn continues_value(text: &str, at: usize) -> bool {
+    let next = &text[at + 1..];
+    next.starts_with([' ', '\t']) && !next.trim_start().starts_with('[')
+}
+
+/// The userinfo spans of `text` under `rule`.
+fn userinfo_spans(text: &str, rule: AuthorityRule) -> Vec<Range<usize>> {
     let mut spans = Vec::new();
     let mut pos = 0;
     while let Some(found) = text[pos..].find("://") {
@@ -391,16 +450,47 @@ fn url_userinfo_spans(text: &str) -> Vec<Range<usize>> {
             .next()
             .is_some_and(|c| c.is_ascii_alphabetic());
         let authority = sep + 3;
-        let after = &text[authority..];
-        let end = after
-            .find(|c: char| AUTHORITY_END.contains(&c) || c == '\n' || c == '\r')
-            .unwrap_or(after.len());
-        if is_url && let Some(at) = after[..end].rfind('@') {
+        let end = authority_end(text, authority, rule);
+        if is_url && let Some(at) = text[authority..end].rfind('@') {
             spans.push(authority..authority + at);
         }
         pos = authority;
     }
     spans
+}
+
+/// Where the authority that starts at `from` ends under `rule`.
+fn authority_end(text: &str, from: usize, rule: AuthorityRule) -> usize {
+    let mut pos = from;
+    loop {
+        let rest = &text[pos..];
+        let stop = match rule {
+            AuthorityRule::Rfc3986 => {
+                rest.find(|c: char| AUTHORITY_END.contains(&c) || c == '\n' || c == '\r')
+            }
+            AuthorityRule::RepoValue => rest.find(['/', '?', '\n']),
+        };
+        let Some(i) = stop else {
+            return text.len();
+        };
+        let at = pos + i;
+        match rule {
+            AuthorityRule::RepoValue
+                if text[at..].starts_with('\n') && continues_value(text, at) =>
+            {
+                pos = at + 1;
+            }
+            AuthorityRule::RepoValue if text[at..].starts_with('\n') => {
+                // A `\r` before the line break is not part of the value.
+                return if text[..at].ends_with('\r') {
+                    at - 1
+                } else {
+                    at
+                };
+            }
+            _ => return at,
+        }
+    }
 }
 
 /// One repo or key reference, as a diagnostic may name it, with any
@@ -485,6 +575,87 @@ mod tests {
             scrub_url_userinfo("baseurl=https://h.example/"),
             Cow::Borrowed(_)
         ));
+    }
+
+    /// A `.repo` value's credential runs to the last `@` before the first
+    /// `/` or `?` of the value, through every separator the parser later
+    /// cuts at, a continuation line included; a line that is not a
+    /// continuation (a header, a comment, a new option) ends it.
+    #[test]
+    fn a_repo_value_credential_runs_through_every_separator_the_parser_cuts_at() {
+        let cases = [
+            (
+                "gpgkey=file://keys:orchid92;tulip17@h.example/K\n",
+                "gpgkey=file://REDACTED@h.example/K\n",
+            ),
+            (
+                "gpgkey=file://keys:orchid92#tulip17@h.example/K\n",
+                "gpgkey=file://REDACTED@h.example/K\n",
+            ),
+            (
+                "gpgkey=file://keys:orchid92,tulip17@h.example/K\n",
+                "gpgkey=file://REDACTED@h.example/K\n",
+            ),
+            (
+                "gpgkey=file://keys:orchid92 \ttulip17@h.example/K\n",
+                "gpgkey=file://REDACTED@h.example/K\n",
+            ),
+            (
+                "gpgkey=file://keys:orchid92\n  tulip17@h.example/K\n",
+                "gpgkey=file://REDACTED@h.example/K\n",
+            ),
+            (
+                "gpgkey=file://keys:orchid92\r\n\ttulip17@h.example/K\r\n",
+                "gpgkey=file://REDACTED@h.example/K\r\n",
+            ),
+            (
+                "baseurl=https://u:orchid92@a.example/r;comment\n",
+                "baseurl=https://REDACTED@a.example/r;comment\n",
+            ),
+            (
+                "baseurl=https://a.example\n  https://u:p@b.example/\n",
+                "baseurl=https://a.example\n  https://REDACTED@b.example/\n",
+            ),
+            (
+                "baseurl=https://a.example\n[b]\nname=x@y\n",
+                "baseurl=https://a.example\n[b]\nname=x@y\n",
+            ),
+            (
+                "baseurl=https://a.example\n# admin@example.invalid\n",
+                "baseurl=https://a.example\n# admin@example.invalid\n",
+            ),
+            (
+                "baseurl=https://a.example\nname=ops@example.invalid\n",
+                "baseurl=https://a.example\nname=ops@example.invalid\n",
+            ),
+            (
+                "mirrorlist=https://a.example/l?u=x@y\n",
+                "mirrorlist=https://a.example/l?u=x@y\n",
+            ),
+        ];
+        for (input, want) in cases {
+            assert_eq!(scrub_repo_credentials(input), want, "{input:?}");
+        }
+    }
+
+    /// A piece cut from a repo value loses every byte of a credential
+    /// span it holds, wherever the cut fell.
+    #[test]
+    fn a_piece_of_a_repo_value_is_named_without_its_credential_bytes() {
+        let content = "gpgkey=file://keys:orchid92;tulip17@h.example/K\n";
+        let spans = repo_credential_spans(content);
+        for (piece, want) in [
+            ("file://keys:orchid92", "file://REDACTED"),
+            ("tulip17@h.example/K", "REDACTED@h.example/K"),
+            ("h.example/K", "h.example/K"),
+        ] {
+            let offset = content.find(piece).expect("the piece is in the content");
+            assert_eq!(
+                without_repo_credentials(piece, offset, &spans),
+                want,
+                "{piece}"
+            );
+        }
     }
 
     /// A reference a diagnostic names, with `file://` removed or not,
