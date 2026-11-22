@@ -434,6 +434,55 @@ fn an_edited_anacrontab_is_carried() {
     assert_eq!(entry.content, ANACRONTAB);
 }
 
+/// The copies rpm leaves beside a config it did not overwrite
+/// (`.rpmsave`, `.rpmnew`, `.rpmorig`) are not collected by the unowned
+/// walk: they are leftovers, not configuration. Control: an unowned file
+/// in the same directory is collected.
+#[test]
+fn rpm_backup_copies_are_not_unowned_config() {
+    let exec = with_ghosts(MockExecutor::new(), "")
+        .with_dir("/etc", vec!["cups"])
+        .with_dir(
+            "/etc/cups",
+            vec![
+                "cupsd.conf.rpmsave",
+                "client.conf.rpmnew",
+                "cups-browsed.conf.rpmorig",
+                "local.conf",
+            ],
+        )
+        .with_file("/etc/cups/cupsd.conf.rpmsave", "Listen localhost:631\n")
+        .with_file(
+            "/etc/cups/client.conf.rpmnew",
+            "ServerName /run/cups/cups.sock\n",
+        )
+        .with_file(
+            "/etc/cups/cups-browsed.conf.rpmorig",
+            "BrowseRemoteProtocols\n",
+        )
+        .with_file("/etc/cups/local.conf", "Browsing Off\n");
+    let rpm_state = RpmState {
+        verification_results: Some(Vec::new()),
+        ..Default::default()
+    };
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+    let SectionData::Config(section) = &output.section else {
+        panic!("expected SectionData::Config, got {:?}", output.section);
+    };
+    let paths: Vec<&str> = section.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["/etc/cups/local.conf"]);
+}
+
 /// One byte over the inspector's 256 KiB content cap.
 const OVERSIZED_LEN: usize = 256 * 1024 + 1;
 

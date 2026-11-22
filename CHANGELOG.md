@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An excluded local timer is no longer called carried**: when you exclude an enabled local timer under Systemd units, the Containerfile listed it as carried while dropping its enable. It is now listed as carried but not enabled, since its configuration rows still copy its files and the image has it disabled.
 - **An edited `/etc/anacrontab` is carried**: a file with jobs of its own got a Modernization advisory, no checkbox, and was left out of the image without saying so, while the image's anacron still runs. It is now an ordinary Configuration Files row, included by default, so its jobs keep running. Re-scan to pick it up.
 - **Each version lock is added once and keeps its package name**: on RHEL 9 and 10 the scan read the versionlock list twice through its link, so the Containerfile ran each `dnf versionlock add` twice, and dnf's `name-epoch:version` form left the package name empty. In an aggregate, that empty name merged every lock into one. Re-scan each host.
+- **rpm's leftover config copies are not carried**: files ending in `.rpmsave`, `.rpmnew` or `.rpmorig`, such as `/etc/cups/cupsd.conf.rpmsave`, were listed as Configuration Files and copied into the image. The scan now skips them.
 
 ### Security
 - **SSSD bind passwords are redacted**: `ldap_default_authtok` and other `*_authtok` values in collected configuration are now redacted whole, spaces and quotes included. Before, an SSSD LDAP bind password in `sssd.conf` would have shipped in the export.

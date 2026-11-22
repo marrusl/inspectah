@@ -185,6 +185,13 @@ pub(crate) const UNOWNED_EXCLUDE_PREFIX: &[&str] = &[
     "/etc/pki/product/",
 ];
 
+/// Basename suffixes of the copies rpm leaves beside a config file it
+/// did not overwrite: the old file on removal or upgrade (`.rpmsave`),
+/// the new default it did not install (`.rpmnew`), the file it replaced
+/// (`.rpmorig`). The live file is the config; these are leftovers no
+/// application reads, at any depth.
+pub(crate) const UNOWNED_EXCLUDE_SUFFIX: &[&str] = &[".rpmsave", ".rpmnew", ".rpmorig"];
+
 /// Returns `true` if the path should be excluded from unowned file detection.
 ///
 /// Checks: exact match, glob match, subtree prefix exclusion, and the
@@ -196,7 +203,7 @@ pub fn is_excluded_unowned(exec: &dyn Executor, path: &str) -> bool {
 }
 
 /// The part of [`is_excluded_unowned`] decided by the path alone: the
-/// exact, glob and subtree exclusion lists.
+/// exact, glob, subtree and suffix exclusion lists.
 pub(super) fn is_excluded_unowned_path(path: &str) -> bool {
     UNOWNED_EXCLUDE_EXACT.contains(&path)
         || UNOWNED_EXCLUDE_GLOBS
@@ -206,6 +213,9 @@ pub(super) fn is_excluded_unowned_path(path: &str) -> bool {
         || UNOWNED_EXCLUDE_PREFIX
             .iter()
             .any(|prefix| path.starts_with(prefix))
+        || UNOWNED_EXCLUDE_SUFFIX
+            .iter()
+            .any(|suffix| path.ends_with(suffix))
 }
 
 /// Returns `true` if the path is unit state rather than a unit file: a

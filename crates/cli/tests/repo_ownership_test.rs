@@ -36,7 +36,7 @@ const CUSTOM_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom";
 const EPEL_REPO: &str = "/etc/yum.repos.d/epel.repo";
 const EPEL_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9";
 const ORPHAN_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-orphan";
-const RPMNEW: &str = "/etc/yum.repos.d/custom.repo.rpmnew";
+const NOT_A_REPO: &str = "/etc/yum.repos.d/custom.repo.disabled";
 const REPO_COPY: &str = "COPY config/etc/yum.repos.d/ /etc/yum.repos.d/";
 const KEY_COPY: &str = "COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/";
 
@@ -74,7 +74,7 @@ fn epel_repo() -> String {
 
 /// The host § 9 uses throughout: an unowned `custom.repo` and its key, a
 /// modified `epel.repo` owned by `epel-release` with its key, a key no
-/// repo names, a `.rpmnew` beside `custom.repo`, and members `tool-a` and
+/// repo names, a `custom.repo.disabled` dnf does not read, and members `tool-a` and
 /// `tool-b` from `custom`, `bat` from `epel`. EPEL's key is named
 /// literally: the scan's variable expansion has its own tests.
 fn base_host() -> UnitHost {
@@ -86,7 +86,7 @@ fn base_host() -> UnitHost {
         .owned_file(EPEL_KEY, PGP, "epel-release")
         .rpm_va(&format!("S.5....T.  c {EPEL_REPO}\n"), 1)
         .file(ORPHAN_KEY, PGP)
-        .file(RPMNEW, &custom_repo())
+        .file(NOT_A_REPO, &custom_repo())
         .package("epel-release")
         .package_from("tool-a", "custom")
         .package_from("tool-b", "custom")
@@ -304,7 +304,7 @@ fn t2_config_twins_are_decided_under_repositories() {
     }
     for path in [
         ORPHAN_KEY,
-        RPMNEW,
+        NOT_A_REPO,
         "/etc/yum.repos.d/empty.repo",
         "/etc/pki/rpm-gpg/OLD",
         "/etc/pki/rpm-gpg/PRE",
@@ -1968,7 +1968,7 @@ fn t6_the_scan_tarball_stages_each_repo_file_and_key_once() {
         staged(tree.path(), EPEL_REPO).as_deref(),
         Some(epel_repo().as_str())
     );
-    for path in [RPMNEW, "/etc/yum.repos.d/empty.repo", ORPHAN_KEY] {
+    for path in [NOT_A_REPO, "/etc/yum.repos.d/empty.repo", ORPHAN_KEY] {
         assert!(
             staged(tree.path(), path).is_some(),
             "{path}: an ordinary config file"
