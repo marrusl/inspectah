@@ -74,7 +74,7 @@ replace it.
 |:-----|:------------|
 | `--port <PORT>` | Port to bind the web UI (default: 8642, use 0 for ephemeral). |
 | `--open <true\|false>` | Open browser automatically (default: `true`). To suppress, pass `--open false` or `--open=false`. |
-| `-y, --yes` | Assume yes to all interactive prompts (for CI and automation). |
+| `-y, --yes` | Assume yes to all interactive prompts (for CI and automation). With a saved session it resumes the session; with `--fresh` it discards it without asking. Without `-y`, a saved session and a closed standard input stop refine with an error. |
 | `--fresh` | Start a fresh session, discarding any saved progress. |
 
 ## CLI flags (aggregate)

@@ -85,7 +85,41 @@ pub(crate) fn resolve_session(
     }
 }
 
-fn read_session_choice(tarball: &Path, input: &mut impl BufRead) -> anyhow::Result<SessionChoice> {
+/// One line answering a prompt. A closed input is an error, never a
+/// default answer: automation that runs refine with no terminal must not
+/// read success from a command that did nothing.
+fn read_answer(input: &mut impl BufRead) -> anyhow::Result<String> {
+    let mut answer = String::new();
+    if input.read_line(&mut answer)? == 0 {
+        eprintln!();
+        anyhow::bail!(
+            "no answer: standard input is closed. Run again with --yes to resume the saved \
+             session, or with --fresh --yes to discard it."
+        );
+    }
+    Ok(answer)
+}
+
+/// When the session was saved, for the prompt: the sidecar writes Unix
+/// seconds with an `s` suffix, shown as an RFC 3339 UTC time. Anything
+/// else is shown as written.
+fn saved_at_display(saved_at: &str) -> String {
+    saved_at
+        .strip_suffix('s')
+        .and_then(|secs| secs.parse::<i64>().ok())
+        .and_then(|secs| time::OffsetDateTime::from_unix_timestamp(secs).ok())
+        .and_then(|at| {
+            at.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        })
+        .unwrap_or_else(|| saved_at.to_owned())
+}
+
+fn read_session_choice(
+    tarball: &Path,
+    assume_yes: bool,
+    input: &mut impl BufRead,
+) -> anyhow::Result<SessionChoice> {
     use std::io::Write;
 
     match inspectah_refine::autosave::load_session(tarball) {
@@ -97,13 +131,18 @@ fn read_session_choice(tarball: &Path, input: &mut impl BufRead) -> anyhow::Resu
                 state.cursor,
                 state.timeline.len() - state.cursor
             );
-            eprintln!("  Saved at: {}", state.saved_at);
+            eprintln!("  Saved at: {}", saved_at_display(&state.saved_at));
             eprintln!();
 
+            // `--yes` keeps the operator's saved decisions; discarding
+            // them takes `--fresh` as well.
+            if assume_yes {
+                eprintln!("Resuming the saved session (--yes).");
+                return Ok(SessionChoice::Resume);
+            }
             eprint!("[r] Resume  [f] Start fresh  [q] Quit: ");
             std::io::stderr().flush()?;
-            let mut answer = String::new();
-            input.read_line(&mut answer)?;
+            let answer = read_answer(input)?;
             match answer.trim().to_lowercase().as_str() {
                 "r" | "resume" => Ok(SessionChoice::Resume),
                 "f" | "fresh" => Ok(SessionChoice::Fresh),
@@ -122,15 +161,21 @@ fn read_session_choice(tarball: &Path, input: &mut impl BufRead) -> anyhow::Resu
     }
 }
 
-fn read_fresh_confirm(tarball: &Path, input: &mut impl BufRead) -> anyhow::Result<bool> {
+fn read_fresh_confirm(
+    tarball: &Path,
+    assume_yes: bool,
+    input: &mut impl BufRead,
+) -> anyhow::Result<bool> {
     use std::io::Write;
 
     match inspectah_refine::autosave::load_session(tarball) {
         Ok(Some(state)) => {
+            if assume_yes {
+                return Ok(true);
+            }
             eprint!("Discard {} saved operations? [y/N]: ", state.timeline.len());
             std::io::stderr().flush()?;
-            let mut answer = String::new();
-            input.read_line(&mut answer)?;
+            let answer = read_answer(input)?;
             Ok(answer.trim().to_lowercase() == "y")
         }
         _ => Ok(true),
@@ -138,22 +183,24 @@ fn read_fresh_confirm(tarball: &Path, input: &mut impl BufRead) -> anyhow::Resul
 }
 
 /// Ask the operator about any saved session, reading answers from `input`,
-/// and resolve the session to serve.
+/// and resolve the session to serve. `assume_yes` answers every prompt:
+/// it resumes a saved session, and with `fresh` confirms the discard.
 pub(crate) fn open_session(
     tarball: &Path,
     fresh: bool,
+    assume_yes: bool,
     input: &mut impl BufRead,
 ) -> anyhow::Result<ResolveResult> {
     let session_path = inspectah_refine::autosave::session_file_path(tarball);
 
     let choice = if !fresh && session_path.exists() {
-        Some(read_session_choice(tarball, input)?)
+        Some(read_session_choice(tarball, assume_yes, input)?)
     } else {
         None
     };
 
     let fresh_confirmed = if fresh && session_path.exists() {
-        read_fresh_confirm(tarball, input)?
+        read_fresh_confirm(tarball, assume_yes, input)?
     } else {
         false
     };
@@ -161,10 +208,15 @@ pub(crate) fn open_session(
     resolve_session(tarball, fresh, choice, fresh_confirmed)
 }
 
-pub fn run_refine(args: &RefineArgs) -> anyhow::Result<()> {
+pub fn run_refine(args: &RefineArgs, assume_yes: bool) -> anyhow::Result<()> {
     eprintln!("Loading snapshot...");
 
-    let session = match open_session(&args.tarball, args.fresh, &mut std::io::stdin().lock())? {
+    let session = match open_session(
+        &args.tarball,
+        args.fresh,
+        assume_yes,
+        &mut std::io::stdin().lock(),
+    )? {
         ResolveResult::Session(s) => *s,
         ResolveResult::Quit => {
             eprintln!("Quit.");
@@ -422,7 +474,7 @@ mod tests {
         let saved = write_sidecar_excluding_unit(&tarball, "Service");
         // An answer is offered so a prompt, had one been shown, could not
         // block or quit; the refusal must come before any prompt.
-        let err = match open_session(&tarball, false, &mut std::io::Cursor::new("f\n")) {
+        let err = match open_session(&tarball, false, false, &mut std::io::Cursor::new("f\n")) {
             Err(e) => format!("{e:#}"),
             Ok(_) => panic!("a sidecar that cannot be loaded must stop the command"),
         };
@@ -446,7 +498,7 @@ mod tests {
 
         // Positive control: the same operation under the `Unit` kind resumes.
         write_sidecar_excluding_unit(&tarball, "Unit");
-        let session = match open_session(&tarball, false, &mut std::io::Cursor::new("r\n")) {
+        let session = match open_session(&tarball, false, false, &mut std::io::Cursor::new("r\n")) {
             Ok(ResolveResult::Session(s)) => s,
             Ok(ResolveResult::Quit) => panic!("answering resume must not quit"),
             Err(e) => panic!("a saved `Unit` operation must resume: {e:#}"),
@@ -464,6 +516,55 @@ mod tests {
         );
     }
 
+    /// `--yes` answers the saved-session prompt without reading input: it
+    /// resumes, and with `--fresh` discards. With no `--yes`, a closed
+    /// input is an error naming `--yes`, not a quit that exits 0; a typed
+    /// `q` still quits.
+    #[test]
+    fn yes_answers_the_saved_session_prompt_and_closed_input_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = dir.path().join("test.tar.gz");
+        write_units_tarball(&tarball);
+        let session_path = inspectah_refine::autosave::session_file_path(&tarball);
+        write_sidecar_excluding_unit(&tarball, "Unit");
+        let closed = || std::io::Cursor::new("");
+
+        match open_session(&tarball, false, true, &mut closed()) {
+            Ok(ResolveResult::Session(s)) => assert_eq!(s.view().stats.ops_applied, 1),
+            Ok(ResolveResult::Quit) => panic!("--yes must resume, not quit"),
+            Err(e) => panic!("--yes must resume: {e:#}"),
+        }
+        assert!(session_path.exists(), "resuming keeps the sidecar");
+
+        for fresh in [false, true] {
+            let err = match open_session(&tarball, fresh, false, &mut closed()) {
+                Err(e) => format!("{e:#}"),
+                Ok(_) => panic!("fresh={fresh}: a closed input must fail"),
+            };
+            assert!(err.contains("--yes"), "fresh={fresh}: {err}");
+            assert!(session_path.exists(), "fresh={fresh}: the sidecar is kept");
+        }
+        assert!(matches!(
+            open_session(&tarball, false, false, &mut std::io::Cursor::new("q\n")),
+            Ok(ResolveResult::Quit)
+        ));
+
+        let result = open_session(&tarball, true, true, &mut closed()).unwrap();
+        assert!(matches!(result, ResolveResult::Session(_)));
+        assert!(!session_path.exists(), "--fresh --yes discards the sidecar");
+    }
+
+    #[test]
+    fn saved_at_shows_unix_seconds_as_a_utc_time() {
+        for (saved_at, shown) in [
+            ("1795153386s", "2026-11-20T05:43:06Z"),
+            ("2026-05-21T00:00:00Z", "2026-05-21T00:00:00Z"),
+            ("soon", "soon"),
+        ] {
+            assert_eq!(saved_at_display(saved_at), shown, "{saved_at}");
+        }
+    }
+
     /// `--fresh` still discards a sidecar that cannot be loaded.
     #[test]
     fn open_fresh_flag_discards_unloadable_session() {
@@ -473,7 +574,7 @@ mod tests {
         let session_path = inspectah_refine::autosave::session_file_path(&tarball);
         write_sidecar_excluding_unit(&tarball, "Service");
 
-        let result = open_session(&tarball, true, &mut std::io::Cursor::new("")).unwrap();
+        let result = open_session(&tarball, true, false, &mut std::io::Cursor::new("")).unwrap();
         assert!(matches!(result, ResolveResult::Session(_)));
         assert!(!session_path.exists(), "--fresh must discard the sidecar");
     }

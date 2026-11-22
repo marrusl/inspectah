@@ -76,7 +76,7 @@ fn main() {
             }
         },
         Commands::Refine(args) => {
-            if let Err(e) = commands::refine::run_refine(&args) {
+            if let Err(e) = commands::refine::run_refine(&args, cli.yes) {
                 eprintln!("error: {e:#}");
                 std::process::exit(1);
             }
