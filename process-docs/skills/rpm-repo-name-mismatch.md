@@ -123,8 +123,8 @@ file ships is a refine decision. It also requires the package to be
 installable by name (`is_package_installable`), and it does **not** read
 the package's disposition: it says how a package installs, not whether.
 The Containerfile renderer feeds it the plain list's selection (included,
-baseline, leaf and lock rules), plus every package
-`pulled_in_by_included` reports: a dependency of a leaf the export
+baseline, leaf and lock rules, and the carried unit owners), plus every
+package `leaf_tree_pulled_in` reports: a dependency of a leaf the export
 installs is in the image whatever its disposition, and only its own repo's
 transaction can install it, so it is named there even when refine's
 non-leaf default or the operator excluded it. Selection, not a
@@ -154,11 +154,11 @@ of a package that needs it, ahead of the install itself.
 
 All selected disabled-repo packages and every active local RPM (verified
 upload or included cached RPM) install in **one** transaction that
-enables every one of the disabled repos. A package an enabled repo
-serves joins it when it may pull in a package only a disabled repo
-serves that the transaction does not name (`disabled_repos_reached` in
-`containerfile.rs`), so dnf can take or skip that provider there. An
-upload takes its package off the disabled-repo route, so a local RPM can
+enables every one of the disabled repos. Nothing an enabled repo serves
+joins it: moving a package there lets dnf pick a version only the
+disabled repo serves, and routing on what a package may pull in failed
+in new ways each round, so the routing is beta.6's (Mark Russell,
+2026-11-21). An upload takes its package off the disabled-repo route, so a local RPM can
 be the dependency of a
 disabled-repo package or depend on one; installing the two sets in
 separate steps fails in one direction or the other, which is why they

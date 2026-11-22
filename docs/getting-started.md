@@ -187,9 +187,11 @@ every kind (sockets, timers and the rest), not services alone.
 The tarball is written to your current directory. The filename includes
 the hostname and a timestamp.
 
-If the scan leaves out packages that own a unit enabled on the host,
-such as `firewalld` or `cronie`, it ends with a `Notice:` line naming
-them and pointing at the Not carried table in `audit-report.md`.
+The scan carries packages that own a unit enabled on the host, such as
+`firewalld` or `cronie`. If it leaves one out because the package needs a
+repo disabled on the host, or a package no enabled repo serves, it ends
+with a `Notice:` line naming it with that reason and pointing at the Not
+carried table in `audit-report.md`.
 Include those packages in `inspectah refine` if the image needs them.
 
 ## Understand the output

@@ -272,6 +272,11 @@ A package that owns a unit enabled on the source host, such as
 `firewalld`, is carried by default, and so are the packages it needs,
 such as `python3-firewall`. If you exclude it, it is listed here with
 those packages, and including it again takes them all out of the group.
+One that needs a repo disabled on the source host, or a package that no
+enabled repo serves, is not carried by default: it is listed here with
+that reason, and the export notice names it with the reason too. You can
+include it, but the build installs it from the repos the image enables
+only, so it fails when what it needs is not there.
 Including any other package takes the packages it needs out of the group
 too, since dnf installs them with it. Their unit commands, and the included
 package's own, run only if the unit file is in the image. A package that

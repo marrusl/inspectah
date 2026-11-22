@@ -511,18 +511,18 @@ certain when:
   which the plan does not see, so **an auto package an operator includes
   by hand reads as not named**: its commands and its dependencies' are
   guarded, though the Containerfile installs it. The guard then passes;
-- the disabled-repo transaction names it: a package an installed one
-  certainly pulls in (`pulled_in_by_included`) that only a host-disabled
-  repo serves. One that is only possible is never named; the package
-  that may need it installs in that transaction instead;
+- the disabled-repo transaction names it: a package only a host-disabled
+  repo serves that an installed leaf pulled in on the source host
+  (`leaf_tree_pulled_in`, the `leaf_dep_tree` entries of the installed
+  leaves), the routing beta.6 released and the Containerfile reads too;
 - a named package's `dep_closures` entry lists it and a repo the image
   enables serves it, or the disabled-repo transaction names it.
   `dep_closures` follows Requires only: a Recommends or Supplements, and
   every path through one, is possible only, because dnf skips a weak
   dependency it cannot install and a plain `disable` of the missing unit
   then fails on systemd 252. A snapshot without `dep_closures` (older than schema 29, or
-  hand-built) has only `leaf_dep_tree`, which holds everything a leaf may
-  install, so it makes nothing certain.
+  hand-built) has only `leaf_dep_tree`, which credits every installed
+  provider of a capability, so it makes nothing certain.
 
 **On a fleet** a closure counts only through a package every host has, on
 a fleet whose every host gave leaf data (`closure_is_certain`). The

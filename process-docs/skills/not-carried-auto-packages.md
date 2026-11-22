@@ -59,21 +59,30 @@ when it is outside both. The not-carried list names a class member only
 when nothing included may pull it in (`possibly_pulled_in_by_included`):
 **a package is listed as not carried only when the export certainly
 leaves it out**. One dnf may install is neither listed nor called
-carried; its commands wait for its unit file. The disabled-repo install
-names a package only a disabled repo serves only when an installed one
-certainly pulls it in. A package that only may pull one in installs in
-that transaction itself, which enables the repo, and dnf picks or skips
-the provider: naming a provider dnf may skip makes it mandatory, and one
-whose own requirement cannot be met then fails the build.
+carried; its commands wait for its unit file.
+
+**Package installs and the disabled-repo transaction are the released
+ones** (Mark Russell, 2026-11-21). The Containerfile names the packages
+beta.6 named, plus the carried unit owners (below), and names a package
+only a disabled repo serves in the transaction that enables that repo
+when `unit_plan::leaf_tree_pulled_in` holds it: the `leaf_dep_tree`
+entries of the installed leaves, what each leaf pulled in on the source
+host. Nothing else moves a package into that transaction, and the
+possible and certain closures never route anything. Every attempt to
+route on them surfaced a new dnf solver failure: naming a provider dnf
+may skip makes it mandatory, moving a root into the transaction lets dnf
+pick a broken version that repo serves, and a package kept only because
+it may be installed made its own dependencies mandatory.
 
 So once an operator includes `tool`, which needs `helper`, `helper`
-leaves the list, its recorded `systemctl` commands are emitted, guarded,
-and a `helper` only a disabled repo serves installs from it, although
-the class still holds `helper` and its disposition still reads excluded.
-The commands are guarded because the plan does not see refine's
-`original_includes`, so it cannot tell `tool` from an included auto
-package the Containerfile does not name; the guard passes, since dnf
-installs `helper`.
+leaves the list and its recorded `systemctl` commands are emitted,
+guarded, although the class still holds `helper` and its disposition
+still reads excluded. The commands are guarded because the plan does not
+see refine's `original_includes`, so it cannot tell `tool` from an
+included auto package the Containerfile does not name; the guard passes,
+since dnf installs `helper`. A `helper` only a disabled repo serves is
+not routed, as in beta.6: `tool` is no leaf, so that build cannot
+resolve it.
 
 **Requirements, not choices.** The collector records two maps (schema
 29), both over every leaf and auto package, **leaves included**:
@@ -92,9 +101,12 @@ A root's closure is `unit_plan::closure_of`, at a `Reach`: `Certain`
 reads the `dep_closures` entry, `Possible` both. `export_installs` counts
 a certain closure only for a named root, only when `dep_closures` is
 recorded (a snapshot with only `leaf_dep_tree` makes nothing certain,
-since the tree is what a leaf may install), and only for a dependency a
-repo the image enables serves. `leaf_dep_tree` keeps only the auto part
-of a leaf's two entries joined, because refine's
+since the tree credits every installed provider of a capability), and
+only for a dependency a repo the image enables serves. `leaf_dep_tree`
+is what the leaf pulled in on the host (`RpmDepGraph::held`: each `or`
+by its first operand present, each conditional evaluated there), auto
+packages only: within the auto part of the leaf's two entries joined,
+never wider. The routing reads it, and refine's
 `normalize_package_defaults` reads a leaf listed in it as a dependency of
 another leaf. Pulled-in membership is transitive in the closures
 already, so a pulled-in package's own closure adds nothing.
@@ -106,9 +118,9 @@ named on an install line, so its commands are guarded.
 
 The collector's dnf fallback cannot tell one provider from several, so
 it records every `dep_closures` entry empty and the whole closure in
-`dep_alternatives`: on that route every dependency's command is guarded,
-and a package needing one a disabled repo serves installs with that repo
-enabled. The rpm
+`dep_alternatives`: on that route every dependency's command is guarded.
+Its graph is what dnf resolved on the host, so the leaf tree, built on
+it, routes a leaf's disabled-repo dependency as beta.6 did. The rpm
 route is the one real hosts take; the CLI test hosts (`UnitHost`, the
 parity fixture) answer its queries, and `UnitHost::rpm_deps_unavailable`
 answers the fallback's.
@@ -126,6 +138,25 @@ be lost when the operator excludes `httpd`. It does not depend on the
 tree fallback either, which decides only whether other auto packages can
 safely be left out. In the class an owner nothing pulls in is
 `AutoCarriage::UnitOwner`; the rest are `Unneeded`.
+
+**Unless it needs a repo the image does not enable** (Mark Russell,
+2026-11-21). The owner is named on the plain install line, which enables
+no disabled repo, and nothing routes an auto package's dependency into
+the transaction that does. So `not_carried::owner_hold` holds back an
+owner that comes from a repo the host disabled, or whose possible
+closure (`unit_plan::possible_closure`: every provider, every branch,
+weak dependencies) holds a package that routes `DisabledRepo`
+(`OwnerHold::DisabledRepo`) or that no enabled repo serves by name, a
+local RPM or one from a repo the export lacks (`OwnerHold::NoRepo`). A
+requirement the collector could not read already puts every added
+package in the closure. A package named in the baseline does not count.
+`unit_owner_holds` is every owner with its hold; `default_carried_unit_owners`
+is the ones with none. A held owner is `AutoCarriage::HeldOwner`,
+excluded by default and listed with the hold's reason
+(`OwnerHold::reason`: "needs a repo disabled on the host", "needs a
+package no enabled repo serves"). Refine's leaf default excludes it
+too, since it is not in the carried set. Included by the operator, it
+installs as any auto package an operator includes does, as in beta.6.
 
 "Owns" and "enabled" are `enabled_units_by_owner`. A unit is enabled
 when its inventory entry says so, or, for an aggregate, when it is in
@@ -145,7 +176,7 @@ Three places must carry one, and each asks
 
 | Where | What it does |
 |---|---|
-| `apply_scan_package_defaults` | excludes only `Unneeded`, so the scan keeps a unit owner included |
+| `apply_scan_package_defaults` | excludes only `Unneeded` and `HeldOwner`, so the scan keeps a carried unit owner included |
 | refine `normalize_package_defaults` | includes a Site-bucket unit owner after the leaf default, pulled in or not |
 | Containerfile leaf filter (`packages_section_lines`) | names an included unit owner in `dnf install` although it is no leaf, unless an installed leaf pulls it in (`pulled_in_by_installed_leaves`) |
 
@@ -157,17 +188,22 @@ the two exports disagree (`the_install_names_match`) or neither installs
 the package (`the_fixture_is_baseline_backed_and_has_a_not_carried_list`).
 `excluding_the_leaf_keeps_the_unit_owner_it_pulled_in` pins the
 membership rule; `crates/cli/tests/unit_owner_evidence_test.rs` pins the
-template instance, the disabled-repo dependency, a dependency's recorded
-`disable`, the graph fallback, and a hand-included package's dependency
-(its unit command and its disabled-repo install), each from collector
-output.
+template instance, the three holds and their surfaces
+(`an_owner_needing_a_repo_the_image_does_not_enable_is_not_carried_by_default`),
+a held owner once included
+(`including_an_owner_that_needs_a_disabled_repo_installs_it_as_released`),
+a dependency's recorded `disable`, the graph fallback, the released
+routing of competing providers, the dnf fallback and an unread
+requirement, and a hand-included package's dependency, each from
+collector output.
 
 ## The one decider
 
 `crates/pipeline/src/render/not_carried.rs` decides membership, through
 `classify_auto_carriage`. `apply_scan_package_defaults` excludes the
-`Unneeded` part and `not_carried_packages` lists every excluded
-`Unneeded` or `UnitOwner` package nothing installed pulls in; both reach
+`Unneeded` and `HeldOwner` parts and `not_carried_packages` lists every
+excluded `Unneeded`, `UnitOwner` or `HeldOwner` package nothing installed
+pulls in; both reach
 the class through the classifier. No function outside the module decides
 membership, and the module calls `pulled_in_by_default_roots` and never copies
 it. The aggregate guard lives only in `classify_auto_carriage`.
@@ -275,10 +311,12 @@ hosts and user-installed where the leaf is.
 
 - Containerfile: a `# Not carried: <NOT_CARRIED_REASON> (N)` comment block
   with `#   name (unit was enabled)` lines. One unit reads "was enabled",
-  several read "were enabled".
+  several read "were enabled". A held owner's line adds its reason:
+  `#   agent (agent.service was enabled; needs a repo disabled on the host)`.
 - Audit report: `### Not carried (N)`, columns `Package | Source Repo |
   Enabled Units | Reason`. The Enabled Units cell lists the units with no
-  verb, or `-`.
+  verb, or `-`. The Reason is `NotCarriedPackage::reason`:
+  `NOT_CARRIED_REASON`, then `; ` and the hold's reason for a held owner.
 - Services: a unit is omitted only when the existing presence rules prove
   its owner absent; the reason is `NotCarried` when every entry of the
   owner's name is in the list, else `PackageExcluded`. On a fleet, an
@@ -287,18 +325,22 @@ hosts and user-installed where the leaf is.
   directories are not provisioned.
 - Refine export warnings: one `notice` entry in `x-export-warnings` when
   the export list holds packages that own an enabled unit (by default
-  only on a fleet, or once an operator excludes a unit owner), naming the count and
-  the first three by display name, then `and N more`, and pointing at the
+  only on a fleet, for a held owner, or once an operator excludes a unit
+  owner), naming the count and the first three by display name, a held
+  one followed by its reason in parentheses
+  (`agent (needs a repo disabled on the host)`), then `and N more`, and
+  pointing at the
   audit table and the `# Not carried` block. `not_carried_notice`, in
   this module, builds it from `not_carried_packages` filtered to entries
   with `enabled_units`; it never decides "owns an enabled unit" itself.
-  Names are sanitized and bounded because the entry rides in a header.
+  Names are sanitized and bounded because the entry rides in a header;
+  the reasons are constants.
   Contract: `refine-export-warnings-header.md`.
 - Scan stderr: `inspectah scan` prints the same notice as one
   `Notice: ...` line after it writes the tarball, quiet mode included,
-  and nothing with `--inspect-only`. Since the scan carries every unit
-  owner, a single host prints it only for a snapshot whose owners were
-  excluded before the scan's defaults. `inspectah aggregate` prints the
+  and nothing with `--inspect-only`. A single host prints it for a held
+  owner, or for a snapshot whose owners were excluded before the scan's
+  defaults. `inspectah aggregate` prints the
   fleet notice the same way, last.
 - Refine view: `GET /api/view` carries the list as
   `not_carried_packages` and the notice as `not_carried_notice`; see
@@ -307,7 +349,8 @@ hosts and user-installed where the leaf is.
 Order on every surface: packages owning an enabled unit first, then the
 rest; each part by name, then arch.
 The display name is `name`, or `name.arch` when the list holds more
-than one arch of that name. All reason wording comes from the one constant `NOT_CARRIED_REASON`.
+than one arch of that name. All reason wording comes from the constant
+`NOT_CARRIED_REASON` and `OwnerHold::reason`.
 
 ## What it does not promise
 
@@ -317,6 +360,19 @@ than one arch of that name. All reason wording comes from the one constant `NOT_
   that says whether it is in the image counts it as installed (above).
 - An auto package that only another not-carried package needs is in the
   class too, which is correct.
+- The routing is beta.6's, with its limits, which are not this class's:
+  a dependency of an auto package carried on its own, an owner the
+  operator includes or a hand-included package, is never routed into the
+  disabled-repo transaction, so such a package that needs a disabled
+  repo fails to build; a requirement the collector cannot read routes
+  nothing, so a leaf whose unread requirement needs a disabled repo
+  fails to build; and the tree names every installed provider of a
+  capability, so a provider from a disabled repo that cannot be
+  installed fails the build even when another provider would do.
+- The hold over-counts on purpose: it reads the possible closure, so an
+  owner whose alternative provider comes from a disabled repo is held
+  even when dnf would pick one an enabled repo serves. The operator can
+  include it.
 - A closure is the source host's dependency graph, not the target's: the
   image's dnf resolves against the target repos, which may offer a
   provider the host lacked.

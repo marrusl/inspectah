@@ -79,9 +79,8 @@ packages, each package depended on the providers of its neighbours'
 capabilities, and the closure `classify_leaf_auto` takes spread that to
 almost everything. On a RHEL 9.8 host, 25 of 26 leaves had the same
 114-package dependency list: `tree`, `htop` and `wget` each "depended on"
-`nginx-core`, `httpd-core` and `rsyslog`. `pulled_in_by_included` reads
-that tree, so the service tiers and the disabled-repo selection then
-treated packages as present that nothing installs.
+`nginx-core`, `httpd-core` and `rsyslog`. The presence answer and the disabled-repo selection read that tree, so
+they then treated packages as present that nothing installs.
 
 **The requirement: each capability maps to its own providers only.** The
 collector now builds one provides index from the rpmdb and looks each
@@ -160,14 +159,19 @@ only possible.
 
 `dep_closures` is each leaf's and auto package's walk of `requires` over
 the classified packages, leaves included; `dep_alternatives` is the rest
-of its `depends_on` walk; `leaf_dep_tree` is the auto part of each
-leaf's two joined. `unit_plan::export_installs`, which decides which
-packages are certainly in the image, reads `dep_closures` for the
-packages the Containerfile names: a base-image or second added provider
-means dnf installs no particular one. The not-carried list and a
-fleet's drops read both, and so does the disabled-repo install, but only
-to choose which disabled repos a package's transaction enables: it names
-a package only when an installed one certainly pulls it in. Both graphs
+of its `depends_on` walk; `leaf_dep_tree` is each leaf's walk of `held`,
+auto packages only, as beta.6 built it from the same graph.
+`unit_plan::export_installs`, which decides which packages are certainly
+in the image, reads `dep_closures` for the packages the Containerfile
+names: a base-image or second added provider means dnf installs no
+particular one. The not-carried list, a fleet's drops and the unit-owner
+hold (`not_carried::owner_hold`) read both. The disabled-repo install
+reads neither: it names a package from a disabled repo only when an
+installed leaf's `leaf_dep_tree` entry holds it
+(`unit_plan::leaf_tree_pulled_in`), the released routing (Mark Russell,
+2026-11-21). Routing on the wider maps named providers dnf may skip, or
+moved roots into the transaction, and each surfaced a new solver
+failure. Both graphs
 count everything dnf installs alongside a leaf, not only hard
 requirements, or packages dnf does install read as not carried. The requires query asks for
 three tags, each in its own `[...]` group with a one-letter tag first:
@@ -283,11 +287,11 @@ past `MAX_RICH_DEP_DEPTH` reaches the collector. `parse_sentinel_deps`
 marks such a package `unread`, and `classify_deps_rpm` gives it a
 `depends_on` edge to every other added package, but no `held` or
 `requires` edge. So nothing is called absent because of it, its
-dependencies' commands are guarded, and the Containerfile installs it in
-the transaction that enables every disabled repo an added package comes
-from. Dropping the line once read as an authoritative graph with the
-edge missing, and the plain `dnf install` failed on a dependency only a
-disabled repo served.
+dependencies' commands are guarded, and a unit owner it may pull in a
+disabled-repo package for is not carried by default. The leaf tree is
+built on `held`, so the routing gains nothing from it, as in beta.6: a
+leaf whose unread requirement needs a package only a disabled repo serves
+still fails the plain `dnf install`, a known limitation.
 
 **Judged on the source host, not the target, where that is safe.** dnf
 evaluates `or` alternatives and `if` conditions against the base image
