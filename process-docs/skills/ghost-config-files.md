@@ -178,9 +178,11 @@ walk, orphans, authselect's edited files) runs both:
   (`AliasLeavesEtc`) or when `classify_ghost` does not call either
   spelling `Config` (`AliasToWithheld`: key material, host identity, the
   account databases, another section's file, a generated file). Every
-  branch then applies its own exclusions (ownership, `rpm -Va` paths,
-  `is_excluded_unowned`, dev artifacts, DHCP, the SELinux store) to both
-  spellings through `Located::spellings`. With `/etc/app/state -> /etc`,
+  branch then applies its own exclusions (`is_excluded_unowned`, dev
+  artifacts, DHCP, the SELinux store) to both spellings through
+  `Located::spellings`. Package ownership and `rpm -Va` rows are not
+  exclusions: the walk and the orphan scan check them on the walked
+  spelling only (next bullet). With `/etc/app/state -> /etc`,
   `/etc/app/state/chrony.keys` read `/etc/chrony.keys` as `Config` before
   the first version of this gate; the same held for `machine-id`,
   `shadow` and a `/etc/yum.repos.d` alias, and all stay refused. A
@@ -196,19 +198,37 @@ walk, orphans, authselect's edited files) runs both:
   both spellings, and **both are kept**: the image has no link joining
   them, so each name the host had needs its own file. The copy is
   deliberate; a reader of either name gets the host's content.
-- **The walk does not enter a link to a directory above it**
-  (`is_symlink_to_ancestor` in `walk.rs`). `/etc/app/state -> /etc`
-  would otherwise list all of `/etc` again under `/etc/app/state/`, and
-  again inside that, now that aliased spellings are admitted. A link to
-  a sibling (`conf.d -> ../httpd-live`) is entered.
+- **An alias is never skipped because its physical file is packaged or
+  already carried.** This is beta.6's walk: with `/etc/httpd/live.d ->
+  conf.d`, a modified `mod_ssl` `ssl.conf` is carried by the `rpm -Va`
+  branch as `/etc/httpd/conf.d/ssl.conf` and by the walk as
+  `/etc/httpd/live.d/ssl.conf`, with the same content; a ghost file
+  under `conf.d` the same way. Skipping the alias when the physical
+  spelling was owned, as the first two-spelling gate did, lost the path
+  httpd reads. Only an exclusion above, on either spelling, skips it.
+- **The walk enters a link to a directory above it once**
+  (`link_location` in `walk.rs`). Each directory link the walk is inside
+  is kept by where the link itself is (its directory resolved, then its
+  name), and the walk does not enter the same link again inside it. So
+  `/etc/httpd/conf.d -> .` yields `/etc/httpd/conf.d/site.conf` and
+  stops at `conf.d/conf.d`, and `/etc/app/state -> /etc` lists `/etc`
+  once more under `/etc/app/state/`, where the exclusions refuse every
+  withheld file. Not entering such a link at all, as the gate first did, lost
+  `conf.d/site.conf`; beta.6 entered it without end, until the kernel's
+  link limit. A link to a sibling (`conf.d -> ../httpd-live`) is entered
+  as before.
 - Measured on `rhel9` and `rhel10`, 2026-11-21, after drift runs: no
   packaged file lies under a directory link in `/etc` (`find /etc -type
   l -xtype d` against `rpm -qa` file lists), and every directory link
   there points out of `/etc` (`/etc/httpd/logs`,
   `/etc/swid/swidtags.d/redhat.com`, which the walk already skips) or at
   a directory the walk reaches by its own name (`/etc/ssl/certs`,
-  `/etc/yum/vars`, `/etc/xdg/systemd/user`). So on a stock host the
-  second spelling adds files only where an administrator made the link.
+  `/etc/yum/vars`, `/etc/xdg/systemd/user`). Under the alias rule above,
+  `/etc/yum/vars` files are kept under both names, the
+  `/etc/ssl/certs` entries are links whose targets a package owns
+  (`is_rpm_owned_via_symlink` skips them), and `/etc/xdg/systemd` is on
+  the walk's exclusion list. Not re-measured on a host since the alias
+  rule went back to beta.6's.
 - **`readable`, inside `capture_config`.** A regular file is read. A
   link is followed to its end: `/dev/null` is a mask, kept empty and
   never opened; a FIFO, socket or device is never opened; a regular file
@@ -223,12 +243,20 @@ walk, orphans, authselect's edited files) runs both:
   rule, the empty-unit-file mask test in `is_excluded_unowned`) go
   through `may_read_to_decide`: the same `locate` and `readable` as a
   capture, so a link or linked directory to key material or out of
-  `/etc` is never opened even though nothing read is kept. A warning
-  never quotes file content: the crypto policy's invalid-value warning
-  names `/etc/crypto-policies/config` and a fixed reason. Before this,
-  `/etc/crypto-policies/config -> /etc/chrony.keys` put the key's first
-  line in the warning, which reaches the snapshot, the README, the HTML
-  report and the audit report, and `redact()` does not scan warnings.
+  `/etc` is never opened even though nothing read is kept.
+- **No warning holds a value read from a file, even after validation.**
+  Warnings reach the snapshot, the README, the HTML report and the audit
+  report, and `redact()` does not scan them. Every config warning is
+  fixed text plus paths: both crypto-policy warnings name
+  `/etc/crypto-policies/config` and never the policy, because a value
+  that passes the name check can still be a secret
+  (`/etc/crypto-policies/config -> /etc/app/credentials` holding
+  `PASSWORD:<value>` passes it, and both admission checks admit the
+  link); a failed `authselect check` gives its exit code only, because
+  its diagnostics can repeat `authselect.conf` (an unknown profile, in
+  brackets). The paths a warning names (refused paths, link targets, the
+  audit reasons) and `io::Error` text are not file content. The
+  collected files carry the values, and redaction covers those.
 - **`rpm -Va` decides the kind before it reads**: a metadata-only row is
   dropped before content capture, so a ghost FIFO with a `.M.......` row
   is never opened.
@@ -273,7 +301,11 @@ this holds, by presence alone:
 - `/etc/audit/rules.d` is a directory;
 - at least one loader unit (`auditd.service`, `audit-rules.service`) is
   in `/usr/lib/systemd/system/`, a regular file the file-flags query
-  lists (`GhostQuery::packaged_units`), with no `rpm -Va` row;
+  lists (`GhostQuery::packaged_units`), and `rpm -Va` ran to the end
+  with no row for it. A failed or killed `rpm -Va` is not "unmodified":
+  `RpmState::verification_results` is `None` then (from
+  `RpmSection::rpm_va_complete`, which the snapshot does not record),
+  and the file is carried;
 - for both units, nothing else exists at `<dir>/<unit>` or at any
   drop-in directory systemd reads for it (`<unit>.d`, each dash prefix,
   `service.d`), in every directory of the system unit search path
