@@ -7,9 +7,9 @@
 //!
 //! The § 4.4 host of the users block spec lives in
 //! `testdata/fixtures/users-block/` with the sections it renders
-//! (`alice.containerfile`, `four-users.containerfile`). A real build test
-//! reuses [`spec_host`], [`useradd`] and those files: it puts the section
-//! between `FROM <base>` and `RUN bootc container lint`.
+//! (`alice.containerfile`, `four-users.containerfile`). The real build
+//! test, `users_build_test`, builds its snapshots with [`spec_host`],
+//! [`useradd`] and the collector helpers here.
 
 use std::path::Path;
 
@@ -160,7 +160,7 @@ const FIXTURES: &str = concat!(
     "/../../testdata/fixtures/users-block"
 );
 
-fn fixture(name: &str) -> String {
+pub(crate) fn fixture(name: &str) -> String {
     std::fs::read_to_string(Path::new(FIXTURES).join(name))
         .unwrap_or_else(|e| panic!("fixture {name}: {e}"))
 }
@@ -191,7 +191,7 @@ fn run(inspector: &dyn Inspector, exec: &MockExecutor) -> InspectorOutput {
     }
 }
 
-fn collect_users(exec: &MockExecutor, preserve_keys: bool) -> UserGroupSection {
+pub(crate) fn collect_users(exec: &MockExecutor, preserve_keys: bool) -> UserGroupSection {
     collect_users_with(
         exec,
         UserGroupOptions {
@@ -202,10 +202,7 @@ fn collect_users(exec: &MockExecutor, preserve_keys: bool) -> UserGroupSection {
 }
 
 /// The users section the collector records with `options`.
-pub(crate) fn collect_users_with(
-    exec: &MockExecutor,
-    options: UserGroupOptions,
-) -> UserGroupSection {
+fn collect_users_with(exec: &MockExecutor, options: UserGroupOptions) -> UserGroupSection {
     let inspector = UsersGroupsInspector::with_options(options);
     match run(&inspector, exec).section {
         SectionData::UsersGroups(section) => section,
@@ -213,7 +210,7 @@ pub(crate) fn collect_users_with(
     }
 }
 
-fn collect_storage(exec: &MockExecutor) -> StorageSection {
+pub(crate) fn collect_storage(exec: &MockExecutor) -> StorageSection {
     match run(&StorageInspector::new(), exec).section {
         SectionData::Storage(section) => section,
         other => panic!("expected the storage section, got {other:?}"),
@@ -229,7 +226,7 @@ fn ok(stdout: &str) -> ExecResult {
 }
 
 /// A host whose `/var/lib` walk finds `dirs`, each `(path, stat output)`.
-fn with_var_lib(exec: MockExecutor, dirs: &[(&str, &str)]) -> MockExecutor {
+pub(crate) fn with_var_lib(exec: MockExecutor, dirs: &[(&str, &str)]) -> MockExecutor {
     let found: String = dirs.iter().map(|(p, _)| format!("{p}\n")).collect();
     let mut exec = exec
         .with_file("/etc/fstab", "")

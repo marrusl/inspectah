@@ -27,5 +27,6 @@ mod smoke_render;
 mod smoke_render_2b;
 mod smoke_render_2c;
 mod unit_plan_test;
+mod users_build_test;
 mod users_render_test;
 mod var_backing_export_test;
