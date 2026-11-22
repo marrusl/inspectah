@@ -267,4 +267,49 @@ describe("Machine state, aggregate", () => {
     );
     expect(mutatingRequests).toEqual([]);
   });
+
+  it("reveals the row from GlobalSearch with focus, each time it is picked", async () => {
+    const HOSTNAME = "/etc/hostname";
+    serveLayout("aggregate");
+    // jsdom has no layout; the reveal scrolls before it focuses.
+    Element.prototype.scrollIntoView = vi.fn();
+    const user = userEvent.setup();
+    render(<App />);
+    const pick = async () => {
+      const input = await screen.findByRole("textbox", {
+        name: "Search all sections",
+      });
+      await user.clear(input);
+      await user.type(input, "hostname");
+      const results = await screen.findByRole("listbox", {
+        name: "Search results",
+      });
+      await user.click(within(results).getByText(HOSTNAME));
+    };
+
+    await pick();
+    const row = await screen.findByTestId(`machine-state-row-${HOSTNAME}`);
+    const toggle = screen.getByRole("button", { name: /^Machine state/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // A `never` row has no button: the row itself takes focus, not the
+    // section's first ordinary row.
+    await waitFor(() => expect(row).toHaveFocus());
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+
+    // Collapse the block and pick the same result: a new reveal.
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await pick();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^Machine state/ }),
+      ).toHaveAttribute("aria-expanded", "true"),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByTestId(`machine-state-row-${HOSTNAME}`),
+      ).toHaveFocus(),
+    );
+    expect(mutatingRequests).toEqual([]);
+  });
 });

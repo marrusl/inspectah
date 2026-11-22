@@ -440,6 +440,22 @@ export function MachineStateGroup({
 }
 
 /**
+ * Scrolls the row with `itemId` into view and focuses its button, or the
+ * row itself when it has none (a `never` row). False when the row is not
+ * in the document, so the caller can try again once it renders.
+ */
+export function revealMachineStateRow(itemId: string): boolean {
+  const li = rowElement(document.body, itemId);
+  if (!li) return false;
+  li.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const button = li.querySelector<HTMLElement>(
+    ".inspectah-machine-state__action button",
+  );
+  (button ?? li).focus();
+  return true;
+}
+
+/**
  * The `<li>` of the row with `itemId` under `root`, compared by test id as
  * a string, never through a CSS selector built from a host path.
  */

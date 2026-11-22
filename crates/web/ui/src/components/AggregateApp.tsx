@@ -34,6 +34,7 @@ import { AppShell } from "./AppShell";
 import {
   MACHINE_STATE_ITEM_PREFIX,
   MachineStateGroup,
+  revealMachineStateRow,
 } from "./MachineStateGroup";
 
 /** The fleet's rows offer no control, so the block never sends an op. */
@@ -230,6 +231,18 @@ export function AggregateApp({
   // GlobalSearch navigation clears the section search.
   const filterClearRef = useRef(0);
 
+  // A GlobalSearch pick of a machine-state row: its section opens with the
+  // block expanded, and the row is scrolled to and focused. Each reveal is
+  // consumed once the row has focus, so picking the same row again, after
+  // the block was collapsed, is a new reveal.
+  const [machineStateReveal, setMachineStateReveal] = useState<
+    string | undefined
+  >(undefined);
+  // Read by the section-change focus below, which must not move focus to
+  // the section's first row while a machine-state row is being revealed.
+  const machineStateRevealRef = useRef<string | undefined>(undefined);
+  machineStateRevealRef.current = machineStateReveal;
+
   // Clear section filter and close variant view when switching sections,
   // then move focus to the first reviewable item in the new section.
   useEffect(() => {
@@ -237,6 +250,7 @@ export function AggregateApp({
     setExpandedItemId(null);
     // Defer focus to next frame so the section content has rendered.
     const timer = setTimeout(() => {
+      if (machineStateRevealRef.current !== undefined) return;
       const firstRow = document.querySelector(
         '[data-testid="aggregate-content"] [data-testid="aggregate-item-row"]',
       ) as HTMLElement | null;
@@ -304,11 +318,20 @@ export function AggregateApp({
     [],
   );
 
-  // A GlobalSearch pick of a machine-state row: its section opens with the
-  // block expanded.
-  const [machineStateReveal, setMachineStateReveal] = useState<
-    string | undefined
-  >(undefined);
+  // Scroll to and focus the revealed machine-state row, then consume the
+  // reveal. Declared after the section-change focus above, so on a section
+  // change this timer runs after that one, which leaves focus alone while
+  // a reveal is pending. The block expands in the render that set the
+  // reveal, so the row is in the document by now.
+  useEffect(() => {
+    if (machineStateReveal === undefined) return;
+    const timer = setTimeout(() => {
+      if (revealMachineStateRow(machineStateReveal)) {
+        setMachineStateReveal(undefined);
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [machineStateReveal, activeSection, view]);
 
   const handleSearchNavigate = useCallback(
     (sectionId: string, itemId: string) => {
