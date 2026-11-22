@@ -207,13 +207,27 @@ stayed, and the build failed
 (`an_owner_included_through_its_repo_or_group_is_not_held`). The scan's
 defaults exclude it with the other holds.
 
-An included `RepoExcluded` owner therefore always came from the
-operator, but its include matches refine's open-time default (the repo
-was carried then), so the install line's include-changed test does not
-name it. `named_unit_owners`, the carried owners plus those held only on
-a lost repo, is what the install line and refine's package list key off;
+An included `RepoExcluded` owner did not necessarily come from the
+operator. The scan classifies `PulledIn` before it asks about holds, so
+an owner a leaf may pull in, a recommendation among them, stays included
+whatever its hold, and a repo the stager refuses (a `.repo` file name
+with a control character, which dnf still reads) is lost in a fresh
+scan's own export. Naming that owner turns a weak dependency dnf may
+skip into a requested package whose missing requirement fails the build
+under dnf's default `strict=True`
+(`a_held_owner_the_operator_never_included_is_not_named`). So the
+install line names a `RepoExcluded` owner on the operator's word alone:
+`RenderContext::operator_includes`, an `OperatorIncludes` refine fills
+from `packages_included_explicitly`, the same set the projection's hold
+spares. Every other render has none. The operator's include matches
+refine's open-time default (the repo was carried then), so the install
+line's include-changed test does not name it; `named_unit_owners`, the
+carried owners plus the operator's `RepoExcluded` ones, is what the
+install line and refine's package list key off.
 `default_carried_unit_owners` stays the default set (normalize, scan
-defaults, unit guards).
+defaults, unit guards). A refine-projected snapshot rendered outside
+refine has lost its operator includes with the session, as it has its
+group states.
 
 Precedence: `RepoExcluded` first (until the repo is back nothing the
 operator does to the owner helps), then `DisabledRepo` (the one the
