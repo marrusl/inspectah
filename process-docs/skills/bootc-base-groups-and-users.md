@@ -56,11 +56,22 @@ any gid range; never infer a group name from a gid range.
 ## A tmpfiles.d line names only groups the image is sure to have
 
 `systemd-tmpfiles` rejects a line whose owner or group it cannot resolve,
-so the directory is never made. A user the users block creates is safe to
-name, but the group the host recorded on that user's directory may be one
-no group line creates (`d /var/lib/svc 0750 svc homeowners -`, where no
-accepted user is in `homeowners`). Name a group in a tmpfiles.d line only
-when `ContainerfileUserPlan::guaranteed_gid` returns the host's gid for
+so the directory is never made. Proving the owner does not prove the group the
+host recorded on the directory, whichever way the owner is proved:
+
+- **A user the users block creates** (`ContainerfileUserPlan::creates_user`)
+  is safe to name, but its directory's group may be one no group line
+  creates (`d /var/lib/svc 0750 svc homeowners -`, where no accepted user
+  is in `homeowners`).
+- **An account a carried package creates** (`KNOWN_PACKAGE_ACCOUNTS`, or a
+  package named for the account) proves the account and the group the
+  package creates with it, which has the account's name. It proves no
+  other group: `apache:homeowners` with only `httpd` carried.
+
+Name a group in a tmpfiles.d line only when it is that same-named package
+group or `ContainerfileUserPlan::guaranteed_gid` returns the host's gid for
 it; otherwise write the host's numeric gid, which the group-identity rule
-above keeps meaningful. Ask the plan; do not re-derive which groups exist
-from the snapshot, and do not assume a base group from its name.
+above keeps meaningful. A group the scan recorded no name for is written by
+gid too, never as the owner's name. Ask the plan; do not re-derive which
+groups exist from the snapshot, and do not assume a base group from its
+name.

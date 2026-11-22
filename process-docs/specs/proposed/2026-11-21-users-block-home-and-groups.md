@@ -114,7 +114,21 @@ A user enters the plan when `containerfile_strategy == "useradd"` and `include !
    - every group the user names, primary and supplementary, has an entry in `group_gids`; else "a group it names has no recorded gid".
    - every group it names has the same gid as for any user accepted before it; else "group <g> has gid <a> here and <b> for an earlier user". Within one host this cannot happen, since every user's `group_gids` comes from the same `/etc/group`; in a fleet aggregate it can (§ 7).
 
-Only an accepted user's groups enter `groups`. Group lines, `useradd` lines, `chpasswd` entries, home rules, the keys comment and the materialized names are all derived from `accepted`; nothing re-reads the snapshot's user entries after the plan is built. `collect_materialized_usernames(snap)` becomes `ContainerfileUserPlan::from_snapshot(snap).materialized_usernames()`, and its two callers, `render_tmpfiles_conf` and `var_dir_section_lines`, are otherwise unchanged. The plan is a pure function of the snapshot, so the users block and the two `/var` callers each building it get the same set.
+Only an accepted user's groups enter `groups`. Group lines, `useradd` lines, `chpasswd` entries, home rules and the keys comment are all derived from `accepted`; nothing re-reads the snapshot's user entries after the plan is built. `collect_materialized_usernames` is removed. Its two callers, `render_tmpfiles_conf` and `var_dir_section_lines`, build the plan with `ContainerfileUserPlan::from_snapshot(snap)` and pass it to `resolve_tmpfiles_ownership`, which asks it two questions:
+
+```rust
+/// Whether the Containerfile creates the account `name`, so a
+/// tmpfiles.d line may name it as an owner.
+pub(crate) fn creates_user(&self, name: &str) -> bool;
+
+/// The gid group `name` is guaranteed to have in the image: a group
+/// line gives the image that name with that gid or stops the build.
+/// `None` for any other group, which the image may lack, so a
+/// tmpfiles.d line must not name it.
+pub(crate) fn guaranteed_gid(&self, name: &str) -> Option<u32>;
+```
+
+`creates_user` is true for accepted users only. `guaranteed_gid` answers for the planned groups only, never for a base image group by its name. A directory's group is guaranteed when `guaranteed_gid` returns the host's gid for it; how each branch of `resolve_tmpfiles_ownership` uses that is in § 4.3. The plan is a pure function of the snapshot, so the users block and the two `/var` callers each building it get the same answers.
 
 A refusal costs the whole user, as today: no group lines on its behalf, no `useradd`, no password, no home rule, no key line, and a `/var` directory it owns falls to the numeric ownership `resolve_tmpfiles_ownership` (`containerfile.rs:2344`) already uses for an account it cannot vouch for.
 
@@ -175,7 +189,14 @@ The block is one section, `# === Users and Groups ===`, rendered when the plan h
 
 ### 4.3 Group identity: collisions and numeric ownership
 
-The export writes group ownership two ways. The users tmpfiles lines and the materialized-user branch of `resolve_tmpfiles_ownership` write the group by name. Its other branches write the host's numeric gid: a collected `/var/lib/shared` owned by `legacy:appgrp` (uid 500, gid 1001, mode 0770), where `legacy` is not created by this export, renders `d /var/lib/shared 0770 500 1001 -`. If the image's `appgrp` had gid 2001, `alice`'s membership in it would grant nothing on that directory, and nothing in the build would say so.
+The export writes group ownership two ways: by name, or as the host's numeric gid. `systemd-tmpfiles` rejects a line whose group it cannot resolve, and the directory is then never made, so a tmpfiles.d line names a group only when the image is sure to have it. Every other group is written by number.
+
+- **The users tmpfiles lines** name the user's primary group, which a group line always guarantees, since every accepted user's primary group is planned.
+- **`resolve_tmpfiles_ownership`, owner the plan creates** (`creates_user`): the owner by name; the group by name when `guaranteed_gid` returns the host's gid for it, else the host's numeric gid. A directory `d /var/lib/svc` owned by `svc:homeowners` renders `svc homeowners` only when some accepted user is in `homeowners`, and `svc 45001` otherwise.
+- **`resolve_tmpfiles_ownership`, owner a carried package creates** (`KNOWN_PACKAGE_ACCOUNTS`, or a replicated package whose name is the account's): the owner by name, with a `# created by package: <pkg>` comment. The package is the evidence for the account and for the group it creates with it, which has the account's name, so that group is written by name; both then take the ids the image's package gives them. Any other group is named only when `guaranteed_gid` returns the host's gid for it, else written as the host's gid. A directory owned by `apache:homeowners`, where `httpd` is carried and no accepted user is in `homeowners`, renders `apache 45001`. A directory whose group the scan recorded no name for is written by gid.
+- **Any other owner**: the host's numeric uid and gid. A collected `/var/lib/shared` owned by `legacy:appgrp` (uid 500, gid 1001, mode 0770), where `legacy` is not created by this export, renders `d /var/lib/shared 0770 500 1001 -`.
+
+A numeric gid is only as good as the group behind it: if the image's `appgrp` had gid 2001, `alice`'s membership in it would grant nothing on that directory, and nothing in the build would say so.
 
 The policy is the one that needs no further decision: **every group the block touches ends up with the host's gid, or the build stops at that group's line.** The line succeeds only in these cases:
 
@@ -299,7 +320,7 @@ Per case:
 |---|---|---|
 | `/home/<rest>` | `Tmpfiles`: `d /var/home/<rest> 0700 <user> <primary_group> -` | `/home` is a symlink to `var/home` on the base; the real path is written, matching the passwd entry's resolved home. A nested `<rest>` gets its missing parents from tmpfiles as root 0755 (*recalled*); `/var/home` itself comes from the base's `rpm-ostree-0-integration.conf` (measured). |
 | `/var/home/<rest>` | `Tmpfiles`: `d /var/home/<rest> 0700 <user> <primary_group> -` | The same directory, recorded by its real path, as on a host that was already image-based. |
-| any other path under `/var/` | `VarFragment` when `storage.var_directories` has an entry for exactly that path whose effective backing (`effective_var_backing`, `crates/pipeline/src/render/var_dirs.rs:95`) is `Carried` or `Provision`; otherwise `NotCreated` | The export then has a creator or an active rule for it, and the fragment resolves the owner by name because the user is materialized (§ 4.1). `Unresolved` gets only a commented line from the fragment, so it is not evidence. |
+| any other path under `/var/` | `VarFragment` when `storage.var_directories` has an entry for exactly that path whose effective backing (`effective_var_backing`, `crates/pipeline/src/render/var_dirs.rs:95`) is `Carried` or `Provision`; otherwise `NotCreated` | The export then has a creator or an active rule for it, and the fragment names the owner because the plan creates the user (§ 4.1). `Unresolved` gets only a commented line from the fragment, so it is not evidence. |
 | `/` | `Exists` | It exists. |
 | anything else | `NotCreated` | Under `/usr` it would be image content; `/opt`, `/srv` and others are outside what the decision covers. |
 
