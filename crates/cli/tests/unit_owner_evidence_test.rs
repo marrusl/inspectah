@@ -581,12 +581,29 @@ fn set_repo(session: &mut RefineSession, id: &str, include: bool) {
 /// scan path's render of what refine exports: only `app` is installed, no
 /// command names `agent.service`, and the notice gives the reason.
 /// Including `vendor` again carries `agent`.
+///
+/// The same holds for `company.repo`'s `[baseos]`, an internal mirror the
+/// host enabled in a custom file, serving `helper`: a distro-named section
+/// is not the base image's to provide by its name, so the owner gets the
+/// same hold, and the same restoration, as for `vendor`.
 #[test]
 fn excluding_a_dependencys_repo_holds_its_owner() {
+    excluding_the_repo_holds_the_owner(VENDOR_REPO_PATH, VENDOR_REPO, "vendor");
+    excluding_the_repo_holds_the_owner(
+        "/etc/yum.repos.d/company.repo",
+        "[baseos]\nname=BaseOS mirror\nbaseurl=https://mirror.corp.example/baseos/\n\
+         enabled=1\ngpgcheck=0\n",
+        "baseos",
+    );
+}
+
+/// [`excluding_a_dependencys_repo_holds_its_owner`] for `helper` served by
+/// the enabled section `repo` that `path` defines with `content`.
+fn excluding_the_repo_holds_the_owner(path: &str, content: &str, repo: &str) {
     let host = agent_host(|h| {
-        h.file(VENDOR_REPO_PATH, VENDOR_REPO)
+        h.file(path, content)
             .package("agent")
-            .package_from("helper", "vendor")
+            .package_from("helper", repo)
             .requires("agent", &["(vendor-runtime or helper)"])
     });
     let collected = collected_with_repos(host, VENDOR_ENABLED_REPOS);
@@ -611,17 +628,17 @@ fn excluding_a_dependencys_repo_holds_its_owner() {
         let carried = surfaces_of(&session);
         assert!(
             carried.install_names().iter().any(|n| n == "agent"),
-            "{opened}: vendor included, agent is carried:\n{}",
+            "{repo}, {opened}: {repo} included, agent is carried:\n{}",
             carried.containerfile
         );
 
-        set_repo(&mut session, "vendor", false);
+        set_repo(&mut session, repo, false);
         let refine = surfaces_of(&session);
         let scan_dir = tempfile::tempdir().expect("tempdir");
         scan_export(session.snapshot_projected(), scan_dir.path());
         let scan = Surfaces::read(scan_dir.path());
         for (label, surfaces) in [("refine", &refine), ("scan", &scan)] {
-            let ctx = format!("{opened}, {label}");
+            let ctx = format!("{repo}, {opened}, {label}");
             assert_eq!(
                 surfaces.install_names(),
                 ["app"],
@@ -645,12 +662,12 @@ fn excluding_a_dependencys_repo_holds_its_owner() {
             "{opened}: {warnings:?}"
         );
 
-        set_repo(&mut session, "vendor", true);
+        set_repo(&mut session, repo, true);
         let restored = surfaces_of(&session);
         assert_eq!(
             restored.install_names(),
             carried.install_names(),
-            "{opened}: including vendor again carries agent:\n{}",
+            "{repo}, {opened}: including {repo} again carries agent:\n{}",
             restored.containerfile
         );
         assert!(

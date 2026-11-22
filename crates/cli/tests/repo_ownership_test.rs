@@ -1308,6 +1308,272 @@ fn t5_a_carriage_only_switch_that_restores_a_package_is_named() {
     ));
 }
 
+/// What the scan tarball and the refine export opened from it each
+/// render for `snap`, by path name.
+fn both_containerfiles(snap: &InspectionSnapshot) -> [(&'static str, String); 2] {
+    [
+        ("scan", containerfile(render_export(snap).path())),
+        (
+            "refine",
+            containerfile(export_session(&session(snap)).path()),
+        ),
+    ]
+}
+
+/// The FIXME a package gets when no repo switch restores its route.
+fn unrestorable_fixme(name: &str, repo: &str) -> String {
+    format!(
+        "# FIXME: upload the RPM; {name} installs from repo {repo}, whose definition this \
+         export does not carry, and re-including no repo in refine restores it"
+    )
+}
+
+/// A repo id may spell a credential key, as a COPR id spells `token:`.
+/// Redaction never rewrites a `[section]` header of a `.repo` file, so the
+/// repo keeps its file, its key and its package's route through the scan
+/// and both exports. And when a snapshot's stored file no longer defines
+/// the section the collector attributed a package to, as when a header
+/// was rewritten after the scan, the route is read from that
+/// attribution, made before redaction ran: the file is dropped and the
+/// package renders the FIXME on both exports instead of installing by
+/// name from a repo the export does not carry.
+#[test]
+fn t5_a_repo_id_spelling_a_credential_key_keeps_its_route() {
+    const VENDOR: &str = "/etc/yum.repos.d/vendor.repo";
+    const VENDOR_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-vendor";
+    const ID: &str = "copr:copr.fedorainfracloud.org:token:vendor";
+    let content = format!(
+        "[{ID}]\nname=Vendor\nbaseurl=https://vendor.example/rpm/\nenabled=1\n\
+         gpgkey=file://{VENDOR_KEY}\n"
+    );
+    let host = UnitHost::new()
+        .base_package("bash")
+        .file(VENDOR, &content)
+        .file(VENDOR_KEY, PGP)
+        .package_from("site-tool", ID)
+        .enabled_repos(&[ID]);
+    let snap = reload(&scan_finished(host));
+    let stored = rpm(&snap)
+        .repo_files
+        .iter()
+        .find(|f| f.path == VENDOR)
+        .unwrap();
+    assert_eq!(stored.content, content, "redaction leaves the header");
+    assert!(stored.disposition.is_included());
+    assert_eq!(config_row(&snap, VENDOR).unwrap().content, content);
+    for (via, file) in both_containerfiles(&snap) {
+        assert!(installs(&file, "site-tool"), "{via}:\n{file}");
+    }
+    let tree = render_export(&snap);
+    assert_eq!(
+        staged(tree.path(), VENDOR).as_deref(),
+        Some(content.as_str())
+    );
+    assert!(staged(tree.path(), VENDOR_KEY).is_some());
+
+    // The header rewritten after the scan: the stored file defines no
+    // section, has no owner and is dropped, and the attribution says the
+    // package's route went with it.
+    let mut rewritten = snap.clone();
+    let broken = content.replace(
+        &format!("[{ID}]"),
+        "[copr:copr.fedorainfracloud.org:token:X",
+    );
+    for file in &mut rewritten.rpm.as_mut().unwrap().repo_files {
+        if file.path == VENDOR {
+            file.content = broken.clone();
+        }
+    }
+    for file in &mut rewritten.config.as_mut().unwrap().files {
+        if file.path == VENDOR {
+            file.content = broken.clone();
+        }
+    }
+    settle_repo_ownership(&mut rewritten);
+    let rewritten = reload(&rewritten);
+    assert!(
+        !rpm(&rewritten)
+            .repo_files
+            .iter()
+            .any(|f| f.path == VENDOR && f.disposition.is_included())
+    );
+    for (via, file) in both_containerfiles(&rewritten) {
+        assert!(!installs(&file, "site-tool"), "{via}:\n{file}");
+        assert!(
+            file.lines()
+                .any(|l| l == unrestorable_fixme("site-tool", ID)),
+            "{via}:\n{file}"
+        );
+    }
+    assert!(staged(render_export(&rewritten).path(), VENDOR).is_none());
+}
+
+/// The base image's own repos are never lost: on a Fedora host whose
+/// stock `fedora.repo` and `fedora-updates.repo` the base image's
+/// `fedora-repos` owns unmodified, excluding `fedora`'s carriage-only
+/// switch drops the host's copy and `tree` still installs by name. A
+/// copy `rpm -Va` reports modified is the host's own, and its packages
+/// lose their route with it.
+#[test]
+fn t5_a_repo_the_base_image_supplies_keeps_its_route_when_its_file_is_dropped() {
+    const FEDORA: &str = "/etc/yum.repos.d/fedora.repo";
+    const UPDATES: &str = "/etc/yum.repos.d/fedora-updates.repo";
+    const FEDORA_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-43-x86_64";
+    let stock = |id: &str| {
+        format!(
+            "[{id}]\nname=Fedora $releasever - $basearch\n\
+             metalink=https://mirrors.fedoraproject.org/metalink?repo={id}-$releasever&arch=$basearch\n\
+             enabled=1\ngpgcheck=1\ngpgkey=file://{FEDORA_KEY}\n"
+        )
+    };
+    let host = |modified: bool| {
+        let host = UnitHost::new()
+            .base_package("bash")
+            .base_package("fedora-repos")
+            .base_package("fedora-gpg-keys")
+            .owned_file(FEDORA, &stock("fedora"), "fedora-repos")
+            .owned_file(UPDATES, &stock("updates"), "fedora-repos")
+            .owned_file(FEDORA_KEY, PGP, "fedora-gpg-keys")
+            .package_from("tree", "fedora")
+            .package_from("htop", "updates")
+            .enabled_repos(&["fedora", "updates"]);
+        if modified {
+            host.rpm_va(&format!("S.5....T.  c {FEDORA}\n"), 1)
+        } else {
+            host
+        }
+    };
+
+    let snap = reload(&scan_finished(host(false)));
+    let mut s = session(&snap);
+    assert_eq!(s.repo_state("fedora").control, RepoControl::CarriageOnly);
+    for id in ["fedora", "updates"] {
+        s.apply(set_repo(id, false)).unwrap();
+    }
+    let tree = export_session(&s);
+    assert!(staged(tree.path(), FEDORA).is_none());
+    assert!(staged(tree.path(), UPDATES).is_none());
+    let file = containerfile(tree.path());
+    for name in ["tree", "htop"] {
+        assert!(installs(&file, name), "{name}:\n{file}");
+        assert!(
+            !file.contains(&format!("{name} installs from repo")),
+            "{file}"
+        );
+    }
+    let projected = s.snapshot_projected();
+    assert!(
+        rpm(&projected)
+            .packages_added
+            .iter()
+            .all(|p| p.repoless_annotation.is_empty()),
+        "no upload is offered"
+    );
+
+    // Modified on the host: the host's own definition, lost when dropped.
+    let snap = reload(&scan_finished(host(true)));
+    let mut s = session(&snap);
+    s.apply(set_repo("fedora", false)).unwrap();
+    let file = containerfile(export_session(&s).path());
+    assert!(!installs(&file, "tree"), "{file}");
+    assert!(
+        file.lines().any(|l| l
+            == lost_route_fixme(
+                "tree",
+                "fedora",
+                "which brings back its repo files and keys"
+            )),
+        "{file}"
+    );
+    assert!(installs(&file, "htop"), "{file}");
+}
+
+/// `[site]` and `[SITE]`, in separate files, are two repos: `[site]`
+/// names a local key the host lacks, `[SITE]` a remote one. Only the
+/// lower-case section's package loses its route, in both file orders,
+/// on both exports.
+#[test]
+fn t5_a_case_variant_repo_keeps_its_own_route() {
+    let lower = "[site]\nname=lower\nbaseurl=https://lower.example/\nenabled=1\n\
+                 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-missing\n";
+    let upper = "[SITE]\nname=upper\nbaseurl=https://upper.example/\nenabled=1\n\
+                 gpgkey=https://upper.example/RPM-GPG-KEY\n";
+    for (lower_file, upper_file) in [("a.repo", "b.repo"), ("b.repo", "a.repo")] {
+        let host = UnitHost::new()
+            .base_package("bash")
+            .file(&format!("/etc/yum.repos.d/{lower_file}"), lower)
+            .file(&format!("/etc/yum.repos.d/{upper_file}"), upper)
+            .package_from("lower-tool", "site")
+            .package_from("upper-tool", "SITE")
+            .enabled_repos(&["site", "SITE"]);
+        let snap = reload(&scan_finished(host));
+        for (via, file) in both_containerfiles(&snap) {
+            let ctx = format!("{lower_file} then {upper_file}, {via}");
+            assert!(installs(&file, "upper-tool"), "{ctx}:\n{file}");
+            assert!(!installs(&file, "lower-tool"), "{ctx}:\n{file}");
+            assert!(
+                file.lines()
+                    .any(|l| l == unrestorable_fixme("lower-tool", "site")),
+                "{ctx}:\n{file}"
+            );
+            assert!(
+                !file.contains("upper-tool installs from repo"),
+                "{ctx}:\n{file}"
+            );
+        }
+    }
+}
+
+/// A key a repo names is a prerequisite of its packages only when dnf
+/// checks signatures for it. With `gpgcheck=0` and `repo_gpgcheck=0`, a
+/// retired key the host no longer has costs `site-tool` nothing, and the
+/// file is carried as the host wrote it; with `gpgcheck=1`, or with it
+/// unset, which the base image's `dnf.conf` reads as on, the same missing
+/// key loses the route.
+#[test]
+fn t5_a_missing_key_costs_a_route_only_when_dnf_checks_signatures() {
+    const SITE: &str = "/etc/yum.repos.d/site.repo";
+    let content = |check: &str| {
+        format!(
+            "[site]\nname=Site\nbaseurl=https://site.example/\nenabled=1\n{check}\
+             gpgkey=file:///etc/pki/rpm-gpg/retired-key\n"
+        )
+    };
+    for (check, lost) in [
+        ("gpgcheck=0\nrepo_gpgcheck=0\n", false),
+        ("gpgcheck=0\n", false),
+        ("gpgcheck=1\nrepo_gpgcheck=0\n", true),
+        ("gpgcheck=0\nrepo_gpgcheck=1\n", true),
+        ("", true),
+    ] {
+        let host = UnitHost::new()
+            .base_package("bash")
+            .file(SITE, &content(check))
+            .package_from("site-tool", "site")
+            .enabled_repos(&["site"]);
+        let snap = reload(&scan_finished(host));
+        let tree = render_export(&snap);
+        assert_eq!(
+            staged(tree.path(), SITE).as_deref(),
+            Some(content(check).as_str()),
+            "{check:?}: carried as the host wrote it"
+        );
+        for (via, file) in both_containerfiles(&snap) {
+            assert_eq!(
+                !installs(&file, "site-tool"),
+                lost,
+                "{check:?}, {via}:\n{file}"
+            );
+            assert_eq!(
+                file.lines()
+                    .any(|l| l == unrestorable_fixme("site-tool", "site")),
+                lost,
+                "{check:?}, {via}:\n{file}"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------
 // T6. CLI export.
 // ---------------------------------------------------------------------

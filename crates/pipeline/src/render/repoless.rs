@@ -1,11 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use inspectah_core::rpm_filename::StagedName;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::repo::{
-    RepoAttribution, RepoId, RepoSectionDef, effective_definition, effective_definition_in,
-    parse_repo_sections,
+    RepoAttribution, RepoId, RepoSectionDef, SectionId, effective_definition, effective_section_in,
+    parse_repo_sections, section_spelling,
 };
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
@@ -37,13 +37,14 @@ pub enum PackageRoute<'a> {
     /// phase's combined install, which carries `--enablerepo=<id>` for
     /// every such repo. Nothing is staged for it.
     DisabledRepo(RepoId),
-    /// Not repo-less on the host, but the repo it installed from there is
-    /// one this export carried and no longer can ([`InstallRepos::lost_route`]):
-    /// the export drops its `.repo` file, the file's definition is not the
-    /// one dnf reads, or a key it names is not in the image. It renders the
-    /// demotion FIXME naming what restores it, and takes an upload, until
-    /// the repo's files and keys are back.
-    LostRepo(RepoId),
+    /// Not repo-less on the host, but the section it installed from there,
+    /// by exact spelling, is one the build cannot install it from
+    /// ([`InstallRepos::lost_route`]): the export drops its `.repo` file,
+    /// the file's definition is not the one dnf reads, or a key dnf needs
+    /// for it is not in the image, and the base image does not supply it.
+    /// It renders the demotion FIXME naming what restores it, and takes an
+    /// upload, until the repo's files and keys are back.
+    LostRepo(SectionId),
     /// Repo-less, installed from the operator's upload, which the export
     /// proved and writes, by path in the same combined install. An upload is a decision the operator made, so it
     /// wins over a disabled repo the export could install from.
@@ -85,7 +86,7 @@ pub fn route_for<'a>(
         return PackageRoute::Upload(upload);
     }
     if let Some(id) = lost {
-        return PackageRoute::LostRepo(id.clone());
+        return PackageRoute::LostRepo(id);
     }
     match disabled_repo_install(rpm, repos, pkg) {
         Some(id) => PackageRoute::DisabledRepo(id),
@@ -170,8 +171,9 @@ pub fn write_cached_rpms(
 /// ([`RepoAttribution::Pseudo`]: `@System`, `anaconda`), the definition dnf
 /// would use among the repo files the build has when it installs
 /// ([`InstallRepos::effective`]) is disabled and defines a source, every
-/// `gpgkey=file://` key that section names is an included key (dnf cannot
-/// verify the package without it), and the id and the package's name and arch pass `sanitize_shell_value`. The id
+/// key dnf needs for that section ([`RepoSectionDef::required_keys`]) is
+/// in the image (dnf cannot verify the package without it), and the id
+/// and the package's name and arch pass `sanitize_shell_value`. The id
 /// is returned as the `.repo` file spells it, since `--enablerepo` takes
 /// it verbatim.
 ///
@@ -201,7 +203,7 @@ fn disabled_repo_install(
         .filter(|sec| {
             !sec.enabled
                 && sec.has_source
-                && keys_included(rpm, repos, sec.local_keys())
+                && keys_included(rpm, repos, sec.required_keys())
                 && sanitize_shell_value(sec.id.as_str()).is_some()
         })
         .map(|sec| RepoId::new(sec.id.as_str()))
@@ -243,10 +245,14 @@ pub struct InstallRepos {
     files: Vec<(String, String)>,
     /// The paths of the `gpg_keys` entries the GPG Keys section copies.
     keys: BTreeSet<String>,
-    /// The repos an ordinary package installed from on the source host
-    /// that this export cannot install from ([`routes_lost`]), keyed as
-    /// [`RepoId`] folds them, each spelled as its section is.
-    lost: BTreeMap<RepoId, RepoId>,
+    /// Every section spelling the snapshot's repo files define, exactly as
+    /// written: what a package's recorded repo resolves against, exact
+    /// spelling first ([`section_spelling`]).
+    spellings: BTreeSet<String>,
+    /// The sections, by exact spelling, a package the source host
+    /// installed by name from cannot be installed from in this export
+    /// ([`route_lost`]).
+    lost: BTreeSet<SectionId>,
 }
 
 impl InstallRepos {
@@ -285,34 +291,79 @@ impl InstallRepos {
                 .map(|k| k.path.clone())
                 .collect()
         });
+        let spellings = snap.rpm.as_ref().map_or_else(BTreeSet::new, |rpm| {
+            rpm.repo_files
+                .iter()
+                .flat_map(|f| parse_repo_sections(&f.content))
+                .map(|sec| sec.id.as_str().to_owned())
+                .collect()
+        });
         let mut repos = Self {
             custom,
             files,
             keys,
-            lost: BTreeMap::new(),
+            spellings,
+            lost: BTreeSet::new(),
         };
         if let Some(rpm) = snap.rpm.as_ref() {
-            repos.lost = routes_lost(rpm, &repos);
+            let mut candidates: BTreeSet<SectionId> =
+                repos.spellings.iter().map(SectionId::new).collect();
+            candidates.extend(
+                rpm.packages_added
+                    .iter()
+                    .filter_map(|p| repos.route_section(p)),
+            );
+            repos.lost = candidates
+                .into_iter()
+                .filter(|section| route_lost(rpm, &repos, section))
+                .collect();
         }
         repos
     }
 
-    /// Every repo whose route this export lost ([`routes_lost`]), spelled
-    /// as its section is.
-    pub(crate) fn lost_repos(&self) -> impl Iterator<Item = &RepoId> {
-        self.lost.values()
+    /// Whether the build cannot install a package from `section`, by exact
+    /// spelling, that the source host installed by name from it
+    /// ([`route_lost`]). The one answer package routing, the repo-less
+    /// advice and unit-owner holds read.
+    pub(crate) fn is_lost(&self, section: &SectionId) -> bool {
+        self.lost.contains(section)
     }
 
-    /// The repo `pkg` installed from on the source host, when this export
-    /// carried that repo and no longer can: [`PackageRoute::LostRepo`].
+    /// The section `pkg` installed from on the source host, by exact
+    /// spelling: the section spelled as its recorded repo, or else its one
+    /// case variant, among the repo files the snapshot holds
+    /// ([`section_spelling`]). When none is, and the collector attributed
+    /// the package to a section a captured file defined
+    /// ([`RepoAttribution::Exact`] or [`RepoAttribution::Resolved`], read
+    /// from the files before redaction ran), that section: its definition
+    /// is no longer in any file the snapshot holds, which is the evidence
+    /// that no file the export copies can define it.
+    fn route_section(&self, pkg: &PackageEntry) -> Option<SectionId> {
+        if pkg.source_repo.is_empty() {
+            return None;
+        }
+        if let Some(spelling) =
+            section_spelling(self.spellings.iter().map(String::as_str), &pkg.source_repo)
+        {
+            return Some(SectionId::new(spelling));
+        }
+        match &pkg.repo_attribution {
+            RepoAttribution::Exact { id } | RepoAttribution::Resolved { id, .. } => {
+                Some(SectionId::new(id.as_str()))
+            }
+            _ => None,
+        }
+    }
+
+    /// The section `pkg` installed from on the source host, when the build
+    /// cannot install it from there: [`PackageRoute::LostRepo`].
     ///
-    /// Only for a package installed by name from a repo the host enabled
-    /// (installable, not repo-enabling, which has its own proof, and not
-    /// attributed to a pseudo repo), and only for a repo the host's dnf
-    /// read from a `.repo` file the scan captured that is not a default
-    /// repo file ([`routes_lost`]). The package's disposition plays no
+    /// Only for a package installed by name (installable, not
+    /// repo-enabling, which has its own proof, and not attributed to a
+    /// pseudo repo), resolved to its section by [`Self::route_section`]
+    /// and judged by [`route_lost`]. The package's disposition plays no
     /// part, as for every route.
-    pub fn lost_route(&self, pkg: &PackageEntry) -> Option<&RepoId> {
+    pub fn lost_route(&self, pkg: &PackageEntry) -> Option<SectionId> {
         if self.lost.is_empty()
             || !pkg.repo_enabling_from.is_empty()
             || !is_package_installable(pkg)
@@ -320,7 +371,8 @@ impl InstallRepos {
         {
             return None;
         }
-        self.lost.get(&RepoId::new(pkg.source_repo.as_str()))
+        self.route_section(pkg)
+            .filter(|section| self.lost.contains(section))
     }
 
     /// Whether the GPG Keys section copies the captured key at `path`
@@ -342,61 +394,105 @@ impl InstallRepos {
         if self.custom == 0 {
             return None;
         }
-        effective_definition(
-            self.files
-                .iter()
-                .map(|(path, content)| (path.as_str(), content.as_str())),
-            id,
-        )
+        effective_definition(self.staged_files(), id)
+    }
+
+    /// The definition of the section spelled exactly `section` dnf uses
+    /// when the package phase installs ([`effective_section_in`] over this
+    /// set): no case variant stands in for it.
+    fn effective_section(&self, section: &SectionId) -> Option<RepoSectionDef> {
+        if self.custom == 0 {
+            return None;
+        }
+        effective_section_in(self.staged_files(), section).map(|(_, sec)| sec)
+    }
+
+    fn staged_files(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.files
+            .iter()
+            .map(|(path, content)| (path.as_str(), content.as_str()))
     }
 }
 
-/// The repos whose route an ordinary package can lose in this export: each
-/// section whose definition the source host's dnf used, among every
-/// `.repo` file the snapshot holds ([`effective_definition_in`]), is
-/// enabled with a source and sits in a file other than a default repo
-/// file, and whose definition among the files the build has when it
-/// installs ([`InstallRepos::effective`]) does not serve
-/// ([`serves`](super::repo_enabling::serves): missing, disabled, without a
-/// source, or naming a key the image lacks).
+/// The route-loss decision: whether the build cannot install, from a
+/// repo the image will have, a package the source host's dnf installed by
+/// name from `section`, by exact spelling. Package routing
+/// ([`InstallRepos::lost_route`]), the advice that names a restoring
+/// switch (`repo_enabling::lost_route_loss`) and unit-owner holds
+/// (`not_carried`) all read this one answer, through
+/// [`InstallRepos::is_lost`].
 ///
-/// A section whose host definition is in a default repo file is the base
-/// image's to provide, as `redhat.repo`'s are. A distro-named section in a
-/// captured file is not: a `company.repo` defining `[baseos]` for an
-/// internal mirror is what the host installed from, and the base image's
-/// own `baseos`, where it has one, need not serve the same packages.
-fn routes_lost(rpm: &RpmSection, repos: &InstallRepos) -> BTreeMap<RepoId, RepoId> {
-    let host_files = || {
-        rpm.repo_files
-            .iter()
-            .map(|f| (f.path.as_str(), f.content.as_str()))
+/// Lost exactly when every one of these holds:
+///
+/// 1. **The host installed by name from it.** The definition the host's
+///    dnf used, among every `.repo` file the snapshot holds
+///    ([`effective_section_in`]), is enabled and has a source. A section
+///    no stored file defines counts too: the collector attributed a
+///    package to it from the files as captured, before redaction, and
+///    nothing the export copies can define it now.
+/// 2. **The base image does not supply it** ([`base_supplies`]): the
+///    host's definition is not in a default repo file, nor in a file a
+///    base image package owns unmodified, such as Fedora's `fedora.repo`.
+///    A distro-named section alone proves nothing: a `company.repo`
+///    defining `[baseos]` for an internal mirror is what the host
+///    installed from, and the base image's own `baseos`, where it has
+///    one, need not serve the same packages.
+/// 3. **The export does not serve it.** The definition of that exact
+///    section among the files the build has when it installs
+///    ([`InstallRepos::effective_section`]) is missing, disabled, without
+///    a source, or names a key dnf needs that the image lacks
+///    ([`serves`](super::repo_enabling::serves)). A key a section names
+///    with signature checking off is not needed
+///    ([`RepoSectionDef::required_keys`]).
+fn route_lost(rpm: &RpmSection, repos: &InstallRepos, section: &SectionId) -> bool {
+    let host_files = rpm
+        .repo_files
+        .iter()
+        .map(|f| (f.path.as_str(), f.content.as_str()));
+    let Some((path, host)) = effective_section_in(host_files, section) else {
+        return true;
     };
-    let mut lost = BTreeMap::new();
-    for file in rpm.repo_files.iter().filter(|f| !f.is_default_repo) {
-        for sec in parse_repo_sections(&file.content) {
-            let id = RepoId::new(sec.id.as_str());
-            if lost.contains_key(&id) {
-                continue;
-            }
-            let Some((path, host)) = effective_definition_in(host_files(), &id) else {
-                continue;
-            };
-            let captured = rpm
-                .repo_files
-                .iter()
-                .any(|f| f.path == path && !f.is_default_repo);
-            if !(captured && host.enabled && host.has_source) {
-                continue;
-            }
-            if !repos
-                .effective(&id)
-                .is_some_and(|export| serves(rpm, repos, &export))
-            {
-                lost.insert(id, RepoId::new(host.id.as_str()));
-            }
-        }
+    if !(host.enabled && host.has_source) || base_supplies(rpm, path) {
+        return false;
     }
-    lost
+    !repos
+        .effective_section(section)
+        .is_some_and(|export| serves(rpm, repos, &export))
+}
+
+/// Whether the base image has its own copy of the repo file at `path`,
+/// defining what the host's copy defines, so a section the host's dnf read
+/// from it is the base image's to provide whatever the export does with
+/// the host's copy:
+///
+/// - a default repo file (`is_default_repo`, `redhat.repo` among them),
+///   which the subscription flow mounts at build time; or
+/// - a file a package the base image has (`baseline_package_names`) owns
+///   on the host (`file_ownership`) that `rpm -Va` did not report
+///   modified (`rpm_va`): Fedora's `fedora-repos` and its `fedora.repo`
+///   and `fedora-updates.repo`, CentOS Stream's `centos-stream-repos`.
+///   This is the evidence the scan reads to leave out a key the base image
+///   ships (`leave_out_keys_the_base_ships`), read from the snapshot. A
+///   host copy someone changed, by enabling a section or adding one, is
+///   reported by `rpm -Va` and is the host's own.
+///
+/// Without a baseline nothing is known about the base image's packages,
+/// and only a default repo file counts.
+fn base_supplies(rpm: &RpmSection, path: &str) -> bool {
+    let Some(file) = rpm.repo_files.iter().find(|f| f.path == path) else {
+        return false;
+    };
+    if file.is_default_repo {
+        return true;
+    }
+    let Some(base) = rpm.baseline_package_names.as_ref() else {
+        return false;
+    };
+    !rpm.rpm_va.iter().any(|e| e.path == path)
+        && rpm
+            .file_ownership
+            .iter()
+            .any(|e| base.contains(&e.package_name) && e.paths.iter().any(|p| p == path))
 }
 
 /// The commented `COPY`/`RUN` pair a pre-excluded cached RPM offers.
@@ -1484,5 +1580,266 @@ mod tests {
         assert!(lines.iter().any(|l| l
             == "# FIXME: upload the RPM for epel-release.noarch again in refine; \
                 the staged file could not be verified for export"));
+    }
+
+    /// The route-loss decision over the class of inputs that decide it,
+    /// each case judged for a package installed by name from `site` with
+    /// the scan's attribution. `lost` is what the build can do: install it
+    /// from a repo the image will have, or not.
+    #[test]
+    fn the_route_is_lost_only_when_the_build_cannot_install_from_a_repo_it_has() {
+        use inspectah_core::types::rpm::{FileOwnershipEntry, RpmVaEntry};
+        const KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-site";
+        let site = |extra: &str| {
+            format!(
+                "[site]\nbaseurl=https://site.example/\nenabled=1\ngpgkey=file://{KEY}\n{extra}"
+            )
+        };
+        let file = |name: &str, content: &str, include: bool| RepoFile {
+            path: format!("/etc/yum.repos.d/{name}"),
+            content: content.into(),
+            disposition: FindingKind::from_bool(include),
+            ..Default::default()
+        };
+        let key = |include: bool| RepoFile {
+            path: KEY.into(),
+            content: "-----BEGIN PGP PUBLIC KEY BLOCK-----\n".into(),
+            disposition: FindingKind::from_bool(include),
+            ..Default::default()
+        };
+        /// What the base image and `rpm -Va` say about the repo files.
+        #[derive(Clone, Copy)]
+        enum Base {
+            /// No baseline: nothing is known about the base image.
+            Unknown,
+            /// `site-repos` owns `site.repo` and is in the base image.
+            Owns,
+            /// As `Owns`, and `rpm -Va` reports `site.repo` modified.
+            OwnsModified,
+        }
+        struct Case {
+            name: &'static str,
+            files: Vec<RepoFile>,
+            key: Option<RepoFile>,
+            base: Base,
+            source_repo: &'static str,
+            lost: bool,
+        }
+        let case = |name, files, key, base, lost| Case {
+            name,
+            files,
+            key,
+            base,
+            source_repo: "site",
+            lost,
+        };
+        let cases = vec![
+            case(
+                "carried",
+                vec![file("site.repo", &site(""), true)],
+                Some(key(true)),
+                Base::Unknown,
+                false,
+            ),
+            case(
+                "file dropped",
+                vec![file("site.repo", &site(""), false)],
+                Some(key(true)),
+                Base::Unknown,
+                true,
+            ),
+            case(
+                "file dropped beside another carried file",
+                vec![
+                    file("site.repo", &site(""), false),
+                    file("other.repo", "[other]\nbaseurl=https://o.example/\n", true),
+                ],
+                Some(key(true)),
+                Base::Unknown,
+                true,
+            ),
+            case(
+                "another section keeps the file",
+                vec![file(
+                    "site.repo",
+                    &format!("{}[other]\nbaseurl=https://o.example/\n", site("")),
+                    true,
+                )],
+                Some(key(true)),
+                Base::Unknown,
+                false,
+            ),
+            case(
+                "host disabled it",
+                vec![file("site.repo", &site("enabled=0\n"), false)],
+                Some(key(true)),
+                Base::Unknown,
+                false,
+            ),
+            case(
+                "key dropped, gpgcheck unset",
+                vec![file("site.repo", &site(""), true)],
+                Some(key(false)),
+                Base::Unknown,
+                true,
+            ),
+            case(
+                "key never captured, gpgcheck=1",
+                vec![file("site.repo", &site("gpgcheck=1\n"), true)],
+                None,
+                Base::Unknown,
+                true,
+            ),
+            case(
+                "key never captured, gpgcheck=0 and repo_gpgcheck=0",
+                vec![file(
+                    "site.repo",
+                    &site("gpgcheck=0\nrepo_gpgcheck=0\n"),
+                    true,
+                )],
+                None,
+                Base::Unknown,
+                false,
+            ),
+            case(
+                "key never captured, dnf 5's pkg_gpgcheck=0",
+                vec![file("site.repo", &site("pkg_gpgcheck=0\n"), true)],
+                None,
+                Base::Unknown,
+                false,
+            ),
+            case(
+                "key never captured, gpgcheck=0 but repo_gpgcheck=1",
+                vec![file(
+                    "site.repo",
+                    &site("gpgcheck=0\nrepo_gpgcheck=1\n"),
+                    true,
+                )],
+                None,
+                Base::Unknown,
+                true,
+            ),
+            case(
+                "dropped, a base image package owns it unmodified",
+                vec![file("site.repo", &site(""), false)],
+                Some(key(true)),
+                Base::Owns,
+                false,
+            ),
+            case(
+                "dropped, a base image package owns it, modified on the host",
+                vec![file("site.repo", &site(""), false)],
+                Some(key(true)),
+                Base::OwnsModified,
+                true,
+            ),
+            Case {
+                source_repo: "baseos",
+                ..case(
+                    "dropped, a distro name in a custom file",
+                    vec![file(
+                        "site.repo",
+                        &site("").replace("[site]", "[baseos]"),
+                        false,
+                    )],
+                    Some(key(true)),
+                    Base::Unknown,
+                    true,
+                )
+            },
+            case(
+                "a default repo file defines it",
+                vec![RepoFile {
+                    is_default_repo: true,
+                    ..file("redhat.repo", &site(""), false)
+                }],
+                Some(key(true)),
+                Base::Unknown,
+                false,
+            ),
+            case(
+                "no file the snapshot holds defines the attributed section",
+                vec![file(
+                    "site.repo",
+                    "[other]\nbaseurl=https://o.example/\n",
+                    true,
+                )],
+                Some(key(true)),
+                Base::Unknown,
+                true,
+            ),
+        ];
+        for c in cases {
+            let mut pkg = from_repo(c.source_repo, exact(c.source_repo));
+            pkg.repoless_annotation.clear();
+            let mut snap = snapshot_with(&pkg, c.files);
+            let rpm = snap.rpm.as_mut().unwrap();
+            rpm.gpg_keys.extend(c.key);
+            if !matches!(c.base, Base::Unknown) {
+                rpm.baseline_package_names = Some(vec!["site-repos".into()]);
+                rpm.file_ownership = vec![FileOwnershipEntry {
+                    package_name: "site-repos".into(),
+                    paths: vec!["/etc/yum.repos.d/site.repo".into()],
+                }];
+            }
+            if matches!(c.base, Base::OwnsModified) {
+                rpm.rpm_va = vec![RpmVaEntry {
+                    path: "/etc/yum.repos.d/site.repo".into(),
+                    ..Default::default()
+                }];
+            }
+            let repos = InstallRepos::of(&snap);
+            let rpm = snap.rpm.as_ref().unwrap();
+            let none = VerifiedUploads::new();
+            let route = route_for(rpm, &repos, &rpm.packages_added[0], &none);
+            assert_eq!(
+                matches!(route, PackageRoute::LostRepo(_)),
+                c.lost,
+                "{} ({}): {route:?}",
+                c.name,
+                c.source_repo
+            );
+            if !c.lost {
+                assert_eq!(route, PackageRoute::ByName, "{}", c.name);
+            }
+        }
+    }
+
+    /// `[site]` and `[SITE]` in separate files are two repos: only the one
+    /// that lost its key loses its route, in either file order, and each
+    /// package resolves to its own spelling.
+    #[test]
+    fn a_case_variant_section_keeps_its_own_route() {
+        const KEY: &str = "/etc/pki/rpm-gpg/missing";
+        let lower = format!("[site]\nbaseurl=https://l.example/\ngpgkey=file://{KEY}\n");
+        let upper = "[SITE]\nbaseurl=https://u.example/\ngpgkey=https://u.example/KEY\n";
+        for (first, second) in [("a.repo", "b.repo"), ("b.repo", "a.repo")] {
+            for (lost_in, kept_in) in [(first, second), (second, first)] {
+                let files = vec![
+                    repo_file(&format!("/etc/yum.repos.d/{lost_in}"), &lower, false),
+                    repo_file(&format!("/etc/yum.repos.d/{kept_in}"), upper, false),
+                ];
+                let mut pkg_lower = from_repo("site", exact("site"));
+                pkg_lower.repoless_annotation.clear();
+                let mut pkg_upper = from_repo("SITE", exact("SITE"));
+                pkg_upper.repoless_annotation.clear();
+                pkg_upper.name = "upper-tool".into();
+                let mut snap = snapshot_with(&pkg_lower, files);
+                snap.rpm.as_mut().unwrap().packages_added.push(pkg_upper);
+                let repos = InstallRepos::of(&snap);
+                let rpm = snap.rpm.as_ref().unwrap();
+                let none = VerifiedUploads::new();
+                assert_eq!(
+                    route_for(rpm, &repos, &rpm.packages_added[0], &none),
+                    PackageRoute::LostRepo(SectionId::new("site")),
+                    "{lost_in} then {kept_in}"
+                );
+                assert_eq!(
+                    route_for(rpm, &repos, &rpm.packages_added[1], &none),
+                    PackageRoute::ByName,
+                    "{lost_in} then {kept_in}"
+                );
+            }
+        }
     }
 }

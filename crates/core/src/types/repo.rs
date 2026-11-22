@@ -289,6 +289,15 @@ pub struct RepoSectionDef {
     /// Every reference in the final `gpgkey=` value, split on whitespace
     /// and commas, in order.
     pub gpg_keys: Vec<GpgKeyRef>,
+    /// Whether dnf checks signatures for this section, so the keys it
+    /// names must be in the image before it installs from it
+    /// ([`Self::required_keys`]): its final `gpgcheck=` (or dnf 5's
+    /// `pkg_gpgcheck=`) or `repo_gpgcheck=` is true. An unset `gpgcheck`
+    /// is read as true, the `[main]` value the stock `dnf.conf` of Fedora,
+    /// CentOS Stream and RHEL sets, which is the one the build's dnf reads:
+    /// the export copies the host's `/etc/dnf` after the packages install.
+    /// An unset `repo_gpgcheck` is read as dnf's own default, false.
+    pub verifies_signatures: bool,
 }
 
 impl RepoSectionDef {
@@ -300,6 +309,15 @@ impl RepoSectionDef {
             GpgKeyRef::Local(path) => Some(path.as_str()),
             GpgKeyRef::Remote(_) => None,
         })
+    }
+
+    /// The local keys dnf needs in the image to install from this section:
+    /// every [`Self::local_keys`] when it checks signatures
+    /// ([`Self::verifies_signatures`]), and none when the host turned
+    /// signature checking off for it. A key such a section names but dnf
+    /// never reads is no prerequisite of its packages.
+    pub fn required_keys(&self) -> impl Iterator<Item = &str> {
+        self.local_keys().filter(|_| self.verifies_signatures)
     }
 }
 
@@ -328,6 +346,9 @@ enum RepoOption {
     Metalink,
     Mirrorlist,
     Gpgkey,
+    /// `gpgcheck=`, or `pkg_gpgcheck=`, dnf 5's name for it: one option.
+    Gpgcheck,
+    RepoGpgcheck,
 }
 
 impl RepoOption {
@@ -338,6 +359,8 @@ impl RepoOption {
             "metalink" => RepoOption::Metalink,
             "mirrorlist" => RepoOption::Mirrorlist,
             "gpgkey" => RepoOption::Gpgkey,
+            "gpgcheck" | "pkg_gpgcheck" => RepoOption::Gpgcheck,
+            "repo_gpgcheck" => RepoOption::RepoGpgcheck,
             _ => return None,
         })
     }
@@ -352,6 +375,8 @@ struct SectionValues {
     metalink: Option<String>,
     mirrorlist: Option<String>,
     gpgkey: Option<String>,
+    gpgcheck: Option<String>,
+    repo_gpgcheck: Option<String>,
 }
 
 impl SectionValues {
@@ -362,13 +387,22 @@ impl SectionValues {
             RepoOption::Metalink => &mut self.metalink,
             RepoOption::Mirrorlist => &mut self.mirrorlist,
             RepoOption::Gpgkey => &mut self.gpgkey,
+            RepoOption::Gpgcheck => &mut self.gpgcheck,
+            RepoOption::RepoGpgcheck => &mut self.repo_gpgcheck,
         }
     }
 
     /// Derive the section dnf ends up with from the final option values.
     fn into_def(self, id: SectionId) -> RepoSectionDef {
         let defined = |v: &Option<String>| v.as_deref().is_some_and(|v| !v.trim().is_empty());
+        let flag = |v: &Option<String>, unset: bool| {
+            v.as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map_or(unset, is_enabled_value)
+        };
         RepoSectionDef {
+            verifies_signatures: flag(&self.gpgcheck, true) || flag(&self.repo_gpgcheck, false),
             id,
             enabled: self
                 .enabled
@@ -569,9 +603,34 @@ pub fn effective_definition_in<'a>(
         id.as_str(),
     )?
     .to_owned();
-    defs.into_iter()
-        .filter(|(_, _, _, sec)| sec.id.as_str() == spelling)
-        .min_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)))
+    first_in_read_order(
+        defs.into_iter()
+            .filter(|(_, _, _, sec)| sec.id.as_str() == spelling),
+    )
+}
+
+/// The definition dnf uses for the section spelled exactly `id`, with the
+/// path of the file that holds it: [`effective_definition_in`] with no
+/// case variant standing in. A caller that already holds a section's
+/// exact identity asks this, so `[site]` is never answered with
+/// `[SITE]`'s definition when only the second is among `files`.
+pub fn effective_section_in<'a>(
+    files: impl IntoIterator<Item = (&'a str, &'a str)>,
+    id: &SectionId,
+) -> Option<(&'a str, RepoSectionDef)> {
+    first_in_read_order(files.into_iter().flat_map(|(path, content)| {
+        parse_repo_sections(content)
+            .into_iter()
+            .filter(|sec| sec.id == *id)
+            .map(move |sec| (dnf_read_order(path), content, path, sec))
+    }))
+}
+
+/// The first of `defs` in dnf's read order, ties broken by content.
+fn first_in_read_order<'a>(
+    defs: impl Iterator<Item = (Vec<&'a str>, &'a str, &'a str, RepoSectionDef)>,
+) -> Option<(&'a str, RepoSectionDef)> {
+    defs.min_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)))
         .map(|(_, _, path, sec)| (path, sec))
 }
 

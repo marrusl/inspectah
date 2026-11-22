@@ -85,9 +85,9 @@ pub(crate) enum RepoEnablingExport {
 /// A serving id survives when the definition dnf uses for it among the
 /// repo files the build has when it installs ([`InstallRepos::effective`]:
 /// the first file in dnf's read order, with the content the export
-/// stages) is *enabled*, has a *source*, and is *keyed* (every
-/// `gpgkey=file://` path it names is a key the image has,
-/// [`keys_included`]). Another file defining the
+/// stages) is *enabled*, has a *source*, and is *keyed* (every key dnf
+/// needs for it is a key the image has, [`serves`]). Another file
+/// defining the
 /// same id does not count: dnf drops it as "listed more than once". The
 /// files and keys the package itself owns are checked too: a dropped
 /// `epel.repo` leaves nothing to install from even when another file
@@ -180,19 +180,19 @@ pub(crate) fn serving_loss(snap: &InspectionSnapshot, pkg: &PackageEntry) -> Opt
     })
 }
 
-/// What to name for a package whose route is `id`, a repo this export no
-/// longer carries ([`InstallRepos::lost_route`]): that repo, when its
-/// switch brings the route back. A route's loss depends on the repo alone,
-/// so every package on it gets the same answer, and a caller asks once per
-/// repo.
-pub(crate) fn lost_route_loss(snap: &InspectionSnapshot, id: &RepoId) -> ServingLoss {
-    let restore = first_restoring(snap, [id.as_str().to_owned()], |proposed| {
-        InstallRepos::of(proposed)
-            .lost_repos()
-            .all(|lost| lost != id)
+/// What to name for a package whose route is `section`, a section the
+/// build cannot install it from ([`InstallRepos::lost_route`]): that
+/// repo, when its switch brings the route back, judged by the same
+/// route-loss decision ([`InstallRepos::is_lost`]) over the export as the
+/// switch would leave it. A route's loss depends on the section alone, so
+/// every package on it gets the same answer, and a caller asks once per
+/// exact section.
+pub(crate) fn lost_route_loss(snap: &InspectionSnapshot, section: &SectionId) -> ServingLoss {
+    let restore = first_restoring(snap, [section.as_str().to_owned()], |proposed| {
+        !InstallRepos::of(proposed).is_lost(section)
     });
     ServingLoss {
-        id: id.clone(),
+        id: RepoId::new(section.as_str()),
         restore,
     }
 }
@@ -214,57 +214,91 @@ fn first_restoring(
         .find(|restore| toggle_restores(snap, &restore.repo, &restored))
 }
 
-/// Whether dnf can install a repo-enabling package from `sec`, the
-/// definition it uses for a serving id: enabled, with a source to fetch
-/// from (`baseurl`, `metalink` or `mirrorlist` left defined), and every
-/// key it names in the image. An enabled copy of the section with no
-/// source cannot supply the package, whichever file it sits in.
+/// Whether dnf can install a package by name from `sec`, the definition
+/// it uses for a section when the package phase installs: enabled, with a
+/// source to fetch from (`baseurl`, `metalink` or `mirrorlist` left
+/// defined), and every key dnf needs for it in the image
+/// ([`RepoSectionDef::required_keys`]: every key it names, unless the
+/// host turned signature checking off for it, and then none). An enabled
+/// copy of the section with no source cannot supply the package,
+/// whichever file it sits in. The repo-enabling proof and the route-loss
+/// decision (`repoless::route_lost`) both read it.
 pub(crate) fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDef) -> bool {
-    sec.enabled && sec.has_source && keys_included(rpm, repos, sec.local_keys())
+    sec.enabled && sec.has_source && keys_included(rpm, repos, sec.required_keys())
 }
 
 /// The switch refine gives `repo` that can bring back what it owns, if
 /// any: `Some(true)` for a full switch, which also cascades to its
 /// packages (core's [`repo::toggleable`] over the snapshot's repo files),
-/// `Some(false)` for a carriage-only one.
+/// `Some(false)` for a carriage-only one. The repo ownership spec's § 5.2,
+/// both clauses, as refine's `RepoState` computes them:
 ///
-/// A repo that is not toggleable has a carriage-only switch when it owns
-/// a carriable entry and the host enabled it in a file that defines it,
-/// or a package is attributed to it: the first clause of the repo
-/// ownership spec's § 5.2, which refine's `RepoState` computes too. Its
-/// second clause, an entry no controlled repo owns, is left out, so the
-/// advice may omit a switch refine has, but never names one it lacks.
+/// 1. a repo that is not toggleable has a carriage-only switch when it
+///    owns a carriable entry and can keep one: the host enabled it in a
+///    file that defines it, or a package is attributed to it, by exact
+///    spelling first ([`section_spelling`]);
+/// 2. and also when it owns a carriable entry that no owner with a full
+///    switch or a switch from the first clause owns, such as a file whose
+///    every section the host disabled.
 fn control(rpm: &RpmSection, repo: &str) -> Option<bool> {
-    if repo::toggleable(
+    let files = || {
         rpm.repo_files
             .iter()
-            .map(|f| (f.path.as_str(), f.content.as_str())),
-        repo,
-    ) {
+            .map(|f| (f.path.as_str(), f.content.as_str()))
+    };
+    if repo::toggleable(files(), repo) {
         return Some(true);
     }
     let ownership = repo_ownership(rpm);
-    let section = SectionId::new(repo);
-    let owned: Vec<&Destination> = ownership.owned_by(&section);
-    let owns_carriable = [
+    let carriable: BTreeSet<Destination> = [
         (OwnedKind::RepoFile, &rpm.repo_files),
         (OwnedKind::GpgKey, &rpm.gpg_keys),
     ]
     .into_iter()
     .flat_map(|(kind, list)| list.iter().map(move |entry| (kind, entry)))
-    .any(|(kind, entry)| {
-        Destination::new(&entry.path).is_ok_and(|d| owned.contains(&&d))
-            && ownership.carriable(kind, entry)
-    });
-    let enabled = ownership
-        .entries()
-        .flat_map(|(_, e)| &e.owners)
-        .any(|o| o.section == section && o.enabled);
-    let attributed = rpm
+    .filter(|(kind, entry)| ownership.carriable(*kind, entry))
+    .filter_map(|(_, entry)| Destination::new(&entry.path).ok())
+    .collect();
+    let carriable_owned = |section: &SectionId| -> Vec<Destination> {
+        ownership
+            .owned_by(section)
+            .into_iter()
+            .filter(|d| carriable.contains(*d))
+            .cloned()
+            .collect()
+    };
+    let spellings: Vec<String> = files()
+        .flat_map(|(_, content)| parse_repo_sections(content))
+        .map(|sec| sec.id.as_str().to_owned())
+        .collect();
+    let attributed: BTreeSet<&str> = rpm
         .packages_added
         .iter()
-        .any(|p| RepoId::new(p.source_repo.as_str()) == RepoId::new(repo));
-    (owns_carriable && (enabled || attributed)).then_some(false)
+        .filter_map(|p| section_spelling(spellings.iter().map(String::as_str), &p.source_repo))
+        .collect();
+    let first_clause = |section: &SectionId| {
+        repo::toggleable(files(), section.as_str())
+            || (!carriable_owned(section).is_empty()
+                && (attributed.contains(section.as_str())
+                    || ownership
+                        .entries()
+                        .flat_map(|(_, e)| &e.owners)
+                        .any(|o| o.section == *section && o.enabled)))
+    };
+    let section = SectionId::new(repo);
+    let owned = carriable_owned(&section);
+    if owned.is_empty() {
+        return None;
+    }
+    if first_clause(&section) {
+        return Some(false);
+    }
+    let orphaned = owned.iter().any(|dest| {
+        ownership
+            .get(dest)
+            .is_some_and(|e| e.owners.iter().all(|o| !first_clause(&o.section)))
+    });
+    orphaned.then_some(false)
 }
 
 /// Whether re-including `repo` in refine makes `restored` true of the
@@ -401,7 +435,9 @@ pub fn demote_lost_routes(snap: &mut InspectionSnapshot) {
                 let id = match repo_enabling_export(rpm, &repos, pkg) {
                     RepoEnablingExport::Lost => serving_loss(read, pkg)?.id,
                     RepoEnablingExport::Served => return None,
-                    RepoEnablingExport::NotEnabling => repos.lost_route(pkg)?.clone(),
+                    RepoEnablingExport::NotEnabling => {
+                        RepoId::new(repos.lost_route(pkg)?.as_str())
+                    }
                 };
                 Some((
                     i,

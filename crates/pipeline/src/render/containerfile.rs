@@ -21,7 +21,7 @@ use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::group_render::{OperatorIncludes, RenderContext};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
-use inspectah_core::types::repo::{RepoId, parse_repo_sections};
+use inspectah_core::types::repo::parse_repo_sections;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::selinux::{ModuleOrigin, is_boolean_name, is_module_name};
 use inspectah_core::types::units::UnitAction;
@@ -1024,7 +1024,7 @@ fn packages_section_lines(
     let mut demoted: Vec<(&PackageEntry, super::repo_enabling::ServingLoss)> = Vec::new();
     // Packages whose repo the export no longer carries, by that repo: one
     // FIXME each, in the repo-less advice below.
-    let mut lost_routes: Vec<(&PackageEntry, RepoId)> = Vec::new();
+    let mut lost_routes: Vec<(&PackageEntry, inspectah_core::types::repo::SectionId)> = Vec::new();
     // Packages installed from a repo the source host has disabled, by repo.
     // They come from the same selection as the plain list, so a non-leaf
     // dependency is left to dnf here as it is there, and naming and
@@ -1179,10 +1179,13 @@ fn packages_section_lines(
     // Advice for the repo-less packages the export cannot install: a lost
     // route's demotion FIXME, the MANUAL block, the FIXMEs, and a
     // pre-excluded cached RPM's commented block, kept together beside the
-    // install above. A lost route's answer depends on its repo alone, so
-    // it is worked out once per repo.
-    let mut losses: std::collections::BTreeMap<RepoId, super::repo_enabling::ServingLoss> =
-        std::collections::BTreeMap::new();
+    // install above. A lost route's answer depends on its section alone,
+    // so it is worked out once per section, by exact spelling: `[site]`
+    // and `[SITE]` are two repos with two answers.
+    let mut losses: std::collections::BTreeMap<
+        inspectah_core::types::repo::SectionId,
+        super::repo_enabling::ServingLoss,
+    > = std::collections::BTreeMap::new();
     let mut advice: Vec<String> = Vec::new();
     for (pkg, id) in &lost_routes {
         let loss = losses
