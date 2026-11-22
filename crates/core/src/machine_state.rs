@@ -326,12 +326,33 @@ pub const PAYLOAD_READ_CHUNK: usize = 64 * 1024;
 /// every private-key label, are far shorter.
 const PEM_LABEL_MAX: usize = 64;
 
-/// How many base64 characters of key material make a private key. The
-/// smallest private key PEM carries, an Ed25519 or X25519 key in PKCS#8
-/// (48 bytes), is 64 base64 characters; every other key is longer. Fewer
-/// after a marker is a template, a placeholder or text that quotes the
-/// marker.
+/// How many base64 characters of key material make a private key when no
+/// private-key `END` marker closes the body: it is cut off, or other text
+/// ends it. Fewer is a template, a placeholder or text that quotes the
+/// marker; a whole key that short always ends at its `END` marker
+/// ([`CLOSED_KEY_MATERIAL_MIN`]).
 const KEY_MATERIAL_MIN: usize = 64;
+
+/// How many base64 characters of key material make a private key when a
+/// private-key `END` marker closes the body: the smallest complete private
+/// key PEM carries. That is SEC1 (`EC PRIVATE KEY`) on the smallest curves
+/// OpenSSL offers, secp112r1 and secp112r2, whose private key is 14 bytes:
+///
+/// - SEQUENCE header 2 + version 3 + private key 2 + 14 = 21 bytes, 28
+///   base64 characters, with neither curve parameters nor public key, as
+///   OpenSSL's library writes it under `EC_PKEY_NO_PARAMETERS`;
+/// - with the named curve, `[0]` 2 + OID 7 more: 30 bytes, 40 characters,
+///   the smallest `openssl ec -no_public` writes (P-224 is 44 bytes, 60);
+/// - encrypted with RFC 1421 headers, 30 bytes pad to 32: 44 characters;
+/// - with the public key, PKCS#8 (Ed25519 and X25519 are 48 bytes, 64), a
+///   PKCS#1 RSA key (OpenSSL generates 512 bits or more) or any OpenSSH
+///   key: more.
+///
+/// An OpenSSL before 1.1.0 dropped leading zero bytes of the private key,
+/// and two of them still encode in 28 characters. The longest text a
+/// closed marker pair holds in the controls this must not withhold (JSON
+/// and minified JavaScript delimiters, prose, templates) is 3 characters.
+const CLOSED_KEY_MATERIAL_MIN: usize = 28;
 
 /// The run of dashes both PEM markers start with.
 const PEM_DASH_RUN: usize = PEM_DASHES.len();
@@ -386,7 +407,9 @@ pub fn payload_credential(reader: &mut dyn io::Read) -> io::Result<Option<Machin
 /// reads what follows as a PEM body and counts its key material. A body
 /// holding [`KEY_MATERIAL_MIN`] base64 characters is a key, however it
 /// ends: at its `END` line, at another marker, at text that is not body,
-/// or at the end of the stream, so a cut-off key is a key. A marker
+/// or at the end of the stream, so a cut-off key is a key. One that a
+/// private-key `END` marker closes is a key from
+/// [`CLOSED_KEY_MATERIAL_MIN`] characters, the smallest whole key. A marker
 /// followed by anything else, such as a delimiter quoted in JSON, source
 /// code, a binary or prose, is not. A certificate, CRL or parameters
 /// block is never a candidate.
@@ -552,13 +575,15 @@ fn is_base64_byte(b: u8) -> bool {
 /// - then whitespace, and after a closing quote one `,`, `+` or `;`, as a
 ///   string list or concatenation writes it.
 ///
-/// Any other byte, a dash included, ends the body: an `END` line ends it
-/// like anything else. A line that is one run of base64 counts its
-/// characters as key material; a run of 64 base64 characters counts
-/// anywhere, so a key whose lines were joined by spaces or not at all is
-/// still a key. A line of several words counts for nothing, and neither
-/// does text on the marker's own line short of such a run, so prose and
-/// quoted delimiters never add up to a key.
+/// Any other byte ends the body. A dash may start the `END` marker
+/// ([`EndRead`]), which ends it too, judged by a lower minimum. A line that
+/// is one run of base64 counts its characters as key material; a run of
+/// 64 base64 characters counts anywhere, so a key whose lines were joined
+/// by spaces or not at all is still a key. A line of several words counts
+/// for nothing, and neither does text on the marker's own line short of
+/// such a run, so prose and quoted delimiters never add up to a key. Only
+/// at an `END` marker does the last run before it count too, which finds a
+/// short key written on the markers' line.
 #[derive(Debug)]
 struct KeyBody {
     /// Base64 characters on the key lines so far.
@@ -575,6 +600,45 @@ struct KeyBody {
     line_material: usize,
     escape: Escape,
     line: Line,
+    /// Reading what may be the `END` marker, from a dash on.
+    end: Option<EndRead>,
+}
+
+/// A [`KeyBody`]'s text from a dash that ended its content: perhaps the
+/// `-----END <label>-----` marker that closes it.
+#[derive(Debug)]
+struct EndRead {
+    /// The body's key material at the dash, the last run before it
+    /// included.
+    material: usize,
+    /// How many bytes of [`PEM_END`] match.
+    matched: usize,
+    label: LabelRead,
+}
+
+impl EndRead {
+    /// Reads `b` as raw bytes, escapes not decoded. A complete private-key
+    /// `END` marker closes a key from [`CLOSED_KEY_MATERIAL_MIN`]; any
+    /// other text ends the body.
+    fn step(&mut self, b: u8) -> BodyStep {
+        let marker = PEM_END.as_bytes();
+        if self.matched < marker.len() {
+            if marker[self.matched] != b {
+                return BodyStep::Ended;
+            }
+            self.matched += 1;
+            return BodyStep::More;
+        }
+        match self.label.step(b) {
+            LabelStep::More => BodyStep::More,
+            LabelStep::Closed
+                if self.label.is_private_key() && self.material >= CLOSED_KEY_MATERIAL_MIN =>
+            {
+                BodyStep::Key
+            }
+            LabelStep::Closed | LabelStep::Invalid => BodyStep::Ended,
+        }
+    }
 }
 
 impl Default for KeyBody {
@@ -585,6 +649,7 @@ impl Default for KeyBody {
             begin_line: true,
             headers_open: true,
             line_material: 0,
+            end: None,
             escape: Escape::None,
             line: Line::Content {
                 clean: false,
@@ -665,6 +730,9 @@ impl Sym {
 
 impl KeyBody {
     fn step(&mut self, b: u8) -> BodyStep {
+        if let Some(end) = &mut self.end {
+            return end.step(b);
+        }
         match self.unescape(b) {
             Some(Some(sym)) => self.read(sym),
             Some(None) => BodyStep::More,
@@ -818,6 +886,14 @@ impl KeyBody {
                 *header = Header::Value;
                 BodyStep::More
             }
+            (b'-', _) => {
+                self.end = Some(EndRead {
+                    material: self.material.saturating_add(self.line_adds()).max(self.run),
+                    matched: 1,
+                    label: LabelRead::default(),
+                });
+                BodyStep::More
+            }
             _ => BodyStep::Ended,
         }
     }
@@ -871,9 +947,13 @@ impl KeyBody {
     }
 
     /// Whether the body is a key, the stream ending here: its last line
-    /// counts as ended.
+    /// counts as ended, and an `END` marker cut off closes nothing.
     fn is_key_at_end(&self) -> bool {
-        self.material.saturating_add(self.line_adds()) >= KEY_MATERIAL_MIN
+        let material = match &self.end {
+            Some(end) => end.material,
+            None => self.material.saturating_add(self.line_adds()),
+        };
+        material >= KEY_MATERIAL_MIN
     }
 }
 
@@ -2205,12 +2285,34 @@ mod tests {
         text
     }
 
+    /// A throwaway test key with no other use: `openssl ecparam -name
+    /// secp224r1 -genkey -noout | openssl ec -no_public`, a complete SEC1
+    /// key of 44 bytes, 60 base64 characters.
+    const P224_NO_PUBLIC: &str = "-----BEGIN EC PRIVATE KEY-----\n\
+         MCoCAQEEHBxNjpedw/q3FhtEH8z8waY+IPuvElTSh8QdkM2gBwYFK4EEACE=\n\
+         -----END EC PRIVATE KEY-----\n";
+
+    /// A throwaway test key with no other use: `openssl ecparam -name
+    /// secp112r1 -genkey -noout | openssl ec -no_public`, the smallest
+    /// key `openssl ec` writes, 30 bytes, 40 base64 characters.
+    const SECP112R1_NO_PUBLIC: &str = "-----BEGIN EC PRIVATE KEY-----\n\
+         MBwCAQEEDjQhQBBXwaSzSB00/43AoAcGBSuBBAAG\n\
+         -----END EC PRIVATE KEY-----\n";
+
+    /// The same test key with its curve parameters dropped too, as
+    /// OpenSSL's library writes SEC1 under `EC_PKEY_NO_PARAMETERS`: 21
+    /// bytes, 28 base64 characters, the smallest private key PEM carries.
+    const SECP112R1_NO_PARAMETERS: &str = "-----BEGIN EC PRIVATE KEY-----\n\
+         MBMCAQEEDjQhQBBXwaSzSB00/43A\n\
+         -----END EC PRIVATE KEY-----\n";
+
     /// The PEM structure decides, whatever surrounds the block: a key is a
     /// private-key `BEGIN` marker and at least 64 characters of base64
     /// lines, in any whitespace OpenSSL reads, wrapping, escaped or
-    /// quoted line form, however the block ends; a marker with no key
-    /// lines after it is text, however it is quoted and whatever an
-    /// earlier marker left open.
+    /// quoted line form, however the block ends, or at least 28 when a
+    /// private-key `END` marker closes them; a marker with no key lines
+    /// after it is text, however it is quoted and whatever an earlier
+    /// marker left open, and so is a short body nothing closes.
     #[test]
     fn the_verdict_follows_the_pem_structure() {
         let material = key_material(1_600);
@@ -2253,6 +2355,11 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" ")
         );
+        let short = key_material(28);
+        let short_block = wrapped_key("EC PRIVATE KEY", &short, 64, "", "", "\n");
+        let short_lines = |quote: &dyn Fn(&str) -> String, sep: &str| {
+            short_block.lines().map(quote).collect::<Vec<_>>().join(sep)
+        };
 
         let keys: Vec<(&str, String)> = vec![
             ("form feed and vertical tab before line ends", ff_vt),
@@ -2279,6 +2386,51 @@ mod tests {
                 format!(
                     "-----BEGIN PRIVATE KEY-----\n{}\n-----BEGIN CERTIFICATE-----\nMII=\n",
                     key_material(128)
+                ),
+            ),
+            ("P-224 without its public key", P224_NO_PUBLIC.to_string()),
+            (
+                "secp112r1 without its public key",
+                SECP112R1_NO_PUBLIC.to_string(),
+            ),
+            (
+                "secp112r1 without parameters or public key",
+                SECP112R1_NO_PARAMETERS.to_string(),
+            ),
+            ("closed 28 characters", short_block.clone()),
+            (
+                "closed 28 characters, CRLF and indented",
+                wrapped_key("PRIVATE KEY", &short, 7, "  ", " ", "\r\n"),
+            ),
+            (
+                "closed 28 characters, JSON string",
+                format!("{{\"k\": \"{}\"}}", short_block.replace('\n', "\\n")),
+            ),
+            (
+                "closed 28 characters, Python string per line",
+                short_lines(&|l| format!("    \"{l}\\n\""), "\n"),
+            ),
+            (
+                "closed 28 characters, array of lines",
+                format!("[{}]", short_lines(&|l| format!("\"{l}\""), ", ")),
+            ),
+            (
+                "closed 28 characters, commented out",
+                wrapped_key("EC PRIVATE KEY", &short, 64, "# ", "", "\n"),
+            ),
+            (
+                "closed 28 characters on the marker's line",
+                format!(
+                    "KEY=\"-----BEGIN EC PRIVATE KEY----- {short} -----END EC PRIVATE KEY-----\"\n"
+                ),
+            ),
+            (
+                "closed 44 characters with RFC 1421 headers",
+                format!(
+                    "-----BEGIN EC PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
+                     DEK-Info: AES-128-CBC,0123456789ABCDEF0123456789ABCDEF\n\n{}\n\
+                     -----END EC PRIVATE KEY-----\n",
+                    key_material(44)
                 ),
             ),
         ];
@@ -2352,6 +2504,38 @@ mod tests {
                 )
                 .into_bytes(),
             ),
+            (
+                "closed 27 characters",
+                wrapped_key("EC PRIVATE KEY", &key_material(27), 64, "", "", "\n").into_bytes(),
+            ),
+            (
+                "60 characters cut off",
+                format!("-----BEGIN EC PRIVATE KEY-----\n{}\n", key_material(60)).into_bytes(),
+            ),
+            (
+                "60 characters cut off inside the END marker",
+                format!(
+                    "-----BEGIN EC PRIVATE KEY-----\n{}\n-----END EC PRIV",
+                    key_material(60)
+                )
+                .into_bytes(),
+            ),
+            (
+                "60 characters then prose",
+                format!(
+                    "-----BEGIN EC PRIVATE KEY-----\n{}\nEnd of the example.\n",
+                    key_material(60)
+                )
+                .into_bytes(),
+            ),
+            (
+                "60 characters closed by a certificate's END",
+                format!(
+                    "-----BEGIN EC PRIVATE KEY-----\n{}\n-----END CERTIFICATE-----\n",
+                    key_material(60)
+                )
+                .into_bytes(),
+            ),
         ];
         for (name, bytes) in &text {
             for read in [PAYLOAD_READ_CHUNK, 13] {
@@ -2419,16 +2603,60 @@ mod tests {
             "[a-zA-Z0-9 .,;:!?(){}<>\\n]{0,200}"
         }
 
+        /// A block's lines: the `BEGIN` marker, `material` wrapped
+        /// `width` characters a line, then `tail` unless it is empty.
+        fn block_lines(label: &str, material: &str, width: usize, tail: &str) -> Vec<String> {
+            let mut lines = vec![format!("-----BEGIN {label}-----")];
+            for chunk in material.as_bytes().chunks(width) {
+                lines.push(std::str::from_utf8(chunk).expect("base64").to_string());
+            }
+            if !tail.is_empty() {
+                lines.push(tail.to_string());
+            }
+            lines
+        }
+
+        /// `lines` written in `form`, each led by `lead` and followed by
+        /// `trail` where the form has room for them.
+        fn write_block(
+            lines: &[String],
+            form: Form,
+            lead: &str,
+            trail: &str,
+            crlf: bool,
+        ) -> String {
+            let eol = if crlf { "\r\n" } else { "\n" };
+            match form {
+                Form::Plain => lines
+                    .iter()
+                    .map(|l| format!("{lead}{l}{trail}{eol}"))
+                    .collect(),
+                Form::Json => format!(
+                    "{{\"key\": \"{}\"}}",
+                    lines
+                        .iter()
+                        .map(|l| format!("{l}{}\\n", " ".repeat(trail.len())))
+                        .collect::<String>()
+                ),
+                Form::Quoted => lines
+                    .iter()
+                    .map(|l| format!("{lead}\"{l}\\n\"{eol}"))
+                    .collect(),
+            }
+        }
+
         proptest! {
             #![proptest_config(ProptestConfig::with_cases(256))]
 
             /// A key of any size, wrapped at any width, with any leading
             /// and trailing whitespace OpenSSL accepts, in any line form,
             /// with or without its `END` line, anywhere in a file, read in
-            /// any buffer size, is a key.
+            /// any buffer size, is a key. A key under 64 characters,
+            /// down to the 21 bytes of the smallest, is one with its
+            /// `END` line.
             #[test]
             fn a_wrapped_key_is_a_key(
-                key in proptest::collection::vec(any::<u8>(), 48..1_200),
+                key in proptest::collection::vec(any::<u8>(), 21..1_200),
                 label in prop::sample::select(LABELS),
                 width in 1usize..=80,
                 lead in "[ \t]{0,6}",
@@ -2441,32 +2669,48 @@ mod tests {
                 read in 1usize..=4_096,
             ) {
                 let material = base64(&key);
-                let mut lines = vec![format!("-----BEGIN {label}-----")];
-                for chunk in material.as_bytes().chunks(width) {
-                    lines.push(std::str::from_utf8(chunk).expect("base64").to_string());
-                }
-                if end {
-                    lines.push(format!("-----END {label}-----"));
-                }
-                let eol = if crlf { "\r\n" } else { "\n" };
-                let block = match form {
-                    Form::Plain => lines
-                        .iter()
-                        .map(|l| format!("{lead}{l}{trail}{eol}"))
-                        .collect::<String>(),
-                    Form::Json => format!(
-                        "{{\"key\": \"{}\"}}",
-                        lines.iter().map(|l| format!("{l}{}\\n", " ".repeat(trail.len()))).collect::<String>()
-                    ),
-                    Form::Quoted => lines
-                        .iter()
-                        .map(|l| format!("{lead}\"{l}\\n\"{eol}"))
-                        .collect::<String>(),
-                };
+                let end = end || material.len() < KEY_MATERIAL_MIN;
+                let tail = if end { format!("-----END {label}-----") } else { String::new() };
+                let lines = block_lines(label, &material, width, &tail);
+                let block = write_block(&lines, form, &lead, &trail, crlf);
                 let text = format!("{prefix}\n{block}{suffix}");
                 let mut finder = PemKeyFinder::default();
                 let found = text.as_bytes().chunks(read).any(|c| finder.feed(c)) || finder.finish();
                 prop_assert!(found, "{text:?}");
+            }
+
+            /// Fewer than 64 characters of base64 lines after a
+            /// private-key marker, in any line form, are not a key unless
+            /// a private-key `END` marker closes them: not when the file
+            /// ends, inside the `END` marker or after them, nor at other
+            /// text or a certificate's markers.
+            #[test]
+            fn a_short_body_nothing_closes_is_not_a_key(
+                key in proptest::collection::vec(any::<u8>(), 1..=45),
+                label in prop::sample::select(LABELS),
+                width in 1usize..=80,
+                lead in "[ \t]{0,6}",
+                trail in whitespace(),
+                crlf in any::<bool>(),
+                form in prop::sample::select(vec![Form::Plain, Form::Json, Form::Quoted]),
+                tail in prop::sample::select(vec![
+                    "",
+                    "-----END ",
+                    "-----END CERTIFICATE-----",
+                    "-----BEGIN CERTIFICATE-----",
+                    "}",
+                    "...",
+                ]),
+                prefix in text_without_markers(),
+                read in 1usize..=4_096,
+            ) {
+                let material = base64(&key);
+                let tail = if tail == "-----END " { format!("-----END {label}") } else { tail.to_string() };
+                let lines = block_lines(label, &material, width, &tail);
+                let text = format!("{prefix}\n{}", write_block(&lines, form, &lead, &trail, crlf));
+                let mut finder = PemKeyFinder::default();
+                let found = text.as_bytes().chunks(read).any(|c| finder.feed(c)) || finder.finish();
+                prop_assert!(!found, "{text:?}");
             }
 
             /// Text holding private-key markers but no base64 line between

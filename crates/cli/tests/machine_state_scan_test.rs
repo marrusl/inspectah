@@ -134,12 +134,17 @@ fn assert_marker_nowhere(snap: &InspectionSnapshot) {
 
 /// [`assert_marker_nowhere`] over artifacts the caller gathered.
 fn assert_marker_absent(artifacts: &[(String, Vec<u8>)]) {
-    let raw = MARKER.as_bytes().to_vec();
-    let hex: String = MARKER.bytes().map(|b| format!("{b:02x}")).collect();
+    assert_absent(MARKER, artifacts);
+}
+
+/// `secret` is in no artifact, raw, hex or base64.
+fn assert_absent(secret: &str, artifacts: &[(String, Vec<u8>)]) {
+    let raw = secret.as_bytes().to_vec();
+    let hex: String = secret.bytes().map(|b| format!("{b:02x}")).collect();
     let mut needles = vec![raw, hex.into_bytes()];
     for pad in 0..3 {
         let mut padded = vec![b'#'; pad];
-        padded.extend_from_slice(MARKER.as_bytes());
+        padded.extend_from_slice(secret.as_bytes());
         let encoded = base64(&padded);
         // Characters encoding the padding bytes differ by alignment; the
         // stable middle is what any encoding of a file holding the marker
@@ -151,7 +156,7 @@ fn assert_marker_absent(artifacts: &[(String, Vec<u8>)]) {
         for needle in &needles {
             assert!(
                 !bytes.windows(needle.len()).any(|w| w == needle.as_slice()),
-                "{where_} holds the key marker"
+                "{where_} holds {secret}"
             );
         }
     }
@@ -1450,6 +1455,24 @@ fn openssh_key() -> String {
     )
 }
 
+/// A throwaway test key with no other use: `openssl ecparam -name
+/// secp224r1 -genkey -noout | openssl ec -no_public`, a complete SEC1 key
+/// of 60 base64 characters, under the 64 an unclosed body needs.
+const P224_NO_PUBLIC: &str = concat!(
+    "-----BEGIN EC PRIVATE KEY-----\n",
+    "MCoCAQEEHBxNjpedw/q3FhtEH8z8waY+IPuvElTSh8QdkM2gBwYFK4EEACE=\n",
+    "-----END EC PRIVATE KEY-----\n"
+);
+
+/// A throwaway test key with no other use: `openssl ecparam -name
+/// secp112r1 -genkey -noout | openssl ec -no_public`, the smallest key
+/// `openssl ec` writes, 40 base64 characters.
+const SECP112R1_NO_PUBLIC: &str = concat!(
+    "-----BEGIN EC PRIVATE KEY-----\n",
+    "MBwCAQEEDjQhQBBXwaSzSB00/43AoAcGBSuBBAAG\n",
+    "-----END EC PRIVATE KEY-----\n"
+);
+
 /// An ordinary binary payload: not UTF-8, no credential.
 const ORDINARY_BINARY: &[u8] = b"\x7fELF\x02\x01\x01\x00\xff\xfe\x80 ordinary";
 
@@ -1483,8 +1506,9 @@ const MIB: usize = 1 << 20;
 /// after more than a MiB of text, and split across the payload check's
 /// read buffer; keys whose PEM body formatting OpenSSL accepts (form feed
 /// and vertical tab before line ends, one character a line with 64
-/// trailing spaces), and a key in JSON after a quoted decoy marker and
-/// about 64 KiB of padding. And ordinary payloads that must ship
+/// trailing spaces), a key in JSON after a quoted decoy marker and
+/// about 64 KiB of padding, and two real short EC keys written with no
+/// public key, under 64 base64 characters. And ordinary payloads that must ship
 /// unchanged: payloads over a MiB that hold PEM blocks or lead with
 /// indentation, and private-key markers with no key after them, in JSON,
 /// minified JavaScript, a binary and a script's last comment.
@@ -1555,6 +1579,11 @@ fn unmanaged_payloads() -> Vec<(&'static str, Vec<u8>)> {
         ("/srv/data/readme.txt", b"data\n".to_vec()),
         ("/opt/myapp/ff.pem", ff_vt.into_bytes()),
         ("/opt/myapp/rewrapped.pem", rewrapped.into_bytes()),
+        ("/opt/myapp/p224.pem", P224_NO_PUBLIC.as_bytes().to_vec()),
+        (
+            "/opt/myapp/secp112r1.pem",
+            SECP112R1_NO_PUBLIC.as_bytes().to_vec(),
+        ),
         ("/opt/app/delimiters.json", delimiters),
         ("/opt/app/check.sh", script),
         ("/opt/app/bundle.min.js", minified),
@@ -1661,8 +1690,13 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
             ),
             ("/opt/myapp/ff.pem", MachineStateMember::PrivateKeyFile),
             ("/opt/myapp/late.conf", MachineStateMember::PrivateKeyFile),
+            ("/opt/myapp/p224.pem", MachineStateMember::PrivateKeyFile),
             (
                 "/opt/myapp/rewrapped.pem",
+                MachineStateMember::PrivateKeyFile
+            ),
+            (
+                "/opt/myapp/secp112r1.pem",
                 MachineStateMember::PrivateKeyFile
             ),
             ("/opt/myapp/split.txt", MachineStateMember::PrivateKeyFile),
@@ -1759,6 +1793,9 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
         );
     }
     assert_marker_absent(&all);
+    for key in [P224_NO_PUBLIC, SECP112R1_NO_PUBLIC] {
+        assert_absent(key.lines().nth(1).expect("a key line"), &all);
+    }
 
     // The refine half: a collected withheld row, never overridable.
     let view = inspectah_web::adapter::build_web_view(&session);
