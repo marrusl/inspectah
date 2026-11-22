@@ -84,7 +84,7 @@ fn network_permission_denied_degraded() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -139,7 +139,7 @@ fn network_not_found_not_degraded() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -189,7 +189,7 @@ fn containers_podman_json_parse_error_degraded() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -252,7 +252,7 @@ fn containers_all_dirs_missing_complete() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -287,7 +287,7 @@ fn users_passwd_failure_incomplete() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -336,7 +336,7 @@ fn users_shadow_permission_denied_degraded() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -404,7 +404,7 @@ fn mixed_failures_across_inspectors() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,

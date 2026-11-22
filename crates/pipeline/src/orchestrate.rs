@@ -7,7 +7,6 @@ use std::sync::atomic::AtomicBool;
 
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::traits::renderer::RenderContext;
@@ -37,7 +36,7 @@ pub enum PipelineError {
 /// Returns the final snapshot (post-redaction) and the path to the tarball.
 pub fn run_pipeline(
     source: &SourceSystem,
-    executor: &dyn Executor,
+    executor: &inspectah_core::machine_state::ScreenedExecutor<'_>,
     inspectors: &[Box<dyn Inspector>],
     output_dir: &Path,
     hostname: &str,

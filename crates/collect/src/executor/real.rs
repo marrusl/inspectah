@@ -1,5 +1,13 @@
-use inspectah_core::traits::executor::{ExecResult, Executor, FileKind};
+// The real executor is the one place collect may open files and run
+// commands directly: every other module reaches the host through it, and
+// inspectors only through the machine-state read gate around it
+// (`crates/collect/clippy.toml`). Its own tests build it.
+#![allow(clippy::disallowed_methods)]
+
+use inspectah_core::traits::executor::{ExecResult, Executor, FileKind, FileMetadata, HostRead};
 use std::io;
+use std::io::Read;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -17,17 +25,20 @@ const FILE_SIZE_CAP: u64 = 1024 * 1024;
 
 /// Phase 1: live-host only. No --host-root flag — all commands and
 /// file reads target /. Containerized/offline inspection is deferred.
-pub struct RealExecutor;
-
-impl Default for RealExecutor {
-    fn default() -> Self {
-        Self
-    }
+///
+/// The private field keeps it from being built by a struct literal, and
+/// there is no `Default`: [`RealExecutor::new`] is the only constructor,
+/// and `crates/collect/clippy.toml` refuses it in this crate, so no
+/// collector builds an executor that skips the machine-state read gate.
+/// `run_scan` builds the only production one and wraps it at once.
+pub struct RealExecutor {
+    _private: (),
 }
 
 impl RealExecutor {
+    #[allow(clippy::new_without_default)] // no Default on purpose: see the type's doc
     pub fn new() -> Self {
-        Self
+        Self { _private: () }
     }
 }
 
@@ -424,6 +435,27 @@ impl Executor for RealExecutor {
 
     fn resolve_final_target(&self, path: &Path) -> io::Result<PathBuf> {
         std::fs::canonicalize(path)
+    }
+
+    fn file_metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        let meta = std::fs::metadata(path)?;
+        Ok(FileMetadata {
+            mode: meta.mode(),
+            size: meta.size(),
+            dev: meta.dev(),
+            ino: meta.ino(),
+            nlink: meta.nlink(),
+        })
+    }
+}
+
+impl HostRead for RealExecutor {
+    fn read_head(&self, path: &Path, n: usize) -> io::Result<Vec<u8>> {
+        let mut head = Vec::with_capacity(n);
+        std::fs::File::open(path)?
+            .take(n as u64)
+            .read_to_end(&mut head)?;
+        Ok(head)
     }
 }
 

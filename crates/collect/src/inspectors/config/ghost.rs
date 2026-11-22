@@ -18,11 +18,13 @@
 //! The files come from one `rpm -qa` query that prints each packaged
 //! file's flags ([`RPM_FILE_FLAGS_FORMAT`]). [`classify_ghost`] then
 //! decides each path: the branch carries general configuration no other
-//! section owns, and leaves out a file another section records, key
-//! material, machine-state members and files the host generates.
+//! section owns, and leaves out a file another section records and files
+//! the host generates. A machine-state class member (key material, host
+//! identity) goes to the collector like any carried file, which withholds
+//! it or records it as a class entry.
 
 use super::is_selinux_fcontext_store_file;
-use super::walk::{is_dev_artifact, is_excluded_unowned_path, match_unowned_glob};
+use super::walk::{is_dev_artifact, is_excluded_unowned_path};
 use crate::inspectors::rpm::repos;
 use crate::inspectors::{kernelboot, selinux, storage, users};
 use inspectah_core::types::completeness::InspectorId;
@@ -179,17 +181,17 @@ fn take_shell_quoted(text: &str) -> Option<(String, &str)> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GhostClass {
     /// General configuration: collected with its content, unless the
-    /// content turns out to be a credential ([`is_credential_content`]).
+    /// read gate refuses it as a credential by its content.
     Config,
     /// Another section records the file ([`OWNED_ELSEWHERE`]). The config
     /// walk never copies it, so it cannot land in the image beside, or
     /// instead of, that section's own decision.
     OwnedBy(InspectorId),
-    /// Key material by path ([`GHOST_CREDENTIAL_EXACT`]): never opened,
-    /// withheld by name with a scan warning.
-    Credential,
     /// A member of the machine-state class by path
-    /// ([`is_machine_state_member`]): never collected.
+    /// ([`inspectah_core::machine_state::classify_path`]): admitted, so the
+    /// collector withholds it or records it as a class entry. Key
+    /// material at a fixed path (chrony's, bind's and unbound's keys) is
+    /// a class member too.
     MachineState,
     /// Not configuration: written on the host by a tool or at run time
     /// from other input that the image writes again, or excluded by the
@@ -224,26 +226,6 @@ const OWNED_BY_RULE_ELSEWHERE: &[(PathClaim, InspectorId)] =
 
 /// Whether a section claims a path, by the rule it reads files by.
 type PathClaim = fn(&str) -> bool;
-
-/// Ghost files whose content is a shared secret or a private key, at
-/// paths no machine-state rule names. Each is withheld by name and never
-/// opened, so the content sniffs cannot be the only guard.
-///
-/// - `/etc/chrony.keys`: chrony's NTP authentication keys, one `<id>
-///   <hash> HEX:<key>` line each. A `%ghost` of `chrony` on RHEL 10.2
-///   (`cg`); a plain `%config` file on RHEL 9.8.
-/// - `/etc/rndc.key` and `/etc/rndc.conf`: bind's rndc HMAC secret,
-///   written by `rndc-confgen`, which puts the key inline in `rndc.conf`
-///   when run without `-a` (`cng` ghosts of `bind` on both releases).
-/// - `/etc/unbound/unbound_control.key` and `unbound_server.key`: the
-///   private keys `unbound-control-setup` writes (`g` ghosts of `unbound`).
-const GHOST_CREDENTIAL_EXACT: &[&str] = &[
-    "/etc/chrony.keys",
-    "/etc/rndc.key",
-    "/etc/rndc.conf",
-    "/etc/unbound/unbound_control.key",
-    "/etc/unbound/unbound_server.key",
-];
 
 /// Ghost files a tool writes on the host, each from input the image has
 /// or writes again, so the copy would be stale or wrong in the image:
@@ -287,13 +269,10 @@ const GHOST_DEFERRED: &[&str] = &[
 ];
 
 /// Classify a ghost path under `/etc`. Checked in order, so a path two
-/// rules name takes the first: a credential is never treated as anything
-/// else.
+/// rules name takes the first: a class member is never treated as
+/// anything else.
 pub(crate) fn classify_ghost(path: &str) -> GhostClass {
-    if GHOST_CREDENTIAL_EXACT.contains(&path) {
-        return GhostClass::Credential;
-    }
-    if is_machine_state_member(path) {
+    if inspectah_core::machine_state::classify_path(path).is_some() {
         return GhostClass::MachineState;
     }
     if let Some(owner) = owner_elsewhere(path) {
@@ -487,149 +466,6 @@ pub(crate) fn selection_args(authselect_conf: &str) -> Option<Vec<&str>> {
 // `classify_path` and `ConfigCollector::admit` replace this list: the
 // branch hands every surviving candidate to `admit`, which records a
 // member as a withheld or machine-state row instead of skipping it.
-// Two members are defined by content as well as by path: a Kerberos
-// keytab and a whole-file private key (§§ 4.5 and 5.3). A ghost file can
-// sit at any path under `/etc`, so the branch checks its content too
-// ([`is_credential_content`]) and drops such a file before its content
-// is kept. The class's read gate will sniff before reading; this interim
-// check reads the file, then discards it.
-
-/// Exact member paths.
-const MACHINE_STATE_EXACT: &[&str] = &[
-    "/etc/machine-id",
-    "/etc/insights-client/machine-id",
-    "/etc/rhsm/facts/insights-client.facts",
-    "/etc/krb5.keytab",
-    "/etc/chef/client.pem",
-    "/etc/iscsi/initiatorname.iscsi",
-    "/etc/salt/minion_id",
-    "/etc/ipa/default.conf",
-    "/etc/hostname",
-    "/etc/rhsm/syspurpose/syspurpose.json",
-    "/etc/nvme/hostnqn",
-    "/etc/nvme/hostid",
-    "/etc/authselect/switchable-auth",
-    "/etc/grub.d/00_tuned",
-];
-
-/// Member globs, matched as the unowned walk matches its globs.
-const MACHINE_STATE_GLOBS: &[&str] = &[
-    "/etc/insights-client/.*",
-    "/etc/pki/consumer/*",
-    "/etc/pki/entitlement/*",
-    "/etc/lvm/devices/*",
-    "/etc/krb5.keytab.*",
-    "/etc/ssh/ssh_host_*",
-    "/etc/cockpit/ws-certs.d/*.key",
-];
-
-/// Member subtrees, each ending on a path boundary.
-const MACHINE_STATE_PREFIX: &[&str] = &[
-    "/etc/pki/tls/private/",
-    "/etc/pki/libvirt/private/",
-    "/etc/puppetlabs/puppet/ssl/",
-    "/etc/salt/pki/minion/",
-];
-
-/// File-name suffix of a Kerberos keytab anywhere under `/etc`.
-const KEYTAB_SUFFIX: &str = ".keytab";
-
-/// Whether `path` is a member of the machine-state class by its path.
-pub(crate) fn is_machine_state_member(path: &str) -> bool {
-    MACHINE_STATE_EXACT.contains(&path)
-        || MACHINE_STATE_GLOBS
-            .iter()
-            .any(|pattern| match_unowned_glob(pattern, path))
-        || MACHINE_STATE_PREFIX.iter().any(|p| path.starts_with(p))
-        || path
-            .rsplit('/')
-            .next()
-            .is_some_and(|name| name.ends_with(KEYTAB_SUFFIX))
-}
-
-/// The first two bytes of a Kerberos keytab: file format version 1 or 2
-/// (§ 4.5 of the machine-state class spec).
-const KEYTAB_HEADERS: [[u8; 2]; 2] = [[0x05, 0x01], [0x05, 0x02]];
-
-/// What every private-key PEM label ends with: `PRIVATE KEY`, `ENCRYPTED
-/// PRIVATE KEY`, `RSA PRIVATE KEY`, `EC PRIVATE KEY`, `DSA PRIVATE KEY`,
-/// `OPENSSH PRIVATE KEY` (§ 5.3).
-const PRIVATE_KEY_LABEL_SUFFIX: &str = "PRIVATE KEY";
-
-/// PEM labels that may sit beside a private key in a key file (§ 5.3).
-const COMPANION_LABELS: &[&str] = &[
-    "CERTIFICATE",
-    "TRUSTED CERTIFICATE",
-    "X509 CRL",
-    "EC PARAMETERS",
-    "DH PARAMETERS",
-    "DSA PARAMETERS",
-];
-
-/// Lines `openssl pkcs12` writes before each block (§ 5.3), matched at
-/// the start of an unindented line.
-const ENVELOPE_PREFIXES: &[&str] = &["Bag Attributes", "Key Attributes", "subject=", "issuer="];
-
-const PEM_BEGIN: &str = "-----BEGIN ";
-const PEM_END: &str = "-----END ";
-const PEM_DASHES: &str = "-----";
-
-/// Whether a file's content makes it a machine-state credential whatever
-/// its path: a keytab, or a file that is a private key and nothing else.
-pub(crate) fn is_credential_content(content: &str) -> bool {
-    KEYTAB_HEADERS
-        .iter()
-        .any(|header| content.as_bytes().starts_with(header))
-        || is_whole_file_private_key(content)
-}
-
-/// § 5.3: every line outside a PEM block is blank, a `#` comment or
-/// `openssl` envelope metadata, every block's label is a private-key
-/// label or a companion, and at least one block is a private key. Any
-/// other line (an application setting) makes the file configuration, and
-/// a key embedded in it is left to redaction. A block that never ends
-/// counts as a block to the end of the file, so a cut-off key is still a
-/// key.
-pub(crate) fn is_whole_file_private_key(content: &str) -> bool {
-    let mut open_label: Option<&str> = None;
-    let mut has_key = false;
-    for line in content.lines() {
-        let line = line.trim_end_matches('\r');
-        if let Some(label) = open_label {
-            if pem_label(line, PEM_END) == Some(label) {
-                open_label = None;
-            }
-            continue;
-        }
-        if let Some(label) = pem_label(line, PEM_BEGIN) {
-            if label.ends_with(PRIVATE_KEY_LABEL_SUFFIX) {
-                has_key = true;
-            } else if !COMPANION_LABELS.contains(&label) {
-                return false;
-            }
-            open_label = Some(label);
-            continue;
-        }
-        let envelope = line.trim().is_empty()
-            || line.starts_with('#')
-            || line.starts_with([' ', '\t'])
-            || ENVELOPE_PREFIXES.iter().any(|p| line.starts_with(p));
-        if !envelope {
-            return false;
-        }
-    }
-    has_key
-}
-
-/// The label of a `-----BEGIN <label>-----` or `-----END <label>-----`
-/// line, by `marker`.
-fn pem_label<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
-    line.trim()
-        .strip_prefix(marker)?
-        .strip_suffix(PEM_DASHES)
-        .filter(|label| !label.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -772,57 +608,6 @@ setup cn '/etc/hosts'
             assert_eq!(err.record, record, "{out:?}: {err}");
         }
         assert_eq!(parse_ghost_files(""), Ok(GhostQuery::default()));
-    }
-
-    /// § 5.3 by example. A key file is a key whatever its label or
-    /// companions; a key inside a configuration file is configuration.
-    #[test]
-    fn whole_file_private_keys() {
-        let encrypted = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHDBOBgkqhkiG9w0BBQ0w\n-----END ENCRYPTED PRIVATE KEY-----\n";
-        let pkcs12 = "Bag Attributes\n    localKeyID: 01 02\n    friendlyName: server\nsubject=CN = host\nissuer=CN = ca\n-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\nKey Attributes: <No Attributes>\n-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n";
-        let ec = "# generated\n\n-----BEGIN EC PARAMETERS-----\nBggq\n-----END EC PARAMETERS-----\n-----BEGIN EC PRIVATE KEY-----\nMHcC\n-----END EC PRIVATE KEY-----\n";
-        let crlf = "-----BEGIN RSA PRIVATE KEY-----\r\nMIIE\r\n-----END RSA PRIVATE KEY-----\r\n";
-        let cut_off = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl\n";
-        for content in [encrypted, pkcs12, ec, crlf, cut_off] {
-            assert!(is_whole_file_private_key(content), "{content:?}");
-            assert!(is_credential_content(content), "{content:?}");
-        }
-
-        let embedded = "listen = 443\nkey = <<EOF\n-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n";
-        let cert_only = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
-        let other_label = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQIN\n-----END PGP PUBLIC KEY BLOCK-----\n-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n";
-        for content in [embedded, cert_only, other_label, "", "[sssd]\n"] {
-            assert!(!is_whole_file_private_key(content), "{content:?}");
-        }
-    }
-
-    #[test]
-    fn keytab_headers() {
-        assert!(is_credential_content("\u{5}\u{2}\0\0\0\u{3c}"));
-        assert!(is_credential_content("\u{5}\u{1}"));
-        assert!(!is_credential_content("\u{5}\u{3}"));
-        assert!(!is_credential_content("0502"));
-    }
-
-    #[test]
-    fn machine_state_members_by_path() {
-        for (path, member) in [
-            ("/etc/machine-id", true),
-            ("/etc/hostname", true),
-            ("/etc/krb5.keytab", true),
-            ("/etc/httpd/conf/http.keytab", true),
-            ("/etc/ssh/ssh_host_ed25519_key", true),
-            ("/etc/pki/tls/private/localhost.key", true),
-            ("/etc/cockpit/ws-certs.d/0-self-signed.key", true),
-            ("/etc/iscsi/initiatorname.iscsi", true),
-            ("/etc/authselect/switchable-auth", true),
-            ("/etc/sssd/sssd.conf", false),
-            ("/etc/default/grub", false),
-            ("/etc/authselect/authselect.conf", false),
-            ("/etc/cockpit/ws-certs.d/0-self-signed.cert", false),
-        ] {
-            assert_eq!(is_machine_state_member(path), member, "{path}");
-        }
     }
 
     /// Bytes measured in rhel-bootc 9.8 (authselect 1.2.6) and 10.2
@@ -1014,8 +799,8 @@ setup cn '/etc/hosts'
             ("/etc/yum.repos.d/repos.conf", Config),
             ("/etc/yum.repos.d.bak", Config),
             ("/etc/yum.repos.d.bak/x.repo", Config),
-            ("/etc/chrony.keys", Credential),
-            ("/etc/rndc.key", Credential),
+            ("/etc/chrony.keys", MachineState),
+            ("/etc/rndc.key", MachineState),
             ("/etc/machine-id", MachineState),
             ("/etc/krb5.keytab", MachineState),
             ("/etc/authselect/nsswitch.conf", Generated),
@@ -1064,9 +849,8 @@ setup cn '/etc/hosts'
             ("/etc/locale.conf", OwnedBy(InspectorId::KernelBoot)),
             ("/etc/selinux/config", OwnedBy(InspectorId::Selinux)),
             ("/etc/yum.repos.d/redhat.repo", OwnedBy(InspectorId::Rpm)),
-            // Key material.
-            ("/etc/chrony.keys", Credential),
-            // Machine state.
+            // Machine state: key material and host identity.
+            ("/etc/chrony.keys", MachineState),
             ("/etc/hostname", MachineState),
             ("/etc/machine-id", MachineState),
             // Written by augenrules, or the admin's: the host decides.

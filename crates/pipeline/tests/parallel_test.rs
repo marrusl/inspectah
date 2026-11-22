@@ -214,7 +214,7 @@ fn independent_inspectors_run_concurrently() {
     let start = Instant::now();
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -268,7 +268,7 @@ fn rpm_state_flows_to_dependent_inspectors() {
 
     let enriched_ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -299,7 +299,7 @@ fn rpm_failure_propagates() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -355,7 +355,7 @@ fn inspector_panic_contained() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -410,7 +410,7 @@ fn orchestrator_skips_inapplicable() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -485,7 +485,7 @@ fn three_wave_model_rpm_runs_in_wave1() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -550,7 +550,7 @@ fn three_wave_model_enriched_context_api_path() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -579,7 +579,7 @@ fn three_wave_model_enriched_context_api_path() {
     // this enriched context automatically.
     let enriched_ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&extracted_state),
         baseline_data: None,
     };

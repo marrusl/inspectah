@@ -447,7 +447,7 @@ fn scan_like(exec: &MockExecutor) -> InspectionSnapshot {
     ];
     let collected = collect(
         &pkg_source(),
-        exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(exec),
         &inspectors,
         None,
         &NullProgress,

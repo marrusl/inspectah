@@ -56,7 +56,13 @@ impl Inspector for SubscriptionInspector {
         ctx: &InspectionContext<'_>,
         _progress: &dyn ProgressSink,
     ) -> Result<InspectorOutput, InspectorError> {
-        let exec = ctx.executor;
+        // The one named bypass of the machine-state read gate: this
+        // section stores the entitlement and consumer certificates and
+        // keys on purpose (`--preserve subscription --ack-sensitive`),
+        // and is outside snapshot validation.
+        let exec = ctx
+            .executor
+            .bypass(inspectah_core::machine_state::ScreenBypass::SubscriptionSection);
         let mut section = SubscriptionSection::default();
         let mut warnings = Vec::new();
 

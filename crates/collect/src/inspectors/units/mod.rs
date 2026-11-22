@@ -3246,7 +3246,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3297,7 +3297,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3333,7 +3333,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3383,7 +3383,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3432,7 +3432,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3457,7 +3457,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3556,7 +3556,7 @@ mod tests {
         };
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3607,7 +3607,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3665,7 +3665,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3737,7 +3737,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3794,7 +3794,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3847,7 +3847,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3899,7 +3899,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3942,7 +3942,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -3979,7 +3979,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -4086,7 +4086,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -4134,7 +4134,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -4220,7 +4220,7 @@ mod tests {
             };
             let ctx = InspectionContext {
                 source_system: &source,
-                executor: &exec,
+                executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
                 rpm_state: None,
                 baseline_data: None,
             };
@@ -4289,7 +4289,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -4374,7 +4374,7 @@ mod tests {
         let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };

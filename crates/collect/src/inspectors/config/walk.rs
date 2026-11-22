@@ -41,11 +41,13 @@ pub fn is_dev_artifact(path: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Exact paths that are system-generated and should not appear as "unowned".
-const UNOWNED_EXCLUDE_EXACT: &[&str] = &[
-    // Machine identity
-    "/etc/machine-id",
+///
+/// Files that identify one machine are not here: they are members of the
+/// machine-state class (`inspectah_core::machine_state::RULES`), which the
+/// collector records visibly with a provisioning notice. This list is
+/// noise only.
+pub(crate) const UNOWNED_EXCLUDE_EXACT: &[&str] = &[
     "/etc/adjtime",
-    "/etc/hostname",
     "/etc/localtime",
     // useradd/groupadd backups
     "/etc/.pwd.lock",
@@ -84,21 +86,6 @@ const UNOWNED_EXCLUDE_EXACT: &[&str] = &[
     "/etc/kernel/cmdline",
     // systemd standard targets
     "/etc/systemd/system/ctrl-alt-del.target",
-    // NVMe host identity
-    "/etc/nvme/hostnqn",
-    "/etc/nvme/hostid",
-    // Subscription manager / RHSM
-    "/etc/rhsm/syspurpose/syspurpose.json",
-    // Registration identity: insights-client writes these at registration,
-    // not at install, so they are unowned. Copied into the image, every
-    // deployed machine would carry the source host's Insights machine-id
-    // and facts. The rest of each directory stays in the walk: it holds
-    // admin-written config (Insights tags and redaction rules, custom
-    // `*.facts`). The client's other generated files are the dotfiles
-    // excluded in UNOWNED_EXCLUDE_GLOBS. Files the packages own here still
-    // reach the rpm -Va branch, which never consults these lists.
-    "/etc/insights-client/machine-id",
-    "/etc/rhsm/facts/insights-client.facts",
     // OpenSSL configs (not RPM-owned on RHEL 10)
     "/etc/pki/tls/ct_log_list.cnf",
     "/etc/pki/tls/fips_local.cnf",
@@ -131,9 +118,8 @@ const UNOWNED_EXCLUDE_EXACT: &[&str] = &[
 ];
 
 /// Glob patterns for system-generated files (fnmatch-style).
-const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
+pub(crate) const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     "/etc/pki/product-default/*.pem",
-    "/etc/ssh/ssh_host_*",
     "/etc/alternatives/*",
     "/etc/X11/fontpath.d/*",
     "/etc/selinux/*/policy/policy.*",
@@ -147,16 +133,6 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     "/etc/pki/tls/cert.pem",
     "/etc/pki/tls/certs/ca-bundle.crt",
     "/etc/pki/tls/certs/ca-bundle.trust.crt",
-    "/etc/pki/consumer/*",
-    "/etc/pki/entitlement/*",
-    // insights-client's registration and upload state: `.registered`,
-    // `.unregistered`, `.lastupload`, `.last-upload.results`. Apart from
-    // `machine-id` (in UNOWNED_EXCLUDE_EXACT), the state files the client
-    // writes here start with a dot, and the documented admin files
-    // (`tags.yaml`, the redaction YAML) do not. Matching the dot also
-    // covers state files a later client adds, which a named list would
-    // miss; a dot-named admin file here would be dropped too.
-    "/etc/insights-client/.*",
     "/etc/depmod.d/*-dist.conf",
     // NOTE: `/etc/modprobe.d/*-blacklist.conf` was here, "for the distro
     // files". This list is consulted only in the unowned branch of the
@@ -184,7 +160,6 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     "/etc/systemd/sleep.conf.d/*",
     "/etc/lvm/archive/*",
     "/etc/lvm/backup/*",
-    "/etc/lvm/devices/*",
     "/etc/firewalld/zones/*.xml.old",
     "/etc/firewalld/*.xml.old",
     "/etc/NetworkManager/system-connections/*.nmconnection.bak",
@@ -195,7 +170,7 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
 /// Subtree prefixes for system-generated noise.
 /// These are package-manager internals, desktop/session infrastructure, and
 /// other runtime-generated trees that are never migration-relevant.
-const UNOWNED_EXCLUDE_PREFIX: &[&str] = &[
+pub(crate) const UNOWNED_EXCLUDE_PREFIX: &[&str] = &[
     // Package manager internals — dnf/yum configs from RPM scriptlets,
     // irrelevant on image-mode systems where dnf doesn't run at runtime
     "/etc/yum/",
@@ -289,88 +264,11 @@ fn is_systemd_unit_symlink(exec: &dyn Executor, path: &str) -> bool {
             .is_ok_and(|content| content.is_empty())
 }
 
-/// Matches a path against a glob pattern.
-///
-/// Unlike standard filepath matching, patterns ending in `/*` match any depth
-/// below the directory. For patterns with wildcards in intermediate segments
-/// (e.g., `/etc/selinux/*/contexts/*`), matches segment-by-segment.
+/// Matches a path against a glob pattern: the machine-state class's
+/// matcher, so the silent lists and the class rules match alike
+/// ([`inspectah_core::machine_state::match_glob`]).
 pub(super) fn match_unowned_glob(pattern: &str, path: &str) -> bool {
-    // Fast path: try standard single-level glob first
-    if glob_match_simple(pattern, path) {
-        return true;
-    }
-
-    // For patterns like "/etc/dir/*", match any path under /etc/dir/
-    if let Some(prefix) = pattern.strip_suffix('*')
-        && path.starts_with(prefix)
-    {
-        return true;
-    }
-
-    // Segment-by-segment matching for intermediate wildcards
-    let pat_parts: Vec<&str> = pattern.split('/').collect();
-    let path_parts: Vec<&str> = path.split('/').collect();
-    match_parts(&pat_parts, &path_parts)
-}
-
-/// Matches path segments against pattern segments.
-///
-/// A `*` in a non-terminal position matches exactly one segment.
-/// In the terminal position, it matches one or more remaining segments.
-fn match_parts(pat: &[&str], path: &[&str]) -> bool {
-    let mut pi = 0;
-    let mut qi = 0;
-    while pi < pat.len() && qi < path.len() {
-        // Terminal * matches rest
-        if pi == pat.len() - 1 && pat[pi] == "*" {
-            return true;
-        }
-        if !glob_match_simple(pat[pi], path[qi]) {
-            return false;
-        }
-        pi += 1;
-        qi += 1;
-    }
-    pi == pat.len() && qi == path.len()
-}
-
-/// Simple glob matching for a single path segment.
-///
-/// Supports `*` (match any sequence) and `?` (match single char).
-/// This is a simplified implementation sufficient for our glob patterns.
-fn glob_match_simple(pattern: &str, text: &str) -> bool {
-    let pat: Vec<char> = pattern.chars().collect();
-    let txt: Vec<char> = text.chars().collect();
-    glob_match_chars(&pat, &txt)
-}
-
-fn glob_match_chars(pat: &[char], txt: &[char]) -> bool {
-    let mut pi = 0;
-    let mut ti = 0;
-    let mut star_pi = usize::MAX;
-    let mut star_ti = 0;
-
-    while ti < txt.len() {
-        if pi < pat.len() && (pat[pi] == '?' || pat[pi] == txt[ti]) {
-            pi += 1;
-            ti += 1;
-        } else if pi < pat.len() && pat[pi] == '*' {
-            star_pi = pi;
-            star_ti = ti;
-            pi += 1;
-        } else if star_pi != usize::MAX {
-            pi = star_pi + 1;
-            star_ti += 1;
-            ti = star_ti;
-        } else {
-            return false;
-        }
-    }
-
-    while pi < pat.len() && pat[pi] == '*' {
-        pi += 1;
-    }
-    pi == pat.len()
+    inspectah_core::machine_state::match_glob(pattern, path)
 }
 
 // ---------------------------------------------------------------------------
@@ -587,8 +485,10 @@ mod tests {
     #[test]
     fn test_is_excluded_unowned_exact() {
         let exec = MockExecutor::new();
-        assert!(is_excluded_unowned(&exec, "/etc/machine-id"));
-        assert!(is_excluded_unowned(&exec, "/etc/hostname"));
+        // Identity files are machine-state class members, recorded
+        // visibly, not silent exclusions.
+        assert!(!is_excluded_unowned(&exec, "/etc/machine-id"));
+        assert!(!is_excluded_unowned(&exec, "/etc/hostname"));
         assert!(is_excluded_unowned(&exec, "/etc/localtime"));
         assert!(is_excluded_unowned(&exec, "/etc/adjtime"));
         assert!(is_excluded_unowned(&exec, "/etc/passwd-"));
@@ -613,7 +513,7 @@ mod tests {
             "/etc/NetworkManager/system-connections/eth0.nmconnection.bak"
         ));
         assert!(is_excluded_unowned(&exec, "/etc/alternatives/java"));
-        assert!(is_excluded_unowned(
+        assert!(!is_excluded_unowned(
             &exec,
             "/etc/lvm/devices/system.devices"
         ));

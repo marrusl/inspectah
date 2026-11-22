@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use inspectah_core::baseline::BaselineData;
+use inspectah_core::machine_state::ScreenedExecutor;
 use inspectah_core::pipeline::{Collected, Pipeline};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::Executor;
@@ -29,7 +30,7 @@ use inspectah_core::types::warnings::{Warning, WarningSeverity};
 /// Returns a `Pipeline<Collected>` containing the populated snapshot.
 pub fn collect(
     source: &SourceSystem,
-    executor: &dyn Executor,
+    executor: &ScreenedExecutor<'_>,
     inspectors: &[Box<dyn Inspector>],
     baseline: Option<&BaselineData>,
     progress: &dyn ProgressSink,
@@ -709,7 +710,7 @@ mod tests {
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -739,7 +740,7 @@ mod tests {
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -769,7 +770,7 @@ mod tests {
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -794,7 +795,7 @@ mod tests {
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -843,7 +844,7 @@ mod tests {
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1039,7 +1040,7 @@ mod tests {
             };
             let pipeline = collect(
                 &source,
-                &exec,
+                &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
                 &[],
                 None,
                 &NullProgress,
@@ -1073,7 +1074,7 @@ mod tests {
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1097,7 +1098,7 @@ mod tests {
             vec![Box::new(RpmInspector::new()), Box::new(FailingInspector)];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1130,7 +1131,7 @@ mod tests {
             vec![Box::new(RpmInspector::new()), Box::new(DegradedInspector)];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1168,7 +1169,7 @@ mod tests {
             vec![Box::new(RpmInspector::new()), Box::new(SkippedInspector)];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1196,7 +1197,7 @@ mod tests {
         ];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1289,7 +1290,7 @@ mod tests {
             vec![Box::new(RpmInspector::new()), Box::new(HintingInspector)];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1321,7 +1322,7 @@ mod tests {
         ];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1436,7 +1437,7 @@ mod tests {
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1478,7 +1479,7 @@ mod tests {
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
         let _pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1507,7 +1508,7 @@ mod tests {
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1632,7 +1633,7 @@ mod tests {
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1760,7 +1761,7 @@ mod tests {
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
         let _pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1886,7 +1887,7 @@ mod tests {
         ];
         let pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &NullProgress,
@@ -1978,7 +1979,7 @@ mod tests {
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
         let _pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &progress,
@@ -2015,7 +2016,7 @@ mod tests {
             vec![Box::new(RpmInspector::new()), Box::new(SkippedInspector)];
         let _pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &progress,
@@ -2046,7 +2047,7 @@ mod tests {
             vec![Box::new(RpmInspector::new()), Box::new(FailingInspector)];
         let _pipeline = collect(
             &source,
-            &exec,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             &inspectors,
             None,
             &progress,
@@ -2118,7 +2119,14 @@ mod tests {
             Box::new(CancellingRpmInspector::new(cancelled.clone())),
             Box::new(UnitsInspector::new()),
         ];
-        let pipeline = collect(&source, &exec, &inspectors, None, &progress, &cancelled);
+        let pipeline = collect(
+            &source,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+            &inspectors,
+            None,
+            &progress,
+            &cancelled,
+        );
 
         // RPM completed in wave 1 (before flag was set)
         assert!(
@@ -2159,7 +2167,14 @@ mod tests {
             Box::new(RpmInspector::new()),
             Box::new(UnitsInspector::new()),
         ];
-        let pipeline = collect(&source, &exec, &inspectors, None, &progress, &cancelled);
+        let pipeline = collect(
+            &source,
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+            &inspectors,
+            None,
+            &progress,
+            &cancelled,
+        );
 
         // Both waves should complete normally
         assert!(

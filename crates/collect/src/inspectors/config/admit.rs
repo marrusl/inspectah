@@ -67,9 +67,9 @@ pub(super) enum Refusal {
     AliasLeavesEtc(String),
     /// A directory above the file is a symlink, and the file it names,
     /// this path, or the requested spelling, is one the section never
-    /// carries at its own path ([`classify_ghost`] is not `Config`): key
-    /// material, machine identity, another section's file, a generated
-    /// file.
+    /// carries at its own path: another section's file, a generated file.
+    /// A machine-state member is not refused here: the collector's read
+    /// gate withholds it under either name.
     AliasToWithheld(String),
 }
 
@@ -137,7 +137,7 @@ pub(super) fn locate(exec: &dyn Executor, path: &str) -> Result<Located, Refusal
     let physical = normalize_etc_path(&named).ok_or(Refusal::AliasLeavesEtc(named))?;
     if [&normalized, &physical]
         .iter()
-        .any(|spelling| classify_ghost(spelling) != GhostClass::Config)
+        .any(|spelling| !carried_at_own_path(spelling))
     {
         return Err(Refusal::AliasToWithheld(physical));
     }
@@ -145,6 +145,17 @@ pub(super) fn locate(exec: &dyn Executor, path: &str) -> Result<Located, Refusal
         path: normalized,
         physical,
     })
+}
+
+/// Whether the section records a file at this path itself: general
+/// configuration, or a machine-state class member, which the collector
+/// withholds or records as a class entry. Another section's file, a
+/// generated file and a deferred one are not.
+fn carried_at_own_path(path: &str) -> bool {
+    matches!(
+        classify_ghost(path),
+        GhostClass::Config | GhostClass::MachineState
+    )
 }
 
 /// What reading a located path returns.
@@ -169,8 +180,7 @@ pub(super) enum Unreadable {
     /// A link that resolves outside `/etc`, to this path.
     LinkLeavesEtc(String),
     /// A link to a file under `/etc` the section never carries at its own
-    /// path ([`classify_ghost`] is not `Config` there): key material,
-    /// machine identity, another section's file, or a generated file.
+    /// path: another section's file, or a generated file.
     LinkToWithheld(String),
 }
 
@@ -206,7 +216,7 @@ pub(super) fn readable(exec: &dyn Executor, path: &str) -> Result<Readable, Unre
                     Err(Unreadable::LinkLeavesEtc(target))
                 };
             }
-            if classify_ghost(&target) == GhostClass::Config {
+            if carried_at_own_path(&target) {
                 Ok(Readable::ThroughLink(target))
             } else {
                 Err(Unreadable::LinkToWithheld(target))
@@ -313,8 +323,16 @@ mod tests {
                 "/etc/app/state/sub/x",
                 located("/etc/app/state/sub/x", "/etc/sub/x"),
             ),
-            ("/etc/app/state/chrony.keys", withheld("/etc/chrony.keys")),
-            ("/etc/app/state/machine-id", withheld("/etc/machine-id")),
+            // A machine-state member is admitted under either name: the
+            // collector's read gate withholds it as a visible row.
+            (
+                "/etc/app/state/chrony.keys",
+                located("/etc/app/state/chrony.keys", "/etc/chrony.keys"),
+            ),
+            (
+                "/etc/app/state/machine-id",
+                located("/etc/app/state/machine-id", "/etc/machine-id"),
+            ),
             ("/etc/app/state/shadow", withheld("/etc/shadow")),
             (
                 "/etc/repo-alias/redhat.repo",
@@ -387,13 +405,15 @@ mod tests {
                 "/etc/to-shadow",
                 Err(Unreadable::LinkToWithheld("/etc/shadow".into())),
             ),
+            // A link to a machine-state member: the gate, not this
+            // check, withholds it by its resolved path.
             (
                 "/etc/to-keys",
-                Err(Unreadable::LinkToWithheld("/etc/chrony.keys".into())),
+                Ok(Readable::ThroughLink("/etc/chrony.keys".into())),
             ),
             (
                 "/etc/to-hostkey",
-                Err(Unreadable::LinkToWithheld(
+                Ok(Readable::ThroughLink(
                     "/etc/ssh/ssh_host_ed25519_key".into(),
                 )),
             ),
@@ -405,7 +425,7 @@ mod tests {
             ("/etc/to-app", true),
             ("/etc/masked", true),
             ("/etc/to-shadow", false),
-            ("/etc/to-keys", false),
+            ("/etc/to-keys", true),
             ("/etc/to-root", false),
             ("/etc/app.fifo", false),
             ("/etc/to-fifo", false),

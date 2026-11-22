@@ -202,7 +202,7 @@ fn test_config_inspector_happy_path() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -314,7 +314,7 @@ fn test_config_inspector_excludes_selinux_fcontext_store_file() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -365,7 +365,7 @@ fn a_content_changed_rpm_config_is_included_at_collect() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -432,7 +432,7 @@ fn a_config_whose_content_was_not_captured_is_an_advisory() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -528,7 +528,7 @@ fn a_modernization_match_keeps_the_capture_failure() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -587,7 +587,7 @@ fn test_config_inspector_no_etc() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -616,7 +616,7 @@ fn test_config_inspector_degraded_permissions() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -649,7 +649,7 @@ fn test_config_inspector_json_roundtrip() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -715,7 +715,7 @@ fn pam_audit_and_tuned_are_config_entries() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -812,7 +812,7 @@ fn an_authselect_symlink_is_not_a_local_pam_file() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -890,7 +890,7 @@ fn kernel_module_and_initramfs_directories_are_config_entries() {
     let rpm_state = RpmState::default();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -1037,7 +1037,7 @@ fn an_rpm_owned_link_re_pointed_to_dev_null_is_a_modified_config() {
         let source = pkg_source();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1124,7 +1124,7 @@ fn a_zero_length_unit_file_under_etc_systemd_system_is_no_config_entry() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -1260,7 +1260,7 @@ fn a_ghost_config_on_the_host_is_collected_and_host_identity_is_not() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -1274,18 +1274,55 @@ fn a_ghost_config_on_the_host_is_collected_and_host_identity_is_not() {
     let paths: Vec<&str> = section.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(
         paths,
-        vec!["/etc/myapp/edited.conf", "/etc/sssd/sssd.conf"],
-        "only the ghost sssd.conf and the rpm -Va row"
+        vec![
+            "/etc/hostname",
+            "/etc/myapp/edited.conf",
+            "/etc/sssd/sssd.conf"
+        ],
+        "the ghost sssd.conf, the rpm -Va row and the hostname as a class entry"
     );
 
-    let sssd = &section.files[1];
+    // Collect case 7: the hostname is a carriable member, held and excluded
+    // by default; the machine-id, the SSH host key and the TLS key are
+    // withheld rows, never opened.
+    assert_eq!(
+        section.files[0].disposition,
+        FindingKind::MachineState {
+            member: inspectah_core::types::machine_state::CarriableMember::Hostname,
+            include: false,
+        }
+    );
+    let withheld: Vec<(&str, &str)> = section
+        .withheld
+        .iter()
+        .map(|w| (w.path.as_str(), w.member.as_str()))
+        .collect();
+    assert_eq!(
+        withheld,
+        vec![
+            ("/etc/machine-id", "machine_id"),
+            ("/etc/pki/tls/private/localhost.key", "private_key_file"),
+            ("/etc/ssh/ssh_host_ed25519_key", "ssh_host_key"),
+        ]
+    );
+    for (path, _) in &withheld {
+        assert!(!exec.was_read(path), "{path} was opened");
+    }
+    assert!(
+        section
+            .withheld
+            .iter()
+            .all(|w| w.kind == ConfigFileKind::RpmOwnedModified)
+    );
+
+    let sssd = &section.files[2];
     assert_eq!(sssd.kind, ConfigFileKind::RpmOwnedModified);
     assert_eq!(sssd.package.as_deref(), Some("sssd-common"));
     assert_eq!(sssd.rpm_va_flags, None, "rpm never verified a ghost file");
     assert!(sssd.content.contains("id_provider = ad"));
     assert!(sssd.disposition.is_included());
 
-    let edited = &section.files[0];
+    let edited = &section.files[1];
     assert_eq!(edited.rpm_va_flags.as_deref(), Some("S.5....T."));
 }
 
@@ -1302,7 +1339,7 @@ fn a_failed_ghost_query_degrades_the_section() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -1366,7 +1403,7 @@ myapp g '/etc/myapp/real.conf'
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -1403,7 +1440,7 @@ fn a_ghost_path_with_a_newline_is_a_warning_and_its_prefix_is_not_read() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -1438,7 +1475,7 @@ fn unreadable_ghost_query_output_degrades_the_section() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -1484,7 +1521,7 @@ fn a_ghost_file_rpm_reports_for_metadata_only_is_still_collected() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -1510,7 +1547,7 @@ fn a_ghost_file_rpm_reports_for_metadata_only_is_still_collected() {
 /// section's (and larger than the config read limit on RHEL 9.8, so
 /// reading it degraded the section), the SELinux config the SELinux
 /// section's. `/etc/chrony.keys` is key material: it is never opened,
-/// and a warning names it. Each of these is registered as unreadable
+/// and it is a withheld machine-state row. Each of these is registered as unreadable
 /// (`PermissionDenied`), so a read of any would have degraded the section
 /// or left an advisory row; the inspector succeeds with neither.
 #[test]
@@ -1547,7 +1584,7 @@ cockpit-ws g '/etc/cockpit/disallowed-users'
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -1561,14 +1598,16 @@ cockpit-ws g '/etc/cockpit/disallowed-users'
     let paths: Vec<&str> = section.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, vec!["/etc/cockpit/disallowed-users"], "the control");
 
-    let withheld: Vec<&str> = output
-        .warnings
-        .iter()
-        .map(|w| w.message.as_str())
-        .filter(|m| m.contains("holds key material"))
-        .collect();
-    assert_eq!(withheld.len(), 1, "{:?}", output.warnings);
-    assert!(withheld[0].starts_with("/etc/chrony.keys "), "{withheld:?}");
+    // The key file is a machine-state class row: withheld by its path,
+    // never opened (a read would have hit the injected error), with its
+    // mode and size from stat.
+    let withheld: Vec<&str> = section.withheld.iter().map(|w| w.path.as_str()).collect();
+    assert_eq!(withheld, vec!["/etc/chrony.keys"]);
+    assert_eq!(
+        section.withheld[0].member,
+        inspectah_core::types::machine_state::MachineStateMember::ServiceKey
+    );
+    assert!(!exec.was_read("/etc/chrony.keys"));
 }
 
 /// A FIFO, socket or device the unowned walk finds, or a link to one, is
@@ -1592,7 +1631,7 @@ fn the_unowned_walk_never_opens_a_special_file() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };

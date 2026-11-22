@@ -39,6 +39,19 @@ fn entry<'a>(snap: &'a InspectionSnapshot, path: &str) -> Option<&'a ConfigFileE
         .find(|f| f.path == path)
 }
 
+/// The withheld machine-state row at `path`.
+fn withheld<'a>(
+    snap: &'a InspectionSnapshot,
+    path: &str,
+) -> Option<&'a inspectah_core::types::machine_state::WithheldConfigEntry> {
+    snap.config
+        .as_ref()
+        .expect("the config section is present")
+        .withheld
+        .iter()
+        .find(|w| w.path == path)
+}
+
 fn containerfile(tree: &Path) -> String {
     std::fs::read_to_string(tree.join("Containerfile")).expect("the export has a Containerfile")
 }
@@ -436,6 +449,11 @@ const KEYTAB_CONTENT: &str = "\u{5}\u{2}\0\0\0\u{3c}\0\u{1}\0\u{b}EXAMPLE.COM";
 /// keytab, is a machine-state credential at any path. Neither path is on
 /// the class's path list, so only the content can say so: neither reaches
 /// the snapshot or either export.
+///
+/// The same files under a directory alias (`/etc/myapp/live -> .`), which
+/// the unowned walk enters, are refused by the read gate the same way:
+/// every branch reads through it, so the alias spelling is a withheld row
+/// and carries no byte of either credential.
 #[test]
 fn ghost_files_holding_a_credential_by_content_are_never_collected() {
     let snap = scan(
@@ -445,12 +463,24 @@ fn ghost_files_holding_a_credential_by_content_are_never_collected() {
             .ghost("myapp", "g", "/etc/myapp/service.kt")
             .file("/etc/myapp/service.kt", KEYTAB_CONTENT)
             .ghost("myapp", "cng", "/etc/myapp/app.conf")
-            .file("/etc/myapp/app.conf", "listen = 8443\n"),
+            .file("/etc/myapp/app.conf", "listen = 8443\n")
+            .link("/etc/myapp/live", "."),
     );
 
     assert!(entry(&snap, "/etc/myapp/app.conf").is_some(), "the control");
-    for path in ["/etc/myapp/server.pem", "/etc/myapp/service.kt"] {
+    for (path, member) in [
+        ("/etc/myapp/server.pem", "private_key_file"),
+        ("/etc/myapp/service.kt", "kerberos_keytab"),
+        ("/etc/myapp/live/server.pem", "private_key_file"),
+        ("/etc/myapp/live/service.kt", "kerberos_keytab"),
+    ] {
         assert!(entry(&snap, path).is_none(), "{path} is not collected");
+        let row = withheld(&snap, path).unwrap_or_else(|| panic!("{path} is withheld"));
+        assert_eq!(row.member.as_str(), member, "{path}");
+    }
+    for (where_, text) in everywhere(&snap) {
+        assert!(!text.contains("ghostkeymaterial"), "{where_}");
+        assert!(!text.contains("EXAMPLE.COM"), "{where_}");
     }
     let json = serde_json::to_string(&snap).expect("the snapshot serializes");
     assert!(!json.contains("ghostkeymaterial"));
@@ -697,7 +727,7 @@ fn a_custom_profile_missing_a_file_is_a_fixme_not_a_select_line() {
 /// `redhat.repo` one of `subscription-manager`. Storage and the repos
 /// section own them, so the ghost branch never copies either into the
 /// image. `/etc/chrony.keys` (a ghost of `chrony` on RHEL 10.2) is key
-/// material: withheld, named by a scan warning, its content nowhere.
+/// material: a withheld machine-state row, its content nowhere.
 #[test]
 fn ghost_fstab_repo_and_key_files_are_never_copied_on_either_export_path() {
     const CHRONY_KEY: &str = "HEX:4D6F6E6B65795365637265744B6579";
@@ -730,11 +760,8 @@ fn ghost_fstab_repo_and_key_files_are_never_copied_on_either_export_path() {
         "the key is nowhere in the snapshot"
     );
     assert!(
-        snap.warnings
-            .iter()
-            .any(|w| w.message.starts_with("/etc/chrony.keys holds key material")),
-        "{:?}",
-        snap.warnings
+        withheld(&snap, "/etc/chrony.keys").is_some(),
+        "the key file is a withheld machine-state row"
     );
 
     for (path, tree) in both_exports(&snap) {
@@ -792,12 +819,14 @@ fn everywhere(snap: &InspectionSnapshot) -> Vec<(String, String)> {
 /// Paths under `/etc` that name a file elsewhere through a directory
 /// link are never read, whatever rule the file they lead to falls under:
 /// a credential (`chrony.keys`), host identity (`machine-id`), another
-/// section's file (`shadow`), and a file outside `/etc`. Each is a
-/// packaged `%ghost` path, so each is named by a scan warning. A final
-/// link is read only to carried configuration under `/etc`: a modified
-/// packaged file re-pointed at the key file is withheld with a warning,
-/// an unowned link to a machine-state file is left out, and one leaving
-/// `/etc` is a content-free advisory.
+/// section's file (`shadow`), and a file outside `/etc`. A credential or
+/// identity file is a machine-state member under either name: the read
+/// gate withholds it by its resolved path, and it is a withheld row under
+/// the alias. Another section's file and one outside `/etc` are packaged
+/// `%ghost` paths named by a scan warning. A final link to a member, a
+/// modified packaged file re-pointed at the key file or an unowned link
+/// to the Insights id, is a withheld row too, and a link leaving `/etc`
+/// is a content-free advisory.
 #[test]
 fn a_path_through_a_linked_directory_or_to_a_withheld_file_is_never_read() {
     let snap = scan(
@@ -833,12 +862,17 @@ fn a_path_through_a_linked_directory_or_to_a_withheld_file_is_never_read() {
             assert!(!text.contains(secret), "{where_}: {secret}");
         }
     }
-    for path in [
-        "/etc/app/state/chrony.keys",
-        "/etc/app/state/machine-id",
-        "/etc/app/state/shadow",
-        "/etc/app/data/token",
+    for (path, member) in [
+        ("/etc/app/state/chrony.keys", "service_key"),
+        ("/etc/app/state/machine-id", "machine_id"),
+        ("/etc/app/app.conf", "service_key"),
+        ("/etc/app/insights-id", "insights_state"),
     ] {
+        assert!(entry(&snap, path).is_none(), "{path} is not a config entry");
+        let row = withheld(&snap, path).unwrap_or_else(|| panic!("{path} is withheld"));
+        assert_eq!(row.member.as_str(), member, "{path}");
+    }
+    for path in ["/etc/app/state/shadow", "/etc/app/data/token"] {
         assert!(entry(&snap, path).is_none(), "{path} is not a config entry");
         assert!(
             snap.warnings.iter().any(|w| w.message.starts_with(&format!(
@@ -848,15 +882,6 @@ fn a_path_through_a_linked_directory_or_to_a_withheld_file_is_never_read() {
             snap.warnings
         );
     }
-    assert!(entry(&snap, "/etc/app/app.conf").is_none());
-    assert!(
-        snap.warnings.iter().any(|w| w
-            .message
-            .starts_with("/etc/app/app.conf is a symbolic link to /etc/chrony.keys")),
-        "{:?}",
-        snap.warnings
-    );
-    assert!(entry(&snap, "/etc/app/insights-id").is_none());
     let root_link = entry(&snap, "/etc/app/root-token").expect("the link is an advisory");
     assert!(root_link.content.is_empty());
     assert!(!root_link.disposition.is_included(), "{root_link:?}");

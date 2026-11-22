@@ -3,18 +3,19 @@ use inspectah_core::types::{AdvisoryType, FindingKind};
 pub(crate) mod admit;
 mod audit_rules;
 pub mod classify;
+mod collector;
 mod ghost;
 pub mod rpmva;
 pub mod walk;
 
-use classify::classify_config_path;
+use collector::{Candidate, ConfigCollector};
 use inspectah_core::traits::executor::{Executor, FileKind};
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
-use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::config::{ConfigFileKind, ConfigSection};
 use inspectah_core::types::redaction::RedactionHint;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
@@ -82,11 +83,12 @@ impl Inspector for ConfigInspector {
         let inspector_id = InspectorId::Config;
         let mut warnings: Vec<Warning> = Vec::new();
         let hints: Vec<RedactionHint> = Vec::new();
-        let mut degraded_reasons: Vec<String> = Vec::new();
+        let mut collector = ConfigCollector::new(exec);
 
         // Branch for ostree/bootc systems
         if is_ostree_system(ctx.source_system) {
-            let section = run_ostree_config(exec, rpm_state, &mut warnings);
+            run_ostree_config(exec, &mut collector);
+            let (section, _) = collector.into_parts();
             return Ok(InspectorOutput {
                 section: SectionData::Config(section),
                 warnings,
@@ -94,12 +96,10 @@ impl Inspector for ConfigInspector {
             });
         }
 
-        let mut section = ConfigSection::default();
-
         // Early exit if /etc doesn't exist (use read_dir since /etc is a directory)
         if exec.read_dir(Path::new("/etc")).is_err() && !exec.file_exists(Path::new("/etc")) {
             return Ok(InspectorOutput {
-                section: SectionData::Config(section),
+                section: SectionData::Config(ConfigSection::default()),
                 warnings,
                 redaction_hints: hints,
             });
@@ -169,29 +169,19 @@ impl Inspector for ConfigInspector {
                 continue;
             }
 
-            let (content, disposition) = match capture_config(exec, path, &mut degraded_reasons) {
-                Ok(captured) => captured,
+            let candidate = Candidate {
+                package: *package,
+                rpm_va_flags: Some(flags),
+                ..Candidate::new(path, kind)
+            };
+            match collector.admit(candidate) {
+                Ok(_) => {}
                 Err(
                     admit::Unreadable::LinkLeavesEtc(target)
                     | admit::Unreadable::LinkToWithheld(target),
-                ) => {
-                    warnings.push(withheld_link_warning(path, &target));
-                    continue;
-                }
-                Err(admit::Unreadable::Special | admit::Unreadable::NotAFile) => continue,
-            };
-
-            section.files.push(ConfigFileEntry {
-                path: path.to_string(),
-                kind,
-                category: classify_config_path(path),
-                content,
-                rpm_va_flags: Some(flags.to_string()),
-                package: package.map(|p| p.to_string()),
-                diff_against_rpm: None, // Phase 3
-                disposition,
-                ..Default::default()
-            });
+                ) => warnings.push(withheld_link_warning(path, &target)),
+                Err(admit::Unreadable::Special | admit::Unreadable::NotAFile) => {}
+            }
         }
         progress.emit(ProgressEvent::StepFinished {
             inspector: inspector_id,
@@ -202,28 +192,15 @@ impl Inspector for ConfigInspector {
         // 1b) `%ghost` files: owned, so the walk below skips them, and
         //     their content never verified, so rpm -Va above reports at
         //     most a metadata change, which it drops as unmodified.
-        collect_ghost_configs(
-            exec,
-            rpm_state,
-            &dhcp_paths,
-            &mut section,
-            &mut degraded_reasons,
-            &mut warnings,
-        );
-        authselect_edit_advisories(
-            exec,
-            rpm_state,
-            &mut section,
-            &mut degraded_reasons,
-            &mut warnings,
-        );
+        collect_ghost_configs(exec, rpm_state, &dhcp_paths, &mut collector, &mut warnings);
+        authselect_edit_advisories(exec, rpm_state, &mut collector, &mut warnings);
 
         // 2) Unowned files: in /etc but not RPM-owned
         progress.emit(ProgressEvent::StepStarted {
             inspector: inspector_id,
             step: StepId::WalkingFilesystem,
         });
-        match walk_etc_with_reasons(exec, "/etc", &mut degraded_reasons) {
+        match walk_etc_with_reasons(exec, "/etc", collector.degraded()) {
             Ok(files) => {
                 for rel_path in files {
                     let abs_path = format!("/etc/{rel_path}");
@@ -271,17 +248,13 @@ impl Inspector for ConfigInspector {
                     if exec.read_link(Path::new(&abs_path)).is_ok() {
                         match exec.resolve_final_target(Path::new(&abs_path)) {
                             Err(_) => {
-                                section.files.push(ConfigFileEntry {
-                                    path: abs_path,
-                                    kind: ConfigFileKind::Unowned,
-                                    category: classify_config_path(&format!("/etc/{rel_path}")),
-                                    content: String::new(),
-                                    disposition: FindingKind::advisory(
+                                collector.admit_advisory(
+                                    Candidate::new(&abs_path, ConfigFileKind::Unowned),
+                                    FindingKind::advisory(
                                         AdvisoryType::CrossTreeSymlink,
                                         "Broken cross-tree symlink",
                                     ),
-                                    ..Default::default()
-                                });
+                                );
                                 continue;
                             }
                             Ok(resolved) => {
@@ -294,54 +267,43 @@ impl Inspector for ConfigInspector {
                                 } else if let Some(rationale) =
                                     crosses_tree_boundary(&abs_path, &resolved_str)
                                 {
-                                    section.files.push(ConfigFileEntry {
-                                        path: abs_path,
-                                        kind: ConfigFileKind::Unowned,
-                                        category: classify_config_path(&format!("/etc/{rel_path}")),
-                                        content: String::new(),
-                                        disposition: FindingKind::advisory(
+                                    collector.admit_advisory(
+                                        Candidate::new(&abs_path, ConfigFileKind::Unowned),
+                                        FindingKind::advisory(
                                             AdvisoryType::CrossTreeSymlink,
                                             rationale,
                                         ),
-                                        ..Default::default()
-                                    });
+                                    );
                                     continue;
                                 }
                             }
                         }
                     }
 
-                    let (content, disposition) =
-                        match capture_config(exec, &abs_path, &mut degraded_reasons) {
-                            Ok(captured) => captured,
-                            Err(admit::Unreadable::LinkLeavesEtc(_)) => (
-                                String::new(),
-                                FindingKind::advisory(
-                                    AdvisoryType::CrossTreeSymlink,
-                                    LINK_LEAVES_ETC_RATIONALE,
-                                ),
+                    let candidate = Candidate::new(&abs_path, ConfigFileKind::Unowned);
+                    match collector.admit(candidate.clone()) {
+                        Ok(_) => {}
+                        Err(admit::Unreadable::LinkLeavesEtc(_)) => collector.admit_advisory(
+                            candidate,
+                            FindingKind::advisory(
+                                AdvisoryType::CrossTreeSymlink,
+                                LINK_LEAVES_ETC_RATIONALE,
                             ),
-                            // The target is collected, or excluded, under
-                            // its own path.
-                            Err(admit::Unreadable::LinkToWithheld(_)) => continue,
-                            Err(admit::Unreadable::Special | admit::Unreadable::NotAFile) => {
-                                continue;
-                            }
-                        };
-
-                    section.files.push(ConfigFileEntry {
-                        path: abs_path,
-                        kind: ConfigFileKind::Unowned,
-                        category: classify_config_path(&format!("/etc/{rel_path}")),
-                        content,
-                        diff_against_rpm: None,
-                        disposition,
-                        ..Default::default()
-                    });
+                        ),
+                        // The target is collected, or excluded, under its
+                        // own path.
+                        Err(
+                            admit::Unreadable::LinkToWithheld(_)
+                            | admit::Unreadable::Special
+                            | admit::Unreadable::NotAFile,
+                        ) => {}
+                    }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                degraded_reasons.push(format!("permission denied during /etc walk: {e}"));
+                collector
+                    .degraded()
+                    .push(format!("permission denied during /etc walk: {e}"));
             }
             Err(_) => {
                 // /etc walk failed for other reasons — continue with what we have
@@ -358,41 +320,34 @@ impl Inspector for ConfigInspector {
             inspector: inspector_id,
             step: StepId::ClassifyingConfigs,
         });
-        detect_orphaned_configs(
-            exec,
-            rpm_state,
-            &rpm_va_paths,
-            &dhcp_paths,
-            &mut section,
-            &mut degraded_reasons,
-        );
+        detect_orphaned_configs(exec, rpm_state, &rpm_va_paths, &dhcp_paths, &mut collector);
 
-        // 4) Modernization advisories: upgrade existing entries or add new ones
+        // 4) Modernization advisories: upgrade existing entries or add new
+        //    ones. A withheld row stays withheld, and a machine-state
+        //    entry keeps its disposition ([`with_modernization`]).
         if let Some(major) = modernization::os_major_version(ctx.source_system) {
             for (path, disposition) in modernization::check_modernization_patterns(exec, major) {
-                if let Some(existing) = section.files.iter_mut().find(|f| f.path == path) {
+                if collector.is_withheld(&path) {
+                    continue;
+                }
+                if let Some(existing) = collector.entry_mut(&path) {
                     existing.disposition = with_modernization(&existing.disposition, disposition);
                 } else {
-                    section.files.push(ConfigFileEntry {
-                        path: path.clone(),
-                        kind: ConfigFileKind::Unowned,
-                        category: classify_config_path(&path),
-                        content: String::new(),
+                    collector.admit_advisory(
+                        Candidate::new(&path, ConfigFileKind::Unowned),
                         disposition,
-                        ..Default::default()
-                    });
+                    );
                 }
             }
         }
 
-        // Sort all files by path for deterministic output
-        section.files.sort_by(|a, b| a.path.cmp(&b.path));
+        let (section, degraded_reasons) = collector.into_parts();
 
         // Emit count of all config files found (modified + unowned + orphaned)
         progress.emit(ProgressEvent::Metric {
             inspector: inspector_id,
             kind: MetricKind::ConfigsModified,
-            value: section.files.len(),
+            value: section.files.len() + section.withheld.len(),
         });
         progress.emit(ProgressEvent::StepFinished {
             inspector: inspector_id,
@@ -437,11 +392,6 @@ const GHOST_QUERY_UNREADABLE: &str = "rpm file-flags query output could not be r
 /// The scan warning for a ghost path holding a control character.
 const GHOST_PATH_REFUSED: &str = "is a %ghost file under /etc whose name holds a control \
      character; it was not read and is not carried";
-
-/// The scan warning for a ghost file withheld as a credential; the path
-/// comes first.
-const GHOST_CREDENTIAL_WITHHELD: &str = "holds key material, so it was withheld: its content is \
-     not in the scan and the image does not carry it. Provision it on each deployed host.";
 
 /// The `%ghost` branch (`ghost.rs`): the ghost files under `/etc` that
 /// are general configuration no other section owns, collected as modified
@@ -498,8 +448,7 @@ fn collect_ghost_configs(
     exec: &dyn Executor,
     rpm_state: &RpmState,
     dhcp_paths: &HashSet<String>,
-    section: &mut ConfigSection,
-    degraded_reasons: &mut Vec<String>,
+    collector: &mut ConfigCollector<'_>,
     warnings: &mut Vec<Warning>,
 ) {
     if rpm_state.owned_paths().is_empty() {
@@ -510,13 +459,15 @@ fn collect_ghost_configs(
         &["-qa", "--queryformat", ghost::RPM_FILE_FLAGS_FORMAT],
     );
     if !result.success() {
-        degraded_reasons.push(GHOST_QUERY_FAILED.to_string());
+        collector.degraded().push(GHOST_QUERY_FAILED.to_string());
         return;
     }
     let query = match ghost::parse_ghost_files(&result.stdout) {
         Ok(query) => query,
         Err(error) => {
-            degraded_reasons.push(format!("{GHOST_QUERY_UNREADABLE} ({error})"));
+            collector
+                .degraded()
+                .push(format!("{GHOST_QUERY_UNREADABLE} ({error})"));
             return;
         }
     };
@@ -527,10 +478,9 @@ fn collect_ghost_configs(
             ..Default::default()
         });
     }
-    let collected: HashSet<String> = section.files.iter().map(|f| f.path.clone()).collect();
     for ghost in query.files {
         let requested = ghost.path.as_str();
-        if collected.contains(requested)
+        if collector.contains(requested)
             || !matches!(exec.file_kind(Path::new(requested)), Ok(FileKind::Regular))
         {
             continue;
@@ -544,7 +494,9 @@ fn collect_ghost_configs(
         };
         let path = located.path.as_str();
         match ghost::classify_ghost(path) {
-            ghost::GhostClass::Config => {}
+            // A class member goes to the collector, which withholds it or
+            // records it as a machine-state entry.
+            ghost::GhostClass::Config | ghost::GhostClass::MachineState => {}
             ghost::GhostClass::AuditRules => match audit_rules::source(
                 exec,
                 &query.packaged_units,
@@ -559,12 +511,7 @@ fn collect_ghost_configs(
                     });
                 }
             },
-            ghost::GhostClass::Credential => {
-                warnings.push(ghost_credential_warning(requested));
-                continue;
-            }
             ghost::GhostClass::OwnedBy(_)
-            | ghost::GhostClass::MachineState
             | ghost::GhostClass::Generated
             | ghost::GhostClass::Deferred => continue,
         }
@@ -575,23 +522,10 @@ fn collect_ghost_configs(
             continue;
         }
 
-        let Ok((content, disposition)) = capture_config(exec, path, degraded_reasons) else {
-            continue;
-        };
-        if ghost::is_credential_content(&content) {
-            warnings.push(ghost_credential_warning(path));
-            continue;
-        }
-        section.files.push(ConfigFileEntry {
-            path: ghost.path.clone(),
-            kind: ConfigFileKind::RpmOwnedModified,
-            category: classify_config_path(path),
-            content,
-            rpm_va_flags: None,
-            package: Some(ghost.package),
-            diff_against_rpm: None,
-            disposition,
-            ..Default::default()
+        let _ = collector.admit(Candidate {
+            read: path,
+            package: Some(&ghost.package),
+            ..Candidate::new(requested, ConfigFileKind::RpmOwnedModified)
         });
     }
 }
@@ -602,13 +536,13 @@ const PATH_REFUSED: &str = "was not read and is not carried:";
 
 /// Why a path under a directory link was refused, after the file it
 /// names.
-const ALIAS_TO_WITHHELD: &str = "is key material, host identity, a generated file, or a file \
-     another section records, so it is left out under either name";
+const ALIAS_TO_WITHHELD: &str = "is a generated file, or a file another section records, so it \
+     is left out under either name";
 
 /// The scan warning for a modified packaged file that is a link to a file
 /// this section does not carry; the path and the target come first.
-const LINKED_FILE_WITHHELD: &str = "which is outside /etc, key material, host identity, or a file \
-     another section records, so it was not read and is not carried.";
+const LINKED_FILE_WITHHELD: &str = "which is outside /etc, a generated file, or a file another \
+     section records, so it was not read and is not carried.";
 
 /// The scan warning when `/etc/audit/audit.rules` is carried although the
 /// scan could not tell whether the host writes it again; the path comes
@@ -656,15 +590,6 @@ fn withheld_link_warning(path: &str, target: &str) -> Warning {
     }
 }
 
-/// The scan warning naming a ghost file withheld as a credential.
-fn ghost_credential_warning(path: &str) -> Warning {
-    Warning {
-        inspector: "config".into(),
-        message: format!("{path} {GHOST_CREDENTIAL_WITHHELD}"),
-        ..Default::default()
-    }
-}
-
 /// Why a file authselect generates is an advisory and not copied.
 const AUTHSELECT_EDITED_RATIONALE: &str = "This file differs from what authselect generates for the \
      selected profile, so it was changed outside authselect. The image runs authselect select, \
@@ -707,14 +632,13 @@ const AUTHSELECT_UNCHECKED_WARNING: &str = "The files authselect generates could
 fn authselect_edit_advisories(
     exec: &dyn Executor,
     rpm_state: &RpmState,
-    section: &mut ConfigSection,
-    degraded_reasons: &mut Vec<String>,
+    collector: &mut ConfigCollector<'_>,
     warnings: &mut Vec<Warning>,
 ) {
     use inspectah_core::types::config::AUTHSELECT_CONF_PATH;
 
-    let Some(selection) = section
-        .files
+    let Some(selection) = collector
+        .files()
         .iter()
         .find(|f| f.path == AUTHSELECT_CONF_PATH)
         .map(|f| f.content.clone())
@@ -796,7 +720,10 @@ fn authselect_edit_advisories(
     let advisory =
         || FindingKind::advisory(AdvisoryType::Modernization, AUTHSELECT_EDITED_RATIONALE);
     for path in edited {
-        if let Some(existing) = section.files.iter_mut().find(|f| f.path == path) {
+        if collector.is_withheld(&path) {
+            continue;
+        }
+        if let Some(existing) = collector.entry_mut(&path) {
             existing.disposition = with_modernization(&existing.disposition, advisory());
             continue;
         }
@@ -805,25 +732,21 @@ fn authselect_edit_advisories(
         {
             continue;
         }
-        let Ok((content, captured)) = capture_config(exec, &path, degraded_reasons) else {
-            continue;
-        };
         let kind = if rpm_state.is_rpm_owned(Path::new(&path)) {
             ConfigFileKind::RpmOwnedModified
         } else {
             ConfigFileKind::Unowned
         };
-        section.files.push(ConfigFileEntry {
-            category: classify_config_path(&path),
-            package: rpm_state
-                .package_for_path(Path::new(&path))
-                .map(|p| p.name.clone()),
-            path,
-            kind,
-            content,
-            disposition: with_modernization(&captured, advisory()),
-            ..Default::default()
-        });
+        let package = rpm_state
+            .package_for_path(Path::new(&path))
+            .map(|p| p.name.clone());
+        let candidate = Candidate {
+            package: package.as_deref(),
+            ..Candidate::new(&path, kind)
+        };
+        if let Ok(Some(entry)) = collector.admit(candidate) {
+            entry.disposition = with_modernization(&entry.disposition, advisory());
+        }
     }
 }
 
@@ -954,7 +877,7 @@ fn is_rpm_owned_dev_null_link(exec: &dyn Executor, path: &str, flags: &str) -> b
 
 /// Why the collector could not capture a config file's content.
 #[derive(Debug)]
-enum CaptureFailure {
+pub(super) enum CaptureFailure {
     /// Over [`MAX_CONFIG_FILE_SIZE`].
     TooLarge {
         bytes: usize,
@@ -962,18 +885,23 @@ enum CaptureFailure {
     PermissionDenied,
     /// Any other read error, including content that is not UTF-8 text.
     Unreadable(std::io::Error),
+    /// The machine-state read gate refused the file: a withheld member by
+    /// path, alias or inode, or a keytab or whole-file private key by its
+    /// content. The collector records a withheld row, never an advisory.
+    Refused(inspectah_core::types::machine_state::MachineStateMember),
 }
 
 impl CaptureFailure {
     /// The rationale the `ContentNotCaptured` advisory carries to the
     /// audit report, the HTML report and refine.
-    fn rationale(&self) -> String {
+    pub(super) fn rationale(&self) -> String {
         let cause = match self {
             Self::TooLarge { bytes } => {
                 format!("file too large ({bytes} bytes, limit {MAX_CONFIG_FILE_SIZE})")
             }
             Self::PermissionDenied => "permission denied reading the file".to_string(),
             Self::Unreadable(e) => format!("file could not be read as text ({e})"),
+            Self::Refused(member) => format!("machine-state file ({})", member.as_str()),
         };
         format!("Content not captured: {cause}. Add the file to the image by hand if it is needed.")
     }
@@ -984,7 +912,7 @@ impl CaptureFailure {
 /// Oversized and permission-denied files are also recorded in
 /// `degraded_reasons`; other read errors are not, matching what the
 /// inspector reported before failures became advisories.
-fn read_config_content(
+pub(super) fn read_config_content(
     exec: &dyn Executor,
     path: &str,
     degraded_reasons: &mut Vec<String>,
@@ -997,6 +925,9 @@ fn read_config_content(
             })
         }
         Ok(content) => Ok(content),
+        Err(e) if let Some(member) = inspectah_core::machine_state::refusal(&e) => {
+            Err(CaptureFailure::Refused(member))
+        }
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             degraded_reasons.push(format!("permission denied reading {path}"));
             Err(CaptureFailure::PermissionDenied)
@@ -1015,6 +946,8 @@ fn read_config_content(
 /// Any other disposition is replaced by the modernization advisory.
 fn with_modernization(existing: &FindingKind, modernization: FindingKind) -> FindingKind {
     match (existing, &modernization) {
+        // The class decides a member; modernization never replaces it.
+        (FindingKind::MachineState { .. }, _) => existing.clone(),
         (
             FindingKind::Advisory {
                 advisory_type: AdvisoryType::ContentNotCaptured,
@@ -1029,33 +962,6 @@ fn with_modernization(existing: &FindingKind, modernization: FindingKind) -> Fin
         ),
         _ => modernization,
     }
-}
-
-/// The content and starting disposition of a collected config file, or
-/// why its content is not read at all ([`admit::readable`]): the one read
-/// every branch makes of a file it keeps.
-///
-/// Captured content, empty or not, keeps the default disposition. A link
-/// to `/dev/null` is a mask: its content is empty, and nothing is opened.
-/// A failed capture becomes a `ContentNotCaptured` advisory with no
-/// content: the config tree stages only included entries, and refine and
-/// the fleet merge leave advisories alone, so no export path can copy an
-/// empty file over the one on the host.
-fn capture_config(
-    exec: &dyn Executor,
-    path: &str,
-    degraded_reasons: &mut Vec<String>,
-) -> Result<(String, FindingKind), admit::Unreadable> {
-    if admit::readable(exec, path)? == admit::Readable::DevNullMask {
-        return Ok((String::new(), FindingKind::default()));
-    }
-    Ok(match read_config_content(exec, path, degraded_reasons) {
-        Ok(content) => (content, FindingKind::default()),
-        Err(failure) => (
-            String::new(),
-            FindingKind::advisory(AdvisoryType::ContentNotCaptured, failure.rationale()),
-        ),
-    })
 }
 
 /// Checks if the source system is an ostree/bootc variant.
@@ -1144,8 +1050,7 @@ fn detect_orphaned_configs(
     rpm_state: &RpmState,
     rpm_va_paths: &HashSet<String>,
     dhcp_paths: &HashSet<String>,
-    section: &mut ConfigSection,
-    degraded_reasons: &mut Vec<String>,
+    collector: &mut ConfigCollector<'_>,
 ) {
     // Get removed packages from dnf history
     let result = exec.run("dnf", &["history", "list", "--reverse"]);
@@ -1158,9 +1063,6 @@ fn detect_orphaned_configs(
     if removed_packages.is_empty() {
         return;
     }
-
-    // Build set of already-captured paths (owned strings to avoid borrow conflict)
-    let seen_paths: HashSet<String> = section.files.iter().map(|f| f.path.clone()).collect();
 
     let etc_files = match walk_etc_recursive(exec, "/etc") {
         Ok(files) => files,
@@ -1175,7 +1077,7 @@ fn detect_orphaned_configs(
             }
 
             let abs_path = format!("/etc/{rel_path}");
-            if seen_paths.contains(&abs_path) {
+            if collector.contains(&abs_path) {
                 continue;
             }
             let Ok(located) = admit::locate(exec, &abs_path) else {
@@ -1192,20 +1094,9 @@ fn detect_orphaned_configs(
                 continue;
             }
 
-            let Ok((content, disposition)) = capture_config(exec, &abs_path, degraded_reasons)
-            else {
-                continue;
-            };
-
-            section.files.push(ConfigFileEntry {
-                path: abs_path,
-                kind: ConfigFileKind::Orphaned,
-                category: classify_config_path(&format!("/etc/{rel_path}")),
-                content,
-                package: Some(pkg_name.clone()),
-                diff_against_rpm: None,
-                disposition,
-                ..Default::default()
+            let _ = collector.admit(Candidate {
+                package: Some(pkg_name),
+                ..Candidate::new(&abs_path, ConfigFileKind::Orphaned)
             });
         }
     }
@@ -1238,19 +1129,13 @@ fn parse_removed_packages(output: &str) -> Vec<String> {
 /// Ostree/bootc config detection.
 ///
 /// Diffs /usr/etc against /etc overlays to find modified and unowned configs.
-fn run_ostree_config(
-    exec: &dyn Executor,
-    _rpm_state: &RpmState,
-    _warnings: &mut [Warning],
-) -> ConfigSection {
-    let mut section = ConfigSection::default();
-
+fn run_ostree_config(exec: &dyn Executor, collector: &mut ConfigCollector<'_>) {
     let etc = "/etc";
     let usr_etc = "/usr/etc";
 
     // Check if /etc exists (try read_dir since it's a directory)
     if exec.read_dir(Path::new(etc)).is_err() && !exec.file_exists(Path::new(etc)) {
-        return section;
+        return;
     }
 
     // Ostree volatile names — system-generated, skip
@@ -1269,7 +1154,8 @@ fn run_ostree_config(
     // Track /etc paths covered by Tier 1 (have a /usr/etc counterpart)
     let mut tier1_paths: HashSet<String> = HashSet::new();
 
-    // Tier 1: /usr/etc -> /etc diff
+    // Tier 1: /usr/etc -> /etc diff. Both reads go through the gate; a
+    // refused /etc file is admitted so the collector records its row.
     if (exec.read_dir(Path::new(usr_etc)).is_ok() || exec.file_exists(Path::new(usr_etc)))
         && let Ok(files) = walk_etc_recursive(exec, usr_etc)
     {
@@ -1287,26 +1173,24 @@ fn run_ostree_config(
             }
 
             let display_path = format!("etc/{rel_path}");
+            let candidate = Candidate {
+                read: &etc_path,
+                ..Candidate::new(&display_path, ConfigFileKind::RpmOwnedModified)
+            };
 
-            // Content comparison
             let usr_content = match exec.read_file(Path::new(&format!("{usr_etc}/{rel_path}"))) {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            let etc_content = match exec.read_file(Path::new(&etc_path)) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            if usr_content != etc_content {
-                section.files.push(ConfigFileEntry {
-                    path: display_path,
-                    kind: ConfigFileKind::RpmOwnedModified,
-                    category: classify_config_path(&format!("/etc/{rel_path}")),
-                    content: etc_content,
-                    diff_against_rpm: None, // Phase 3
-                    ..Default::default()
-                });
+            match exec.read_file(Path::new(&etc_path)) {
+                Ok(etc_content) if etc_content == usr_content => {}
+                Ok(_) => {
+                    let _ = collector.admit(candidate);
+                }
+                Err(e) if inspectah_core::machine_state::refusal(&e).is_some() => {
+                    let _ = collector.admit(candidate);
+                }
+                Err(_) => {}
             }
         }
     }
@@ -1325,20 +1209,12 @@ fn run_ostree_config(
             }
 
             let display_path = format!("etc/{rel_path}");
-            let content = exec.read_file(Path::new(&abs_path)).unwrap_or_default();
-
-            section.files.push(ConfigFileEntry {
-                path: display_path.clone(),
-                kind: ConfigFileKind::Unowned,
-                category: classify_config_path(&format!("/{display_path}")),
-                content,
-                diff_against_rpm: None,
-                ..Default::default()
+            let _ = collector.admit(Candidate {
+                read: &abs_path,
+                ..Candidate::new(&display_path, ConfigFileKind::Unowned)
             });
         }
     }
-
-    section
 }
 
 #[cfg(test)]
@@ -1471,7 +1347,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1510,7 +1386,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1610,7 +1486,7 @@ mod tests {
         let source = test_source_system();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1643,7 +1519,26 @@ mod tests {
             }
         }
 
-        for (path, content) in owned_cases {
+        // The registration state is a machine-state class member: a
+        // visible withheld row, never carried. `/etc/pki/product/` stays
+        // a silent exclusion.
+        let withheld: HashSet<&str> = section.withheld.iter().map(|w| w.path.as_str()).collect();
+        for (path, expected) in cases {
+            let class = !*expected && !path.starts_with("/etc/pki/product/");
+            assert_eq!(
+                withheld.contains(path),
+                class,
+                "{path}: withheld rows {withheld:?}"
+            );
+        }
+
+        // The class covers every branch: the package-owned dotfile the
+        // Insights state rule matches is withheld on the rpm -Va branch
+        // too, and its content is not held.
+        let exp_sed = "/etc/insights-client/.exp.sed";
+        assert!(withheld.contains(exp_sed));
+        assert!(!collected.contains(exp_sed));
+        for (path, content) in owned_cases.iter().filter(|(p, _)| *p != exp_sed) {
             let owned = section
                 .files
                 .iter()
@@ -1658,6 +1553,18 @@ mod tests {
             assert_eq!(owned.package.as_deref(), Some("insights-client"), "{path}");
             assert_eq!(owned.content, *content, "{path}");
         }
+    }
+
+    /// Collect case 12: a modernization pattern never replaces the class's
+    /// disposition.
+    #[test]
+    fn modernization_does_not_replace_the_class() {
+        let class = FindingKind::MachineState {
+            member: inspectah_core::types::machine_state::CarriableMember::Hostname,
+            include: false,
+        };
+        let advice = FindingKind::advisory(AdvisoryType::Modernization, "use x instead");
+        assert_eq!(with_modernization(&class, advice), class);
     }
 
     // ---- Test 17: test_config_orphaned ----
@@ -1706,7 +1613,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1766,7 +1673,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1813,7 +1720,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1858,7 +1765,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1895,7 +1802,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1932,7 +1839,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1975,7 +1882,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2013,7 +1920,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2074,7 +1981,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2103,7 +2010,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -2224,7 +2131,7 @@ mod tests {
         let progress = VecProgress::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2393,7 +2300,7 @@ mod tests {
 
         let ctx = InspectionContext {
             source_system: &test_source_system(),
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2452,7 +2359,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2506,7 +2413,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2546,7 +2453,7 @@ mod tests {
         let inspector = ConfigInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };

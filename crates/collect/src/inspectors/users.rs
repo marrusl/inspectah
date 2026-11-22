@@ -978,7 +978,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
         let source = pkg_source();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -1009,7 +1009,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
         let source = pkg_source();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -1048,7 +1048,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
         let source = pkg_source();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -1191,7 +1191,7 @@ charlie:$5$salt$sha256hash:19700:0:99999:7:::
         let source = pkg_source();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -1218,7 +1218,7 @@ charlie:$5$salt$sha256hash:19700:0:99999:7:::
         let source = pkg_source();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -1520,7 +1520,7 @@ nobody:x:65534:
         let source = pkg_source();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -1543,7 +1543,7 @@ nobody:x:65534:
         let source = pkg_source();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -1977,7 +1977,7 @@ devs:x:1002:alice,bob
         let source = pkg_source();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };

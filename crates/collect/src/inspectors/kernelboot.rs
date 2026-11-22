@@ -303,8 +303,18 @@ fn read_sysctl_entry(exec: &dyn Executor, path: &str) -> Result<SysctlFileBody, 
     if !is_sysctl_read_through_target(&target) {
         return Ok(SysctlFileBody::OutsideLink { target });
     }
+    let content = match exec.read_file(Path::new(path)) {
+        Ok(content) => content,
+        // The read gate refused a machine-state file: not read, and it
+        // still shadows by name, as an outside link does, so the section
+        // stays complete and that file's assignments are unknown.
+        Err(e) if let Some(member) = inspectah_core::machine_state::refusal(&e) => {
+            return Ok(SysctlFileBody::Withheld { member });
+        }
+        Err(e) => return Err(cannot_read(e)),
+    };
     Ok(SysctlFileBody::Read {
-        content: read_sysctl_content(exec, path)?,
+        content: checked_sysctl_content(path, content)?,
         link_target: Some(target).filter(|target| target != path),
         redacted: false,
     })
@@ -319,11 +329,8 @@ fn is_sysctl_read_through_target(target: &str) -> bool {
             .any(|dir| target.starts_with(&format!("{}/", dir.path())))
 }
 
-/// Read an entry's content, held to the config inspector's size cap.
-fn read_sysctl_content(exec: &dyn Executor, path: &str) -> Result<String, String> {
-    let content = exec
-        .read_file(Path::new(path))
-        .map_err(|e| format!("sysctl: cannot read {path}: {e}"))?;
+/// An entry's content, held to the config inspector's size cap.
+fn checked_sysctl_content(path: &str, content: String) -> Result<String, String> {
     if content.len() > MAX_CONFIG_FILE_SIZE {
         return Err(format!(
             "sysctl: {path} is over {MAX_CONFIG_FILE_SIZE} bytes"
@@ -487,7 +494,7 @@ mod tests {
         let inspector = KernelbootInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -518,7 +525,7 @@ mod tests {
         let inspector = KernelbootInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };

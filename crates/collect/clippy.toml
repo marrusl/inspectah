@@ -1,0 +1,15 @@
+# The machine-state read gate (inspectah_core::machine_state::ScreenedExecutor)
+# is the only executor an inspector sees. These are the direct routes around
+# it: opening or copying a file with std, running a command without
+# Executor::run, and building an unscreened executor. executor/real.rs, the
+# one place that may make them, allows each with its reason; so do tests and
+# fixture helpers that read checked-in files.
+disallowed-methods = [
+    { path = "std::fs::read", reason = "read host files through the executor, which the machine-state read gate screens" },
+    { path = "std::fs::read_to_string", reason = "read host files through the executor, which the machine-state read gate screens" },
+    { path = "std::fs::File::open", reason = "read host files through the executor, which the machine-state read gate screens" },
+    { path = "std::fs::OpenOptions::open", reason = "read host files through the executor, which the machine-state read gate screens" },
+    { path = "std::fs::copy", reason = "copy host files only outside a collector, after the read gate's record" },
+    { path = "std::process::Command::new", reason = "run commands through Executor::run" },
+    { path = "inspectah_collect::executor::real::RealExecutor::new", reason = "only run_scan builds the real executor, and wraps it in the read gate at once" },
+]

@@ -139,7 +139,7 @@ fn test_selinux_inspector_happy_path() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -221,7 +221,7 @@ fn test_selinux_inspector_disabled() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -280,7 +280,7 @@ fn test_selinux_inspector_degraded_no_semanage() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -311,7 +311,7 @@ fn test_selinux_inspector_json_roundtrip() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -537,7 +537,7 @@ fn policy_store_forms_and_order() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -596,7 +596,7 @@ fn policy_store_forms_and_order() {
         .with_file("/proc/sys/crypto/fips_enabled", "0\n");
     let ctx2 = InspectionContext {
         source_system: &source,
-        executor: &exec2,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec2),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -642,7 +642,7 @@ fn policy_store_forms_and_order() {
         .with_file("/proc/sys/crypto/fips_enabled", "0\n");
     let ctx3 = InspectionContext {
         source_system: &source,
-        executor: &exec3,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec3),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -699,7 +699,7 @@ fn policy_store_forms_and_order() {
         .with_file("/proc/sys/crypto/fips_enabled", "0\n");
     let ctx4 = InspectionContext {
         source_system: &source,
-        executor: &exec4,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec4),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };

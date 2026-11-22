@@ -326,6 +326,293 @@ fn pem_label<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
         .filter(|label| !label.is_empty())
 }
 
+// ---------------------------------------------------------------------------
+// The read gate
+// ---------------------------------------------------------------------------
+
+use crate::traits::executor::{ExecResult, Executor, FileKind, FileMetadata, HostRead};
+use std::collections::HashMap;
+use std::io;
+use std::path::{Path, PathBuf};
+
+/// How deep the screen walks below a `Prefix` rule's directory.
+const SCREEN_WALK_DEPTH: usize = 8;
+
+/// What the gate says of a path, before opening it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screened {
+    /// A withheld member by its path, the path it resolves to, or its
+    /// inode. Never opened.
+    Withheld(MachineStateMember),
+    /// A carriable member by its own path. Read like any file.
+    Carriable(CarriableMember),
+    /// Not a member by path, alias or inode.
+    Ordinary,
+}
+
+/// Why a collector reads the host without the gate. Each variant is one
+/// reviewed exception.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenBypass {
+    /// The subscription inspector's reads of `/etc/pki/entitlement/` and
+    /// `/etc/pki/consumer/cert.pem`, which `--preserve subscription
+    /// --ack-sensitive` stores in its own section on purpose. That section
+    /// is outside snapshot validation.
+    SubscriptionSection,
+}
+
+/// The `(dev, ino)` of every host file the withheld rules' `Exact`, `Glob`
+/// and `Prefix` patterns match, with its member. Built once per scan.
+#[derive(Debug, Clone, Default)]
+pub struct MachineStateScreen {
+    inodes: HashMap<(u64, u64), MachineStateMember>,
+}
+
+impl MachineStateScreen {
+    /// Stats every host path a withheld rule matches, listing only those
+    /// rules' own directories. Reads no file content. `BasenameSuffix`
+    /// rules are not enumerated: that would take a walk of `/etc`, and a
+    /// keytab linked under another name is caught by its header.
+    pub fn build(exec: &dyn Executor) -> Self {
+        let mut screen = Self::default();
+        for (rule, target) in RULES {
+            let RuleTarget::Withheld(member) = *target else {
+                continue;
+            };
+            match *rule {
+                PathMatch::Exact(path) => screen.note(exec, path, member),
+                PathMatch::Glob(pattern) => {
+                    let dir = glob_dir(pattern);
+                    screen.walk(exec, dir, member, SCREEN_WALK_DEPTH, &|p| {
+                        match_glob(pattern, p)
+                    });
+                }
+                PathMatch::Prefix(prefix) => {
+                    let dir = prefix.trim_end_matches('/');
+                    screen.walk(exec, dir, member, SCREEN_WALK_DEPTH, &|p| {
+                        p.starts_with(prefix)
+                    });
+                }
+                PathMatch::BasenameSuffix(_) => {}
+            }
+        }
+        screen
+    }
+
+    fn note(&mut self, exec: &dyn Executor, path: &str, member: MachineStateMember) {
+        if let Ok(meta) = exec.file_metadata(Path::new(path))
+            && meta.is_regular()
+        {
+            self.inodes.entry((meta.dev, meta.ino)).or_insert(member);
+        }
+    }
+
+    fn walk(
+        &mut self,
+        exec: &dyn Executor,
+        dir: &str,
+        member: MachineStateMember,
+        depth: usize,
+        wanted: &dyn Fn(&str) -> bool,
+    ) {
+        let Ok(names) = exec.read_dir(Path::new(dir)) else {
+            return;
+        };
+        for name in names {
+            let path = format!("{dir}/{name}");
+            if wanted(&path) {
+                self.note(exec, &path, member);
+            }
+            if depth > 0 && matches!(exec.file_kind(Path::new(&path)), Ok(FileKind::Directory)) {
+                self.walk(exec, &path, member, depth - 1, wanted);
+            }
+        }
+    }
+
+    /// The withheld member whose file has this inode.
+    pub fn member_by_inode(&self, meta: &FileMetadata) -> Option<MachineStateMember> {
+        self.inodes.get(&(meta.dev, meta.ino)).copied()
+    }
+}
+
+/// The directory a glob's fixed stem names: everything before the
+/// segment holding the first wildcard.
+fn glob_dir(pattern: &str) -> &str {
+    let first_wild = pattern.find(['*', '?']).unwrap_or(pattern.len());
+    match pattern[..first_wild].rfind('/') {
+        Some(0) | None => "/",
+        Some(slash) => &pattern[..slash],
+    }
+}
+
+/// The error the gate returns for a refused read. Its text names the
+/// member, never the content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MachineStateRefusal {
+    pub member: MachineStateMember,
+}
+
+impl std::fmt::Display for MachineStateRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "machine-state file ({}): contents not captured",
+            self.member.as_str()
+        )
+    }
+}
+
+impl std::error::Error for MachineStateRefusal {}
+
+fn refused(member: MachineStateMember) -> io::Error {
+    io::Error::other(MachineStateRefusal { member })
+}
+
+/// The member a read was refused for, from an error the gate returned.
+pub fn refusal(err: &io::Error) -> Option<MachineStateMember> {
+    err.get_ref()?
+        .downcast_ref::<MachineStateRefusal>()
+        .map(|r| r.member)
+}
+
+/// The text an inspector records as a degraded reason when the gate
+/// refused one of its reads. Fixed text and the path, never content.
+pub fn left_out_reason(path: &str) -> String {
+    format!("machine-state file left out: {path}")
+}
+
+/// The machine-state read gate: the only executor an inspector sees.
+///
+/// `read_file` screens a file before opening it, by its path, the path
+/// it resolves to and its inode; then sniffs a two-byte keytab header;
+/// then checks what it read for a whole-file private key. A withheld
+/// answer is an error that names the member ([`refusal`]), so no
+/// collector that reads through the gate can hold a member's bytes. Every
+/// other method delegates: none returns a file's content. The gate does
+/// not implement [`HostRead`], so it offers no prefix read.
+pub struct ScreenedExecutor<'a> {
+    inner: &'a dyn HostRead,
+    screen: MachineStateScreen,
+}
+
+impl<'a> ScreenedExecutor<'a> {
+    /// Wraps `inner`, building the screen from the host (no content read).
+    pub fn new(inner: &'a dyn HostRead) -> Self {
+        let screen = MachineStateScreen::build(inner);
+        Self { inner, screen }
+    }
+
+    /// Logical path, resolved path, then inode. Opens nothing. Resolution
+    /// and inode add withheld answers only.
+    pub fn screen(&self, path: &str) -> Screened {
+        let by_path = classify_path(path);
+        if let Some(RuleTarget::Withheld(member)) = by_path {
+            return Screened::Withheld(member);
+        }
+        if let Ok(resolved) = self.inner.resolve_final_target(Path::new(path))
+            && let Some(RuleTarget::Withheld(member)) = classify_path(&resolved.to_string_lossy())
+        {
+            return Screened::Withheld(member);
+        }
+        if let Ok(meta) = self.inner.file_metadata(Path::new(path))
+            && let Some(member) = self.screen.member_by_inode(&meta)
+        {
+            return Screened::Withheld(member);
+        }
+        match by_path {
+            Some(RuleTarget::Carriable(member)) => Screened::Carriable(member),
+            _ => Screened::Ordinary,
+        }
+    }
+
+    /// The unscreened executor, for one of the reasons [`ScreenBypass`]
+    /// names.
+    pub fn bypass(&self, why: ScreenBypass) -> &dyn Executor {
+        match why {
+            ScreenBypass::SubscriptionSection => self.inner,
+        }
+    }
+}
+
+impl Executor for ScreenedExecutor<'_> {
+    fn run(&self, cmd: &str, args: &[&str]) -> ExecResult {
+        self.inner.run(cmd, args)
+    }
+
+    fn run_passthrough_stderr(&self, cmd: &str, args: &[&str]) -> ExecResult {
+        self.inner.run_passthrough_stderr(cmd, args)
+    }
+
+    fn run_with_line_callback(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        on_stderr_line: &mut dyn FnMut(&str),
+    ) -> ExecResult {
+        self.inner.run_with_line_callback(cmd, args, on_stderr_line)
+    }
+
+    /// Screen, sniff the keytab header, read, check the content. The
+    /// header sniff runs only on a regular file, so the gate never opens a
+    /// FIFO a caller did not; a failed sniff falls through to the read,
+    /// which reports its own error.
+    fn read_file(&self, path: &Path) -> io::Result<String> {
+        let text = path.to_string_lossy();
+        if let Screened::Withheld(member) = self.screen(&text) {
+            return Err(refused(member));
+        }
+        let regular = self
+            .inner
+            .file_metadata(path)
+            .map(|m| m.is_regular())
+            .unwrap_or(true);
+        if regular
+            && let Ok(head) = self.inner.read_head(path, KEYTAB_HEADER_LEN)
+            && is_keytab_header(&head)
+        {
+            return Err(refused(MachineStateMember::KerberosKeytab));
+        }
+        let content = self.inner.read_file(path)?;
+        if let Some(member) = credential_content(content.as_bytes()) {
+            drop(content);
+            return Err(refused(member));
+        }
+        Ok(content)
+    }
+
+    fn file_exists(&self, path: &Path) -> bool {
+        self.inner.file_exists(path)
+    }
+
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {
+        self.inner.read_dir(path)
+    }
+
+    fn read_dir_strict(&self, path: &Path) -> io::Result<Vec<String>> {
+        self.inner.read_dir_strict(path)
+    }
+
+    fn read_link(&self, path: &Path) -> io::Result<String> {
+        self.inner.read_link(path)
+    }
+
+    fn file_kind(&self, path: &Path) -> io::Result<FileKind> {
+        self.inner.file_kind(path)
+    }
+
+    fn host_root(&self) -> &Path {
+        self.inner.host_root()
+    }
+
+    fn resolve_final_target(&self, path: &Path) -> io::Result<PathBuf> {
+        self.inner.resolve_final_target(path)
+    }
+
+    fn file_metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        self.inner.file_metadata(path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,6 +696,25 @@ mod tests {
         assert_eq!(normal_path("/etc/x\ny"), None);
         assert_eq!(normal_path("/etc/x\u{2028}"), None);
         assert_eq!(normal_path("//"), None);
+    }
+
+    #[test]
+    fn glob_dir_is_the_fixed_stem() {
+        assert_eq!(glob_dir("/etc/ssh/ssh_host_*"), "/etc/ssh");
+        assert_eq!(glob_dir("/etc/insights-client/.*"), "/etc/insights-client");
+        assert_eq!(
+            glob_dir("/etc/cockpit/ws-certs.d/*.key"),
+            "/etc/cockpit/ws-certs.d"
+        );
+    }
+
+    #[test]
+    fn refusal_round_trips_through_io_error() {
+        let err = refused(M::PrivateKeyFile);
+        assert_eq!(refusal(&err), Some(M::PrivateKeyFile));
+        assert!(!err.to_string().is_empty());
+        assert_eq!(refusal(&io::Error::other("x")), None);
+        assert_eq!(refusal(&io::Error::from(io::ErrorKind::NotFound)), None);
     }
 
     #[test]

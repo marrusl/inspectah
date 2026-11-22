@@ -202,7 +202,12 @@ fn scan_quadlet_dir(
         let path = format!("{dir}/{name}");
         let content = match exec.read_file(Path::new(&path)) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => {
+                if inspectah_core::machine_state::refusal(&e).is_some() {
+                    degraded_reasons.push(inspectah_core::machine_state::left_out_reason(&path));
+                }
+                continue;
+            }
         };
 
         let image = if ext == ".container" {
@@ -327,7 +332,12 @@ fn find_compose_files(
     for path in &matches {
         let content = match exec.read_file(Path::new(path)) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => {
+                if inspectah_core::machine_state::refusal(&e).is_some() {
+                    degraded_reasons.push(inspectah_core::machine_state::left_out_reason(path));
+                }
+                continue;
+            }
         };
 
         // Check for YAML anchors/aliases which our simple parser cannot handle.
@@ -916,8 +926,11 @@ mod tests {
         let path = workspace_root
             .join("testdata/fixtures/containers")
             .join(name);
-        std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", path.display()))
+        // A checked-in fixture, not a host file.
+        #[allow(clippy::disallowed_methods)]
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", path.display()));
+        text
     }
 
     fn test_source_system() -> SourceSystem {
@@ -1656,7 +1669,7 @@ com.visualstudio.code\tflathub\tstable
         let source = test_source_system();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };

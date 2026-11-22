@@ -354,7 +354,7 @@ fn collected(exec: &MockExecutor) -> InspectionSnapshot {
     let base = baseline();
     let collected = collect(
         &pkg_source(),
-        exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(exec),
         &inspectors,
         Some(&base),
         &NullProgress,

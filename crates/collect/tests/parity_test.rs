@@ -181,7 +181,7 @@ fn test_services_inspector_correctness() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -232,7 +232,7 @@ fn test_storage_inspector_vs_golden() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -287,7 +287,7 @@ fn test_kernelboot_inspector_correctness() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };

@@ -1,3 +1,4 @@
+use inspectah_core::machine_state::{Screened, ScreenedExecutor};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
@@ -6,6 +7,7 @@ use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigFileKind};
+use inspectah_core::types::machine_state::WithheldUnmanagedEntry;
 use inspectah_core::types::nonrpm::{
     FileType, LanguagePackage, NonRpmItem, NonRpmSoftwareSection, PipPackage, ProvenanceSignals,
     UnmanagedFile, UnmanagedFileSection, UnmanagedUsrEntry,
@@ -276,11 +278,13 @@ impl Inspector for NonRpmInspector {
             probe: ProbeId::EnvFiles,
         });
         let pre = section.env_files.len();
+        let mut degraded_reasons: Vec<String> = Vec::new();
         collect_env_files(
             exec,
             &mut section,
             &mut redaction_hints,
             &self.effective_roots,
+            &mut degraded_reasons,
         );
         let found = section.env_files.len() - pre;
         progress.emit(ProgressEvent::ProbeFinished {
@@ -324,11 +328,22 @@ impl Inspector for NonRpmInspector {
         // Deduplicate items by path, keeping highest confidence.
         deduplicate_items(&mut section);
 
-        Ok(InspectorOutput {
+        let output = InspectorOutput {
             section: SectionData::NonRpmSoftware(section),
             warnings,
             redaction_hints,
-        })
+        };
+        if degraded_reasons.is_empty() {
+            Ok(output)
+        } else {
+            Err(InspectorError::Degraded {
+                partial: Box::new(output),
+                reason: format!(
+                    "non-RPM inspector degraded: {}",
+                    degraded_reasons.join("; ")
+                ),
+            })
+        }
     }
 }
 
@@ -1653,17 +1668,29 @@ fn filter_rpm_owned_gems_with_gemdir(
 // ---------------------------------------------------------------------------
 
 /// Collect .env files from scan roots.
+///
+/// A file the machine-state read gate refuses (a `.env` linked to a key)
+/// gets no row and no redaction hint, and a degraded reason; any other
+/// read error keeps today's empty-content row.
 fn collect_env_files(
     exec: &dyn Executor,
     section: &mut NonRpmSoftwareSection,
     redaction_hints: &mut Vec<RedactionHint>,
     roots: &[String],
+    degraded_reasons: &mut Vec<String>,
 ) {
     for root in roots {
         for env_name in ENV_FILE_NAMES {
             let mut visited = HashSet::new();
             find_files_matching(exec, root, env_name, root, &mut visited, &mut |path| {
-                let content = exec.read_file(Path::new(path)).unwrap_or_default();
+                let content = match exec.read_file(Path::new(path)) {
+                    Ok(content) => content,
+                    Err(e) if inspectah_core::machine_state::refusal(&e).is_some() => {
+                        degraded_reasons.push(inspectah_core::machine_state::left_out_reason(path));
+                        return;
+                    }
+                    Err(_) => String::new(),
+                };
                 let rel_path = path.trim_start_matches('/').to_string();
 
                 // Flag env file content for redaction.
@@ -2118,12 +2145,18 @@ fn is_rpm_owned_path(exec: &dyn Executor, path: &str) -> bool {
 ///
 /// Also performs the /usr walk with RPM-dump diff and ancestor collapse
 /// to populate `usr_entries`.
+///
+/// Each regular file is screened through the machine-state read gate
+/// before it is stat'ed, typed or hashed: an alias or hard link of a
+/// withheld member's file is recorded in `withheld`, never in `items`, so
+/// no Containerfile names a payload the export does not carry.
 pub fn scan_unmanaged_files(
-    exec: &dyn Executor,
+    exec: &ScreenedExecutor<'_>,
     language_env_paths: &[String],
     exclude_paths: &[String],
 ) -> UnmanagedFileSection {
     let mut items = Vec::new();
+    let mut withheld = Vec::new();
     let mut total_size: u64 = 0;
 
     // Pre-compute derived signal inputs once.
@@ -2141,6 +2174,7 @@ pub fn scan_unmanaged_files(
             &mounts,
             &service_workdirs,
             &mut items,
+            &mut withheld,
             &mut total_size,
         );
     }
@@ -2162,7 +2196,7 @@ pub fn scan_unmanaged_files(
         usr_entries,
         total_size,
         total_count,
-        withheld: Vec::new(),
+        withheld,
     }
 }
 
@@ -2186,7 +2220,7 @@ fn path_is_within(path: &str, prefix: &str) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 fn walk_for_unmanaged(
-    exec: &dyn Executor,
+    exec: &ScreenedExecutor<'_>,
     dir: &str,
     language_env_paths: &[String],
     exclude_paths: &[String],
@@ -2194,6 +2228,7 @@ fn walk_for_unmanaged(
     mounts: &HashMap<String, bool>,
     service_workdirs: &[String],
     items: &mut Vec<UnmanagedFile>,
+    withheld: &mut Vec<WithheldUnmanagedEntry>,
     total_size: &mut u64,
 ) {
     let entries = match exec.read_dir(Path::new(dir)) {
@@ -2291,6 +2326,7 @@ fn walk_for_unmanaged(
                 mounts,
                 service_workdirs,
                 items,
+                withheld,
                 total_size,
             );
             continue;
@@ -2311,6 +2347,20 @@ fn walk_for_unmanaged(
             .iter()
             .any(|lp| path_is_within(&child, lp))
         {
+            continue;
+        }
+
+        // The machine-state read gate, before anything reads the file: an
+        // alias or hard link of a withheld member is recorded as withheld.
+        if let Screened::Withheld(member) = exec.screen(&child) {
+            let meta = exec.file_metadata(Path::new(&child)).ok();
+            withheld.push(WithheldUnmanagedEntry {
+                path: child,
+                member,
+                mode: meta.map(|m| m.permissions()),
+                size: meta.map(|m| m.size),
+                aggregate: None,
+            });
             continue;
         }
 
@@ -3097,7 +3147,13 @@ mod tests {
 
         let mut section = NonRpmSoftwareSection::default();
         let mut hints = Vec::new();
-        collect_env_files(&exec, &mut section, &mut hints, &default_scan_roots());
+        collect_env_files(
+            &exec,
+            &mut section,
+            &mut hints,
+            &default_scan_roots(),
+            &mut Vec::new(),
+        );
 
         assert_eq!(section.env_files.len(), 1, "should collect one .env file");
         assert_eq!(section.env_files[0].path, "opt/myapp/.env");
@@ -3144,7 +3200,13 @@ mod tests {
 
         let mut section = NonRpmSoftwareSection::default();
         let mut hints = Vec::new();
-        collect_env_files(&exec, &mut section, &mut hints, &default_scan_roots());
+        collect_env_files(
+            &exec,
+            &mut section,
+            &mut hints,
+            &default_scan_roots(),
+            &mut Vec::new(),
+        );
 
         assert!(!hints.is_empty(), "should flag .env content for redaction");
         assert!(
@@ -3219,7 +3281,7 @@ mod tests {
         let inspector = NonRpmInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -3259,7 +3321,7 @@ mod tests {
         let inspector = NonRpmInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -3435,7 +3497,7 @@ mod tests {
         let progress = VecProgress::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -3508,7 +3570,7 @@ mod tests {
         let progress = VecProgress::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -3605,7 +3667,7 @@ mod tests {
         let inspector = NonRpmInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };

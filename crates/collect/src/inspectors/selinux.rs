@@ -892,7 +892,7 @@ mod tests {
         let inspector = SelinuxInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -921,7 +921,7 @@ mod tests {
         let inspector = SelinuxInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -949,7 +949,7 @@ mod tests {
         let inspector = SelinuxInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -971,7 +971,7 @@ mod tests {
         let inspector = SelinuxInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1012,7 +1012,7 @@ mod tests {
         let source = test_source_system();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1620,7 +1620,7 @@ virt_use_nfs                   (on   ,  off)  Allow virt to use nfs\n"),
         let source = test_source_system();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1684,7 +1684,7 @@ SELinux fcontext                                   type               Context\n\
         let inspector = SelinuxInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1756,7 +1756,7 @@ redis_port_t                    tcp      6380\n";
         let inspector = SelinuxInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1786,7 +1786,7 @@ redis_port_t                    tcp      6380\n";
         let inspector = SelinuxInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1808,7 +1808,7 @@ redis_port_t                    tcp      6380\n";
         let inspector = SelinuxInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1834,7 +1834,7 @@ redis_port_t                    tcp      6380\n";
         let inspector = SelinuxInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };

@@ -63,7 +63,7 @@ impl Inspector for NetworkInspector {
         collect_firewall_zones(exec, &mut section, &mut warnings, &mut degraded_reasons);
         collect_firewall_direct_rules(exec, &mut section);
         section.resolv_provenance = detect_resolv_provenance(exec);
-        collect_hosts_additions(exec, &mut section);
+        collect_hosts_additions(exec, &mut section, &mut degraded_reasons);
         collect_static_routes(exec, &mut section);
         collect_ip_routes(exec, &mut section, &mut warnings);
         collect_proxy(exec, &mut section, &mut hints);
@@ -367,7 +367,12 @@ fn collect_firewall_zones(
         let path = format!("/etc/firewalld/zones/{name}");
         let content = match exec.read_file(Path::new(&path)) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => {
+                if inspectah_core::machine_state::refusal(&e).is_some() {
+                    degraded_reasons.push(inspectah_core::machine_state::left_out_reason(&path));
+                }
+                continue;
+            }
         };
 
         let rel_path = path.strip_prefix('/').unwrap_or(&path).to_string();
@@ -492,11 +497,23 @@ fn detect_resolv_provenance(exec: &dyn Executor) -> String {
 // ---------------------------------------------------------------------------
 
 /// Filters /etc/hosts to only non-localhost entries.
-fn collect_hosts_additions(exec: &dyn Executor, section: &mut NetworkSection) {
+///
+/// A refusal by the machine-state read gate (`/etc/hosts` a link to a key)
+/// leaves no additions and a degraded reason.
+fn collect_hosts_additions(
+    exec: &dyn Executor,
+    section: &mut NetworkSection,
+    degraded_reasons: &mut Vec<String>,
+) {
     let hosts_path = Path::new("/etc/hosts");
     let content = match exec.read_file(hosts_path) {
         Ok(c) => c,
-        Err(_) => return,
+        Err(e) => {
+            if inspectah_core::machine_state::refusal(&e).is_some() {
+                degraded_reasons.push(inspectah_core::machine_state::left_out_reason("/etc/hosts"));
+            }
+            return;
+        }
     };
 
     for line in content.lines() {
@@ -782,8 +799,11 @@ mod tests {
             .and_then(|p| p.parent())
             .unwrap_or(std::path::Path::new(manifest_dir));
         let path = workspace_root.join("testdata/fixtures/network").join(name);
-        std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", path.display()))
+        // A checked-in fixture, not a host file.
+        #[allow(clippy::disallowed_methods)]
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", path.display()));
+        text
     }
 
     // -----------------------------------------------------------------------
@@ -1020,7 +1040,7 @@ mod tests {
         let exec = MockExecutor::new().with_file("/etc/hosts", &hosts);
 
         let mut section = NetworkSection::default();
-        collect_hosts_additions(&exec, &mut section);
+        collect_hosts_additions(&exec, &mut section, &mut Vec::new());
 
         // Should exclude localhost lines and include the custom entry.
         assert_eq!(section.hosts_additions.len(), 1);

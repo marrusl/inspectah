@@ -1,4 +1,4 @@
-use inspectah_core::traits::executor::{ExecResult, Executor, FileKind};
+use inspectah_core::traits::executor::{ExecResult, Executor, FileKind, FileMetadata, HostRead};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -8,9 +8,46 @@ use std::sync::Mutex;
 /// kernel's `ELOOP` limit.
 const MAX_SYMLINK_HOPS: usize = 40;
 
+/// The mode a registered file reports when no test set one: a regular
+/// file, `rw-r--r--`.
+const DEFAULT_FILE_MODE: u32 = 0o100_644;
+
+/// The mode a registered directory reports.
+const DIRECTORY_MODE: u32 = 0o040_755;
+
+/// The one device every mock path is on.
+const MOCK_DEV: u64 = 1;
+
+/// Which read a [`ReadRecord`] logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadKind {
+    /// `read_file`.
+    Full,
+    /// `read_head` ([`HostRead`]).
+    Head,
+}
+
+/// One read of file content, as the path was asked for, with the number
+/// of bytes it returned (0 for a failed read).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadRecord {
+    pub path: String,
+    pub kind: ReadKind,
+    pub bytes: usize,
+}
+
 pub struct MockExecutor {
     commands: HashMap<String, ExecResult>,
-    files: HashMap<String, String>,
+    /// File content as bytes: `read_file` on content that is not UTF-8
+    /// fails with `InvalidData`, as `std::fs::read_to_string` does.
+    files: HashMap<String, Vec<u8>>,
+    /// Hard links: each path here names the same file as the path it maps
+    /// to, so it reads that file's content and shares its inode.
+    hard_links: HashMap<String, String>,
+    /// Permission and type bits a test set for a file.
+    modes: HashMap<String, u32>,
+    /// Every `read_file` and `read_head` call, in order.
+    read_log: Mutex<Vec<ReadRecord>>,
     dirs: HashMap<String, Vec<String>>,
     links: HashMap<String, String>,
     /// Paths that are a FIFO, socket or device ([`FileKind::Special`]).
@@ -53,6 +90,9 @@ impl MockExecutor {
         Self {
             commands: HashMap::new(),
             files: HashMap::new(),
+            hard_links: HashMap::new(),
+            modes: HashMap::new(),
+            read_log: Mutex::new(Vec::new()),
             dirs: HashMap::new(),
             links: HashMap::new(),
             specials: HashSet::new(),
@@ -81,8 +121,61 @@ impl MockExecutor {
     }
 
     pub fn with_file(mut self, path: &str, content: &str) -> Self {
-        self.files.insert(path.to_string(), content.to_string());
+        self.files
+            .insert(path.to_string(), content.as_bytes().to_vec());
         self
+    }
+
+    /// Register a file holding `content`, which need not be UTF-8.
+    pub fn with_file_bytes(mut self, path: &str, content: &[u8]) -> Self {
+        self.files.insert(path.to_string(), content.to_vec());
+        self
+    }
+
+    /// Register `path` as a hard link of the registered file `target`:
+    /// the two names share one inode and one content.
+    pub fn with_hard_link(mut self, path: &str, target: &str) -> Self {
+        self.hard_links.insert(path.to_string(), target.to_string());
+        self
+    }
+
+    /// Set the type and permission bits `file_metadata` reports for a
+    /// registered file (`0o100600` for a regular `rw-------` file).
+    pub fn with_file_mode(mut self, path: &str, mode: u32) -> Self {
+        self.modes.insert(path.to_string(), mode);
+        self
+    }
+
+    /// Every `read_file` and `read_head` call so far, in order.
+    pub fn read_log(&self) -> Vec<ReadRecord> {
+        self.read_log.lock().unwrap().clone()
+    }
+
+    /// Whether any read, full or head, named `path`.
+    pub fn was_read(&self, path: &str) -> bool {
+        self.read_log.lock().unwrap().iter().any(|r| r.path == path)
+    }
+
+    /// The registered content of the file `path` names: by its own name,
+    /// else through registered symlinks (an ancestor's as well), then
+    /// through a hard link.
+    fn content_of(&self, path: &Path) -> Option<(String, &Vec<u8>)> {
+        let key = path.to_str().unwrap_or("");
+        let physical = if self.files.contains_key(key) || self.hard_links.contains_key(key) {
+            key.to_string()
+        } else {
+            self.resolve(path, true).ok()?.to_str()?.to_string()
+        };
+        let canonical = self.hard_links.get(&physical).cloned().unwrap_or(physical);
+        self.files.get(&canonical).map(|c| (canonical, c))
+    }
+
+    fn log_read(&self, path: &Path, kind: ReadKind, bytes: usize) {
+        self.read_log.lock().unwrap().push(ReadRecord {
+            path: path.display().to_string(),
+            kind,
+            bytes,
+        });
     }
 
     pub fn with_dir(mut self, path: &str, entries: Vec<&str>) -> Self {
@@ -254,19 +347,33 @@ impl Executor for MockExecutor {
         );
         // Explicit error injection takes priority over registered files.
         if let Some(&error_kind) = self.file_errors.get(key) {
+            self.log_read(path, ReadKind::Full, 0);
             return Err(io::Error::new(error_kind, path.display().to_string()));
         }
-        self.files
-            .get(key)
-            .cloned()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))
+        let Some((_, bytes)) = self.content_of(path) else {
+            self.log_read(path, ReadKind::Full, 0);
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                path.display().to_string(),
+            ));
+        };
+        self.log_read(path, ReadKind::Full, bytes.len());
+        String::from_utf8(bytes.clone()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )
+        })
     }
 
     /// A registered file or directory exists, as `Path::exists` says for
     /// both on a real host.
     fn file_exists(&self, path: &Path) -> bool {
         let key = path.to_str().unwrap_or("");
-        self.files.contains_key(key) || self.dirs.contains_key(key) || self.specials.contains(key)
+        self.files.contains_key(key)
+            || self.hard_links.contains_key(key)
+            || self.dirs.contains_key(key)
+            || self.specials.contains(key)
     }
 
     fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {
@@ -328,7 +435,10 @@ impl Executor for MockExecutor {
                 .is_some_and(|kind| *kind != io::ErrorKind::NotADirectory)
         {
             Ok(FileKind::Directory)
-        } else if self.files.contains_key(key) || self.file_errors.contains_key(key) {
+        } else if self.files.contains_key(key)
+            || self.hard_links.contains_key(key)
+            || self.file_errors.contains_key(key)
+        {
             Ok(FileKind::Regular)
         } else {
             Err(io::Error::new(
@@ -345,6 +455,78 @@ impl Executor for MockExecutor {
     fn resolve_final_target(&self, path: &Path) -> io::Result<PathBuf> {
         self.resolve(path, true)
     }
+
+    /// As `stat`: links are followed, a hard link shares its target's
+    /// inode, and each other registered path has its own. Only a
+    /// registered file, error-injected file or directory has metadata.
+    fn file_metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        let physical = self.resolve(path, true)?;
+        let key = physical.to_str().unwrap_or("").to_string();
+        if let Some(&error_kind) = self.file_errors.get(&key)
+            && error_kind != io::ErrorKind::PermissionDenied
+        {
+            return Err(io::Error::new(error_kind, path.display().to_string()));
+        }
+        let canonical = self.hard_links.get(&key).cloned().unwrap_or(key);
+        let (mode, size) = if let Some(content) = self.files.get(&canonical) {
+            let mode = self.modes.get(&canonical).copied();
+            (mode.unwrap_or(DEFAULT_FILE_MODE), content.len() as u64)
+        } else if self.file_errors.contains_key(&canonical) {
+            let mode = self.modes.get(&canonical).copied();
+            (mode.unwrap_or(DEFAULT_FILE_MODE), 0)
+        } else if self.dirs.contains_key(&canonical) {
+            (DIRECTORY_MODE, 0)
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                path.display().to_string(),
+            ));
+        };
+        let nlink = 1 + self
+            .hard_links
+            .values()
+            .filter(|t| **t == canonical)
+            .count() as u64;
+        Ok(FileMetadata {
+            mode,
+            size,
+            dev: MOCK_DEV,
+            ino: mock_inode(&canonical),
+            nlink,
+        })
+    }
+}
+
+impl HostRead for MockExecutor {
+    fn read_head(&self, path: &Path, n: usize) -> io::Result<Vec<u8>> {
+        let key = path.to_str().unwrap_or("");
+        assert!(
+            !self.specials.contains(key),
+            "read_head opened the special file {key}, which can block on a real host"
+        );
+        if let Some(&error_kind) = self.file_errors.get(key) {
+            self.log_read(path, ReadKind::Head, 0);
+            return Err(io::Error::new(error_kind, path.display().to_string()));
+        }
+        let Some((_, bytes)) = self.content_of(path) else {
+            self.log_read(path, ReadKind::Head, 0);
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                path.display().to_string(),
+            ));
+        };
+        let head = bytes[..n.min(bytes.len())].to_vec();
+        self.log_read(path, ReadKind::Head, head.len());
+        Ok(head)
+    }
+}
+
+/// A stable inode number for a canonical mock path.
+fn mock_inode(path: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl MockExecutor {
@@ -398,6 +580,7 @@ impl MockExecutor {
     /// link, or an injected read error on one.
     fn is_registered(&self, path: &str) -> bool {
         self.files.contains_key(path)
+            || self.hard_links.contains_key(path)
             || self.specials.contains(path)
             || self.file_errors.contains_key(path)
             || self.dirs.contains_key(path)

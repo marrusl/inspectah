@@ -152,7 +152,7 @@ fn test_nonrpm_inspector_happy_path() {
     let rpm_state = empty_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -216,7 +216,7 @@ fn test_nonrpm_inspector_empty_system() {
     let rpm_state = empty_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -259,7 +259,7 @@ fn test_nonrpm_inspector_degraded_no_readelf() {
     let rpm_state = empty_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -320,7 +320,7 @@ fn test_nonrpm_inspector_json_roundtrip() {
     let rpm_state = empty_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -358,7 +358,7 @@ fn test_nonrpm_uses_rpm_state_for_pip_filtering() {
     let rpm_state_a = RpmState::default();
     let ctx_a = InspectionContext {
         source_system: &source,
-        executor: &exec_a,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec_a),
         rpm_state: Some(&rpm_state_a),
         baseline_data: None,
     };
@@ -380,7 +380,7 @@ fn test_nonrpm_uses_rpm_state_for_pip_filtering() {
     };
     let ctx_b = InspectionContext {
         source_system: &source,
-        executor: &exec_b,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec_b),
         rpm_state: Some(&rpm_state_b),
         baseline_data: None,
     };
@@ -460,7 +460,7 @@ fn test_nonrpm_pip_filtering_excludes_rpm_owned() {
     };
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };

@@ -131,7 +131,7 @@ fn test_containers_inspector_happy_path() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -222,7 +222,7 @@ fn test_containers_inspector_empty_system() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -295,7 +295,7 @@ fn test_containers_inspector_degraded_podman() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -327,7 +327,7 @@ fn test_containers_inspector_json_roundtrip() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };

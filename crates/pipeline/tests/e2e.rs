@@ -96,7 +96,7 @@ fn run_full_pipeline_from_mock(
     // Collect
     let collected = collect(
         &source,
-        &mock,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&mock),
         &inspectors,
         None,
         &NullProgress,
@@ -194,7 +194,7 @@ fn test_full_pipeline_produces_valid_tarball() {
     let output_dir = TempDir::new().unwrap();
     let (_, tarball_path) = run_pipeline(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         &output_dir.path().join("artifacts"),
         "testhost",
@@ -279,7 +279,7 @@ fn test_rpm_section_self_roundtrip() {
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
     let collected = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -416,7 +416,7 @@ fn run_pipeline_keeps_an_unneeded_repoless_auto_package_out_of_the_class() {
     let output_dir = TempDir::new().unwrap();
     let (snapshot, tarball_path) = run_pipeline(
         &build_source(),
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &[Box::new(RpmInspector::new()) as Box<dyn Inspector>],
         &output_dir.path().join("artifacts"),
         "testhost",

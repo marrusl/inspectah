@@ -27,6 +27,37 @@ pub enum FileKind {
     Special,
 }
 
+/// What `stat` says of the file a path resolves to, read without opening
+/// it ([`Executor::file_metadata`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileMetadata {
+    /// `st_mode`: the file type bits and the permission bits.
+    pub mode: u32,
+    pub size: u64,
+    pub dev: u64,
+    pub ino: u64,
+    pub nlink: u64,
+}
+
+/// The file type bits of `st_mode`.
+const S_IFMT: u32 = 0o170_000;
+/// The file type of a regular file in `st_mode`.
+const S_IFREG: u32 = 0o100_000;
+/// The permission bits of `st_mode`, setuid, setgid and sticky included.
+const PERMISSION_BITS: u32 = 0o7777;
+
+impl FileMetadata {
+    /// Whether the path resolves to a regular file.
+    pub fn is_regular(&self) -> bool {
+        self.mode & S_IFMT == S_IFREG
+    }
+
+    /// The permission bits alone, as `chmod` takes them.
+    pub fn permissions(&self) -> u32 {
+        self.mode & PERMISSION_BITS
+    }
+}
+
 pub trait Executor: Send + Sync {
     fn run(&self, cmd: &str, args: &[&str]) -> ExecResult;
 
@@ -89,4 +120,19 @@ pub trait Executor: Send + Sync {
     /// Returns the fully-resolved absolute path, or an error if the chain is
     /// broken (dangling symlink), loops, or hits a permission wall.
     fn resolve_final_target(&self, path: &Path) -> io::Result<PathBuf>;
+
+    /// `stat`, following symlinks: type and permission bits, size, device,
+    /// inode and link count of the file the path resolves to, without
+    /// opening it.
+    fn file_metadata(&self, path: &Path) -> io::Result<FileMetadata>;
+}
+
+/// A host executor the machine-state read gate can wrap
+/// ([`crate::machine_state::ScreenedExecutor`]). The real and mock
+/// executors implement it; the gate does not, so no inspector holds a
+/// value it can call [`HostRead::read_head`] on, and the gate's own
+/// two-byte keytab sniff is the only prefix read a scan makes.
+pub trait HostRead: Executor {
+    /// At most `n` bytes from the start of the file.
+    fn read_head(&self, path: &Path, n: usize) -> io::Result<Vec<u8>>;
 }

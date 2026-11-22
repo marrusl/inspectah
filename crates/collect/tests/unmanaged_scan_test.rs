@@ -133,7 +133,11 @@ fn scan_unmanaged_catalogs_elf_binaries() {
         .with_command("file -b /opt/splunk/etc/config.ini", file_config_result())
         .with_command("rpm -qf /opt/splunk/etc/config.ini", rpm_not_owned());
 
-    let result = scan_unmanaged_files(&exec, &[], &[]);
+    let result = scan_unmanaged_files(
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        &[],
+        &[],
+    );
 
     assert_eq!(result.total_count, 2, "should catalog 2 files");
     assert_eq!(
@@ -179,7 +183,11 @@ fn scan_unmanaged_excludes_rpm_owned_paths() {
         )
         .with_command("file -b /opt/myapp/server", file_elf_result());
 
-    let result = scan_unmanaged_files(&exec, &[], &[]);
+    let result = scan_unmanaged_files(
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        &[],
+        &[],
+    );
 
     assert_eq!(
         result.items.len(),
@@ -219,7 +227,11 @@ fn scan_unmanaged_excludes_tier1_language_paths() {
 
     // Tier 1 claims /opt/myapp/venv
     let language_env_paths = vec!["/opt/myapp/venv".to_string()];
-    let result = scan_unmanaged_files(&exec, &language_env_paths, &[]);
+    let result = scan_unmanaged_files(
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        &language_env_paths,
+        &[],
+    );
 
     assert_eq!(result.items.len(), 1, "should only contain unclaimed file");
     assert!(
@@ -253,7 +265,11 @@ fn scan_unmanaged_applies_exclude_paths() {
         .with_command("file -b /opt/datadog/agent/dd-agent", file_elf_result());
 
     let exclude = vec!["/opt/datadog".to_string()];
-    let result = scan_unmanaged_files(&exec, &[], &exclude);
+    let result = scan_unmanaged_files(
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        &[],
+        &exclude,
+    );
 
     assert_eq!(result.items.len(), 1, "should exclude /opt/datadog paths");
     assert!(
@@ -326,7 +342,11 @@ fn scan_unmanaged_path_lists_match_on_path_boundary() {
     for (exclude, language_envs, expected) in cases {
         let exclude: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
         let language_envs: Vec<String> = language_envs.iter().map(|s| s.to_string()).collect();
-        let result = scan_unmanaged_files(&exec, &language_envs, &exclude);
+        let result = scan_unmanaged_files(
+            &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+            &language_envs,
+            &exclude,
+        );
         let mut paths: Vec<&str> = result.items.iter().map(|i| i.path.as_str()).collect();
         paths.sort();
         assert_eq!(
@@ -337,7 +357,11 @@ fn scan_unmanaged_path_lists_match_on_path_boundary() {
 
     // The link must reach the symlink branch, not fall through to the
     // regular-file branch, or the cases above would not cover it.
-    let result = scan_unmanaged_files(&exec, &[], &[]);
+    let result = scan_unmanaged_files(
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        &[],
+        &[],
+    );
     let link = result
         .items
         .iter()
@@ -360,7 +384,11 @@ fn scan_unmanaged_does_not_scan_var() {
         .with_dir("/var/lib", vec!["myapp"])
         .with_dir("/var/lib/myapp", vec!["data.db"]);
 
-    let result = scan_unmanaged_files(&exec, &[], &[]);
+    let result = scan_unmanaged_files(
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        &[],
+        &[],
+    );
 
     assert!(
         result.items.is_empty(),
@@ -384,7 +412,11 @@ fn scan_unmanaged_classifies_scripts() {
         )
         .with_command("file -b /opt/app/run.sh", file_script_result());
 
-    let result = scan_unmanaged_files(&exec, &[], &[]);
+    let result = scan_unmanaged_files(
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        &[],
+        &[],
+    );
 
     assert_eq!(result.items.len(), 1);
     assert_eq!(
@@ -410,7 +442,11 @@ fn scan_unmanaged_computes_mutability_signal() {
         )
         .with_command("file -b /opt/app/data.log", file_config_result());
 
-    let result = scan_unmanaged_files(&exec, &[], &[]);
+    let result = scan_unmanaged_files(
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        &[],
+        &[],
+    );
 
     assert_eq!(result.items.len(), 1);
     assert!(
@@ -434,7 +470,11 @@ fn scan_unmanaged_computes_writable_mount_signal() {
         )
         .with_command("file -b /opt/app/server", file_elf_result());
 
-    let result = scan_unmanaged_files(&exec, &[], &[]);
+    let result = scan_unmanaged_files(
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        &[],
+        &[],
+    );
 
     assert_eq!(result.items.len(), 1);
     assert!(
@@ -466,7 +506,11 @@ fn scan_unmanaged_computes_service_working_dir_signal() {
         )
         .with_command("file -b /opt/myapp/data.log", file_config_result());
 
-    let result = scan_unmanaged_files(&exec, &[], &[]);
+    let result = scan_unmanaged_files(
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        &[],
+        &[],
+    );
 
     assert_eq!(result.items.len(), 1);
     assert!(

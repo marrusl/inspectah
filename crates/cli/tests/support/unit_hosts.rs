@@ -891,7 +891,7 @@ pub fn scan_unredacted(host: UnitHost) -> InspectionSnapshot {
     ];
     let collected = collect(
         &pkg_source(),
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         baseline.as_ref(),
         &NullProgress,

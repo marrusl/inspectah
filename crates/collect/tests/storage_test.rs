@@ -60,7 +60,7 @@ fn happy_path() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -118,7 +118,7 @@ fn credential_detection() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -167,7 +167,7 @@ fn findmnt_failure_returns_degraded() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -212,7 +212,7 @@ fn malformed_findmnt_json() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -246,7 +246,7 @@ fn fstab_unreadable_returns_failed() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -282,7 +282,7 @@ fn lvm_not_available() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -320,7 +320,7 @@ fn empty_fstab() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -367,7 +367,7 @@ fn unbacked_directories_reach_the_advisory_and_backed_ones_do_not() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -417,7 +417,7 @@ fn storage_snapshot() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };

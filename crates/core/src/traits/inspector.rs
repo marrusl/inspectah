@@ -24,7 +24,9 @@ pub trait Inspector: Send + Sync {
 /// values share one executor.
 pub struct InspectionContext<'a> {
     pub source_system: &'a SourceSystem,
-    pub executor: &'a dyn crate::traits::executor::Executor,
+    /// The machine-state read gate around the host executor: the only
+    /// executor an inspector sees ([`crate::machine_state::ScreenedExecutor`]).
+    pub executor: &'a crate::machine_state::ScreenedExecutor<'a>,
     pub rpm_state: Option<&'a RpmState>,
     pub baseline_data: Option<&'a BaselineData>,
 }

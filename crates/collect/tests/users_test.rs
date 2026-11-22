@@ -87,7 +87,7 @@ fn test_users_inspector_happy_path() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -165,7 +165,7 @@ fn test_users_inspector_shadow_strips_hashes() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -211,7 +211,7 @@ fn test_users_inspector_gshadow_strips_passwords() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -250,7 +250,7 @@ fn test_users_inspector_classification() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -332,7 +332,7 @@ fn test_users_inspector_groups_no_strategy() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -363,7 +363,7 @@ fn test_users_inspector_degraded_shadow() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -400,7 +400,7 @@ fn test_users_inspector_json_roundtrip() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };

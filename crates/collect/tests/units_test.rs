@@ -135,7 +135,7 @@ fn happy_path_state_changes() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -276,7 +276,7 @@ fn inventory_has_one_entry_per_unit_with_state_and_preset() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -358,7 +358,7 @@ fn inventory_records_masked_units() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -422,7 +422,7 @@ fn preset_first_match_wins() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -470,7 +470,7 @@ fn preset_glob_matching() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -499,7 +499,7 @@ fn dropin_files_collected() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -527,7 +527,7 @@ fn systemctl_missing_returns_degraded() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -576,7 +576,7 @@ fn unreadable_preset_returns_degraded_not_ok() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -633,7 +633,7 @@ fn empty_system_returns_empty_section() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -681,7 +681,7 @@ fn dropin_with_secret_produces_redaction_hint() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -707,7 +707,7 @@ fn services_snapshot() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -729,7 +729,7 @@ fn preset_matched_entries_capture_matches() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -836,7 +836,7 @@ fn no_preset_matched_entries_without_preset_rules() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -894,7 +894,7 @@ fn test_intent_gate_warns_runtime_linked_bad_and_unknown_states() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -956,7 +956,7 @@ fn test_clean_default_snapshot_produces_zero_state_changes() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -1015,7 +1015,7 @@ fn test_owning_package_batch_query_populates_state_changes() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -1088,7 +1088,7 @@ fn test_owning_package_batch_failure_falls_back_to_individual_queries() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -1114,7 +1114,7 @@ fn scan(exec: &MockExecutor) -> (UnitSection, Vec<String>) {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -1514,7 +1514,7 @@ fn unreadable_unit_file_degrades_the_inspector() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &unreadable,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&unreadable),
         rpm_state: None,
         baseline_data: None,
     };
@@ -1598,7 +1598,7 @@ fn scan_warnings(exec: &MockExecutor) -> Vec<Warning> {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -2077,7 +2077,7 @@ fn an_unreadable_enabled_storage_unit_is_listed_once() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &unreadable,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&unreadable),
         rpm_state: None,
         baseline_data: None,
     };
@@ -2576,7 +2576,7 @@ fn config_entries(exec: &MockExecutor) -> Vec<ConfigFileEntry> {
     let rpm_state = RpmState::default();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -3050,7 +3050,7 @@ fn config_entries_not_degraded(exec: &MockExecutor) -> Vec<ConfigFileEntry> {
     let rpm_state = RpmState::default();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -3171,7 +3171,7 @@ fn vendor_read_error_under_an_etc_link_does_not_degrade() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &regular,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&regular),
         rpm_state: None,
         baseline_data: None,
     };
@@ -3491,7 +3491,7 @@ fn unreadable_mount_unit_file_degrades_naming_it() {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -3991,7 +3991,7 @@ fn degraded(exec: &MockExecutor) -> (UnitSection, String) {
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(exec),
         rpm_state: None,
         baseline_data: None,
     };
@@ -6250,7 +6250,7 @@ fn scan_maybe_degraded(exec: &MockExecutor) -> (UnitSection, Vec<String>, Option
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(exec),
         rpm_state: None,
         baseline_data: None,
     };

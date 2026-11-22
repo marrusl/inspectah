@@ -445,7 +445,10 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     let has_ssh_keys = preserved.contains(&PreserveItem::SshKeys);
     let has_subscription = preserved.contains(&PreserveItem::Subscription);
 
-    let executor = RealExecutor::new();
+    // The only production executor, wrapped at once: every host read the
+    // scan makes goes through the machine-state read gate.
+    let real_executor = RealExecutor::new();
+    let executor = inspectah_core::machine_state::ScreenedExecutor::new(&real_executor);
 
     // Build effective scan roots from defaults + CLI flags.
     let (effective_roots, home_users, extra_paths) =
@@ -909,7 +912,7 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
 
     // Bundle unmanaged files into render directory if present
     if let Some(ref unmanaged) = snapshot.unmanaged_files {
-        bundle_unmanaged_files(&unmanaged.items, render_dir.path())
+        bundle_unmanaged_files(&unmanaged.items, render_dir.path(), &executor)
             .context("failed to bundle unmanaged files")?;
     }
 
@@ -1189,12 +1192,34 @@ fn describe_scan_roots(items: &[inspectah_core::types::nonrpm::UnmanagedFile]) -
 ///
 /// Symlinks are recreated as symlinks (not followed) to prevent
 /// exfiltration of files outside the scan roots.
+///
+/// Each included regular file is screened again through the scan's read
+/// gate. The walk already moved every withheld file out of `items`, so a
+/// withheld answer here means the file changed after the walk: the scan
+/// fails with an error naming the path, before the tarball is written.
+/// It never skips the file, which would leave a `COPY` with no source.
 fn bundle_unmanaged_files(
     items: &[inspectah_core::types::nonrpm::UnmanagedFile],
     render_dir: &Path,
+    gate: &inspectah_core::machine_state::ScreenedExecutor<'_>,
 ) -> Result<()> {
+    use inspectah_core::machine_state::Screened;
     use inspectah_core::types::nonrpm::FileType;
 
+    for item in items {
+        if item.disposition.is_included()
+            && item.file_type != FileType::Symlink
+            && inspectah_pipeline::render::configtree::unmanaged_withheld(&item.path).is_none()
+            && let Screened::Withheld(member) = gate.screen(&item.path)
+        {
+            anyhow::bail!(
+                "{} became a machine-state file ({}) after the scan walked it; \
+                 re-run the scan",
+                item.path,
+                member.as_str()
+            );
+        }
+    }
     for item in items {
         // A file under `/etc/systemd/system`, or at the machine-id, is
         // withheld on the render's own decision, so the tarball carries no
@@ -1629,6 +1654,25 @@ VARIANT_ID="workstation"
             path: &std::path::Path,
         ) -> Result<std::path::PathBuf, std::io::Error> {
             Ok(path.to_path_buf())
+        }
+
+        fn file_metadata(
+            &self,
+            _path: &std::path::Path,
+        ) -> Result<inspectah_core::traits::executor::FileMetadata, std::io::Error> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            ))
+        }
+    }
+
+    impl inspectah_core::traits::executor::HostRead for ScanTestExecutor {
+        fn read_head(&self, _path: &std::path::Path, _n: usize) -> std::io::Result<Vec<u8>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            ))
         }
     }
 
@@ -2088,7 +2132,7 @@ VARIANT_ID="workstation"
         let rpm_state = RpmState::default();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2268,7 +2312,9 @@ VARIANT_ID="workstation"
             link("/opt/app/current", "/opt/app/releases/1"),
         ];
 
-        bundle_unmanaged_files(&items, render.path()).expect("bundling succeeds");
+        let host = inspectah_collect::executor::mock::MockExecutor::new();
+        let gate = inspectah_core::machine_state::ScreenedExecutor::new(&host);
+        bundle_unmanaged_files(&items, render.path(), &gate).expect("bundling succeeds");
 
         let unmanaged = render.path().join("unmanaged");
         assert!(

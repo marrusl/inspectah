@@ -461,7 +461,7 @@ fn all_success_produces_complete() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -491,7 +491,7 @@ fn one_degraded_produces_partial() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -533,7 +533,7 @@ fn one_failed_produces_incomplete() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -593,7 +593,7 @@ fn panicking_inspector_produces_failed_status() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -757,7 +757,7 @@ fn test_scheduled_permission_denied_degraded() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -805,7 +805,7 @@ fn test_scheduled_not_found_silent() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -851,7 +851,7 @@ fn test_config_rpm_va_failure_degraded() {
     let inspector = ConfigInspector::new();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -893,7 +893,7 @@ fn test_config_etc_permission_denied_degraded() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -977,7 +977,7 @@ fn test_selinux_semanage_unavailable_degraded() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -1044,7 +1044,7 @@ fn test_config_unreadable_subtree_degrades() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -1109,7 +1109,7 @@ fn test_nonrpm_readelf_unavailable_completes() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -1168,7 +1168,7 @@ fn test_nonrpm_scan_dir_not_found_silent() {
 
     let pipeline = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         None,
         &NullProgress,
@@ -1215,7 +1215,7 @@ fn test_wave2_rpm_unavailable_fails_all_dependents() {
     for (name, inspector) in &inspectors {
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -1241,7 +1241,7 @@ fn test_wave2_rpm_unavailable_fails_all_dependents() {
     for (name, inspector) in &inspectors {
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&empty_rpm_state),
             baseline_data: None,
         };

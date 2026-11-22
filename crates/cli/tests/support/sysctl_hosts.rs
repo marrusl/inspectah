@@ -72,6 +72,10 @@ const TARBALL_PREFIX: &str = "sysctl-host";
 #[derive(Debug, Default)]
 pub struct SysctlHost {
     files: BTreeMap<String, String>,
+    /// Files whose content need not be UTF-8.
+    byte_files: BTreeMap<String, Vec<u8>>,
+    /// Hard links: each path names the same file as its target.
+    hard_links: BTreeMap<String, String>,
     links: BTreeMap<String, String>,
     dangling_links: BTreeMap<String, String>,
     /// FIFOs, sockets and devices: a read of one panics.
@@ -113,6 +117,20 @@ impl SysctlHost {
 
     /// A symlink, listed in its directory. A real read of `path` follows
     /// it, so the build registers that content at `path` as well.
+    /// A file holding `content`, which need not be UTF-8.
+    pub fn file_bytes(mut self, path: &str, content: &[u8]) -> Self {
+        self.list(path);
+        self.byte_files.insert(path.into(), content.to_vec());
+        self
+    }
+
+    /// `path` as a hard link of the registered file `target`.
+    pub fn hard_link(mut self, path: &str, target: &str) -> Self {
+        self.list(path);
+        self.hard_links.insert(path.into(), target.into());
+        self
+    }
+
     pub fn link(mut self, path: &str, target: &str) -> Self {
         self.list(path);
         self.links.insert(path.into(), target.into());
@@ -282,6 +300,12 @@ impl SysctlHost {
         for (path, content) in &self.files {
             mock = mock.with_file(path, content);
         }
+        for (path, content) in &self.byte_files {
+            mock = mock.with_file_bytes(path, content);
+        }
+        for (path, target) in &self.hard_links {
+            mock = mock.with_hard_link(path, target);
+        }
         for path in &self.specials {
             mock = mock.with_special_file(path);
         }
@@ -369,11 +393,16 @@ fn pkg_source() -> SourceSystem {
 
 /// `collect()` then `validate` then `redact`: the three calls the scan
 /// command makes, in its order.
-fn scan_with(host: SysctlHost, inspectors: Vec<Box<dyn Inspector>>) -> InspectionSnapshot {
-    let exec = host.build();
+pub fn scan_with(host: SysctlHost, inspectors: Vec<Box<dyn Inspector>>) -> InspectionSnapshot {
+    scan_exec(&host.build(), inspectors)
+}
+
+/// The scan path over an executor already built, so a test can read its
+/// read log afterwards.
+pub fn scan_exec(exec: &MockExecutor, inspectors: Vec<Box<dyn Inspector>>) -> InspectionSnapshot {
     let collected = collect(
         &pkg_source(),
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(exec),
         &inspectors,
         None,
         &NullProgress,

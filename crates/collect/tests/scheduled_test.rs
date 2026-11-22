@@ -88,7 +88,7 @@ fn test_scheduled_inspector_happy_path() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -178,7 +178,7 @@ fn test_scheduled_inspector_cron_not_found() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -211,7 +211,7 @@ fn test_scheduled_inspector_degraded_permissions() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -261,7 +261,7 @@ fn test_reboot_entry_no_fake_timer() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -330,7 +330,7 @@ fn test_scheduled_inspector_json_roundtrip() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -367,7 +367,7 @@ fn a_collected_timer_is_a_description_only() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };
@@ -442,7 +442,7 @@ fn a_linked_instance_of_a_vendor_template_timer_is_described() {
     let rpm_state = mock_rpm_state();
     let ctx = InspectionContext {
         source_system: &source,
-        executor: &exec,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         rpm_state: Some(&rpm_state),
         baseline_data: None,
     };

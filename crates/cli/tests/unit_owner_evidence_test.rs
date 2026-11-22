@@ -135,7 +135,7 @@ fn collected_with(
     };
     let collected = collect(
         &source,
-        &exec,
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         baseline.as_ref(),
         &NullProgress,

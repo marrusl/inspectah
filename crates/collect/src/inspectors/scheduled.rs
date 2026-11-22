@@ -138,7 +138,7 @@ impl Inspector for ScheduledTasksInspector {
                 timer.trigger = TimerTrigger::Unresolved;
             }
         }
-        scan_instance_timers(exec, &mut section);
+        scan_instance_timers(exec, &mut section, &mut degraded_reasons);
 
         // --- At jobs ---
         scan_at_jobs(exec, &mut section, &mut hints, &mut degraded_reasons);
@@ -820,7 +820,7 @@ fn scan_systemd_timers(
         }
 
         let timer_path = format!("{dir_path}/{entry_name}");
-        let timer_text = match exec.read_file(Path::new(&timer_path)) {
+        let timer_text = match read_noting_refusal(exec, &timer_path, degraded_reasons) {
             Ok(t) if !t.is_empty() => t,
             _ => continue,
         };
@@ -831,7 +831,7 @@ fn scan_systemd_timers(
 
         let service_path = format!("{dir_path}/{name}.service");
         let service_text = if exec.file_exists(Path::new(&service_path)) {
-            exec.read_file(Path::new(&service_path)).unwrap_or_default()
+            read_noting_refusal(exec, &service_path, degraded_reasons).unwrap_or_default()
         } else {
             String::new()
         };
@@ -884,7 +884,11 @@ const SERVICE_SUFFIX: &str = ".service";
 /// inspector finds instances by ([`read_host_links`]); a failed read there
 /// is the units inspector's to report, and an instance it hides is left
 /// undescribed, which rule 5 reads as an unresolved trigger.
-fn scan_instance_timers(exec: &dyn Executor, section: &mut ScheduledTaskSection) {
+fn scan_instance_timers(
+    exec: &dyn Executor,
+    section: &mut ScheduledTaskSection,
+    degraded_reasons: &mut Vec<String>,
+) {
     let (host_links, _failures) = read_host_links(exec);
     for unit in host_links.admin.keys() {
         let Some(parts) = unit.instance() else {
@@ -903,7 +907,7 @@ fn scan_instance_timers(exec: &dyn Executor, section: &mut ScheduledTaskSection)
             (VENDOR_TIMER_DIR, "vendor"),
         ] {
             let template_path = format!("{dir}/{}", template.as_str());
-            let timer_text = match exec.read_file(Path::new(&template_path)) {
+            let timer_text = match read_noting_refusal(exec, &template_path, degraded_reasons) {
                 Ok(text) if !text.is_empty() => text,
                 _ => continue,
             };
@@ -911,7 +915,7 @@ fn scan_instance_timers(exec: &dyn Executor, section: &mut ScheduledTaskSection)
                 .iter()
                 .map(|service| format!("{dir}/{service}"))
                 .find(|path| exec.file_exists(Path::new(path)))
-                .map(|path| exec.read_file(Path::new(&path)).unwrap_or_default())
+                .map(|path| read_noting_refusal(exec, &path, degraded_reasons).unwrap_or_default())
                 .unwrap_or_default();
             let (trigger, trigger_drop_ins) = timer_trigger(exec, name, &timer_text);
             section.systemd_timers.push(SystemdTimer {
@@ -1224,7 +1228,13 @@ fn scan_at_jobs(
             continue;
         }
         let file_path = format!("/var/spool/at/{entry_name}");
-        let content = exec.read_file(Path::new(&file_path)).unwrap_or_default();
+        // A job the read gate refused has no known command: no row, and
+        // a degraded reason. Any other read error keeps today's row.
+        let content = match read_noting_refusal(exec, &file_path, degraded_reasons) {
+            Ok(content) => content,
+            Err(e) if inspectah_core::machine_state::refusal(&e).is_some() => continue,
+            Err(_) => String::new(),
+        };
         let rel_path = strip_leading_slash(&file_path);
         let job = parse_at_job(&content, &rel_path);
 
@@ -1237,6 +1247,22 @@ fn scan_at_jobs(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// `read_file`, recording a degraded reason when the machine-state read
+/// gate refused the file. The error is returned as it came.
+fn read_noting_refusal(
+    exec: &dyn Executor,
+    path: &str,
+    degraded_reasons: &mut Vec<String>,
+) -> std::io::Result<String> {
+    let read = exec.read_file(Path::new(path));
+    if let Err(e) = &read
+        && inspectah_core::machine_state::refusal(e).is_some()
+    {
+        degraded_reasons.push(inspectah_core::machine_state::left_out_reason(path));
+    }
+    read
+}
 
 /// Strips the leading `/` from a path string.
 fn strip_leading_slash(path: &str) -> String {
@@ -1326,7 +1352,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1373,7 +1399,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1418,7 +1444,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1483,7 +1509,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -1998,7 +2024,7 @@ mod tests {
         let source = test_source_system();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2168,7 +2194,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2232,7 +2258,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2266,7 +2292,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2317,7 +2343,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2346,7 +2372,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2378,7 +2404,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: None,
             baseline_data: None,
         };
@@ -2410,7 +2436,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
@@ -2449,7 +2475,7 @@ mod tests {
         let inspector = ScheduledTasksInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
-            executor: &exec,
+            executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
             rpm_state: Some(&rpm_state),
             baseline_data: None,
         };
