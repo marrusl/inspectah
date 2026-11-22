@@ -138,7 +138,11 @@ Prefer this pattern for any new fixture a frontend test loads. A
 browser test that needs the packages view with real rows can serve one
 of these recordings as `/api/view` and override only the fields it
 varies, as `e2e/not-carried.spec.ts` does with `files-no-tuned`; its
-`.groups.json` also gives the sidebar real section links to click.
+`.groups.json` also gives the sidebar real section links to click. A
+recording can also be taken after ops: `machine_state_host_with_overrides`
+applies `SetInclude` to the session before recording, which gives
+`e2e/machine-state.spec.ts` and the Vitest tests a real "after the op"
+view to answer `/api/op` with.
 
 **The recorded units bodies are the other kind of recording.**
 `e2e/systemd-units.spec.ts` and the units Vitest tests load four bodies

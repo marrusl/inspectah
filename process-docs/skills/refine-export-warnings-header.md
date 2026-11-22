@@ -92,7 +92,11 @@ focus the toggle). Without a handler (aggregate mode, which has no
 notice anyway) the alert has no link, never a dead one.
 
 After download, `withoutShownNotice` (`exportWarnings.ts`) drops header
-entries whose `kind` and `text` equal the view's notice, and only those.
+entries whose `kind` and `text` equal a notice the dialog showed, and
+only those. The shown list is the view's `not_carried_notice` plus its
+`machine_state_notices`, which the server builds with the export's own
+`export_notices`; the dialog shows their substance as the machine-state
+info alert (`machine_state_steps`) and the included-identity warning.
 For a single host the server builds both from `not_carried_notice_for`
 on the same list, so equality is the whole test; never match on a text
 pattern. For a fleet the view's notice is `null` and the header carries

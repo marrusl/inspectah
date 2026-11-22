@@ -116,3 +116,23 @@ leave `config_files`, so stats and bulk controls never reach them.
 `item_id` is present exactly when the row can be overridden. `SetInclude`
 on a withheld config or unmanaged path, and `EditVariant` holding a
 credential, return `RefineError::NotCarriable` (422, `not carried:`).
+
+The UI (`MachineStateGroup.tsx`) takes a row's control from `override`
+alone, never from its path, member or reason: `never` shows the text
+"Not carried" and no control, `plain` an Include button, `warn` an
+Include… button behind a confirm dialog. The block sits at the foot of
+Configuration in both modes and stays under that section's empty
+states; on a fleet every row is `never`. A row's item id is
+`machine-state:<path>`: it is the GlobalSearch id, the `ServiceSection`
+`required_config` link target (MainContent maps a class path to it), the
+pending-guard key for include and exclude, and the `useItemFailures` key.
+Its `<li>` carries `data-testid="machine-state-row-<path>"` and
+`tabIndex={-1}`; `App.tsx` reveal finds it by that exact string and
+focuses the row's button, or the `<li>` when it has none. A 422
+`not carried:` is shown on the row as an `info` statement, anything else
+as "not saved", and the row keeps the server's state. The UI fixtures are
+the recorded `machine-state` and `machine-state-included` sessions in
+`system_tuning_fixtures_test.rs`; record any new case there, never by
+hand. The export dialog lists `machine_state_steps` and drops the
+`machine_state_notices` entries after download
+([refine-export-warnings-header](refine-export-warnings-header.md)).
