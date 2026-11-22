@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 /**
  * Controls that send their request directly rather than through App's
  * useMutation each hold a per-item guard while the request is in flight.
@@ -264,21 +265,25 @@ function renderMainContent(onMutationError: (err: Error) => void) {
 }
 
 /**
- * Configuration with one `plain` machine-state row, its block expanded:
+ * Configuration with the recorded machine-state host's `plain` hostname
+ * row (`machine-state.view.json`, recorded by
+ * `crates/web/tests/system_tuning_fixtures_test.rs`), its block expanded:
  * MainContent guards the row's include by `machine-state:<path>`.
  */
-const HOSTNAME_ROW: MachineStateRowDto = {
-  path: "/etc/hostname",
-  member: "hostname",
-  reason: "host_identity",
-  override: "plain",
-  include: false,
-  content_captured: true,
-  mode: null,
-  size: null,
-  notice: { kind: "automatic", by: "provisioning" },
-  item_id: { kind: "Config", key: { path: "/etc/hostname" } },
-};
+const MACHINE_STATE_VIEW = Object.values(
+  import.meta.glob<{ default: ViewResponse }>(
+    "../../__tests__/fixtures/system-tuning/machine-state.view.json",
+    { eager: true },
+  ),
+)[0].default;
+
+function recordedRow(path: string): MachineStateRowDto {
+  const row = MACHINE_STATE_VIEW.machine_state.find((r) => r.path === path);
+  if (!row) throw new Error(`no recorded machine-state row ${path}`);
+  return row;
+}
+
+const HOSTNAME_ROW = recordedRow("/etc/hostname");
 
 function renderMachineState(onMutationError: (err: Error) => void) {
   renderSection("configs", { machine_state: [HOSTNAME_ROW] }, onMutationError);
