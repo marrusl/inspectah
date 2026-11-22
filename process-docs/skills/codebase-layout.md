@@ -61,7 +61,7 @@ Each module defines the data model for a snapshot section:
   - `parse.rs`: the one `sysctl.d(5)` line parser and `sysctl_values_equal`
   - `resolve.rs`: precedence resolution the way systemd-sysctl applies it (`SysctlSection::effective()` gives `Resolved` or `Unknown`), vendor replacements and carriage read from the config entries
 - `aggregate.rs` — Aggregate-specific types (consensus items, variants)
-- `repo.rs` — Repository definitions: `parse_repo_sections`, the one `.repo` reader (`RepoSectionDef`, `GpgKeyRef`), `SectionId` (a header's exact spelling, the identity of a repo decision) beside the case-folding `RepoId`, `effective_definition` and `toggleable`
+- `repo.rs`: repository definitions, `parse_repo_sections`, the one `.repo` reader (`RepoSectionDef`, `GpgKeyRef`), `SectionId` (a header's exact spelling, the identity of a repo decision) beside the case-folding `RepoId`, `effective_definition` and `toggleable`
 - `destination.rs`: `Destination`, a normalized image path, and `PathError`, moved from the pipeline's config tree so core's repo ownership pass and the stager compare paths one way
 - `subscription.rs` — RHSM entitlement types
 - `system.rs`, `os.rs` — System metadata
