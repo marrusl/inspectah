@@ -182,7 +182,7 @@ Usage: inspectah refine [OPTIONS] <TARBALL>
 | `--open <OPEN>` | `true` or `false` | `true` | Open the browser automatically. The flag takes a value: pass `--open false` or `--open=false` to suppress |
 | `--fresh` | bool | `false` | Start a fresh session, discarding any saved progress |
 
-When a saved session sits beside the tarball, refine asks whether to resume it, start fresh or quit. `-y, --yes` resumes it without asking, and `--fresh -y` discards it without asking. Without `-y`, a closed standard input stops refine with an error rather than quitting.
+When a saved session sits beside the tarball, refine asks whether to resume it, start fresh or quit. `-y, --yes` resumes it without asking, and `--fresh -y` discards it without asking. Without `-y`, a closed standard input stops refine with an error rather than quitting. A saved session that cannot be resumed, for example because the tarball changed since it was saved, stops refine with an error and is kept; `--fresh -y` discards it.
 
 ### Examples
 

@@ -51,13 +51,14 @@ pub(crate) fn resolve_session(
                     eprintln!("Resumed session ({ops_count} ops active).");
                     Ok(ResolveResult::Session(Box::new(s)))
                 }
-                Err(e) => {
-                    eprintln!("Warning: could not resume: {e}");
-                    eprintln!("Starting fresh session.");
-                    let mut s = inspectah_refine::tarball::from_tarball(tarball)?;
-                    s.set_tarball_path(tarball.to_path_buf());
-                    Ok(ResolveResult::Session(Box::new(s)))
-                }
+                // A fresh session in its place would autosave over the
+                // saved decisions: only `--fresh` discards them.
+                Err(e) => anyhow::bail!(
+                    "could not resume the saved session {}: {e}\n\
+                     The saved session was kept. To discard it and start over, run \
+                     again with --fresh --yes.",
+                    session_path.display()
+                ),
                 Ok(None) => unreachable!("sidecar was just verified to exist"),
             },
             SessionChoice::Fresh => {
@@ -550,6 +551,54 @@ mod tests {
         ));
 
         let result = open_session(&tarball, true, true, &mut closed()).unwrap();
+        assert!(matches!(result, ResolveResult::Session(_)));
+        assert!(!session_path.exists(), "--fresh --yes discards the sidecar");
+    }
+
+    /// A saved session whose tarball changed since it was saved loads but
+    /// cannot resume. Whether `--yes` resumed it or the operator answered
+    /// resume, the command stops with the cause and the way to discard
+    /// it, the sidecar untouched, and no fresh session is served in its
+    /// place: only `--fresh` discards saved decisions.
+    #[test]
+    fn a_failed_resume_stops_and_keeps_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = dir.path().join("test.tar.gz");
+        write_units_tarball(&tarball);
+        let session_path = inspectah_refine::autosave::session_file_path(&tarball);
+        let saved = write_sidecar_excluding_unit(&tarball, "Unit");
+        // Another valid scan at the same path.
+        write_test_tarball(&tarball);
+
+        for (assume_yes, answer) in [(true, ""), (false, "r\n")] {
+            let ctx = format!("--yes={assume_yes}, answer {answer:?}");
+            let err = match open_session(
+                &tarball,
+                false,
+                assume_yes,
+                &mut std::io::Cursor::new(answer),
+            ) {
+                Err(e) => format!("{e:#}"),
+                Ok(ResolveResult::Session(_)) => panic!("{ctx}: a fresh session was served"),
+                Ok(ResolveResult::Quit) => panic!("{ctx}: a failed resume must be an error"),
+            };
+            assert!(err.contains("stale tarball"), "{ctx}: the cause: {err}");
+            assert!(
+                err.contains(&session_path.display().to_string()),
+                "{ctx}: where the kept session is: {err}"
+            );
+            assert!(
+                err.contains("kept") && err.contains("--fresh --yes"),
+                "{ctx}: the session was kept and how to discard it: {err}"
+            );
+            assert_eq!(
+                std::fs::read(&session_path).expect("the sidecar must still exist"),
+                saved,
+                "{ctx}: the sidecar must be byte-for-byte intact"
+            );
+        }
+
+        let result = open_session(&tarball, true, true, &mut std::io::Cursor::new("")).unwrap();
         assert!(matches!(result, ResolveResult::Session(_)));
         assert!(!session_path.exists(), "--fresh --yes discards the sidecar");
     }

@@ -645,7 +645,9 @@ named `.inspectah-session-<basename>.json` (for example,
 When you run `inspectah refine` on the same tarball again and a saved
 session exists, it shows the number of saved operations and asks whether to
 resume, start fresh, or quit. Resuming restores all your previous
-include/exclude decisions.
+include/exclude decisions. If the session cannot be resumed, for example
+because the tarball changed since it was saved, `refine` stops with an
+error and keeps the saved session rather than starting fresh.
 
 To start fresh and discard saved progress, pass `--fresh`. If a saved
 session exists, `refine` asks you to confirm before it discards it:
