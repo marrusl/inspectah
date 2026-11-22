@@ -307,9 +307,10 @@ test.describe("Aggregate mode", () => {
   });
 });
 
-// Position 29 (§ 3.2, § 6.3) in the aggregate mount: the repo Switch reads
-// the effective counts, never `enabled`/history, and activation posts the
-// direction those counts derive through `handleAggregateRepoToggle`. Same
+// Position 29 (§ 3.2, § 6.3) in the aggregate mount, as § 5.5 of the repo
+// ownership spec amends it: the repo Switch reads the decision (`kept`) and
+// the effective counts, and activation posts the direction the server
+// accepts through `handleAggregateRepoToggle`. Same
 // `repo-disagree` sequence fixtures as e2e/repos.spec.ts (built to double as
 // both a ViewResponse and an AggregateViewResponse).
 test.describe("Repo disagreement in aggregate mode (position 29)", () => {
@@ -321,7 +322,7 @@ test.describe("Repo disagreement in aggregate mode (position 29)", () => {
     await clearMocks(page);
   });
 
-  test("enabled history, members excluded, then included; undo and redo", async ({
+  test("kept, members excluded, then included; undo and redo", async ({
     page,
   }) => {
     await mockSequence(
@@ -372,7 +373,7 @@ test.describe("Repo disagreement in aggregate mode (position 29)", () => {
     await expect(page.getByText("2 of 2 packages included")).toBeVisible();
   });
 
-  test("mirror direction: excluded history, members included, then excluded", async ({
+  test("excluded in refine, members included by hand, then kept again; undo and redo", async ({
     page,
   }) => {
     await mockSequence(
@@ -380,7 +381,7 @@ test.describe("Repo disagreement in aggregate mode (position 29)", () => {
       "/api/aggregate/view",
       [
         "sequences/repo-disagree/10-disabled-all-included.json",
-        "sequences/repo-disagree/11-after-exclude-all.json",
+        "sequences/repo-disagree/11-after-include.json",
         "sequences/repo-disagree/12-after-undo.json",
         "sequences/repo-disagree/13-after-redo.json",
       ],
@@ -401,25 +402,29 @@ test.describe("Repo disagreement in aggregate mode (position 29)", () => {
 
     const vendorSwitch = page.locator("#repo-toggle-vendor");
     await expect(vendorSwitch).toBeVisible();
-    await expect(vendorSwitch).toBeChecked();
-    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(
+      page.getByText("2 of 2 packages included, excluded in refine"),
+    ).toBeVisible();
 
     await vendorSwitch.click({ force: true });
-    await expect(vendorSwitch).not.toBeChecked();
-    await expect(page.getByText("2 packages excluded")).toBeVisible();
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included", { exact: true })).toBeVisible();
     expect(opPayloads.at(-1)).toMatchObject({
       target: {
         item_id: { kind: "Repo", key: { path: "vendor" } },
-        include: false,
+        include: true,
       },
     });
 
     await page.getByRole("button", { name: "Undo" }).click();
-    await expect(vendorSwitch).toBeChecked();
-    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(
+      page.getByText("2 of 2 packages included, excluded in refine"),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: "Redo" }).click();
-    await expect(vendorSwitch).not.toBeChecked();
-    await expect(page.getByText("2 packages excluded")).toBeVisible();
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included", { exact: true })).toBeVisible();
   });
 });

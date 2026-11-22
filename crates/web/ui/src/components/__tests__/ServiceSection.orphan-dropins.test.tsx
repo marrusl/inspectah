@@ -52,6 +52,7 @@ function makeDropin(
     triage: TRIAGE,
     include: true,
     locked: false,
+    config_paths: [overrides.path ?? ORPHAN_PATH],
     ...overrides,
   };
 }

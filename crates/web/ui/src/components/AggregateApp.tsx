@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
+  Alert,
+  AlertActionCloseButton,
   Button,
   Page,
   PageSection,
@@ -44,6 +46,11 @@ import { AggregateBanner } from "./aggregate/AggregateBanner";
 import { AggregateSectionContent } from "./aggregate/AggregateSection";
 import { itemDisplayName } from "./aggregate/AggregateItemRow";
 import { RepoBar } from "./RepoBar";
+import {
+  inventoryRefusalText,
+  repoFailure,
+  type RepoFailure,
+} from "./repoControl";
 import { SysctlPanel } from "./SysctlPanel";
 import { PackageList } from "./PackageList";
 import type { PackageListPackage } from "./PackageList";
@@ -186,8 +193,66 @@ export function AggregateApp({
       .catch((e) => setError(e.message));
   }, []);
 
-  const { mutate, undo, redo, isPending, refetchError, retry } =
-    useAggregateMutation(setView, (err) => setError(err.message));
+  // A refused repo op is shown on its row, the way the single-host
+  // Repositories section shows it; a `nothing to change:` means the view
+  // was stale, so it is fetched again. A refused op on a row another
+  // section decides is information about that row, never a failure.
+  const [repoFailures, setRepoFailures] = useState<
+    ReadonlyMap<string, RepoFailure>
+  >(() => new Map());
+  const [opNotice, setOpNotice] = useState<string | null>(null);
+  const clearRepoFailure = useCallback((sectionId: string) => {
+    setRepoFailures((prev) => {
+      if (!prev.has(sectionId)) return prev;
+      const next = new Map(prev);
+      next.delete(sectionId);
+      return next;
+    });
+  }, []);
+  const handleMutationError = useCallback(
+    (err: Error, op?: RefinementOp) => {
+      const inventory = inventoryRefusalText(err);
+      if (inventory !== null) {
+        setOpNotice(inventory);
+        return;
+      }
+      if (op?.op === "SetInclude" && op.target.item_id.kind === "Repo") {
+        const sectionId = op.target.item_id.key.path;
+        const failure = repoFailure(err);
+        setRepoFailures((prev) => new Map(prev).set(sectionId, failure));
+        if (failure.kind === "nothing_to_change") {
+          fetchAggregateView()
+            .then(setView)
+            .catch((e: unknown) =>
+              setError(e instanceof Error ? e.message : String(e)),
+            );
+        }
+        return;
+      }
+      setError(err.message);
+    },
+    [],
+  );
+  const {
+    mutate,
+    undo: undoOp,
+    redo: redoOp,
+    isPending,
+    refetchError,
+    retry,
+  } = useAggregateMutation(setView, handleMutationError);
+  // An Undo or Redo can replace any repo's state, so it ends every
+  // failure the rows show.
+  const undo = useCallback(() => {
+    setRepoFailures(new Map());
+    setOpNotice(null);
+    undoOp();
+  }, [undoOp]);
+  const redo = useCallback(() => {
+    setRepoFailures(new Map());
+    setOpNotice(null);
+    redoOp();
+  }, [redoOp]);
 
   // --- Divergent review tracking (session-layer state) ---
   const [confirmedDivergentIds, setConfirmedDivergentIds] = useState<
@@ -404,6 +469,7 @@ export function AggregateApp({
       if (!view) return;
       const repo = view.repo_groups.find((r) => r.section_id === sectionId);
       if (!repo) return;
+      clearRepoFailure(sectionId);
       mutate({
         op: "SetInclude",
         target: {
@@ -412,7 +478,7 @@ export function AggregateApp({
         },
       });
     },
-    [view, mutate],
+    [view, mutate, clearRepoFailure],
   );
 
   // Loading state
@@ -639,11 +705,28 @@ export function AggregateApp({
                       </Button>
                     </div>
                   )}
+                  {opNotice && (
+                    <Alert
+                      variant="info"
+                      isInline
+                      isPlain
+                      title={opNotice}
+                      data-testid="aggregate-op-notice"
+                      actionClose={
+                        <AlertActionCloseButton
+                          aria-label="Dismiss the message"
+                          onClose={() => setOpNotice(null)}
+                        />
+                      }
+                    />
+                  )}
                   {activeSection === "packages" ? (
                     <>
                       <RepoBar
                         repos={aggregateView.repo_groups}
                         onToggle={handleAggregateRepoToggle}
+                        failures={repoFailures}
+                        onDismissFailure={clearRepoFailure}
                         conflictCount={aggregateView.repo_conflict_count}
                         dismissedCount={dismissedCount}
                         onRestoreDismissed={handleRestoreDismissed}

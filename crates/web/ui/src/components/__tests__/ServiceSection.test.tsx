@@ -63,6 +63,7 @@ function makeDropin(
     triage: makeTriage("site"),
     include: true,
     locked: false,
+    config_paths: [overrides.path ?? "/etc/systemd/system/httpd.service.d/override.conf"],
     ...overrides,
   };
 }
@@ -81,6 +82,7 @@ const MOCK_VIEW: ViewResponse = {
   stats: MOCK_STATS,
   generation: 1,
   repo_groups: [],
+  repo_owned: [],
   version_changes: [],
   unit_states: [],
   unit_dropins: [],
@@ -468,6 +470,7 @@ describe("ServiceSection full shadow on the drop-in row", () => {
       path: SHADOW_PATH,
       shadow_type: "full_shadow",
       shadow_rationale: "This service is critical for bootc",
+      config_paths: [overrides.path ?? "/etc/systemd/system/httpd.service.d/override.conf"],
       ...overrides,
     });
   }

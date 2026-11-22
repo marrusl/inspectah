@@ -13,7 +13,11 @@ const mockRepos: RepoGroupInfo[] = [
     effective_member_count: 12,
     effective_included: 12,
     effective_unlisted: 0,
-    enabled: true,
+    control: "none",
+    kept: true,
+    carriage_count: 0,
+    carriage_included: 0,
+    owns: [],
   },
   {
     section_id: "appstream",
@@ -24,7 +28,11 @@ const mockRepos: RepoGroupInfo[] = [
     effective_member_count: 28,
     effective_included: 28,
     effective_unlisted: 0,
-    enabled: true,
+    control: "none",
+    kept: true,
+    carriage_count: 0,
+    carriage_included: 0,
+    owns: [],
   },
   {
     section_id: "crb",
@@ -35,7 +43,11 @@ const mockRepos: RepoGroupInfo[] = [
     effective_member_count: 4,
     effective_included: 4,
     effective_unlisted: 0,
-    enabled: true,
+    control: "full",
+    kept: true,
+    carriage_count: 0,
+    carriage_included: 0,
+    owns: [],
   },
   {
     section_id: "epel",
@@ -46,7 +58,11 @@ const mockRepos: RepoGroupInfo[] = [
     effective_member_count: 8,
     effective_included: 8,
     effective_unlisted: 0,
-    enabled: true,
+    control: "full",
+    kept: true,
+    carriage_count: 0,
+    carriage_included: 0,
+    owns: [],
   },
 ];
 
@@ -61,7 +77,11 @@ function repo(overrides: Partial<RepoGroupInfo>): RepoGroupInfo {
     effective_member_count: 2,
     effective_included: 1,
     effective_unlisted: 0,
-    enabled: true,
+    control: "full",
+    kept: true,
+    carriage_count: 0,
+    carriage_included: 0,
+    owns: [],
     ...overrides,
   };
 }
@@ -94,24 +114,34 @@ describe("RepoBar", () => {
     expect(alwaysLabels).toHaveLength(2);
   });
 
-  // The two states where `enabled` and the effective counts disagree,
-  // verbatim from Task 7's build_repo_groups assertions (§ 3.2, position 29).
+  // The two states where the decision and the effective counts disagree
+  // (§ 3.2, position 29 of the refine-ui-fixup spec; § 5.5 of the repo
+  // ownership spec): members all excluded by hand while the repo is kept,
+  // and members all included while the repo is excluded.
   const stateA: Partial<RepoGroupInfo> = {
     section_id: "vendor",
-    enabled: true,
+    control: "full",
+    kept: true,
+    carriage_count: 0,
+    carriage_included: 0,
+    owns: [],
     effective_member_count: 2,
     effective_included: 0,
     effective_unlisted: 0,
   };
   const stateB: Partial<RepoGroupInfo> = {
     section_id: "vendor",
-    enabled: false,
+    control: "full",
+    kept: false,
+    carriage_count: 0,
+    carriage_included: 0,
+    owns: [],
     effective_member_count: 2,
     effective_included: 2,
     effective_unlisted: 0,
   };
 
-  it("reads the counts, not the history, and posts the derived direction", () => {
+  it("reads the decision and the counts, and posts the direction the server accepts", () => {
     const onToggle = vi.fn();
     const { rerender } = render(
       <RepoBar repos={[repo(stateA)]} onToggle={onToggle} />,
@@ -121,9 +151,23 @@ describe("RepoBar", () => {
     fireEvent.click(screen.getByRole("switch"));
     expect(onToggle).toHaveBeenCalledWith("vendor", true);
 
+    // Excluded in refine with its members put back by hand: the include
+    // moves the decision, so it is what the switch posts.
     rerender(<RepoBar repos={[repo(stateB)]} onToggle={onToggle} />);
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    expect(
+      screen.getByText("2 of 2 packages included, excluded in refine"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch"));
+    expect(onToggle).toHaveBeenLastCalledWith("vendor", true);
+
+    rerender(
+      <RepoBar
+        repos={[repo({ ...stateB, kept: true })]}
+        onToggle={onToggle}
+      />,
+    );
     expect(screen.getByRole("switch")).toBeChecked();
-    expect(screen.getByText("2 of 2 packages included")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("switch"));
     expect(onToggle).toHaveBeenLastCalledWith("vendor", false);
   });
@@ -150,41 +194,6 @@ describe("RepoBar", () => {
     // on screen is inside the composed count text asserted above.
     expect(screen.queryByText("1")).not.toBeInTheDocument();
   });
-
-  it.each([stateA, stateB])(
-    "ignores a contradicting enabled bit",
-    (state) => {
-      const onToggle = vi.fn();
-      // PatternFly's Switch stamps a unique generated OUIA id per mount, so
-      // markup is compared with that attribute stripped out.
-      const stripOuiaId = (html: string) =>
-        html.replace(/data-ouia-component-id="[^"]*"/, "");
-
-      const { container, unmount } = render(
-        <RepoBar repos={[repo(state)]} onToggle={onToggle} />,
-      );
-      const before = stripOuiaId(container.innerHTML);
-      const switchBefore = screen.getByRole("switch") as HTMLInputElement;
-      const wasChecked = switchBefore.checked;
-      fireEvent.click(switchBefore);
-      expect(onToggle).toHaveBeenCalledWith(state.section_id, !wasChecked);
-      unmount();
-
-      const { container: afterContainer } = render(
-        <RepoBar
-          repos={[repo({ ...state, enabled: !state.enabled })]}
-          onToggle={onToggle}
-        />,
-      );
-      // Same rendered markup regardless of the contradicting `enabled` bit.
-      expect(stripOuiaId(afterContainer.innerHTML)).toBe(before);
-      fireEvent.click(screen.getByRole("switch"));
-      expect(onToggle).toHaveBeenLastCalledWith(
-        state.section_id,
-        !wasChecked,
-      );
-    },
-  );
 
   it("gives two same-count repos distinguishable accessible names", () => {
     // `aria-label` overrides the visible repo name in accessible-name
@@ -383,6 +392,7 @@ describe("RepoBar", () => {
           repos={[
             repo({
               provenance,
+              control: "none",
               effective_member_count: 2,
               effective_included: 1,
             }),
@@ -407,6 +417,7 @@ describe("RepoBar", () => {
         repos={[
           repo({
             provenance: "verified",
+            control: "none",
             effective_member_count: 0,
             effective_included: 0,
           }),
@@ -416,7 +427,7 @@ describe("RepoBar", () => {
     );
     expect(screen.queryByRole("switch")).toBeNull();
     expect(
-      screen.getByText("nothing to decide: all members are locked"),
+      screen.getByText("nothing to decide: no package to change and no file or key the export can carry"),
     ).toBeInTheDocument();
   });
 
@@ -446,6 +457,7 @@ describe("RepoBar", () => {
           repo({
             section_id: "@commandline",
             provenance: "unknown",
+            control: "none",
             effective_member_count: 0,
             effective_included: 0,
           }),

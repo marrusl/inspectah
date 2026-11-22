@@ -52,6 +52,7 @@ function view(config_files: RefinedConfig[]): ViewResponse {
     stats: mockStats(),
     generation: 0,
     repo_groups: [],
+    repo_owned: [],
     version_changes: [],
     unit_states: [],
     unit_dropins: [],

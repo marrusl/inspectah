@@ -1,18 +1,19 @@
 /**
- * Covers § 8.12's phase 0 activation block for the single-host mount:
- * the live RepoBar, mounted by MainContent, must read the repo Switch from
- * the effective counts (not `enabled`/history) and post the direction those
- * counts derive -- not `!repo.enabled` -- through `handleRepoToggle`.
+ * Covers § 8.12's phase 0 activation block for the single-host mount, as
+ * the repo ownership spec's § 5.5 amends it: the live RepoBar, mounted by
+ * MainContent, reads the repo Switch from the decision (`kept`) and the
+ * counts, and posts the direction they derive, which the server never
+ * refuses, through `handleRepoToggle`.
  *
  * Unlike MainContent.ungroup.test.tsx, `applyOp` here is a *stateful* fake,
  * not `vi.fn()`: a case asserting only that the op fired would not catch the
  * historical-direction bug this task fixes, since both the old and new code
- * call `applyOp` at least once. The fake applies § 3.2's Repo arm (reject a
- * same-state op with a 422, otherwise move every effective member and
- * `effective_included`, and set `enabled` to the posted direction) and an
+ * call `applyOp` at least once. The fake applies the Repo arm of § 5.3 of
+ * the repo ownership spec (move every effective member and set `kept` to
+ * the posted direction; reject an op that moves neither with a 422) and an
  * accepted package-level `SetInclude` (moves its own member and the repo's
- * count, leaves `enabled` alone), so the test can tell which direction the
- * UI actually posted and whether the server accepted it.
+ * count, leaves `kept` alone), so the test can tell which direction the UI
+ * actually posted and whether the server accepted it.
  */
 import { useState } from "react";
 import { describe, it, expect, vi } from "vitest";
@@ -38,6 +39,7 @@ import { emptyView } from "../../test-utils/emptyView";
 vi.mock("../../api/client", () => ({
   ungroupGroup: vi.fn(),
   applyOp: vi.fn(),
+  fetchView: vi.fn(),
 }));
 
 // --- Fixtures ---
@@ -53,7 +55,11 @@ function makeVendorRepo(overrides: Partial<RepoGroupInfo> = {}): RepoGroupInfo {
     effective_member_count: 2,
     effective_included: 2,
     effective_unlisted: 0,
-    enabled: true,
+    control: "full",
+    kept: true,
+    carriage_count: 0,
+    carriage_included: 0,
+    owns: [],
     ...overrides,
   };
 }
@@ -111,8 +117,8 @@ function makeFakeApi(initialView: ViewResponse) {
       const repo = findRepo(item_id.key.path);
       if (!repo) throw new Error(`unknown repo: ${item_id.key.path}`);
       const alreadyHolds = include
-        ? repo.effective_included === repo.effective_member_count
-        : repo.effective_included === 0;
+        ? repo.kept && repo.effective_included === repo.effective_member_count
+        : !repo.kept && repo.effective_included === 0;
       if (alreadyHolds) {
         throw new ApiError(422, {
           error: `nothing to change: ${item_id.key.path}`,
@@ -128,7 +134,7 @@ function makeFakeApi(initialView: ViewResponse) {
         }
       }
       repo.effective_included = include ? repo.effective_member_count : 0;
-      repo.enabled = include;
+      repo.kept = include;
       opsLog.push(op);
       return structuredClone(view);
     }
@@ -215,8 +221,8 @@ async function includeExcludedZoneMember(nameArch: string) {
   });
 }
 
-describe("RepoBar's Switch in MainContent reads members, not history", () => {
-  it("state (a): reaches enabled history with both members excluded, then includes all", async () => {
+describe("RepoBar's Switch in MainContent reads the decision and the members", () => {
+  it("state (a): kept with both members excluded, then includes all", async () => {
     const initialView = makeView(makeVendorRepo());
     const fake = makeFakeApi(initialView);
     vi.mocked(client.applyOp).mockImplementation(fake.applyOp);
@@ -230,7 +236,7 @@ describe("RepoBar's Switch in MainContent reads members, not history", () => {
     await excludeMemberRow("a.x86_64");
     await excludeMemberRow("b.x86_64");
     expect(fake.repo("vendor")).toMatchObject({
-      enabled: true,
+      kept: true,
       effective_member_count: 2,
       effective_included: 0,
     });
@@ -253,13 +259,11 @@ describe("RepoBar's Switch in MainContent reads members, not history", () => {
     expect(screen.getByText("2 of 2 packages included")).toBeInTheDocument();
   });
 
-  it("state (b): excluded history with both members individually included, then excludes all", async () => {
-    // PackageList's `disabledRepos` split (`PackageList.tsx`) routes a
-    // disabled repo's members into ExcludedZone, which now (task 9c) wires
-    // per-row checkboxes through the same `onToggle` the normal zone uses,
-    // so each member stays individually clickable while the repo stays
-    // history-excluded -- reached here through a live sequence rather than
-    // the fixture surgery the prior revision needed.
+  it("state (b): excluded with both members individually included, then kept again", async () => {
+    // PackageList's `disabledRepos` split (`PackageList.tsx`) routes an
+    // excluded repo's members into ExcludedZone, which wires per-row
+    // checkboxes through the same `onToggle` the normal zone uses, so each
+    // member stays individually clickable while the repo stays excluded.
     const initialView = makeView(makeVendorRepo());
     const fake = makeFakeApi(initialView);
     vi.mocked(client.applyOp).mockImplementation(fake.applyOp);
@@ -274,19 +278,23 @@ describe("RepoBar's Switch in MainContent reads members, not history", () => {
     fireEvent.click(screen.getByRole("switch"));
     await waitFor(() => expect(screen.getByRole("switch")).not.toBeChecked());
     expect(fake.repo("vendor")).toMatchObject({
-      enabled: false,
+      kept: false,
       effective_included: 0,
     });
 
     await includeExcludedZoneMember("a.x86_64");
     await includeExcludedZoneMember("b.x86_64");
     expect(fake.repo("vendor")).toMatchObject({
-      enabled: false,
+      kept: false,
       effective_member_count: 2,
       effective_included: 2,
     });
-    expect(screen.getByRole("switch")).toBeChecked();
-    expect(screen.getByText("2 of 2 packages included")).toBeInTheDocument();
+    // The decision is still excluded, so the switch reads off and says so,
+    // and the include it posts moves the decision: the server accepts it.
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    expect(
+      screen.getByText("2 of 2 packages included, excluded in refine"),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("switch"));
     await waitFor(() =>
@@ -294,17 +302,53 @@ describe("RepoBar's Switch in MainContent reads members, not history", () => {
         op: "SetInclude",
         target: {
           item_id: { kind: "Repo", key: { path: "vendor" } },
-          include: false,
+          include: true,
         },
       }),
     );
     expect(onMutationError).not.toHaveBeenCalled();
-    expect(fake.opsLog()).toHaveLength(4); // repo exclude, two member includes, repo exclude
-    await waitFor(() => expect(screen.getByRole("switch")).not.toBeChecked());
-    expect(screen.getByText("2 packages excluded")).toBeInTheDocument();
+    expect(fake.opsLog()).toHaveLength(4); // repo exclude, two member includes, repo include
+    await waitFor(() => expect(screen.getByRole("switch")).toBeChecked());
+    expect(screen.getByText("2 of 2 packages included")).toBeInTheDocument();
     expect(fake.repo("vendor")).toMatchObject({
-      enabled: false,
-      effective_included: 0,
+      kept: true,
+      effective_included: 2,
     });
+  });
+
+  it("shows a 422 nothing to change on the row as information and refetches the view", async () => {
+    // A stale view: the client thinks the repo is excluded, the server has
+    // it kept with everything carried.
+    const stale = makeView(
+      makeVendorRepo({ kept: false, effective_included: 0 }),
+    );
+    const fresh = makeView(makeVendorRepo());
+    vi.mocked(client.applyOp).mockRejectedValue(
+      new ApiError(422, {
+        error:
+          "nothing to change: repo 'vendor' is already kept, with its files and keys carried and every effective member included",
+      }),
+    );
+    vi.mocked(client.fetchView).mockResolvedValue(fresh);
+    const onMutationError = vi.fn();
+
+    render(<Harness initialView={stale} onMutationError={onMutationError} />);
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    fireEvent.click(screen.getByRole("switch"));
+
+    const notice = await screen.findByTestId("repo-failure-vendor");
+    expect(notice).toHaveTextContent(
+      "Nothing to change: repo 'vendor' is already kept, with its files and keys carried and every effective member included.",
+    );
+    expect(notice.className).toMatch(/info/);
+    await waitFor(() => expect(screen.getByRole("switch")).toBeChecked());
+    expect(client.fetchView).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Dismiss the message for repo vendor",
+      }),
+    );
+    expect(screen.queryByTestId("repo-failure-vendor")).toBeNull();
   });
 });

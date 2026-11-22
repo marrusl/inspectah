@@ -1,8 +1,9 @@
 /**
- * Covers § 8.12's phase 0 activation block for the aggregate mount: the
- * live RepoBar, mounted by AggregateApp, must read the repo Switch from the
- * effective counts (not `enabled`/history) and post the direction those
- * counts derive through `handleAggregateRepoToggle`.
+ * Covers § 8.12's phase 0 activation block for the aggregate mount, as the
+ * repo ownership spec's § 5.5 amends it: the live RepoBar, mounted by
+ * AggregateApp, reads the repo Switch from the decision (`kept`) and the
+ * counts, and posts the direction they derive through
+ * `handleAggregateRepoToggle`.
  *
  * Like MainContent.repo.test.tsx, `applyOp`/`undo`/`redo` here are a
  * *stateful* fake, not `vi.fn()`, so the test can tell which direction the
@@ -85,7 +86,11 @@ function makeVendorRepo(overrides: Partial<RepoGroupInfo> = {}): RepoGroupInfo {
     effective_member_count: 2,
     effective_included: 2,
     effective_unlisted: 0,
-    enabled: true,
+    control: "full",
+    kept: true,
+    carriage_count: 0,
+    carriage_included: 0,
+    owns: [],
     ...overrides,
   };
 }
@@ -158,8 +163,8 @@ function makeFakeApi(initialView: AggregateViewResponse) {
       const repo = findRepo(item_id.key.path);
       if (!repo) throw new Error(`unknown repo: ${item_id.key.path}`);
       const alreadyHolds = include
-        ? repo.effective_included === repo.effective_member_count
-        : repo.effective_included === 0;
+        ? repo.kept && repo.effective_included === repo.effective_member_count
+        : !repo.kept && repo.effective_included === 0;
       if (alreadyHolds) {
         throw new ApiError(422, {
           error: `nothing to change: ${item_id.key.path}`,
@@ -171,7 +176,7 @@ function makeFakeApi(initialView: AggregateViewResponse) {
         }
       }
       repo.effective_included = include ? repo.effective_member_count : 0;
-      repo.enabled = include;
+      repo.kept = include;
     } else if (item_id.kind === "Package") {
       const item = packageItems().find(
         (i) =>
@@ -276,7 +281,7 @@ async function includeExcludedZoneMember(nameArch: string) {
   });
 }
 
-describe("RepoBar's Switch in AggregateApp reads members, not history", () => {
+describe("RepoBar's Switch in AggregateApp reads the decision and the members", () => {
   function wireFake(fake: ReturnType<typeof makeFakeApi>) {
     mockFetchAggregateView.mockImplementation(() =>
       Promise.resolve(fake.currentView()),
@@ -286,7 +291,7 @@ describe("RepoBar's Switch in AggregateApp reads members, not history", () => {
     mockRedo.mockImplementation(fake.redo);
   }
 
-  it("state (a): reaches enabled history with both members excluded, then includes all, with undo/redo", async () => {
+  it("state (a): kept with both members excluded, then includes all, with undo/redo", async () => {
     const fake = makeFakeApi(makeView(makeVendorRepo()));
     wireFake(fake);
 
@@ -297,7 +302,7 @@ describe("RepoBar's Switch in AggregateApp reads members, not history", () => {
     await excludeMemberRow("a.x86_64");
     await excludeMemberRow("b.x86_64");
     expect(fake.repo("vendor")).toMatchObject({
-      enabled: true,
+      kept: true,
       effective_member_count: 2,
       effective_included: 0,
     });
@@ -337,37 +342,35 @@ describe("RepoBar's Switch in AggregateApp reads members, not history", () => {
     expect(fake.opsLog()).toHaveLength(3);
   });
 
-  // PackageList's `disabledRepos` split (`PackageList.tsx`) routes a
-  // disabled repo's members into ExcludedZone, which now (task 9c) wires
-  // per-row checkboxes through the same `onToggle` the normal zone uses,
-  // so each member stays individually clickable while the repo stays
-  // history-excluded -- reached here through a live sequence rather than
-  // the fixture surgery the prior revision needed.
-  it("state (b): excluded history with both members individually included, then excludes all", async () => {
+  // PackageList's `disabledRepos` split (`PackageList.tsx`) routes an
+  // excluded repo's members into ExcludedZone, which wires per-row
+  // checkboxes through the same `onToggle` the normal zone uses, so each
+  // member stays individually clickable while the repo stays excluded.
+  it("state (b): excluded with both members individually included, then kept again", async () => {
     const fake = makeFakeApi(makeView(makeVendorRepo()));
     wireFake(fake);
 
     renderAggregateApp();
     await waitForContent();
 
-    // Exclude the repo via the Switch, then re-include each member
-    // individually through its row in ExcludedZone.
     fireEvent.click(screen.getByRole("switch"));
     await waitFor(() => expect(screen.getByRole("switch")).not.toBeChecked());
     expect(fake.repo("vendor")).toMatchObject({
-      enabled: false,
+      kept: false,
       effective_included: 0,
     });
 
     await includeExcludedZoneMember("a.x86_64");
     await includeExcludedZoneMember("b.x86_64");
     expect(fake.repo("vendor")).toMatchObject({
-      enabled: false,
+      kept: false,
       effective_member_count: 2,
       effective_included: 2,
     });
-    expect(screen.getByRole("switch")).toBeChecked();
-    expect(screen.getByText("2 of 2 packages included")).toBeInTheDocument();
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    expect(
+      screen.getByText("2 of 2 packages included, excluded in refine"),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("switch"));
     await waitFor(() =>
@@ -375,16 +378,63 @@ describe("RepoBar's Switch in AggregateApp reads members, not history", () => {
         op: "SetInclude",
         target: {
           item_id: { kind: "Repo", key: { path: "vendor" } },
-          include: false,
+          include: true,
         },
       }),
     );
-    expect(fake.opsLog()).toHaveLength(4); // repo exclude, two member includes, repo exclude
-    await waitFor(() => expect(screen.getByRole("switch")).not.toBeChecked());
-    expect(screen.getByText("2 packages excluded")).toBeInTheDocument();
+    expect(fake.opsLog()).toHaveLength(4); // repo exclude, two member includes, repo include
+    await waitFor(() => expect(screen.getByRole("switch")).toBeChecked());
     expect(fake.repo("vendor")).toMatchObject({
-      enabled: false,
-      effective_included: 0,
+      kept: true,
+      effective_included: 2,
     });
+  });
+
+  it("shows a refused repo op on the row and refetches the view", async () => {
+    const fake = makeFakeApi(makeView(makeVendorRepo()));
+    wireFake(fake);
+    renderAggregateApp();
+    await waitForContent();
+
+    mockApplyOp.mockRejectedValueOnce(
+      new ApiError(422, {
+        error:
+          "nothing to change: repo 'vendor' is already excluded, with no effective member included and nothing more to drop",
+      }),
+    );
+    const fetchesBefore = mockFetchAggregateView.mock.calls.length;
+    fireEvent.click(screen.getByRole("switch"));
+    const notice = await screen.findByTestId("repo-failure-vendor");
+    expect(notice).toHaveTextContent(
+      "Nothing to change: repo 'vendor' is already excluded, with no effective member included and nothing more to drop.",
+    );
+    expect(notice.className).toMatch(/info/);
+    await waitFor(() =>
+      expect(mockFetchAggregateView.mock.calls.length).toBeGreaterThan(
+        fetchesBefore,
+      ),
+    );
+    // The page stays up: a refused op is not a load failure.
+    expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
+  });
+
+  it("states an inventory refusal on a configuration row as information", async () => {
+    const fake = makeFakeApi(makeView(makeVendorRepo()));
+    wireFake(fake);
+    renderAggregateApp();
+    await waitForContent();
+
+    mockApplyOp.mockRejectedValueOnce(
+      new ApiError(422, {
+        error:
+          "inventory finding is not toggleable: /etc/yum.repos.d/vendor.repo",
+      }),
+    );
+    fireEvent.click(screen.getByRole("switch"));
+    const notice = await screen.findByTestId("aggregate-op-notice");
+    expect(notice).toHaveTextContent(
+      "Nothing was changed: /etc/yum.repos.d/vendor.repo is decided by the section that owns it, not by this row.",
+    );
+    expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
   });
 });

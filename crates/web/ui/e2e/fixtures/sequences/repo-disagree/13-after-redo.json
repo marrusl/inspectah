@@ -10,7 +10,7 @@
         "state": "added",
         "disposition": {
           "kind": "actionable",
-          "include": false
+          "include": true
         },
         "source_repo": "vendor",
         "aggregate": null
@@ -34,7 +34,7 @@
         "state": "added",
         "disposition": {
           "kind": "actionable",
-          "include": false
+          "include": true
         },
         "source_repo": "vendor",
         "aggregate": null
@@ -55,8 +55,8 @@
       {
         "kind": "package",
         "total": 2,
-        "included": 0,
-        "excluded": 2
+        "included": 2,
+        "excluded": 0
       }
     ],
     "needs_review_count": 0,
@@ -176,7 +176,7 @@
               "arch": "x86_64"
             }
           },
-          "include": false,
+          "include": true,
           "triage": {
             "bucket": "universal",
             "prevalence": {
@@ -198,7 +198,7 @@
               "arch": "x86_64"
             }
           },
-          "include": false,
+          "include": true,
           "triage": {
             "bucket": "universal",
             "prevalence": {
@@ -227,9 +227,13 @@
       "tier": "third_party",
       "package_count": 2,
       "effective_member_count": 2,
-      "effective_included": 0,
+      "effective_included": 2,
       "effective_unlisted": 0,
-      "enabled": false
+      "control": "full",
+      "kept": true,
+      "carriage_count": 0,
+      "carriage_included": 0,
+      "owns": []
     }
   ]
 }

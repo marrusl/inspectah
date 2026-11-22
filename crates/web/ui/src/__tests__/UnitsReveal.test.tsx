@@ -305,7 +305,18 @@ describe("the reveal lookup (§ 6.11 Which row an item id names)", () => {
 
 describe('U25: "Go to owner" (§ 6.11)', () => {
   it("focuses the shadowing drop-in's row", async () => {
-    serve(emptyView({ ...kitchenSink, config_files: [shadowedConfig(SHADOW_PATH)] }));
+    // The planted config row is the one the full shadow's drop-in row
+    // shadows, so that drop-in lists its path, as the server would.
+    const unit_dropins = kitchenSink.unit_dropins.map((d) =>
+      d.path === SHADOW_PATH ? { ...d, config_paths: [SHADOW_PATH] } : d,
+    );
+    serve(
+      emptyView({
+        ...kitchenSink,
+        unit_dropins,
+        config_files: [shadowedConfig(SHADOW_PATH)],
+      }),
+    );
     render(<App />);
     await openSection(/^Config Files/, "Config Files");
     await userEvent.click(await screen.findByTestId("shadow-owner-link"));

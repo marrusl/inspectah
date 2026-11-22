@@ -174,7 +174,7 @@ export type ConfigCategory =
  * Rust: ConfigShadow — #[serde(rename_all = "snake_case")]
  * Which other section's decision carries this file's content.
  */
-export type ConfigShadow = "units";
+export type ConfigShadow = "units" | "repositories";
 
 export interface ConfigFileEntry {
   path: string;
@@ -530,7 +530,80 @@ export interface RepoGroupInfo {
   effective_included: number;
   /** Of the effective members, those absent from the visible package list. */
   effective_unlisted: number;
-  enabled: boolean;
+  /** What the switch decides; `none` renders no switch. */
+  control: RepoControl;
+  /**
+   * The repo's decision: no repo op excluded it, or the last one included
+   * it. Says nothing about what its files do; the carriage counts do.
+   */
+  kept: boolean;
+  /** The carriable files and keys this repo owns. */
+  carriage_count: number;
+  /** Of those, how many the export currently carries. */
+  carriage_included: number;
+  /**
+   * The destination of every file and key this repo owns, carriable or
+   * not, sorted; each is the `destination` of one `repo_owned` entry.
+   */
+  owns: string[];
+}
+
+/**
+ * Rust: RepoControl, snake_case. `full` cascades to the repo's packages and
+ * moves its files and keys; `carriage_only` moves only its files and keys;
+ * `none` has no switch.
+ */
+export type RepoControl = "full" | "carriage_only" | "none";
+
+/** Rust: RepoOwnedKind, snake_case. */
+export type RepoOwnedKind = "repo_file" | "gpg_key";
+
+/** Rust: KeyRejection, snake_case. */
+export type KeyRejection = "not_pgp" | "private_key_material";
+
+/** Rust: RepoOwner. One section that owns a repo file or key. */
+export interface RepoOwner {
+  section_id: string;
+  /** The owner's row control; `none` when it has no row or no switch. */
+  control: RepoControl;
+  kept: boolean;
+}
+
+/** Rust: RepoKeeper. A section keeping an entry for an excluded owner. */
+export interface RepoKeeper {
+  section_id: string;
+  /** Set when the keeper is host-disabled and keeps the entry for this
+   *  included package's `--enablerepo` install. */
+  enablerepo_package?: string;
+}
+
+/** Rust: NoOwnerCause, tagged on `kind`. */
+export type NoOwnerCause =
+  | { kind: "redacted"; repo_files: string[] }
+  | { kind: "fleet"; hosts: string[]; redacted_repo_files: string[] };
+
+/** Rust: RepoOwnedExport, tagged on `state`: what the export does with it. */
+export type RepoOwnedExport =
+  | { state: "ships"; kept_by: RepoKeeper[] }
+  | { state: "not_shipped" }
+  | { state: "base_image"; package: string }
+  | { state: "default_repo_file" }
+  | { state: "rejected"; reason: KeyRejection }
+  | { state: "no_owner"; cause: NoOwnerCause }
+  | { state: "withheld"; reason: string };
+
+/**
+ * Rust: RepoOwnedEntry. One destination of `rpm.repo_files` or
+ * `rpm.gpg_keys`. A config row with `shadowed_by: "repositories"` joins
+ * the entry whose `recorded_paths` holds its own `path`.
+ */
+export interface RepoOwnedEntry {
+  destination: string;
+  recorded_paths: string[];
+  kind: RepoOwnedKind;
+  /** Sorted by section id; empty only for `no_owner`. */
+  owners: RepoOwner[];
+  export: RepoOwnedExport;
 }
 
 export interface AggregateHealthInfo {
@@ -760,6 +833,12 @@ export interface DropInDecisionDto {
   kind?: string;
   /** Present when the export does not write the file this row offers. */
   withheld?: WithheldView;
+  /**
+   * The paths of the config rows this drop-in's destination shadows: a
+   * `"units"` config row joins on its own `path`, an ostree scan's
+   * relative spelling included.
+   */
+  config_paths: string[];
 }
 
 // --- Sysctl panel types (crates/web/src/web_types.rs) ---
@@ -987,6 +1066,11 @@ export interface PackageProvenance {
  */
 export interface ViewResponse extends RefinedView {
   repo_groups: RepoGroupInfo[];
+  /**
+   * One entry per repo-owned file or key, whether or not any owner has a
+   * row. Single host only: the aggregate view has none.
+   */
+  repo_owned: RepoOwnedEntry[];
   version_changes: VersionChangeEntry[];
   unit_states: ServiceDecisionDto[];
   unit_dropins: DropInDecisionDto[];

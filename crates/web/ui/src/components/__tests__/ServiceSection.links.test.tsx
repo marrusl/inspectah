@@ -56,6 +56,7 @@ function makeDropin(overrides: Partial<DropInDecisionDto> = {}): DropInDecisionD
     include: true,
     locked: false,
     kind: "service",
+    config_paths: [overrides.path ?? "/etc/systemd/system/app.service.d/10-install.conf"],
     ...overrides,
   };
 }

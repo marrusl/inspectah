@@ -194,6 +194,7 @@
     "user_added_count": 4,
     "review_count": 2
   },
+  "repo_owned": [],
   "repo_groups": [
     {
       "section_id": "rhel-9-for-x86_64-baseos-rpms",
@@ -201,7 +202,11 @@
       "is_distro": true,
       "tier": "distro",
       "package_count": 2,
-      "enabled": true
+      "control": "none",
+      "kept": true,
+      "carriage_count": 0,
+      "carriage_included": 0,
+      "owns": []
     },
     {
       "section_id": "rhel-9-for-x86_64-appstream-rpms",
@@ -209,7 +214,11 @@
       "is_distro": true,
       "tier": "distro",
       "package_count": 3,
-      "enabled": true
+      "control": "none",
+      "kept": true,
+      "carriage_count": 0,
+      "carriage_included": 0,
+      "owns": []
     }
   ],
   "version_changes": [

@@ -97,6 +97,15 @@ const repoStyles: Record<string, React.CSSProperties> = {
 
 // --- Component ---
 
+/**
+ * An excluded repo whose switch moved its packages. A carriage-only switch
+ * drops only the repo's files and keys, so its packages stay where they
+ * are in the list.
+ */
+function excludesItsPackages(rg: RepoGroupInfo): boolean {
+  return !rg.kept && rg.control === "full";
+}
+
 export function PackageList({
   mode,
   packages,
@@ -132,10 +141,11 @@ export function PackageList({
     () => new Set(),
   );
 
-  // Latched: once any non-distro repo is disabled, stays true for the session
+  // Latched: once any non-distro repo's packages are excluded with it,
+  // stays true for the session
   const [hasEverToggled, setHasEverToggled] = useState(false);
   useEffect(() => {
-    if (repoGroups.some((r) => !r.is_distro && !r.enabled)) {
+    if (repoGroups.some((r) => !r.is_distro && excludesItsPackages(r))) {
       setHasEverToggled(true);
     }
   }, [repoGroups]);
@@ -161,11 +171,11 @@ export function PackageList({
     return map;
   }, [repoGroups]);
 
-  // Build disabled repo set
+  // Build the set of repos whose packages went with them
   const disabledRepos = useMemo(() => {
     const set = new Set<string>();
     for (const rg of repoGroups) {
-      if (!rg.enabled) set.add(rg.section_id);
+      if (excludesItsPackages(rg)) set.add(rg.section_id);
     }
     return set;
   }, [repoGroups]);

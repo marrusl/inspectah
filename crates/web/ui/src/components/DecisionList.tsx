@@ -29,6 +29,7 @@ import { RepoGroup } from "./RepoGroup";
 import { RoutineSummary } from "./RoutineSummary";
 import { DecisionItem, itemId as getItemId } from "./DecisionItem";
 import type { DecisionItemKind } from "./DecisionItem";
+import { inventoryRefusalText } from "./repoControl";
 import type { ShadowOwner } from "./shadowOwner";
 import { highestAttention, triageBucketToAttention } from "./attentionUtils";
 
@@ -343,6 +344,25 @@ export function DecisionList({
       }
 
       const id = ++toastIdRef.current;
+      // A row another section decides offers no control, so this only
+      // arrives from a stale view or a client the UI does not know of. It
+      // is a statement about the row, not a fault.
+      const inventory = inventoryRefusalText(err);
+      if (inventory !== null) {
+        setToasts((prev) => [
+          ...prev,
+          { id, message: inventory, variant: AlertVariant.info },
+        ]);
+        setTimeout(() => {
+          setToasts((prev) => prev.filter((t) => t.id !== id));
+        }, 3000);
+        fetchView()
+          .then((view) => onViewUpdate(view))
+          .catch(() => {
+            // The statement is already visible.
+          });
+        return;
+      }
       const isNetwork =
         err.message.includes("fetch") ||
         err.message.includes("network") ||
@@ -387,12 +407,12 @@ export function DecisionList({
   );
 
   const handleRepoToggle = useCallback(
-    (sectionId: string, enabled: boolean) => {
+    (sectionId: string, include: boolean) => {
       const op: RefinementOp = {
         op: "SetInclude",
         target: {
           item_id: { kind: "Repo", key: { path: sectionId } },
-          include: enabled,
+          include,
         },
       };
       mutation.mutate(op);
@@ -457,20 +477,20 @@ export function DecisionList({
       });
     }
 
-    // Sort: distro alpha → enabled third-party alpha → disabled → unknown last
+    // Sort: distro alpha → kept third-party alpha → excluded → unknown last
     partitions.sort((a, b) => {
       const rankA = a.isUnknown
         ? 4
         : a.repo?.is_distro
           ? 0
-          : !a.repo?.enabled
+          : !a.repo?.kept
             ? 3
             : 1;
       const rankB = b.isUnknown
         ? 4
         : b.repo?.is_distro
           ? 0
-          : !b.repo?.enabled
+          : !b.repo?.kept
             ? 3
             : 1;
       if (rankA !== rankB) return rankA - rankB;
@@ -617,7 +637,11 @@ export function DecisionList({
                 effective_member_count: 0,
                 effective_included: 0,
                 effective_unlisted: 0,
-                enabled: true,
+                control: "none",
+                kept: true,
+                carriage_count: 0,
+                carriage_included: 0,
+                owns: [],
               };
               // Sort items within unknown group by attention priority
               const sortedItems = [...part.items].sort((a, b) => {
@@ -672,7 +696,7 @@ export function DecisionList({
             }
 
             const repo = part.repo!;
-            const isDisabled = !repo.enabled;
+            const isDisabled = !repo.kept;
             const hasNeedsReview = part.needsReview.length > 0;
             const hasInfo = part.informational.length > 0;
             const allRoutine = !hasNeedsReview && !hasInfo;

@@ -14,7 +14,11 @@ const distroRepo: RepoGroupInfo = {
   effective_member_count: 10,
   effective_included: 0,
   effective_unlisted: 0,
-  enabled: true,
+  control: "none",
+  kept: true,
+  carriage_count: 0,
+  carriage_included: 0,
+  owns: [],
 };
 
 const coreGroup: GroupInfo = {

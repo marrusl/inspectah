@@ -52,6 +52,7 @@ import {
 } from "./MachineStateGroup";
 import type { MachineStateFailure } from "./MachineStateGroup";
 import { buildShadowOwners } from "./shadowOwner";
+import { repoFailure, type RepoFailure } from "./repoControl";
 import { Content } from "@patternfly/react-core";
 
 /** Maps section IDs to human-readable heading text (mirrors Sidebar labels). */
@@ -378,7 +379,11 @@ export function MainContent({
   const shadowOwners = useMemo(
     () =>
       viewData
-        ? buildShadowOwners(viewData.config_files, viewData.unit_dropins)
+        ? buildShadowOwners(
+            viewData.config_files,
+            viewData.unit_dropins,
+            viewData.repo_owned,
+          )
         : new Map(),
     [viewData],
   );
@@ -527,6 +532,29 @@ export function MainContent({
       new Set((viewData.machine_state ?? []).map((r) => machineStateItemId(r.path))),
     );
   }, [viewData, retainMachineStateFailures]);
+  // Repo switch failures, by section id, kept here with `repoGuard` for
+  // the same reason as the machine-state ones: a reset or any Undo or Redo
+  // can replace a row's state, so either ends every failure, and a repo
+  // that leaves the view ends its own.
+  const repoFailures = useItemFailures<RepoFailure>();
+  const {
+    begin: beginRepoAttempt,
+    clear: clearRepoFailure,
+    clearAll: clearRepoFailures,
+    retain: retainRepoFailures,
+  } = repoFailures;
+  useEffect(() => {
+    clearRepoFailures();
+  }, [resetCounter, clearRepoFailures]);
+  useEffect(() => {
+    if (historyChange) clearRepoFailures();
+  }, [historyChange, clearRepoFailures]);
+  useEffect(() => {
+    if (!viewData) return;
+    retainRepoFailures(
+      new Set((viewData.repo_groups ?? []).map((r) => r.section_id)),
+    );
+  }, [viewData, retainRepoFailures]);
   const runPackage = packageGuard.runGuarded;
   const runRepo = repoGuard.runGuarded;
   const runGroup = groupGuard.runGuarded;
@@ -635,17 +663,34 @@ export function MainContent({
           include,
         },
       };
-      runRepo(sectionId, () =>
-        applyOp(op)
+      runRepo(sectionId, () => {
+        const recordFailure = beginRepoAttempt(sectionId);
+        return applyOp(op)
           .then((updatedView) => onViewUpdate(updatedView))
-          .catch((err) =>
+          .catch((err: unknown) => {
+            const failure = repoFailure(err);
+            recordFailure(failure);
             onMutationError(
               err instanceof Error ? err : new Error(String(err)),
-            ),
-          ),
-      );
+            );
+            // The switch posts only a direction the server accepts, so a
+            // `nothing to change:` means this view was stale: fetch the
+            // server's, which the row then shows.
+            if (failure.kind === "nothing_to_change") {
+              return fetchView()
+                .then((freshView) => onViewUpdate(freshView))
+                .catch((refetchErr: unknown) =>
+                  onMutationError(
+                    refetchErr instanceof Error
+                      ? refetchErr
+                      : new Error(String(refetchErr)),
+                  ),
+                );
+            }
+          });
+      });
     },
-    [viewData, runRepo, onViewUpdate, onMutationError],
+    [viewData, runRepo, beginRepoAttempt, onViewUpdate, onMutationError],
   );
 
   // Group toggle: SetInclude with ItemId::Group
@@ -808,6 +853,9 @@ export function MainContent({
           repos={viewData?.repo_groups ?? []}
           onToggle={handleRepoToggle}
           pendingKeys={repoGuard.pendingKeys}
+          repoOwned={viewData?.repo_owned ?? []}
+          failures={repoFailures.failures}
+          onDismissFailure={clearRepoFailure}
         />
         <PackageList
           mode="single"

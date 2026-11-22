@@ -13,16 +13,24 @@ expression: value
   "repo_conflict_count": 0,
   "repo_groups": [
     {
-      "enabled": true,
+      "carriage_count": 0,
+      "carriage_included": 0,
+      "control": "none",
       "is_distro": true,
+      "kept": true,
+      "owns": [],
       "package_count": 2,
       "provenance": "verified",
       "section_id": "rhel-9-for-x86_64-baseos-rpms",
       "tier": "distro"
     },
     {
-      "enabled": true,
+      "carriage_count": 0,
+      "carriage_included": 0,
+      "control": "none",
       "is_distro": true,
+      "kept": true,
+      "owns": [],
       "package_count": 2,
       "provenance": "verified",
       "section_id": "rhel-9-for-x86_64-appstream-rpms",

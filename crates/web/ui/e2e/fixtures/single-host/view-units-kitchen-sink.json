@@ -59,6 +59,7 @@
   "package_groups": [],
   "packages": [],
   "quadlets": [],
+  "repo_owned": [],
   "repo_groups": [],
   "session_is_sensitive": false,
   "stats": {
@@ -785,6 +786,7 @@
       "include": true,
       "kind": "service",
       "locked": false,
+      "config_paths": [],
       "path": "/etc/systemd/system/nginx.service.d/override.conf",
       "shadow_type": "drop_in",
       "triage": {
@@ -800,6 +802,7 @@
       "include": true,
       "kind": "service",
       "locked": false,
+      "config_paths": [],
       "path": "/etc/systemd/system/httpd.service.d/override.conf",
       "shadow_type": "drop_in",
       "triage": {
@@ -815,6 +818,7 @@
       "include": true,
       "kind": "service",
       "locked": false,
+      "config_paths": [],
       "path": "/etc/systemd/system/httpd.service.d/limits.conf",
       "shadow_type": "drop_in",
       "triage": {
@@ -830,6 +834,7 @@
       "include": true,
       "kind": "service",
       "locked": false,
+      "config_paths": [],
       "path": "/etc/systemd/system/sshd.service",
       "shadow_rationale": "Full shadow: this unit file in /etc/systemd/system/ overrides the vendor unit in /usr/lib/systemd/system/. Base image updates to this unit will be silently ignored.",
       "shadow_type": "full_shadow",

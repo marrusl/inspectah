@@ -20,6 +20,7 @@ const MOCK_VIEW: ViewResponse = {
   },
   generation: 1,
   repo_groups: [],
+  repo_owned: [],
   version_changes: [],
   unit_states: [],
   unit_dropins: [],

@@ -50,6 +50,7 @@ const MOCK_VIEW: ViewResponse = {
   stats: MOCK_STATS,
   generation: 7,
   repo_groups: [],
+  repo_owned: [],
   version_changes: [],
   unit_states: [],
   unit_dropins: [],

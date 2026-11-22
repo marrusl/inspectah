@@ -35,6 +35,10 @@ import {
   MACHINE_STATE_ITEM_PREFIX,
   MACHINE_STATE_ROW_TESTID_PREFIX,
 } from "./components/MachineStateGroup";
+import {
+  REPO_ITEM_PREFIX,
+  REPO_ROW_TESTID_PREFIX,
+} from "./components/repoControl";
 import "highlight.js/styles/github.css";
 import "./App.css";
 
@@ -624,6 +628,14 @@ function SingleHostApp({
           el?.querySelector<HTMLElement>(
             ".inspectah-machine-state__action button",
           ) ?? null;
+      } else if (itemId.startsWith(REPO_ITEM_PREFIX)) {
+        // A repo row under Repositories: its switch takes focus, or the
+        // row itself when it has none.
+        el = elementByTestId(
+          `${REPO_ROW_TESTID_PREFIX}${itemId.slice(REPO_ITEM_PREFIX.length)}`,
+        );
+        focusTarget =
+          el?.querySelector<HTMLElement>("input[role='switch']") ?? null;
       } else if (activeSection === "units") {
         // The units section names its rows by row key, not by test id
         // (spec § 6.11); an id that names no row finds nothing.

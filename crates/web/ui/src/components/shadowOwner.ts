@@ -2,11 +2,25 @@ import type {
   ConfigFileEntry,
   DropInDecisionDto,
   RefinedConfig,
+  RepoOwnedEntry,
 } from "../api/types";
 import { rowKey } from "./unitOutcome";
+import {
+  owningSwitch,
+  ownedShips,
+  repoItemId,
+  repoOwnedExplanation,
+} from "./repoControl";
 
 /** Section ID the Service Drop-ins rows render under. */
 const SERVICES_SECTION_ID = "units";
+
+/** Section ID the Repositories rows render under. */
+const PACKAGES_SECTION_ID = "packages";
+
+/** The label of a row the repo section decides (spec § 7.3); the server's
+ *  `DECIDED_UNDER_REPOSITORIES` summary uses the same words. */
+export const DECIDED_UNDER_REPOSITORIES = "Decided under Repositories";
 
 /**
  * Where a shadowed config file's include decision actually lives.
@@ -29,22 +43,27 @@ export interface ShadowOwner {
   explanation: string;
   /** Route to the owning row. Null when no owning row was found. */
   target: { sectionId: string; itemId: string } | null;
+  /** The link's text; "Go to owner" when absent. */
+  linkText?: string;
 }
 
 /**
  * Resolve the owner of a shadowed config entry.
  *
- * The join key is the path string itself: `unit_dropins[].path` is the
- * same string the shadow was computed from in
- * `shadow_matching_config_entries`, so no extra field is needed.
+ * Each join is on a list of path spellings the server gives, so the client
+ * never normalizes a path: a `"units"` row joins the drop-in whose
+ * `config_paths` holds its `path`, and a `"repositories"` row the
+ * `repo_owned` entry whose `recorded_paths` does (an ostree scan's
+ * relative spelling and a `gpgkey=` written with `//` included).
  * Returns null when the entry is not shadowed.
  */
 export function resolveShadowOwner(
   entry: ConfigFileEntry,
   dropins: DropInDecisionDto[],
+  repoOwned: RepoOwnedEntry[] = [],
 ): ShadowOwner | null {
   if (entry.shadowed_by === "units") {
-    const owner = dropins.find((d) => d.path === entry.path);
+    const owner = dropins.find((d) => d.config_paths.includes(entry.path));
     return {
       // Spec § 7 string 26: the units section's name (§ 6.14).
       label: "Controlled in Systemd units",
@@ -68,6 +87,32 @@ export function resolveShadowOwner(
     };
   }
 
+  if (entry.shadowed_by === "repositories") {
+    const owned = repoOwned.find((e) => e.recorded_paths.includes(entry.path));
+    if (!owned) {
+      // The server lists every destination it shadows, so this is a view
+      // that disagrees with itself; say where the decision is anyway.
+      return {
+        label: DECIDED_UNDER_REPOSITORIES,
+        state: null,
+        explanation:
+          "A repo's switch under Repositories, in Packages, decides whether this file ships.",
+        target: null,
+      };
+    }
+    const ships = ownedShips(owned);
+    const switchOwner = owningSwitch(owned);
+    return {
+      label: DECIDED_UNDER_REPOSITORIES,
+      state: { text: ships ? "Ships" : "Not shipped", included: ships },
+      explanation: repoOwnedExplanation(owned),
+      target: switchOwner
+        ? { sectionId: PACKAGES_SECTION_ID, itemId: repoItemId(switchOwner) }
+        : null,
+      linkText: switchOwner ? `Go to repo ${switchOwner}` : undefined,
+    };
+  }
+
   return null;
 }
 
@@ -75,10 +120,11 @@ export function resolveShadowOwner(
 export function buildShadowOwners(
   configs: RefinedConfig[],
   dropins: DropInDecisionDto[],
+  repoOwned: RepoOwnedEntry[] = [],
 ): Map<string, ShadowOwner> {
   const owners = new Map<string, ShadowOwner>();
   for (const cfg of configs) {
-    const owner = resolveShadowOwner(cfg.entry, dropins);
+    const owner = resolveShadowOwner(cfg.entry, dropins, repoOwned);
     if (owner) owners.set(cfg.entry.path, owner);
   }
   return owners;

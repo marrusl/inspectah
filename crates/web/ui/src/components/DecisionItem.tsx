@@ -405,7 +405,7 @@ export function DecisionItem({
                       );
                     }}
                   >
-                    Go to owner
+                    {shadowOwner.linkText ?? "Go to owner"}
                   </Button>
                 </div>
               )}

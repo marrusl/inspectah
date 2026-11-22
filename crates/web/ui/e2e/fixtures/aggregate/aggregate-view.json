@@ -155,7 +155,11 @@
       "is_distro": true,
       "tier": "distro",
       "package_count": 2,
-      "enabled": true
+      "control": "none",
+      "kept": true,
+      "carriage_count": 0,
+      "carriage_included": 0,
+      "owns": []
     },
     {
       "section_id": "rhel-9-for-x86_64-appstream-rpms",
@@ -163,7 +167,11 @@
       "is_distro": true,
       "tier": "distro",
       "package_count": 2,
-      "enabled": true
+      "control": "none",
+      "kept": true,
+      "carriage_count": 0,
+      "carriage_included": 0,
+      "owns": []
     }
   ],
   "machine_state": [],

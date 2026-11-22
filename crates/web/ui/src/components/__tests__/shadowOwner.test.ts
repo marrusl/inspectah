@@ -38,6 +38,7 @@ function dropin(overrides: Partial<DropInDecisionDto> = {}): DropInDecisionDto {
     triage: TRIAGE,
     include: true,
     locked: false,
+    config_paths: [overrides.path ?? DROPIN_PATH],
     ...overrides,
   };
 }
@@ -91,6 +92,26 @@ describe("resolveShadowOwner", () => {
     // is no row to route to or report state for.
     expect(owner!.target).toBeNull();
     expect(owner!.state).toBeNull();
+  });
+
+  it("joins an ostree scan's relative path through the drop-in's config_paths", () => {
+    // The server compares by destination, so the absolute drop-in shadows
+    // the relative config row and lists that row's spelling.
+    const relative = DROPIN_PATH.slice(1);
+    const owner = resolveShadowOwner(
+      configEntry({ path: relative, shadowed_by: "units" }),
+      [dropin({ config_paths: [relative] })],
+    );
+    expect(owner!.target).toEqual({
+      sectionId: "units",
+      itemId: `["dropin","${DROPIN_PATH}"]`,
+    });
+    // The drop-in's own path alone does not join a row it does not list.
+    expect(
+      resolveShadowOwner(configEntry({ path: relative, shadowed_by: "units" }), [
+        dropin({ config_paths: [] }),
+      ])!.target,
+    ).toBeNull();
   });
 
   it("explains where the decision went", () => {

@@ -69,6 +69,7 @@ function makeView(
     stats: mockStats(),
     generation: 1,
     repo_groups: [],
+    repo_owned: [],
     version_changes: [],
     unit_states: [],
     unit_dropins: [],

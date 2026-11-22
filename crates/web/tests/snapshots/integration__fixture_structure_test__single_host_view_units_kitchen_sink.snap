@@ -64,6 +64,7 @@ expression: value
   "packages": [],
   "quadlets": [],
   "repo_groups": [],
+  "repo_owned": [],
   "session_is_sensitive": false,
   "stats": {
     "baseline_available": true,
@@ -786,6 +787,7 @@ expression: value
   ],
   "unit_dropins": [
     {
+      "config_paths": [],
       "include": true,
       "kind": "service",
       "locked": false,
@@ -801,6 +803,7 @@ expression: value
       "unit": "nginx.service"
     },
     {
+      "config_paths": [],
       "include": true,
       "kind": "service",
       "locked": false,
@@ -816,6 +819,7 @@ expression: value
       "unit": "httpd.service"
     },
     {
+      "config_paths": [],
       "include": true,
       "kind": "service",
       "locked": false,
@@ -831,6 +835,7 @@ expression: value
       "unit": "httpd.service"
     },
     {
+      "config_paths": [],
       "include": true,
       "kind": "service",
       "locked": false,

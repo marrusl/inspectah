@@ -72,12 +72,13 @@ test.describe("Repo surfaces on Packages page", () => {
   });
 });
 
-// Position 29 (§ 3.2, § 6.3): the repo Switch reads the effective counts,
-// never `enabled`/history, and activation posts the direction those counts
-// derive. The `repo-disagree` sequence fixtures start each case already in
-// the state where history and members disagree -- reachable through
-// ordinary per-package decisions (§ 6.3's phase 0 RepoBar rule) -- and walk
-// the Switch through include-all/exclude-all, undo, and redo.
+// Position 29 (§ 3.2, § 6.3), as § 5.5 of the repo ownership spec amends
+// it: the repo Switch reads the decision (`kept`) and the effective counts,
+// and activation posts the direction the server accepts. The
+// `repo-disagree` sequence fixtures start each case already in a state
+// where the decision and members disagree -- reachable through ordinary
+// per-package decisions -- and walk the Switch through an include, undo,
+// and redo.
 test.describe("Repo disagreement (position 29)", () => {
   test.beforeEach(async ({ page }) => {
     await applyMockApi(page, "single-host");
@@ -106,7 +107,7 @@ test.describe("Repo disagreement (position 29)", () => {
     await clearMocks(page);
   });
 
-  test("enabled history, members excluded, then included; undo and redo", async ({
+  test("kept, members excluded, then included; undo and redo", async ({
     page,
   }) => {
     await mockSequence(
@@ -155,7 +156,7 @@ test.describe("Repo disagreement (position 29)", () => {
     await expect(page.getByText("2 of 2 packages included")).toBeVisible();
   });
 
-  test("mirror direction: excluded history, members included, then excluded", async ({
+  test("excluded in refine, members included by hand, then kept again; undo and redo", async ({
     page,
   }) => {
     await mockSequence(
@@ -163,7 +164,7 @@ test.describe("Repo disagreement (position 29)", () => {
       "/api/view",
       [
         "sequences/repo-disagree/10-disabled-all-included.json",
-        "sequences/repo-disagree/11-after-exclude-all.json",
+        "sequences/repo-disagree/11-after-include.json",
         "sequences/repo-disagree/12-after-undo.json",
         "sequences/repo-disagree/13-after-redo.json",
       ],
@@ -180,27 +181,33 @@ test.describe("Repo disagreement (position 29)", () => {
     await page.goto("/");
     await sidebarLink(page.locator(".inspectah-layout__sidebar"), "Packages").click();
 
+    // The decision is excluded, so the switch reads off and says so, and
+    // the include it posts moves the decision (repo ownership spec § 5.5).
     const vendorSwitch = page.locator("#repo-toggle-vendor");
     await expect(vendorSwitch).toBeVisible();
-    await expect(vendorSwitch).toBeChecked();
-    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(
+      page.getByText("2 of 2 packages included, excluded in refine"),
+    ).toBeVisible();
 
     await vendorSwitch.click({ force: true });
-    await expect(vendorSwitch).not.toBeChecked();
-    await expect(page.getByText("2 packages excluded")).toBeVisible();
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included", { exact: true })).toBeVisible();
     expect(opPayloads.at(-1)).toMatchObject({
       target: {
         item_id: { kind: "Repo", key: { path: "vendor" } },
-        include: false,
+        include: true,
       },
     });
 
     await page.getByRole("button", { name: "Undo" }).click();
-    await expect(vendorSwitch).toBeChecked();
-    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(
+      page.getByText("2 of 2 packages included, excluded in refine"),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: "Redo" }).click();
-    await expect(vendorSwitch).not.toBeChecked();
-    await expect(page.getByText("2 packages excluded")).toBeVisible();
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included", { exact: true })).toBeVisible();
   });
 });

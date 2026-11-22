@@ -18,7 +18,8 @@ type QueueEntry =
 
 export function useAggregateMutation(
   onViewUpdate: (view: AggregateViewResponse) => void,
-  onError: (err: Error) => void,
+  /** `op` is the refused op; absent when an undo or redo failed. */
+  onError: (err: Error, op?: RefinementOp) => void,
 ): UseAggregateMutationResult {
   const [isPending, setIsPending] = useState(false);
   const [refetchError, setRefetchError] = useState<string | null>(null);
@@ -61,7 +62,10 @@ export function useAggregateMutation(
         }
       } catch (err: unknown) {
         queueRef.current = [];
-        onError(err instanceof Error ? err : new Error(String(err)));
+        onError(
+          err instanceof Error ? err : new Error(String(err)),
+          entry.kind === "op" ? entry.op : undefined,
+        );
         break;
       }
     }

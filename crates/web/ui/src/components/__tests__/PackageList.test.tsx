@@ -49,7 +49,11 @@ const distroRepo: RepoGroupInfo = {
   effective_member_count: 10,
   effective_included: 0,
   effective_unlisted: 0,
-  enabled: true,
+  control: "none",
+  kept: true,
+  carriage_count: 0,
+  carriage_included: 0,
+  owns: [],
 };
 
 const officialRepo: RepoGroupInfo = {
@@ -61,7 +65,11 @@ const officialRepo: RepoGroupInfo = {
   effective_member_count: 3,
   effective_included: 0,
   effective_unlisted: 0,
-  enabled: true,
+  control: "full",
+  kept: true,
+  carriage_count: 0,
+  carriage_included: 0,
+  owns: [],
 };
 
 const thirdPartyRepo: RepoGroupInfo = {
@@ -73,7 +81,11 @@ const thirdPartyRepo: RepoGroupInfo = {
   effective_member_count: 2,
   effective_included: 0,
   effective_unlisted: 0,
-  enabled: true,
+  control: "full",
+  kept: true,
+  carriage_count: 0,
+  carriage_included: 0,
+  owns: [],
 };
 
 const allRepos = [distroRepo, officialRepo, thirdPartyRepo];
@@ -235,7 +247,7 @@ describe("PackageList", () => {
   // --- ExcludedZone: packages from disabled repos ---
 
   it("shows excluded packages in ExcludedZone when a repo is disabled", () => {
-    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
+    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, kept: false };
     const pkgs = [
       makePkg("bash", "baseos"),
       makePkg("nginx", "epel", false),
@@ -264,7 +276,7 @@ describe("PackageList", () => {
 
   it("re-includes an excluded repo's member by clicking its ExcludedZone checkbox", () => {
     const onToggle = vi.fn();
-    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
+    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, kept: false };
     const pkgs = [makePkg("nginx", "epel", false)];
     render(
       <PackageList
@@ -284,7 +296,7 @@ describe("PackageList", () => {
 
   it("passes the upload gate through to ExcludedZone", () => {
     const onUploadClick = vi.fn();
-    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
+    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, kept: false };
     render(
       <PackageList
         mode="single"
@@ -532,7 +544,7 @@ describe("PackageList", () => {
   });
 
   it("excluded zone stays visible with 'No packages from excluded repos' after repo re-enabled (latched)", () => {
-    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
+    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, kept: false };
     const pkgs = [makePkg("bash", "baseos"), makePkg("nginx", "epel")];
     // Render with repo disabled — excluded zone appears
     const { rerender } = render(

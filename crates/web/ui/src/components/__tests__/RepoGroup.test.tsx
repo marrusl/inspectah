@@ -13,7 +13,11 @@ const baseRepo: RepoGroupInfo = {
   effective_member_count: 5,
   effective_included: 2,
   effective_unlisted: 0,
-  enabled: true,
+  control: "full",
+  kept: true,
+  carriage_count: 0,
+  carriage_included: 0,
+  owns: [],
 };
 
 /** Factory for a toggleable baseline repo fixture, overridable per test. */
@@ -115,9 +119,12 @@ describe("RepoGroup", () => {
         <div>content</div>
       </RepoGroup>,
     );
-    const toggle = screen.getByRole("switch", { name: /toggle epel repo/i });
+    const toggle = screen.getByRole("switch", {
+      name: "epel: 2 of 5 packages included",
+    });
     await userEvent.click(toggle);
-    expect(onRepoToggle).toHaveBeenCalledWith("epel", false);
+    // Two of five members included: the switch reads off and posts include.
+    expect(onRepoToggle).toHaveBeenCalledWith("epel", true);
   });
 
   it("does not show toggle for distro repos", () => {
@@ -125,6 +132,7 @@ describe("RepoGroup", () => {
       ...baseRepo,
       section_id: "baseos",
       is_distro: true,
+      control: "none",
     };
     render(
       <RepoGroup repo={distroRepo} defaultExpanded={true}>
@@ -134,15 +142,55 @@ describe("RepoGroup", () => {
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
-  it("renders with disabled styling when repo is disabled", () => {
-    const disabledRepo: RepoGroupInfo = { ...baseRepo, enabled: false };
+  it("says an excluded repo is excluded in refine, with no strike-through", () => {
+    const excludedRepo: RepoGroupInfo = {
+      ...baseRepo,
+      kept: false,
+      effective_included: 0,
+    };
     render(
-      <RepoGroup repo={disabledRepo} defaultExpanded={false}>
+      <RepoGroup repo={excludedRepo} defaultExpanded={false}>
         <div data-testid="child">content</div>
       </RepoGroup>,
     );
-    const label = screen.getByText("epel");
-    expect(label.style.textDecoration).toBe("line-through");
+    expect(screen.getByText("epel").style.textDecoration).toBe("");
+    expect(
+      screen.getByRole("switch", {
+        name: "epel: 5 packages excluded, excluded in refine",
+      }),
+    ).not.toBeChecked();
+  });
+
+  it("gives a carriage-only distro row its badge and a switch for its files", async () => {
+    const onRepoToggle = vi.fn();
+    render(
+      <RepoGroup
+        repo={repo({
+          section_id: "baseos",
+          is_distro: true,
+          tier: "distro",
+          control: "carriage_only",
+          carriage_count: 2,
+          carriage_included: 2,
+          owns: [
+            "/etc/pki/rpm-gpg/RPM-GPG-KEY-company",
+            "/etc/yum.repos.d/company.repo",
+          ],
+        })}
+        defaultExpanded={false}
+        onRepoToggle={onRepoToggle}
+      >
+        <div>content</div>
+      </RepoGroup>,
+    );
+    expect(screen.getByText("always included")).toBeInTheDocument();
+    const sw = screen.getByRole("switch", {
+      name: "baseos: repo files 2 of 2 carried; switch moves files and keys only, packages unchanged",
+    });
+    // Members are mixed (2 of 5) and do not count for a carriage-only switch.
+    expect(sw).toBeChecked();
+    await userEvent.click(sw);
+    expect(onRepoToggle).toHaveBeenCalledWith("baseos", false);
   });
 
   it("shows infoCount in collapsed header when provided", () => {
@@ -201,6 +249,7 @@ describe("RepoGroup", () => {
         <RepoGroup
           repo={repo({
             provenance,
+            control: "none",
             effective_member_count: 2,
             effective_included: 1,
           })}
@@ -227,6 +276,7 @@ describe("RepoGroup", () => {
       <RepoGroup
         repo={repo({
           provenance: "verified",
+          control: "none",
           effective_member_count: 0,
           effective_included: 0,
         })}
@@ -237,7 +287,7 @@ describe("RepoGroup", () => {
     );
     expect(screen.queryByRole("switch")).toBeNull();
     expect(
-      screen.getByText("nothing to decide: all members are locked"),
+      screen.getByText("nothing to decide: no package to change and no file or key the export can carry"),
     ).toBeInTheDocument();
   });
 
@@ -266,6 +316,7 @@ describe("RepoGroup", () => {
         repo={repo({
           section_id: "@commandline",
           provenance: "unknown",
+          control: "none",
           effective_member_count: 0,
           effective_included: 0,
         })}
@@ -284,7 +335,7 @@ describe("RepoGroup", () => {
   it("shows 'always included' state text for distro repos", () => {
     render(
       <RepoGroup
-        repo={repo({ section_id: "baseos", is_distro: true })}
+        repo={repo({ section_id: "baseos", is_distro: true, control: "none" })}
         defaultExpanded={true}
       >
         <div>content</div>

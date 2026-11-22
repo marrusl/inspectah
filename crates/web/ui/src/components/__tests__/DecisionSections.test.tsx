@@ -108,6 +108,7 @@ const MOCK_VIEW: ViewResponse = {
   stats: MOCK_STATS,
   generation: 1,
   repo_groups: [],
+  repo_owned: [],
   version_changes: [],
   unit_states: [],
   unit_dropins: [],
@@ -192,6 +193,7 @@ function makeViewResponse(
     stats: { ...MOCK_STATS, ...overrides.stats },
     generation: 1,
     repo_groups: overrides.repo_groups ?? [],
+    repo_owned: [],
     version_changes: [],
     unit_states: [],
     unit_dropins: [],
@@ -1596,7 +1598,11 @@ describe("RepoBar in MainContent", () => {
           effective_member_count: 1,
           effective_included: 0,
           effective_unlisted: 0,
-          enabled: true,
+          control: "none",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
         },
         {
           section_id: "epel",
@@ -1607,7 +1613,11 @@ describe("RepoBar in MainContent", () => {
           effective_member_count: 1,
           effective_included: 0,
           effective_unlisted: 0,
-          enabled: true,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
         },
       ],
     });
@@ -1647,7 +1657,11 @@ describe("RepoBar in MainContent", () => {
           effective_member_count: 1,
           effective_included: 0,
           effective_unlisted: 0,
-          enabled: true,
+          control: "none",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
         },
         {
           section_id: "epel",
@@ -1658,7 +1672,11 @@ describe("RepoBar in MainContent", () => {
           effective_member_count: 1,
           effective_included: 0,
           effective_unlisted: 0,
-          enabled: true,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
         },
       ],
     });
@@ -1928,7 +1946,11 @@ describe("Repo-first package grouping", () => {
       effective_member_count: 2,
       effective_included: 0,
       effective_unlisted: 0,
-      enabled: true,
+      control: "none",
+      kept: true,
+      carriage_count: 0,
+      carriage_included: 0,
+      owns: [],
     },
     {
       section_id: "appstream",
@@ -1939,7 +1961,11 @@ describe("Repo-first package grouping", () => {
       effective_member_count: 1,
       effective_included: 0,
       effective_unlisted: 0,
-      enabled: true,
+      control: "none",
+      kept: true,
+      carriage_count: 0,
+      carriage_included: 0,
+      owns: [],
     },
     {
       section_id: "epel",
@@ -1950,7 +1976,11 @@ describe("Repo-first package grouping", () => {
       effective_member_count: 2,
       effective_included: 0,
       effective_unlisted: 0,
-      enabled: true,
+      control: "full",
+      kept: true,
+      carriage_count: 0,
+      carriage_included: 0,
+      owns: [],
     },
     {
       section_id: "custom",
@@ -1961,7 +1991,11 @@ describe("Repo-first package grouping", () => {
       effective_member_count: 1,
       effective_included: 0,
       effective_unlisted: 0,
-      enabled: true,
+      control: "full",
+      kept: true,
+      carriage_count: 0,
+      carriage_included: 0,
+      owns: [],
     },
     {
       section_id: "disabled-repo",
@@ -1972,7 +2006,11 @@ describe("Repo-first package grouping", () => {
       effective_member_count: 1,
       effective_included: 0,
       effective_unlisted: 0,
-      enabled: false,
+      control: "full",
+      kept: false,
+      carriage_count: 0,
+      carriage_included: 0,
+      owns: [],
     },
   ];
 
@@ -2365,7 +2403,11 @@ describe("Disabled repo behavior", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: false,
+        control: "full",
+        kept: false,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
       {
         section_id: "baseos",
@@ -2376,7 +2418,11 @@ describe("Disabled repo behavior", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "none",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -2428,7 +2474,11 @@ describe("Disabled repo behavior", () => {
         effective_member_count: 10,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: false,
+        control: "full",
+        kept: false,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -2457,8 +2507,10 @@ describe("Disabled repo behavior", () => {
     await waitFor(() => {
       expect(mockFetch).toHaveBeenCalled();
     });
-    expect(screen.getByText(/2 packages excluded/)).toBeInTheDocument();
-    expect(screen.queryByText(/10 packages excluded/)).not.toBeInTheDocument();
+    // The header counts the visible rows; the decision is in the switch's
+    // count text ("excluded in refine"), not in the package count.
+    expect(screen.getByText("2 packages")).toBeInTheDocument();
+    expect(screen.queryByText("10 packages")).not.toBeInTheDocument();
   });
 
   it("disabled repos start collapsed because they are disabled", async () => {
@@ -2472,7 +2524,11 @@ describe("Disabled repo behavior", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: false,
+        control: "full",
+        kept: false,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -2509,7 +2565,11 @@ describe("Disabled repo behavior", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: false,
+        control: "full",
+        kept: false,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -2549,12 +2609,21 @@ describe("RepoGroupHeader updated labels", () => {
   it("shows no label for distro repos", () => {
     render(
       <RepoGroupHeader
-        sectionId="baseos"
-        provenance="verified"
-        isDistro={true}
-        packageCount={50}
-        effectiveMemberCount={50}
-        enabled={true}
+        repo={{
+          section_id: "baseos",
+          provenance: "verified",
+          is_distro: true,
+          tier: "distro",
+          package_count: 50,
+          effective_member_count: 50,
+          effective_included: 50,
+          effective_unlisted: 0,
+          control: "none",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
       />,
     );
     expect(screen.queryByText("Distro")).not.toBeInTheDocument();
@@ -2566,12 +2635,21 @@ describe("RepoGroupHeader updated labels", () => {
   it("shows 'Third-party' text for verified non-distro repos", () => {
     render(
       <RepoGroupHeader
-        sectionId="epel"
-        provenance="verified"
-        isDistro={false}
-        packageCount={5}
-        effectiveMemberCount={5}
-        enabled={true}
+        repo={{
+          section_id: "epel",
+          provenance: "verified",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 5,
+          effective_member_count: 5,
+          effective_included: 5,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
       />,
     );
     expect(screen.getByText("Third-party")).toBeInTheDocument();
@@ -2581,12 +2659,21 @@ describe("RepoGroupHeader updated labels", () => {
   it("shows 'Third-party' text for incomplete-provenance non-distro repos", () => {
     render(
       <RepoGroupHeader
-        sectionId="custom"
-        provenance="incomplete"
-        isDistro={false}
-        packageCount={3}
-        effectiveMemberCount={3}
-        enabled={true}
+        repo={{
+          section_id: "custom",
+          provenance: "incomplete",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 3,
+          effective_member_count: 3,
+          effective_included: 3,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
       />,
     );
     expect(screen.getByText("Third-party")).toBeInTheDocument();
@@ -2597,12 +2684,21 @@ describe("RepoGroupHeader updated labels", () => {
   it("shows 'Third-party' text for unknown-provenance non-distro repos", () => {
     render(
       <RepoGroupHeader
-        sectionId="mystery"
-        provenance="unknown"
-        isDistro={false}
-        packageCount={2}
-        effectiveMemberCount={2}
-        enabled={true}
+        repo={{
+          section_id: "mystery",
+          provenance: "unknown",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 2,
+          effective_member_count: 2,
+          effective_included: 2,
+          effective_unlisted: 0,
+          control: "none",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
       />,
     );
     expect(screen.getByText("Third-party")).toBeInTheDocument();
@@ -2612,44 +2708,71 @@ describe("RepoGroupHeader updated labels", () => {
   it("shows toggle switch for non-distro repos with known provenance", () => {
     const { rerender } = render(
       <RepoGroupHeader
-        sectionId="epel"
-        provenance="verified"
-        isDistro={false}
-        packageCount={5}
-        effectiveMemberCount={5}
-        enabled={true}
+        repo={{
+          section_id: "epel",
+          provenance: "verified",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 5,
+          effective_member_count: 5,
+          effective_included: 5,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         onToggle={vi.fn()}
       />,
     );
     expect(
-      screen.getByRole("switch", { name: /toggle epel repo/i }),
+      screen.getByRole("switch", { name: /^epel: / }),
     ).toBeInTheDocument();
 
     // "incomplete" provenance repos are also toggleable
     rerender(
       <RepoGroupHeader
-        sectionId="custom"
-        provenance="incomplete"
-        isDistro={false}
-        packageCount={3}
-        effectiveMemberCount={3}
-        enabled={true}
+        repo={{
+          section_id: "custom",
+          provenance: "incomplete",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 3,
+          effective_member_count: 3,
+          effective_included: 3,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         onToggle={vi.fn()}
       />,
     );
     expect(
-      screen.getByRole("switch", { name: /toggle custom repo/i }),
+      screen.getByRole("switch", { name: /^custom: / }),
     ).toBeInTheDocument();
 
     // "unknown" provenance repos (e.g. @commandline) are NOT toggleable
     rerender(
       <RepoGroupHeader
-        sectionId="local"
-        provenance="unknown"
-        isDistro={false}
-        packageCount={2}
-        effectiveMemberCount={2}
-        enabled={true}
+        repo={{
+          section_id: "local",
+          provenance: "unknown",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 2,
+          effective_member_count: 2,
+          effective_included: 2,
+          effective_unlisted: 0,
+          control: "none",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         onToggle={vi.fn()}
       />,
     );
@@ -2659,12 +2782,21 @@ describe("RepoGroupHeader updated labels", () => {
   it("renders chevron icon", () => {
     const { container } = render(
       <RepoGroupHeader
-        sectionId="epel"
-        provenance="verified"
-        isDistro={false}
-        packageCount={5}
-        effectiveMemberCount={5}
-        enabled={true}
+        repo={{
+          section_id: "epel",
+          provenance: "verified",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 5,
+          effective_member_count: 5,
+          effective_included: 5,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         isExpanded={false}
       />,
     );
@@ -2674,12 +2806,21 @@ describe("RepoGroupHeader updated labels", () => {
   it("uses role='row' with aria-expanded and aria-controls", () => {
     render(
       <RepoGroupHeader
-        sectionId="epel"
-        provenance="verified"
-        isDistro={false}
-        packageCount={5}
-        effectiveMemberCount={5}
-        enabled={true}
+        repo={{
+          section_id: "epel",
+          provenance: "verified",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 5,
+          effective_member_count: 5,
+          effective_included: 5,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         isExpanded={true}
       />,
     );
@@ -2689,31 +2830,51 @@ describe("RepoGroupHeader updated labels", () => {
     expect(header).toHaveAttribute("aria-controls", "repo-group-content-epel");
   });
 
-  it("shows struck-through name and dimmed text for disabled repos", () => {
+  it("says an excluded repo is excluded in refine, with no strike-through", () => {
     render(
       <RepoGroupHeader
-        sectionId="epel"
-        provenance="verified"
-        isDistro={false}
-        packageCount={5}
-        effectiveMemberCount={5}
-        enabled={false}
+        repo={{
+          section_id: "epel",
+          provenance: "verified",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 5,
+          effective_member_count: 5,
+          effective_included: 0,
+          effective_unlisted: 0,
+          control: "full",
+          kept: false,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
       />,
     );
     const label = screen.getByText("epel");
-    expect(label.style.textDecoration).toBe("line-through");
-    expect(label.style.opacity).toBe("0.6");
+    expect(label.style.textDecoration).toBe("");
+    expect(
+      screen.getByText("5 packages excluded, excluded in refine"),
+    ).toBeInTheDocument();
   });
 
   it("shows informational count in header when provided", () => {
     render(
       <RepoGroupHeader
-        sectionId="appstream"
-        provenance="verified"
-        isDistro={true}
-        packageCount={20}
-        effectiveMemberCount={20}
-        enabled={true}
+        repo={{
+          section_id: "appstream",
+          provenance: "verified",
+          is_distro: true,
+          tier: "distro",
+          package_count: 20,
+          effective_member_count: 20,
+          effective_included: 20,
+          effective_unlisted: 0,
+          control: "none",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         infoCount={3}
       />,
     );
@@ -2723,12 +2884,21 @@ describe("RepoGroupHeader updated labels", () => {
   it("shows 'No action needed' for all-routine repos", () => {
     render(
       <RepoGroupHeader
-        sectionId="baseos"
-        provenance="verified"
-        isDistro={true}
-        packageCount={50}
-        effectiveMemberCount={50}
-        enabled={true}
+        repo={{
+          section_id: "baseos",
+          provenance: "verified",
+          is_distro: true,
+          tier: "distro",
+          package_count: 50,
+          effective_member_count: 50,
+          effective_included: 50,
+          effective_unlisted: 0,
+          control: "none",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         summaryText="No action needed"
       />,
     );
@@ -2740,12 +2910,21 @@ describe("RepoGroupHeader updated labels", () => {
     const onToggle = vi.fn();
     render(
       <RepoGroupHeader
-        sectionId="epel"
-        provenance="verified"
-        isDistro={false}
-        packageCount={5}
-        effectiveMemberCount={5}
-        enabled={true}
+        repo={{
+          section_id: "epel",
+          provenance: "verified",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 5,
+          effective_member_count: 5,
+          effective_included: 5,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         isExpanded={false}
         onExpandToggle={onExpandToggle}
         onToggle={onToggle}
@@ -2763,12 +2942,21 @@ describe("RepoGroupHeader updated labels", () => {
     const onToggle = vi.fn();
     render(
       <RepoGroupHeader
-        sectionId="epel"
-        provenance="verified"
-        isDistro={false}
-        packageCount={5}
-        effectiveMemberCount={5}
-        enabled={true}
+        repo={{
+          section_id: "epel",
+          provenance: "verified",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 5,
+          effective_member_count: 5,
+          effective_included: 5,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         isExpanded={false}
         onExpandToggle={onExpandToggle}
         onToggle={onToggle}
@@ -2785,12 +2973,21 @@ describe("RepoGroupHeader updated labels", () => {
     const onExpandToggle = vi.fn();
     render(
       <RepoGroupHeader
-        sectionId="epel"
-        provenance="verified"
-        isDistro={false}
-        packageCount={5}
-        effectiveMemberCount={5}
-        enabled={true}
+        repo={{
+          section_id: "epel",
+          provenance: "verified",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 5,
+          effective_member_count: 5,
+          effective_included: 5,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         isExpanded={false}
         onExpandToggle={onExpandToggle}
       />,
@@ -2816,7 +3013,11 @@ describe("Repo-first keyboard navigation", () => {
       effective_member_count: 1,
       effective_included: 0,
       effective_unlisted: 0,
-      enabled: true,
+      control: "none",
+      kept: true,
+      carriage_count: 0,
+      carriage_included: 0,
+      owns: [],
     },
     {
       section_id: "epel",
@@ -2827,7 +3028,11 @@ describe("Repo-first keyboard navigation", () => {
       effective_member_count: 1,
       effective_included: 0,
       effective_unlisted: 0,
-      enabled: true,
+      control: "full",
+      kept: true,
+      carriage_count: 0,
+      carriage_included: 0,
+      owns: [],
     },
   ];
 
@@ -2921,7 +3126,11 @@ describe("Repo-first keyboard navigation", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "none",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
       {
         section_id: "epel",
@@ -2932,7 +3141,11 @@ describe("Repo-first keyboard navigation", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "full",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -2980,7 +3193,11 @@ describe("Repo-first keyboard navigation", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "none",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -3020,7 +3237,11 @@ describe("Repo-first keyboard navigation", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "full",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -3062,7 +3283,11 @@ describe("Repo-first keyboard navigation", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "full",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -3105,7 +3330,11 @@ describe("Repo-first keyboard navigation", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "none",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
       {
         section_id: "epel",
@@ -3116,7 +3345,11 @@ describe("Repo-first keyboard navigation", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "full",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -3175,7 +3408,11 @@ describe("Repo-first filter and reveal", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "none",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
       {
         section_id: "epel",
@@ -3186,7 +3423,11 @@ describe("Repo-first filter and reveal", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "full",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -3241,7 +3482,11 @@ describe("Repo-first filter and reveal", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "none",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
       {
         section_id: "custom",
@@ -3252,7 +3497,11 @@ describe("Repo-first filter and reveal", () => {
         effective_member_count: 1,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "full",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -3311,7 +3560,11 @@ describe("Repo-first filter and reveal", () => {
             effective_member_count: 1,
             effective_included: 0,
             effective_unlisted: 0,
-            enabled: false,
+            control: "full",
+            kept: false,
+            carriage_count: 0,
+            carriage_included: 0,
+            owns: [],
           },
         ]}
         onViewUpdate={vi.fn()}
@@ -3339,7 +3592,11 @@ describe("Repo-first filter and reveal", () => {
             effective_member_count: 1,
             effective_included: 0,
             effective_unlisted: 0,
-            enabled: false,
+            control: "full",
+            kept: false,
+            carriage_count: 0,
+            carriage_included: 0,
+            owns: [],
           },
         ]}
         onViewUpdate={vi.fn()}
@@ -3360,7 +3617,11 @@ describe("Repo-first filter and reveal", () => {
         effective_member_count: 2,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "none",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -3404,7 +3665,11 @@ describe("Repo-first filter and reveal", () => {
         effective_member_count: 3,
         effective_included: 0,
         effective_unlisted: 0,
-        enabled: true,
+        control: "full",
+        kept: true,
+        carriage_count: 0,
+        carriage_included: 0,
+        owns: [],
       },
     ];
     const items: DecisionItemKind[] = [
@@ -3464,7 +3729,11 @@ describe("Package section uses unified components", () => {
           effective_member_count: 1,
           effective_included: 0,
           effective_unlisted: 0,
-          enabled: true,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
         },
         {
           section_id: "baseos",
@@ -3475,7 +3744,11 @@ describe("Package section uses unified components", () => {
           effective_member_count: 1,
           effective_included: 0,
           effective_unlisted: 0,
-          enabled: true,
+          control: "none",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
         },
       ],
     });

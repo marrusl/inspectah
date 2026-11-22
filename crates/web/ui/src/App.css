@@ -357,14 +357,6 @@ body,
   font-style: italic;
 }
 
-.inspectah-repo-group-header--disabled {
-  opacity: 0.6;
-}
-
-.inspectah-repo-group-header--disabled .inspectah-repo-group-header__label {
-  text-decoration: line-through;
-}
-
 /* Responsive: repo group header wraps toggle to second line below 1024px */
 @media (max-width: 1023px) {
   .inspectah-repo-group-header {
@@ -403,9 +395,83 @@ body,
 
 .inspectah-repo-bar__row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  column-gap: var(--pf-t--global--spacer--sm);
   padding: 2px 0;
+}
+
+/* One repo: its row, the files and keys it owns, and its last failure. */
+.inspectah-repo-bar__repo {
+  padding: 2px 0;
+}
+
+.inspectah-repo-bar__repo:focus-visible {
+  outline: 2px solid var(--pf-t--global--border--color--clicked);
+  outline-offset: 2px;
+}
+
+.inspectah-repo-bar__carriage-note {
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+/* The owns line: compact, wraps at narrow widths, never scrolls. */
+.inspectah-repo-bar__owns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--pf-t--global--spacer--md);
+  margin: 0 0 2px var(--pf-t--global--spacer--md);
+  padding: 0;
+  list-style: none;
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.inspectah-repo-bar__owned {
+  overflow-wrap: anywhere;
+}
+
+.inspectah-repo-bar__owned-name {
+  font-family: var(--pf-t--global--font--family--mono);
+}
+
+.inspectah-repo-bar__owned--left-out .inspectah-repo-bar__owned-name {
+  text-decoration: line-through;
+}
+
+.inspectah-repo-bar__owned-state {
+  margin-left: var(--pf-t--global--spacer--xs);
+  font-style: italic;
+}
+
+.inspectah-repo-bar__unlisted {
+  margin-top: var(--pf-t--global--spacer--xs);
+  padding-top: var(--pf-t--global--spacer--xs);
+  border-top: 1px solid var(--pf-t--global--border--color--default);
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+.inspectah-repo-bar__unlisted ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inspectah-repo-bar__unlisted-title {
+  color: var(--pf-t--global--text--color--subtle);
+  font-weight: 600;
+}
+
+.inspectah-repo-bar__unlisted-item {
+  overflow-wrap: anywhere;
+  padding: 2px 0;
+}
+
+.inspectah-repo-bar__unlisted-why {
+  margin: 0;
+  color: var(--pf-t--global--text--color--subtle);
 }
 
 .inspectah-repo-bar__name {

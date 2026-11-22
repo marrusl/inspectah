@@ -60,7 +60,11 @@ const VENDOR: RepoGroupInfo = {
   effective_member_count: 1,
   effective_included: 1,
   effective_unlisted: 0,
-  enabled: true,
+  control: "full",
+  kept: true,
+  carriage_count: 0,
+  carriage_included: 0,
+  owns: [],
 };
 
 const GROUP: GroupInfo = {
@@ -161,6 +165,7 @@ const SERVICE: ServiceDecisionDto = {
 const DROPIN: DropInDecisionDto = {
   unit: "httpd.service",
   path: "/etc/systemd/system/httpd.service.d/override.conf",
+  config_paths: ["/etc/systemd/system/httpd.service.d/override.conf"],
   triage: SERVICE.triage,
   include: true,
   locked: false,

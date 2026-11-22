@@ -16,6 +16,7 @@ const DROPIN_PATH = "/etc/systemd/system/sshd.service.d/override.conf";
 const DROPIN: DropInDecisionDto = {
   unit: "sshd.service",
   path: DROPIN_PATH,
+  config_paths: [DROPIN_PATH],
   triage: TRIAGE,
   include: true,
   locked: false,

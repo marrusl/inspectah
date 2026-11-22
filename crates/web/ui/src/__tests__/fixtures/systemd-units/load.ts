@@ -73,6 +73,11 @@
  *   install_unknown_words and UNDETERMINED_CHECK (unit_plan.rs); the
  *   builder reproduces the kitchen-sink's driftify-upheld.service record
  *   exactly first.
+ *
+ * `unit_dropins[].config_paths` arrived after every file here was taken, and
+ * none of them keeps the view's config rows, so the loader adds it as the
+ * empty list: no config row in these fields is shadowed. A test that plants
+ * a config row a drop-in shadows sets that drop-in's `config_paths` itself.
  */
 import type { UnitFields } from "../../../components/unitOutcome";
 
@@ -90,16 +95,25 @@ function raw(name: UnitFixtureName): Record<string, unknown> {
   return JSON.parse(JSON.stringify(entry.default)) as Record<string, unknown>;
 }
 
+/** Gives every drop-in the `config_paths` the recordings predate. */
+function withConfigPaths(fields: Record<string, unknown>): UnitFields {
+  const dropins = (fields.unit_dropins ?? []) as Record<string, unknown>[];
+  for (const d of dropins) {
+    if (!("config_paths" in d)) d.config_paths = [];
+  }
+  return fields as unknown as UnitFields;
+}
+
 /** The six unit fields of a fixture (`planted` without its U8 after view). */
 export function loadUnitFields(name: UnitFixtureName): UnitFields {
   const fields = raw(name);
   delete fields[AFTER_INCLUDE_KEY];
-  return fields as unknown as UnitFields;
+  return withConfigPaths(fields);
 }
 
 /** The six unit fields U8's mocked applyOp returns: planted, drop-in included. */
 export function loadPlantedAfterInclude(): UnitFields {
   const after = raw("planted")[AFTER_INCLUDE_KEY];
   if (!after) throw new Error(`planted.units.json has no ${AFTER_INCLUDE_KEY}`);
-  return after as UnitFields;
+  return withConfigPaths(after as Record<string, unknown>);
 }

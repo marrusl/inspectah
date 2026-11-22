@@ -389,6 +389,7 @@ describe("MainContent: unit section", () => {
     {
       unit: "sshd.service",
       path: "/etc/systemd/system/sshd.service",
+      config_paths: ["/etc/systemd/system/sshd.service"],
       triage,
       include: true,
       locked: false,
@@ -398,6 +399,7 @@ describe("MainContent: unit section", () => {
     {
       unit: "kdump.service",
       path: "/etc/systemd/system/kdump.service.d/override.conf",
+      config_paths: ["/etc/systemd/system/kdump.service.d/override.conf"],
       triage,
       include: true,
       locked: false,

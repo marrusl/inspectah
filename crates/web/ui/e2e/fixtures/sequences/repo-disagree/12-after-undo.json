@@ -229,7 +229,11 @@
       "effective_member_count": 2,
       "effective_included": 2,
       "effective_unlisted": 0,
-      "enabled": false
+      "control": "full",
+      "kept": false,
+      "carriage_count": 0,
+      "carriage_included": 0,
+      "owns": []
     }
   ]
 }

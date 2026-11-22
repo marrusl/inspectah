@@ -17,7 +17,7 @@ export interface RepoGroupProps {
   itemIds?: string[];
   /** Roving tabindex value for the header row */
   tabIndex?: number;
-  onRepoToggle?: (sectionId: string, enabled: boolean) => void;
+  onRepoToggle?: (sectionId: string, include: boolean) => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
   children: React.ReactNode;
 }
@@ -55,12 +55,7 @@ export function RepoGroup({
   return (
     <div data-testid={`repo-group-wrapper-${repo.section_id}`}>
       <RepoGroupHeader
-        sectionId={repo.section_id}
-        provenance={repo.provenance}
-        isDistro={repo.is_distro}
-        packageCount={repo.package_count}
-        effectiveMemberCount={repo.effective_member_count}
-        enabled={repo.enabled}
+        repo={repo}
         isExpanded={effectiveExpanded}
         infoCount={infoCount}
         summaryText={summaryText}

@@ -48,6 +48,7 @@ function view(overrides: Partial<ViewResponse> = {}): ViewResponse {
     stats: mockStats(),
     generation: 0,
     repo_groups: [],
+    repo_owned: [],
     version_changes: [],
     unit_states: [],
     unit_dropins: [],
@@ -75,6 +76,7 @@ function view(overrides: Partial<ViewResponse> = {}): ViewResponse {
 const DROPIN: DropInDecisionDto = {
   unit: "sshd.service",
   path: DROPIN_PATH,
+  config_paths: [DROPIN_PATH],
   triage: TRIAGE,
   include: false,
   locked: false,

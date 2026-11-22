@@ -116,6 +116,7 @@ const MOCK_VIEW_DATA: ViewResponse = {
   stats: MOCK_STATS,
   generation: 1,
   repo_groups: [],
+  repo_owned: [],
   version_changes: [],
   unit_states: [
     {
@@ -430,6 +431,7 @@ describe("Sidebar", () => {
           {
             unit: "sshd.service",
             path: "/etc/systemd/system/sshd.service",
+            config_paths: ["/etc/systemd/system/sshd.service"],
             triage: TRIAGE,
             include: true,
             locked: false,
@@ -465,6 +467,7 @@ describe("Sidebar", () => {
           {
             unit: "httpd.service",
             path: "/etc/systemd/system/httpd.service.d/override.conf",
+            config_paths: ["/etc/systemd/system/httpd.service.d/override.conf"],
             triage: TRIAGE,
             include: true,
             locked: false,

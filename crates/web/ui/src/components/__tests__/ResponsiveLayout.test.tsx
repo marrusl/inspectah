@@ -244,12 +244,21 @@ describe("Repo group header classification label", () => {
 
     render(
       <RepoGroupHeader
-        sectionId="epel"
-        provenance="verified"
-        isDistro={false}
-        packageCount={5}
-        effectiveMemberCount={5}
-        enabled={true}
+        repo={{
+          section_id: "epel",
+          provenance: "verified",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 5,
+          effective_member_count: 5,
+          effective_included: 5,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         onToggle={vi.fn()}
       />,
     );
@@ -267,12 +276,21 @@ describe("Repo group header classification label", () => {
 
     render(
       <RepoGroupHeader
-        sectionId="baseos"
-        provenance="verified"
-        isDistro={true}
-        packageCount={10}
-        effectiveMemberCount={10}
-        enabled={true}
+        repo={{
+          section_id: "baseos",
+          provenance: "verified",
+          is_distro: true,
+          tier: "distro",
+          package_count: 10,
+          effective_member_count: 10,
+          effective_included: 10,
+          effective_unlisted: 0,
+          control: "none",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
       />,
     );
 
@@ -288,12 +306,21 @@ describe("Repo group header classification label", () => {
 
     render(
       <RepoGroupHeader
-        sectionId="epel"
-        provenance="verified"
-        isDistro={false}
-        packageCount={3}
-        effectiveMemberCount={3}
-        enabled={true}
+        repo={{
+          section_id: "epel",
+          provenance: "verified",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 3,
+          effective_member_count: 3,
+          effective_included: 3,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
       />,
     );
 
@@ -307,12 +334,21 @@ describe("Repo group header classification label", () => {
 
     render(
       <RepoGroupHeader
-        sectionId="epel"
-        provenance="verified"
-        isDistro={false}
-        packageCount={3}
-        effectiveMemberCount={3}
-        enabled={true}
+        repo={{
+          section_id: "epel",
+          provenance: "verified",
+          is_distro: false,
+          tier: "third_party",
+          package_count: 3,
+          effective_member_count: 3,
+          effective_included: 3,
+          effective_unlisted: 0,
+          control: "full",
+          kept: true,
+          carriage_count: 0,
+          carriage_included: 0,
+          owns: [],
+        }}
         onToggle={vi.fn()}
       />,
     );
