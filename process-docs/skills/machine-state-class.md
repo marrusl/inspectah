@@ -152,16 +152,22 @@ key by its structure, with two readers over every byte:
   then base64 or, before any key line, an RFC 1421 header, then
   whitespace and after a closing quote one `,`, `+` or `;`. A quote
   after that starts the next line (JSON arrays, Python concatenation).
-  Any other byte, a dash included, ends the body.
+  Any other byte ends the body; a dash may start `EndRead`, the `END`
+  marker, which ends it too.
 
-The verdict is key material, `KEY_MATERIAL_MIN` (64) base64 characters:
-lines that are one base64 run count their characters, and one run of
-64 counts anywhere (lines joined by spaces, or not at all). Lines of
-several words and text on the marker's own line count for nothing.
-Sixty-four is the smallest key PEM carries (Ed25519 in PKCS#8), so a
-key is a key however its body ends, cut off included, and
-delimiter-only text, templates and prose never are. A test key needs
-64 base64 characters of key lines, or it reads as text. Never bring
+The verdict is key material: lines that are one base64 run count their
+characters, and one run of 64 counts anywhere (lines joined by spaces,
+or not at all). Lines of several words and text on the marker's own
+line count for nothing. A body holding `KEY_MATERIAL_MIN` (64) is a key
+however it ends, cut off included. One a private-key `END` marker
+closes is a key from `CLOSED_KEY_MATERIAL_MIN` (28), the last run
+before the marker counted too: the smallest whole key is SEC1 on
+secp112r1 with neither curve parameters nor public key, 21 bytes
+(`openssl ec -no_public` writes 40 characters there, 60 for P-224).
+Under 64 only the `END` marker tells a key from a template, so never
+drop either minimum: delimiter-only text, templates and prose hold at
+most 3 characters between markers. A test key needs 64 base64
+characters of key lines, or 28 and its `END` line. Never bring
 back an allowlist of body bytes or a body length limit: the first let
 neighbouring JSON count as a body and the second let padding and
 whitespace reset it. Never reintroduce a verdict from part of a file
