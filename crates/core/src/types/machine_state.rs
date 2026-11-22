@@ -365,8 +365,8 @@ pub struct WithheldConfigEntry {
 }
 
 /// An unmanaged file the read gate withheld: an alias or hard link of a
-/// withheld member's file, or a whole-file credential. No disposition, so
-/// it cannot be included.
+/// withheld member's file, a keytab, or a file holding a PEM private key
+/// anywhere in its bytes. No disposition, so it cannot be included.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WithheldUnmanagedEntry {
     pub path: String,

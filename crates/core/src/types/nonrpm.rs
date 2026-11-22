@@ -208,7 +208,8 @@ pub struct UnmanagedFileSection {
     #[serde(default)]
     pub total_count: usize,
     /// Files the read gate withheld: aliases or hard links of a withheld
-    /// machine-state member, or whole-file credentials. Never in `items`.
+    /// machine-state member, keytabs, and files holding a PEM private key
+    /// anywhere in their bytes. Never in `items`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub withheld: Vec<super::machine_state::WithheldUnmanagedEntry>,
 }
