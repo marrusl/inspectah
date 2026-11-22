@@ -7,7 +7,7 @@
 //! a refine session's export of the scan tarball.
 
 use crate::sysctl_hosts::{
-    SysctlHost, export_session, render_export, scan_exec, scan_with, session,
+    SysctlHost, export_session, reload, render_export, scan_exec, scan_with, session,
 };
 use inspectah_collect::executor::mock::{MockExecutor, ReadKind};
 use inspectah_collect::inspectors::config::ConfigInspector;
@@ -17,6 +17,7 @@ use inspectah_collect::inspectors::network::NetworkInspector;
 use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
+use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::types::FindingKind;
@@ -631,4 +632,152 @@ fn no_command_prints_an_etc_file() {
             );
         }
     }
+}
+
+/// One host of a fleet: its hostname and the files `extra` adds.
+fn fleet_host(hostname: &str, extra: impl FnOnce(SysctlHost) -> SysctlHost) -> InspectionSnapshot {
+    reload(&scan_with(
+        extra(SysctlHost::new().file("/etc/hostname", &format!("{hostname}\n"))),
+        std_inspectors(),
+    ))
+}
+
+/// The aggregate of `hosts`, written and loaded again.
+fn aggregate(hosts: Vec<InspectionSnapshot>) -> InspectionSnapshot {
+    let (merged, _) = merge_snapshots(hosts, None, None).expect("the hosts merge");
+    reload(&merged)
+}
+
+const IQN: &str = "/etc/iscsi/initiatorname.iscsi";
+
+/// Collect case 21: every class path is one withheld row with both hosts,
+/// whatever each host held: the same IQN, different IQNs, one IQN and one
+/// unreadable, a key on one host and an ordinary file on the other. No
+/// member content reaches the aggregate, and neither export stages it.
+#[test]
+fn a_fleet_aggregate_withholds_every_class_path() {
+    let iqn =
+        |value: &'static str| move |h: SysctlHost| h.file(IQN, &format!("InitiatorName={value}\n"));
+    let cases: Vec<(&str, InspectionSnapshot, InspectionSnapshot)> = vec![
+        (
+            "same IQN",
+            fleet_host("host-a", iqn("iqn.2000-01.com.example:same")),
+            fleet_host("host-b", iqn("iqn.2000-01.com.example:same")),
+        ),
+        (
+            "different IQNs",
+            fleet_host("host-a", iqn("iqn.2000-01.com.example:a")),
+            fleet_host("host-b", iqn("iqn.2000-01.com.example:b")),
+        ),
+        (
+            "captured and unreadable",
+            fleet_host("host-a", iqn("iqn.2000-01.com.example:a")),
+            fleet_host("host-b", |h| {
+                h.file_error(IQN, std::io::ErrorKind::PermissionDenied)
+            }),
+        ),
+    ];
+    for (name, a, b) in cases {
+        let merged = aggregate(vec![a, b]);
+        let config = merged.config.as_ref().expect("a config section");
+        assert!(!config.files.iter().any(|f| f.path == IQN), "{name}");
+        let row = config
+            .withheld
+            .iter()
+            .find(|w| w.path == IQN)
+            .unwrap_or_else(|| panic!("{name}: the IQN is withheld"));
+        assert_eq!(
+            row.member,
+            MachineStateMember::Carriable(CarriableMember::IscsiInitiatorName),
+            "{name}"
+        );
+        let hosts = &row.aggregate.as_ref().expect("prevalence").hosts;
+        assert_eq!(hosts, &["host-a", "host-b"], "{name}");
+        let json = serde_json::to_string(&merged).unwrap();
+        assert!(
+            !json.contains("iqn.2000-01"),
+            "{name}: no IQN in the aggregate"
+        );
+        for (path, tree) in [
+            ("scan export", render_export(&merged)),
+            ("refine export", export_session(&session(&merged))),
+        ] {
+            assert!(
+                !tree.path().join("config/etc/iscsi").exists(),
+                "{name}: {path}"
+            );
+        }
+    }
+
+    let key_and_ordinary = aggregate(vec![
+        fleet_host("host-a", |h| {
+            h.file("/etc/myapp/server.pem", &encrypted_key())
+        }),
+        fleet_host("host-b", |h| {
+            h.file("/etc/myapp/server.pem", "listen = 1\nROLE=worker\n")
+        }),
+    ]);
+    let config = key_and_ordinary.config.as_ref().unwrap();
+    assert!(
+        !config
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/myapp/server.pem")
+    );
+    let row = config
+        .withheld
+        .iter()
+        .find(|w| w.path == "/etc/myapp/server.pem")
+        .expect("withheld");
+    assert_eq!(row.member, MachineStateMember::PrivateKeyFile);
+    assert_eq!(row.aggregate.as_ref().unwrap().hosts, ["host-a", "host-b"]);
+    let json = serde_json::to_string(&key_and_ordinary).unwrap();
+    assert!(
+        !json.contains("ROLE=worker"),
+        "host B's content is dropped too"
+    );
+    assert_marker_nowhere(&key_and_ordinary);
+}
+
+/// Collect case 28, the configuration half: host A's drop-in path is a
+/// symlink to a key, host B's the same path holding a regular drop-in.
+/// The aggregate has one withheld row with both hosts and no entry at
+/// the path, and host B's content is nowhere.
+#[test]
+fn a_two_host_drop_in_at_a_class_path_is_withheld_for_the_fleet() {
+    const DROP_IN: &str = "/etc/systemd/system/app.service.d/key.conf";
+    let merged = aggregate(vec![
+        fleet_host("host-a", |h| {
+            h.file("/etc/pki/tls/private/server.key", &encrypted_key())
+                .link(DROP_IN, "/etc/pki/tls/private/server.key")
+        }),
+        fleet_host("host-b", |h| {
+            h.file(DROP_IN, "[Service]\nEnvironment=ROLE=worker\n")
+        }),
+    ]);
+    let config = merged.config.as_ref().unwrap();
+    assert!(!config.files.iter().any(|f| f.path == DROP_IN));
+    let row = config
+        .withheld
+        .iter()
+        .find(|w| w.path == DROP_IN)
+        .expect("withheld");
+    assert_eq!(row.aggregate.as_ref().unwrap().hosts, ["host-a", "host-b"]);
+    let json = serde_json::to_string(&merged).unwrap();
+    assert!(!json.contains("ROLE=worker"));
+    for (path, tree) in [
+        ("scan export", render_export(&merged)),
+        ("refine export", export_session(&session(&merged))),
+    ] {
+        assert!(
+            !tree
+                .path()
+                .join("config/etc/systemd/system/app.service.d")
+                .exists(),
+            "{path}"
+        );
+        let containerfile = std::fs::read_to_string(tree.path().join("Containerfile")).unwrap();
+        assert!(!containerfile.contains("key.conf"), "{path}");
+    }
+    assert_marker_nowhere(&merged);
 }

@@ -38,6 +38,53 @@ pub trait AggregateMergeable: Clone {
     fn content_captured(&self) -> bool {
         true
     }
+
+    /// The host path this row stages or exports a file at, or `None` for a
+    /// row that writes no file (a package, a module stream, a unit state).
+    /// Required, with no default, so every mergeable type answers whether
+    /// a machine-state class path can reach it ([`merge_items`]).
+    fn destination(&self) -> Option<&str>;
+}
+
+/// Normalized paths that are a machine-state class row on at least one
+/// host: a `config.withheld` or `unmanaged_files.withheld` row, or a
+/// `MachineState` entry. Built from rows, not from the rule table, so a
+/// path withheld on one host by alias or inode is in it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClassPaths(std::collections::BTreeSet<String>);
+
+impl ClassPaths {
+    /// The class paths of every host.
+    pub fn from_hosts(hosts: &[crate::snapshot::InspectionSnapshot]) -> Self {
+        let mut paths = std::collections::BTreeSet::new();
+        for host in hosts {
+            if let Some(config) = &host.config {
+                paths.extend(config.withheld.iter().map(|w| class_key(&w.path)));
+                paths.extend(
+                    config
+                        .files
+                        .iter()
+                        .filter(|f| f.disposition.is_machine_state())
+                        .map(|f| class_key(&f.path)),
+                );
+            }
+            if let Some(unmanaged) = &host.unmanaged_files {
+                paths.extend(unmanaged.withheld.iter().map(|w| class_key(&w.path)));
+            }
+        }
+        Self(paths)
+    }
+
+    /// Whether `path`, normalized, is a class path.
+    pub fn contains(&self, path: &str) -> bool {
+        self.0.contains(&class_key(path))
+    }
+}
+
+/// The key a path is compared under: its normal form, or itself when it
+/// has none.
+fn class_key(path: &str) -> String {
+    crate::machine_state::normal_path(path).unwrap_or_else(|| path.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -47,6 +94,11 @@ pub trait AggregateMergeable: Clone {
 use crate::types::rpm::{EnabledModuleStream, PackageEntry, RepoFile, VersionLockEntry};
 
 impl AggregateMergeable for PackageEntry {
+    /// Stages no file.
+    fn destination(&self) -> Option<&str> {
+        None
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Owned(format!("{}.{}", self.name, self.arch))
     }
@@ -61,6 +113,11 @@ impl AggregateMergeable for PackageEntry {
 }
 
 impl AggregateMergeable for RepoFile {
+    /// The host path this row stages at.
+    fn destination(&self) -> Option<&str> {
+        Some(&self.path)
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.path)
     }
@@ -75,6 +132,11 @@ impl AggregateMergeable for RepoFile {
 }
 
 impl AggregateMergeable for EnabledModuleStream {
+    /// Stages no file.
+    fn destination(&self) -> Option<&str> {
+        None
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Owned(format!("{}:{}", self.module_name, self.stream))
     }
@@ -89,6 +151,11 @@ impl AggregateMergeable for EnabledModuleStream {
 }
 
 impl AggregateMergeable for VersionLockEntry {
+    /// Stages no file.
+    fn destination(&self) -> Option<&str> {
+        None
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Owned(format!("{}.{}", self.name, self.arch))
     }
@@ -107,8 +174,16 @@ impl AggregateMergeable for VersionLockEntry {
 // ---------------------------------------------------------------------------
 
 use crate::types::config::ConfigFileEntry;
+use crate::types::machine_state::{
+    MachineStateMember, WithheldConfigEntry, WithheldUnmanagedEntry,
+};
 
 impl AggregateMergeable for ConfigFileEntry {
+    /// The host path this row stages at.
+    fn destination(&self) -> Option<&str> {
+        Some(&self.path)
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.path)
     }
@@ -149,6 +224,11 @@ use crate::types::units::{MountUnitFinding, SystemdDropIn, UnitStateChange};
 /// the whole finding the most hosts recorded, a tie going to the first host
 /// by hostname.
 impl AggregateMergeable for MountUnitFinding {
+    /// Stages no file.
+    fn destination(&self) -> Option<&str> {
+        None
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(self.unit.name().as_unit_name().as_str())
     }
@@ -163,6 +243,11 @@ impl AggregateMergeable for MountUnitFinding {
 }
 
 impl AggregateMergeable for UnitStateChange {
+    /// Stages no file.
+    fn destination(&self) -> Option<&str> {
+        None
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(self.unit().name().as_str())
     }
@@ -177,6 +262,11 @@ impl AggregateMergeable for UnitStateChange {
 }
 
 impl AggregateMergeable for SystemdDropIn {
+    /// The host path this row stages at.
+    fn destination(&self) -> Option<&str> {
+        Some(&self.path)
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.path)
     }
@@ -209,6 +299,11 @@ impl AggregateMergeable for SystemdDropIn {
 use crate::types::containers::{ComposeFile, FlatpakApp, QuadletUnit};
 
 impl AggregateMergeable for QuadletUnit {
+    /// The host path this row stages at.
+    fn destination(&self) -> Option<&str> {
+        Some(&self.path)
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.path)
     }
@@ -235,6 +330,11 @@ impl AggregateMergeable for QuadletUnit {
 }
 
 impl AggregateMergeable for ComposeFile {
+    /// The host path this row stages at.
+    fn destination(&self) -> Option<&str> {
+        Some(&self.path)
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.path)
     }
@@ -262,6 +362,11 @@ impl AggregateMergeable for ComposeFile {
 }
 
 impl AggregateMergeable for FlatpakApp {
+    /// Stages no file.
+    fn destination(&self) -> Option<&str> {
+        None
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Owned(format!("{}.{}.{}", self.app_id, self.remote, self.branch))
     }
@@ -282,6 +387,11 @@ impl AggregateMergeable for FlatpakApp {
 use crate::types::network::{FirewallZone, NMConnection};
 
 impl AggregateMergeable for NMConnection {
+    /// The host path this row stages at.
+    fn destination(&self) -> Option<&str> {
+        Some(&self.path)
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.path)
     }
@@ -296,6 +406,11 @@ impl AggregateMergeable for NMConnection {
 }
 
 impl AggregateMergeable for FirewallZone {
+    /// The host path this row stages at.
+    fn destination(&self) -> Option<&str> {
+        Some(&self.path)
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.path)
     }
@@ -316,6 +431,11 @@ impl AggregateMergeable for FirewallZone {
 use crate::types::selinux::SelinuxPortLabel;
 
 impl AggregateMergeable for SelinuxPortLabel {
+    /// Stages no file.
+    fn destination(&self) -> Option<&str> {
+        None
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Owned(format!("{}:{}", self.protocol, self.port))
     }
@@ -336,6 +456,11 @@ impl AggregateMergeable for SelinuxPortLabel {
 use crate::types::kernelboot::KernelModule;
 
 impl AggregateMergeable for KernelModule {
+    /// Stages no file.
+    fn destination(&self) -> Option<&str> {
+        None
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.name)
     }
@@ -356,6 +481,11 @@ impl AggregateMergeable for KernelModule {
 use crate::types::nonrpm::{NonRpmItem, UnmanagedFile, UnmanagedFileSection};
 
 impl AggregateMergeable for NonRpmItem {
+    /// Stages no file.
+    fn destination(&self) -> Option<&str> {
+        None
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         // Composite key: method determines the ecosystem, path provides
         // the environment scope. Falls back to name for legacy items
@@ -414,6 +544,11 @@ impl AggregateMergeable for NonRpmItem {
 }
 
 impl AggregateMergeable for UnmanagedFile {
+    /// The host path this row stages at.
+    fn destination(&self) -> Option<&str> {
+        Some(&self.path)
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         // File path is the stable identity for unmanaged files.
         Cow::Borrowed(&self.path)
@@ -449,6 +584,11 @@ impl AggregateMergeable for UnmanagedFile {
 use crate::types::scheduled::{AtJob, CronJob, GeneratedTimerUnit, SystemdTimer};
 
 impl AggregateMergeable for CronJob {
+    /// The host path this row stages at.
+    fn destination(&self) -> Option<&str> {
+        Some(&self.path)
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.path)
     }
@@ -463,6 +603,11 @@ impl AggregateMergeable for CronJob {
 }
 
 impl AggregateMergeable for SystemdTimer {
+    /// The host path this row stages at.
+    fn destination(&self) -> Option<&str> {
+        Some(&self.path)
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.name)
     }
@@ -478,6 +623,11 @@ impl AggregateMergeable for SystemdTimer {
 }
 
 impl AggregateMergeable for AtJob {
+    /// The host path this row stages at.
+    fn destination(&self) -> Option<&str> {
+        Some(&self.file)
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.file)
     }
@@ -492,6 +642,11 @@ impl AggregateMergeable for AtJob {
 }
 
 impl AggregateMergeable for GeneratedTimerUnit {
+    /// Stages no file.
+    fn destination(&self) -> Option<&str> {
+        None
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.name)
     }
@@ -512,6 +667,11 @@ impl AggregateMergeable for GeneratedTimerUnit {
 use crate::types::storage::FstabEntry;
 
 impl AggregateMergeable for FstabEntry {
+    /// Stages no file.
+    fn destination(&self) -> Option<&str> {
+        None
+    }
+
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.mount_point)
     }
@@ -539,13 +699,21 @@ impl AggregateMergeable for FstabEntry {
 /// sub-grouped by content hash (see [`merge_with_variants`]).
 ///
 /// The returned list is sorted by identity key for deterministic output.
+///
+/// Every observation whose destination is a machine-state class path is
+/// dropped before anything groups, so no section keeps an ordinary row or
+/// a variant at a path that is one host's identity or credential.
 pub fn merge_items<T: AggregateMergeable + serde::Serialize>(
     items: Vec<(usize, T)>,
     total_hosts: usize,
     hostnames: &[String],
+    class: &ClassPaths,
 ) -> Vec<T> {
     let mut groups: HashMap<String, Vec<(usize, T)>> = HashMap::new();
     for (host_idx, item) in items {
+        if item.destination().is_some_and(|d| class.contains(d)) {
+            continue;
+        }
         let key = item.identity_key().into_owned();
         groups.entry(key).or_default().push((host_idx, item));
     }
@@ -1143,6 +1311,7 @@ pub fn merge_rpm_sections(
     total_hosts: usize,
     hostnames: &[String],
     baseline_host_idx: Option<usize>,
+    class: &ClassPaths,
 ) -> Option<(RpmSection, HashMap<String, Vec<RepoSourceEntry>>)> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
@@ -1152,16 +1321,19 @@ pub fn merge_rpm_sections(
         collect_items(&sections, |s| &s.packages_added),
         total_hosts,
         hostnames,
+        class,
     );
     let base_image_only = merge_items(
         collect_items(&sections, |s| &s.base_image_only),
         total_hosts,
         hostnames,
+        class,
     );
     let repo_files = merge_items(
         collect_items(&sections, |s| &s.repo_files),
         total_hosts,
         hostnames,
+        class,
     );
     let mut gpg_keys = merge_items(
         keep_base_shipping_where_every_host_agrees(union_gpgkey_references(collect_items(
@@ -1170,6 +1342,7 @@ pub fn merge_rpm_sections(
         ))),
         total_hosts,
         hostnames,
+        class,
     );
     // The merge includes every universal item; a key every host left to
     // the base image stays out.
@@ -1180,11 +1353,13 @@ pub fn merge_rpm_sections(
         collect_items(&sections, |s| &s.module_streams),
         total_hosts,
         hostnames,
+        class,
     );
     let version_locks = merge_items(
         collect_items(&sections, |s| &s.version_locks),
         total_hosts,
         hostnames,
+        class,
     );
 
     // Dedup string lists
@@ -1602,21 +1777,122 @@ pub fn merge_config_sections(
     sections: Vec<Option<ConfigSection>>,
     total_hosts: usize,
     hostnames: &[String],
+    class: &ClassPaths,
 ) -> Option<ConfigSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
     }
 
+    // The generic merge never sees a class path: its observations, class
+    // rows and ordinary ones alike, go to the class merge, so a payload
+    // every host shares cannot be included and content cannot split one
+    // path into variants.
     let files = merge_items(
         collect_items(&sections, |s| &s.files),
         total_hosts,
         hostnames,
+        class,
     );
 
-    Some(ConfigSection {
-        files,
-        withheld: Vec::new(),
-    })
+    let mut by_path: std::collections::BTreeMap<String, Vec<ClassObservation>> =
+        std::collections::BTreeMap::new();
+    for (idx, section) in sections.iter().enumerate() {
+        let Some(section) = section else { continue };
+        for entry in section.files.iter().filter(|f| class.contains(&f.path)) {
+            let member = match &entry.disposition {
+                FindingKind::MachineState { member, .. } => {
+                    Some(MachineStateMember::Carriable(*member))
+                }
+                _ => None,
+            };
+            by_path
+                .entry(class_key(&entry.path))
+                .or_default()
+                .push(ClassObservation {
+                    host: idx,
+                    member,
+                    kind: entry.kind.clone(),
+                    package: entry.package.clone(),
+                    mode: None,
+                    size: None,
+                });
+        }
+        for row in &section.withheld {
+            by_path
+                .entry(class_key(&row.path))
+                .or_default()
+                .push(ClassObservation {
+                    host: idx,
+                    member: Some(row.member),
+                    kind: row.kind.clone(),
+                    package: row.package.clone(),
+                    mode: row.mode,
+                    size: row.size,
+                });
+        }
+    }
+    let withheld = by_path
+        .into_iter()
+        .filter_map(|(path, observations)| {
+            let rep = class_representative(&observations)?;
+            Some(WithheldConfigEntry {
+                path,
+                kind: rep.kind.clone(),
+                package: rep.package.clone(),
+                member: rep.member?,
+                mode: rep.mode,
+                size: rep.size,
+                aggregate: Some(class_prevalence(&observations, total_hosts, hostnames)),
+            })
+        })
+        .collect();
+
+    Some(ConfigSection { files, withheld })
+}
+
+/// One host's observation of a class path, in any form: a withheld row,
+/// a captured carriable entry (its content dropped), or an ordinary entry
+/// on a host where the path is not a class row (`member` is `None`), which
+/// contributes its host and nothing else.
+#[derive(Debug, Clone)]
+struct ClassObservation {
+    host: usize,
+    member: Option<MachineStateMember>,
+    kind: crate::types::config::ConfigFileKind,
+    package: Option<String>,
+    mode: Option<u32>,
+    size: Option<u64>,
+}
+
+/// The observation a merged class row takes its fields from: the member is
+/// the first one, in hostname order, that is not `Carriable(_)`, else the
+/// first `Carriable(_)` one; the other fields come from the first host
+/// whose observation has that member. Observations arrive in host order.
+fn class_representative(observations: &[ClassObservation]) -> Option<&ClassObservation> {
+    observations
+        .iter()
+        .find(|o| matches!(o.member, Some(m) if !matches!(m, MachineStateMember::Carriable(_))))
+        .or_else(|| observations.iter().find(|o| o.member.is_some()))
+}
+
+/// The hosts that have a class path, in any form.
+fn class_prevalence(
+    observations: &[ClassObservation],
+    total_hosts: usize,
+    hostnames: &[String],
+) -> AggregatePrevalence {
+    let mut hosts: Vec<String> = observations
+        .iter()
+        .map(|o| hostnames[o.host].clone())
+        .collect();
+    hosts.sort();
+    hosts.dedup();
+    AggregatePrevalence {
+        count: hosts.len() as i32,
+        total: total_hosts as i32,
+        hosts,
+        ..Default::default()
+    }
 }
 
 /// Merge service sections from multiple hosts.
@@ -1624,13 +1900,14 @@ pub fn merge_service_sections(
     sections: Vec<Option<UnitSection>>,
     total_hosts: usize,
     hostnames: &[String],
+    class: &ClassPaths,
 ) -> Option<UnitSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
     }
 
     let observed = collect_items(&sections, |s| &s.state_changes);
-    let mut state_changes = merge_items(observed.clone(), total_hosts, hostnames);
+    let mut state_changes = merge_items(observed.clone(), total_hosts, hostnames, class);
     for change in &mut state_changes {
         union_lists(change, &observed);
     }
@@ -1643,6 +1920,7 @@ pub fn merge_service_sections(
         collect_items(&sections, |s| &s.drop_ins),
         total_hosts,
         hostnames,
+        class,
     );
     let inventory = merge_unit_inventory(&sections);
     let enabled_on_any_host: Vec<UnitName> = sections
@@ -1658,6 +1936,7 @@ pub fn merge_service_sections(
         collect_items(&sections, |s| &s.mount_findings),
         total_hosts,
         hostnames,
+        class,
     );
 
     let manual_links = merge_by_first_host(
@@ -1869,6 +2148,7 @@ pub fn merge_container_sections(
     sections: Vec<Option<ContainerSection>>,
     total_hosts: usize,
     hostnames: &[String],
+    class: &ClassPaths,
 ) -> Option<ContainerSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
@@ -1878,11 +2158,13 @@ pub fn merge_container_sections(
         collect_items(&sections, |s| &s.quadlet_units),
         total_hosts,
         hostnames,
+        class,
     );
     let compose_files = merge_items(
         collect_items(&sections, |s| &s.compose_files),
         total_hosts,
         hostnames,
+        class,
     );
 
     // Skip running_containers — runtime state, not config
@@ -1892,6 +2174,7 @@ pub fn merge_container_sections(
         collect_items(&sections, |s| &s.flatpak_apps),
         total_hosts,
         hostnames,
+        class,
     );
 
     Some(ContainerSection {
@@ -1907,6 +2190,7 @@ pub fn merge_network_sections(
     sections: Vec<Option<NetworkSection>>,
     total_hosts: usize,
     hostnames: &[String],
+    class: &ClassPaths,
 ) -> Option<NetworkSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
@@ -1916,11 +2200,13 @@ pub fn merge_network_sections(
         collect_items(&sections, |s| &s.connections),
         total_hosts,
         hostnames,
+        class,
     );
     let firewall_zones = merge_items(
         collect_items(&sections, |s| &s.firewall_zones),
         total_hosts,
         hostnames,
+        class,
     );
 
     // Dedup firewall_direct_rules by identity (all fields)
@@ -1996,6 +2282,7 @@ pub fn merge_storage_sections(
     sections: Vec<Option<StorageSection>>,
     total_hosts: usize,
     hostnames: &[String],
+    class: &ClassPaths,
 ) -> Option<StorageSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
@@ -2005,6 +2292,7 @@ pub fn merge_storage_sections(
         collect_items(&sections, |s| &s.fstab_entries),
         total_hosts,
         hostnames,
+        class,
     );
 
     // Dedup mount_points by target
@@ -2116,6 +2404,7 @@ pub fn merge_scheduled_sections(
     sections: Vec<Option<ScheduledTaskSection>>,
     total_hosts: usize,
     hostnames: &[String],
+    class: &ClassPaths,
 ) -> Option<ScheduledTaskSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
@@ -2125,21 +2414,25 @@ pub fn merge_scheduled_sections(
         collect_items(&sections, |s| &s.cron_jobs),
         total_hosts,
         hostnames,
+        class,
     );
     let systemd_timers = merge_items(
         collect_items(&sections, |s| &s.systemd_timers),
         total_hosts,
         hostnames,
+        class,
     );
     let at_jobs = merge_items(
         collect_items(&sections, |s| &s.at_jobs),
         total_hosts,
         hostnames,
+        class,
     );
     let generated_timer_units = merge_items(
         collect_items(&sections, |s| &s.generated_timer_units),
         total_hosts,
         hostnames,
+        class,
     );
 
     Some(ScheduledTaskSection {
@@ -2155,6 +2448,7 @@ pub fn merge_selinux_sections(
     sections: Vec<Option<SelinuxSection>>,
     total_hosts: usize,
     hostnames: &[String],
+    class: &ClassPaths,
 ) -> Option<SelinuxSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
@@ -2164,6 +2458,7 @@ pub fn merge_selinux_sections(
         collect_items(&sections, |s| &s.port_labels),
         total_hosts,
         hostnames,
+        class,
     );
 
     let custom_modules = dedup_strings(collect_string_lists(&sections, |s| &s.custom_modules));
@@ -2281,6 +2576,7 @@ pub fn merge_kernelboot_sections(
     sections: Vec<Option<KernelBootSection>>,
     total_hosts: usize,
     hostnames: &[String],
+    class: &ClassPaths,
 ) -> Option<KernelBootSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
@@ -2290,6 +2586,7 @@ pub fn merge_kernelboot_sections(
         collect_items(&sections, |s| &s.loaded_modules),
         total_hosts,
         hostnames,
+        class,
     );
     // Dedup alternatives by name
     let alternatives = {
@@ -2345,6 +2642,7 @@ pub fn merge_nonrpm_sections(
     sections: Vec<Option<NonRpmSoftwareSection>>,
     total_hosts: usize,
     hostnames: &[String],
+    class: &ClassPaths,
 ) -> Option<NonRpmSoftwareSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
@@ -2354,6 +2652,7 @@ pub fn merge_nonrpm_sections(
         collect_items(&sections, |s| &s.items),
         total_hosts,
         hostnames,
+        class,
     );
 
     // env_files are ConfigFileEntry — merge with variants
@@ -2361,6 +2660,7 @@ pub fn merge_nonrpm_sections(
         collect_items(&sections, |s| &s.env_files),
         total_hosts,
         hostnames,
+        class,
     );
 
     Some(NonRpmSoftwareSection { items, env_files })
@@ -2374,6 +2674,7 @@ pub fn merge_unmanaged_file_sections(
     sections: Vec<Option<UnmanagedFileSection>>,
     total_hosts: usize,
     hostnames: &[String],
+    class: &ClassPaths,
 ) -> Option<UnmanagedFileSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
@@ -2383,18 +2684,69 @@ pub fn merge_unmanaged_file_sections(
         collect_items(&sections, |s| &s.items),
         total_hosts,
         hostnames,
+        class,
     );
 
     // Recompute totals from merged items.
     let total_size: u64 = items.iter().map(|f| f.size).sum();
     let total_count = items.len();
 
+    // One withheld row per path, from every host's withheld rows; hosts
+    // that have the path as an item count toward its prevalence.
+    let mut by_path: std::collections::BTreeMap<String, Vec<ClassObservation>> =
+        std::collections::BTreeMap::new();
+    for (idx, section) in sections.iter().enumerate() {
+        let Some(section) = section else { continue };
+        for row in &section.withheld {
+            by_path
+                .entry(class_key(&row.path))
+                .or_default()
+                .push(ClassObservation {
+                    host: idx,
+                    member: Some(row.member),
+                    kind: Default::default(),
+                    package: None,
+                    mode: row.mode,
+                    size: row.size,
+                });
+        }
+    }
+    for (idx, section) in sections.iter().enumerate() {
+        let Some(section) = section else { continue };
+        for item in &section.items {
+            if let Some(observations) = by_path.get_mut(&class_key(&item.path)) {
+                observations.push(ClassObservation {
+                    host: idx,
+                    member: None,
+                    kind: Default::default(),
+                    package: None,
+                    mode: None,
+                    size: None,
+                });
+            }
+        }
+    }
+    let withheld = by_path
+        .into_iter()
+        .filter_map(|(path, mut observations)| {
+            observations.sort_by_key(|o| o.host);
+            let rep = class_representative(&observations)?;
+            Some(WithheldUnmanagedEntry {
+                path,
+                member: rep.member?,
+                mode: rep.mode,
+                size: rep.size,
+                aggregate: Some(class_prevalence(&observations, total_hosts, hostnames)),
+            })
+        })
+        .collect();
+
     Some(UnmanagedFileSection {
         items,
         usr_entries: Vec::new(),
         total_size,
         total_count,
-        withheld: Vec::new(),
+        withheld,
     })
 }
 
@@ -2513,6 +2865,48 @@ fn merge_json_by_name(
 
 #[cfg(test)]
 mod tests {
+
+    /// Collect case 28, the merge half: a drop-in observation at a path
+    /// that is a class row on another host is dropped before any grouping,
+    /// in every section that merges through `merge_items`.
+    #[test]
+    fn merge_items_drops_every_observation_at_a_class_path() {
+        use crate::snapshot::InspectionSnapshot;
+        use crate::types::config::ConfigFileKind;
+        use crate::types::machine_state::{MachineStateMember, WithheldConfigEntry};
+        use crate::types::units::SystemdDropIn;
+        const PATH: &str = "/etc/systemd/system/app.service.d/key.conf";
+        let host_a = InspectionSnapshot {
+            config: Some(ConfigSection {
+                withheld: vec![WithheldConfigEntry {
+                    path: PATH.into(),
+                    kind: ConfigFileKind::Unowned,
+                    package: None,
+                    member: MachineStateMember::PrivateKeyFile,
+                    mode: None,
+                    size: None,
+                    aggregate: None,
+                }],
+                ..Default::default()
+            }),
+            ..InspectionSnapshot::new()
+        };
+        let class = ClassPaths::from_hosts(&[host_a]);
+        assert!(class.contains("/etc/systemd/system/./app.service.d/key.conf"));
+        let drop_in = SystemdDropIn {
+            unit: "app.service".into(),
+            path: PATH.into(),
+            content: "[Service]\nEnvironment=ROLE=worker\n".into(),
+            ..Default::default()
+        };
+        let merged = merge_items(
+            vec![(1, drop_in)],
+            2,
+            &["host-a".into(), "host-b".into()],
+            &class,
+        );
+        assert!(merged.is_empty());
+    }
     use super::*;
 
     #[test]
@@ -2560,6 +2954,7 @@ mod tests {
             3,
             &hostnames,
             None,
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -2620,6 +3015,7 @@ mod tests {
                 3,
                 &hostnames,
                 None,
+                &crate::aggregate::merge::ClassPaths::default(),
             )
             .expect("merge should succeed")
             .0
@@ -2663,6 +3059,7 @@ mod tests {
             2,
             &hostnames,
             None,
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -2710,8 +3107,14 @@ mod tests {
         ];
 
         let hostnames = vec!["host-a".into(), "host-b".into()];
-        let (merged, conflicts) =
-            merge_rpm_sections(sections, 2, &hostnames, None).expect("merge should succeed");
+        let (merged, conflicts) = merge_rpm_sections(
+            sections,
+            2,
+            &hostnames,
+            None,
+            &crate::aggregate::merge::ClassPaths::default(),
+        )
+        .expect("merge should succeed");
 
         assert_eq!(merged.packages_added[0].source_repo, "baseos");
         assert!(conflicts.is_empty());
@@ -2747,8 +3150,14 @@ mod tests {
         ];
 
         let hostnames = vec!["host-a".into(), "host-b".into()];
-        let (merged, conflicts) =
-            merge_rpm_sections(sections, 2, &hostnames, None).expect("merge should succeed");
+        let (merged, conflicts) = merge_rpm_sections(
+            sections,
+            2,
+            &hostnames,
+            None,
+            &crate::aggregate::merge::ClassPaths::default(),
+        )
+        .expect("merge should succeed");
 
         let nginx = merged
             .packages_added
@@ -2809,8 +3218,14 @@ mod tests {
         ];
 
         let hostnames = vec!["host-a".into(), "host-b".into(), "host-c".into()];
-        let (_, conflicts) =
-            merge_rpm_sections(sections, 3, &hostnames, None).expect("merge should succeed");
+        let (_, conflicts) = merge_rpm_sections(
+            sections,
+            3,
+            &hostnames,
+            None,
+            &crate::aggregate::merge::ClassPaths::default(),
+        )
+        .expect("merge should succeed");
 
         assert!(
             !conflicts.contains_key("bash.x86_64"),
@@ -2849,8 +3264,14 @@ mod tests {
         ];
 
         let hostnames = vec!["host-a".into(), "host-b".into()];
-        let (_, conflicts) =
-            merge_rpm_sections(sections, 2, &hostnames, None).expect("merge should succeed");
+        let (_, conflicts) = merge_rpm_sections(
+            sections,
+            2,
+            &hostnames,
+            None,
+            &crate::aggregate::merge::ClassPaths::default(),
+        )
+        .expect("merge should succeed");
 
         assert!(
             conflicts.contains_key("nginx.x86_64"),
@@ -2893,6 +3314,7 @@ mod tests {
             vec![Some(host_a_cfg), Some(host_b_cfg), Some(host_c_cfg)],
             3,
             &hostnames,
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -2973,9 +3395,14 @@ mod tests {
                 })
             })
             .collect();
-        merge_config_sections(sections, observations.len(), &hostnames)
-            .expect("merge should succeed")
-            .files
+        merge_config_sections(
+            sections,
+            observations.len(),
+            &hostnames,
+            &crate::aggregate::merge::ClassPaths::default(),
+        )
+        .expect("merge should succeed")
+        .files
     }
 
     /// A host that could not read a file is no evidence of its content. It
@@ -3126,6 +3553,7 @@ mod tests {
             3,
             &hostnames,
             None,
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -3182,6 +3610,7 @@ mod tests {
             vec![Some(host_a), Some(host_b)],
             2,
             &["host-a".into(), "host-b".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -3240,6 +3669,7 @@ mod tests {
             vec![Some(host_a), Some(host_b)],
             2,
             &["host-a".into(), "host-b".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -3287,6 +3717,7 @@ mod tests {
             vec![Some(host_a), Some(host_b)],
             2,
             &["host-a".into(), "host-b".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -3338,6 +3769,7 @@ mod tests {
             vec![Some(host_a), Some(host_b), Some(host_c)],
             3,
             &["host-a".into(), "host-b".into(), "host-c".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -3369,6 +3801,7 @@ mod tests {
             vec![Some(make_host()), Some(make_host()), Some(make_host())],
             3,
             &["host-a".into(), "host-b".into(), "host-c".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -3397,6 +3830,7 @@ mod tests {
             vec![Some(make_host()), Some(make_host()), Some(make_host())],
             3,
             &["host-a".into(), "host-b".into(), "host-c".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -3420,6 +3854,7 @@ mod tests {
             vec![Some(make_host()), Some(make_host()), Some(make_host())],
             3,
             &["host-a".into(), "host-b".into(), "host-c".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -3451,6 +3886,7 @@ mod tests {
             vec![Some(host_a), Some(host_b), Some(host_c)],
             3,
             &["host-a".into(), "host-b".into(), "host-c".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -3488,6 +3924,7 @@ mod tests {
             items,
             3,
             &["host-a".into(), "host-b".into(), "host-c".into()],
+            &ClassPaths::default(),
         );
         assert_eq!(result.len(), 1);
         let pkg = &result[0];
@@ -3532,6 +3969,7 @@ mod tests {
             items,
             3,
             &["host-a".into(), "host-b".into(), "host-c".into()],
+            &ClassPaths::default(),
         );
         assert_eq!(result.len(), 1);
         let pkg = &result[0];
@@ -3590,6 +4028,7 @@ mod tests {
             3,
             &hostnames,
             None,
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .expect("merge should succeed");
 
@@ -3694,6 +4133,7 @@ mod tests {
             vec![section_a, section_b],
             2,
             &["host-a".into(), "host-b".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .unwrap();
 
@@ -3731,6 +4171,7 @@ mod tests {
             vec![section_a, section_b],
             2,
             &["host-a".into(), "host-b".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .unwrap();
 
@@ -3784,6 +4225,7 @@ mod tests {
             vec![section_a, section_b],
             2,
             &["host-a".into(), "host-b".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .unwrap();
 
@@ -3835,6 +4277,7 @@ mod tests {
             vec![section_a, section_b],
             2,
             &["host-a".into(), "host-b".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .unwrap();
 
@@ -3885,6 +4328,7 @@ mod tests {
             vec![section_a, section_b],
             2,
             &["host-a".into(), "host-b".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .unwrap();
 
@@ -3927,6 +4371,7 @@ mod tests {
             vec![section_a, section_b],
             2,
             &["host-a".into(), "host-b".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .unwrap();
 
@@ -3972,6 +4417,7 @@ mod tests {
             vec![Some(host_a), Some(host_b)],
             2,
             &["host-a".into(), "host-b".into()],
+            &crate::aggregate::merge::ClassPaths::default(),
         )
         .unwrap();
 

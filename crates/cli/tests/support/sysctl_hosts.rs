@@ -76,6 +76,8 @@ pub struct SysctlHost {
     byte_files: BTreeMap<String, Vec<u8>>,
     /// Hard links: each path names the same file as its target.
     hard_links: BTreeMap<String, String>,
+    /// Files whose read fails with an error kind.
+    file_errors: BTreeMap<String, std::io::ErrorKind>,
     links: BTreeMap<String, String>,
     dangling_links: BTreeMap<String, String>,
     /// FIFOs, sockets and devices: a read of one panics.
@@ -121,6 +123,13 @@ impl SysctlHost {
     pub fn file_bytes(mut self, path: &str, content: &[u8]) -> Self {
         self.list(path);
         self.byte_files.insert(path.into(), content.to_vec());
+        self
+    }
+
+    /// A file whose read fails with `kind`.
+    pub fn file_error(mut self, path: &str, kind: std::io::ErrorKind) -> Self {
+        self.list(path);
+        self.file_errors.insert(path.into(), kind);
         self
     }
 
@@ -305,6 +314,9 @@ impl SysctlHost {
         }
         for (path, target) in &self.hard_links {
             mock = mock.with_hard_link(path, target);
+        }
+        for (path, kind) in &self.file_errors {
+            mock = mock.with_file_error(path, *kind);
         }
         for path in &self.specials {
             mock = mock.with_special_file(path);

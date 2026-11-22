@@ -21,49 +21,6 @@
           "include": false,
           "item_id": {
             "key": {
-              "path": "/etc/hostname"
-            },
-            "kind": "Config"
-          },
-          "locked": false,
-          "prevalence": {
-            "count": 1,
-            "total": 2
-          },
-          "source_repo": "",
-          "triage": {
-            "bucket": "site",
-            "prevalence": 1,
-            "reason": "config_unowned",
-            "zone": "NearConsensus"
-          },
-          "variants": {
-            "count": 2,
-            "options": [
-              {
-                "hash": "57d9c2b1d931d39efdf20ff0c2d64df8533f70a720056c179b989d5c7a7e8542",
-                "host_count": 1,
-                "hosts": [
-                  "host-b"
-                ],
-                "selected": true
-              },
-              {
-                "hash": "732952f650c0318a104ee2df8674e707dbc2daaf78ece4863f8265b1d8a187c6",
-                "host_count": 1,
-                "hosts": [
-                  "host-a"
-                ],
-                "selected": false
-              }
-            ],
-            "selected": "57d9c2b1d931d39efdf20ff0c2d64df8533f70a720056c179b989d5c7a7e8542"
-          }
-        },
-        {
-          "include": false,
-          "item_id": {
-            "key": {
               "path": "/etc/sysctl.d/90-x.conf"
             },
             "kind": "Config"
@@ -115,17 +72,6 @@
   "session_is_sensitive": false,
   "summary": {
     "actionable_variant_items": [
-      {
-        "item_id": {
-          "key": {
-            "path": "/etc/hostname"
-          },
-          "kind": "Config"
-        },
-        "max_host_spread": 1,
-        "section_id": "configs",
-        "variant_count": 2
-      },
       {
         "item_id": {
           "key": {

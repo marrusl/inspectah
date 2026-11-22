@@ -355,7 +355,12 @@ fn test_merge_items_two_hosts_same_package() {
         ),
     ];
     let hostnames = vec!["host-a".to_string(), "host-b".to_string()];
-    let merged = merge_items(items, 2, &hostnames);
+    let merged = merge_items(
+        items,
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert_eq!(merged.len(), 1);
     let agg = merged[0].aggregate.as_ref().unwrap();
     assert_eq!(agg.count, 2);
@@ -385,7 +390,12 @@ fn test_merge_items_different_packages_stay_separate() {
         ),
     ];
     let hostnames = vec!["host-a".to_string(), "host-b".to_string()];
-    let merged = merge_items(items, 2, &hostnames);
+    let merged = merge_items(
+        items,
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert_eq!(merged.len(), 2);
     // Sorted by identity key
     assert_eq!(merged[0].name, "httpd");
@@ -398,7 +408,12 @@ fn test_merge_items_different_packages_stay_separate() {
 fn test_merge_items_empty_input() {
     let items: Vec<(usize, PackageEntry)> = vec![];
     let hostnames: Vec<String> = vec!["host-a".into()];
-    let merged = merge_items(items, 1, &hostnames);
+    let merged = merge_items(
+        items,
+        1,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert!(merged.is_empty());
 }
 
@@ -413,7 +428,12 @@ fn test_merge_items_single_host() {
         },
     )];
     let hostnames = vec!["solo-host".to_string()];
-    let merged = merge_items(items, 1, &hostnames);
+    let merged = merge_items(
+        items,
+        1,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert_eq!(merged.len(), 1);
     let agg = merged[0].aggregate.as_ref().unwrap();
     assert_eq!(agg.count, 1);
@@ -443,7 +463,12 @@ fn test_merge_items_deduplicates_same_host_index() {
         ),
     ];
     let hostnames = vec!["host-a".to_string()];
-    let merged = merge_items(items, 1, &hostnames);
+    let merged = merge_items(
+        items,
+        1,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert_eq!(merged.len(), 1);
     let agg = merged[0].aggregate.as_ref().unwrap();
     // Count should be 1 (one unique host), not 2
@@ -480,7 +505,12 @@ fn test_merge_items_output_sorted_by_identity_key() {
         ),
     ];
     let hostnames = vec!["host-a".to_string()];
-    let merged = merge_items(items, 1, &hostnames);
+    let merged = merge_items(
+        items,
+        1,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert_eq!(merged.len(), 3);
     assert_eq!(merged[0].name, "curl");
     assert_eq!(merged[1].name, "httpd");
@@ -520,7 +550,12 @@ fn test_merge_items_hosts_list_sorted() {
         "bravo".to_string(),
         "alpha".to_string(),
     ];
-    let merged = merge_items(items, 3, &hostnames);
+    let merged = merge_items(
+        items,
+        3,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert_eq!(merged.len(), 1);
     let agg = merged[0].aggregate.as_ref().unwrap();
     // Hosts sorted alphabetically
@@ -560,7 +595,12 @@ fn test_merge_items_variant_selection() {
         ),
     ];
     let hostnames = vec!["h1".into(), "h2".into(), "h3".into()];
-    let merged = merge_items(items, 3, &hostnames);
+    let merged = merge_items(
+        items,
+        3,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert_eq!(merged.len(), 2);
     let selected = merged
         .iter()
@@ -597,7 +637,12 @@ fn test_merge_items_single_variant_is_only() {
         ),
     ];
     let hostnames = vec!["h1".into(), "h2".into()];
-    let merged = merge_items(items, 2, &hostnames);
+    let merged = merge_items(
+        items,
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].variant_selection, VariantSelection::Only);
 }
@@ -644,8 +689,18 @@ fn test_merge_items_variant_tie_break_deterministic() {
     ];
     let hostnames = vec!["h1".into(), "h2".into()];
 
-    let merged_fwd = merge_items(items_forward, 2, &hostnames);
-    let merged_rev = merge_items(items_reverse, 2, &hostnames);
+    let merged_fwd = merge_items(
+        items_forward,
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
+    let merged_rev = merge_items(
+        items_reverse,
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
 
     assert_eq!(merged_fwd.len(), 2);
     assert_eq!(merged_rev.len(), 2);
@@ -708,7 +763,12 @@ fn test_merge_items_three_variants() {
         ),
     ];
     let hostnames: Vec<String> = (0..5).map(|i| format!("host-{}", i)).collect();
-    let merged = merge_items(items, 5, &hostnames);
+    let merged = merge_items(
+        items,
+        5,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert_eq!(merged.len(), 3);
 
     let selected = merged
@@ -766,7 +826,12 @@ fn test_merge_items_mixed_paths_with_variants() {
         ),
     ];
     let hostnames = vec!["h1".into(), "h2".into()];
-    let merged = merge_items(items, 2, &hostnames);
+    let merged = merge_items(
+        items,
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
 
     // /etc/a.conf: 1 item (Only), /etc/b.conf: 2 items (Selected + Alternative)
     assert_eq!(merged.len(), 3);
@@ -814,7 +879,12 @@ fn test_merge_items_all_variants_included() {
         ),
     ];
     let hostnames = vec!["h1".into(), "h2".into()];
-    let merged = merge_items(items, 2, &hostnames);
+    let merged = merge_items(
+        items,
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     for item in &merged {
         assert!(
             !item.disposition.is_included(),
@@ -844,7 +914,12 @@ fn test_merge_items_variant_total_reflects_aggregate_size() {
         ),
     ];
     let hostnames = vec!["h1".into(), "h2".into()];
-    let merged = merge_items(items, 5, &hostnames);
+    let merged = merge_items(
+        items,
+        5,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     // total should reflect the aggregate size (5), not just the hosts that have this item
     for item in &merged {
         assert_eq!(item.aggregate.as_ref().unwrap().total, 5);
@@ -958,7 +1033,13 @@ fn test_dedup_json_values_removes_duplicates() {
 
 #[test]
 fn test_merge_rpm_sections_all_none() {
-    let result = merge_rpm_sections(vec![None, None], 2, &["h1".into(), "h2".into()], None);
+    let result = merge_rpm_sections(
+        vec![None, None],
+        2,
+        &["h1".into(), "h2".into()],
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -988,7 +1069,14 @@ fn test_merge_rpm_sections_packages_merged() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let (result, _) = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
+    let (result, _) = merge_rpm_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        Some(0),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.packages_added.len(), 2);
     let httpd = result
@@ -1033,6 +1121,7 @@ fn test_merge_rpm_sections_keeps_gpgkey_references() {
         3,
         &hostnames,
         None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
 
@@ -1084,6 +1173,7 @@ fn test_merge_rpm_sections_leaves_a_key_to_the_base_only_when_every_host_does() 
             2,
             &hostnames,
             None,
+            &inspectah_core::aggregate::merge::ClassPaths::default(),
         )
         .unwrap();
         assert_eq!(result.gpg_keys.len(), 1, "{name}");
@@ -1106,7 +1196,14 @@ fn test_merge_rpm_sections_dedup_strings() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let (result, _) = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
+    let (result, _) = merge_rpm_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        Some(0),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.dnf_history_removed, vec!["pkg-a", "pkg-b", "pkg-c"]);
     assert_eq!(result.multiarch_packages, vec!["glibc", "openssl"]);
@@ -1135,7 +1232,14 @@ fn test_merge_rpm_sections_version_changes_dedup() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let (result, _) = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
+    let (result, _) = merge_rpm_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        Some(0),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Should be deduped to 1 entry
     assert_eq!(result.version_changes.len(), 1);
@@ -1150,7 +1254,14 @@ fn test_merge_rpm_sections_passthrough_scalars() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into()];
-    let (result, _) = merge_rpm_sections(vec![Some(s1)], 1, &hostnames, Some(0)).unwrap();
+    let (result, _) = merge_rpm_sections(
+        vec![Some(s1)],
+        1,
+        &hostnames,
+        Some(0),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     assert_eq!(
         result.base_image,
@@ -1165,7 +1276,12 @@ fn test_merge_rpm_sections_passthrough_scalars() {
 
 #[test]
 fn test_merge_config_sections_all_none() {
-    let result = merge_config_sections(vec![None, None], 2, &["h1".into(), "h2".into()]);
+    let result = merge_config_sections(
+        vec![None, None],
+        2,
+        &["h1".into(), "h2".into()],
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -1188,7 +1304,13 @@ fn test_merge_config_sections_files_with_variants() {
         withheld: Vec::new(),
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_config_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_config_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Two variants of the same path
     assert_eq!(result.files.len(), 2);
@@ -1212,7 +1334,12 @@ fn test_merge_config_sections_files_with_variants() {
 
 #[test]
 fn test_merge_service_sections_all_none() {
-    let result = merge_service_sections(vec![None], 1, &["h1".into()]);
+    let result = merge_service_sections(
+        vec![None],
+        1,
+        &["h1".into()],
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -1256,7 +1383,13 @@ fn test_merge_service_sections_dedup_units() {
         enabled_on_any_host: Vec::new(),
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_service_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_service_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // state_changes merged: httpd present on both hosts
     assert_eq!(result.state_changes.len(), 1);
@@ -1322,7 +1455,13 @@ fn test_merge_inventory_keeps_most_prevalent_state() {
             Some(PresetDefault::Enable),
         )]),
     ];
-    let result = merge_service_sections(sections, 3, &hostnames).unwrap();
+    let result = merge_service_sections(
+        sections,
+        3,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     assert_eq!(
         inventory_summary(&result),
@@ -1357,7 +1496,13 @@ fn test_merge_inventory_tie_goes_to_first_host() {
         )]),
         inventory_section(vec![inv("a.service", UnitState::Enabled, None)]),
     ];
-    let result = merge_service_sections(sections, 4, &hostnames).unwrap();
+    let result = merge_service_sections(
+        sections,
+        4,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     assert_eq!(
         inventory_summary(&result),
@@ -1386,7 +1531,13 @@ fn test_merge_inventory_preset_from_first_host_with_winning_state() {
             Some(PresetDefault::Enable),
         )]),
     ];
-    let result = merge_service_sections(sections, 3, &hostnames).unwrap();
+    let result = merge_service_sections(
+        sections,
+        3,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     assert_eq!(
         inventory_summary(&result),
@@ -1460,7 +1611,12 @@ fn test_merge_inventory_tie_follows_hostname_not_argument_order() {
 
 #[test]
 fn test_merge_container_sections_all_none() {
-    let result = merge_container_sections(vec![None], 1, &["h1".into()]);
+    let result = merge_container_sections(
+        vec![None],
+        1,
+        &["h1".into()],
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -1487,7 +1643,13 @@ fn test_merge_container_sections_flatpak_dedup() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_container_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_container_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.flatpak_apps.len(), 2);
     assert!(result.running_containers.is_empty()); // runtime state skipped
@@ -1534,7 +1696,13 @@ fn test_merge_container_sections_quadlets_with_variants() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_container_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_container_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Two variants
     assert_eq!(result.quadlet_units.len(), 2);
@@ -1552,7 +1720,12 @@ fn test_merge_container_sections_quadlets_with_variants() {
 
 #[test]
 fn test_merge_network_sections_all_none() {
-    let result = merge_network_sections(vec![None], 1, &["h1".into()]);
+    let result = merge_network_sections(
+        vec![None],
+        1,
+        &["h1".into()],
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -1578,7 +1751,13 @@ fn test_merge_network_sections_dedup_proxy_by_source() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_network_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_network_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.proxy.len(), 1);
     assert_eq!(result.ip_routes.len(), 2);
@@ -1601,7 +1780,13 @@ fn test_merge_network_resolv_provenance_most_prevalent() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
-    let result = merge_network_sections(vec![Some(s1), Some(s2), Some(s3)], 3, &hostnames).unwrap();
+    let result = merge_network_sections(
+        vec![Some(s1), Some(s2), Some(s3)],
+        3,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.resolv_provenance, "systemd-resolved");
 }
@@ -1618,7 +1803,13 @@ fn test_merge_network_resolv_provenance_tie_break() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_network_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_network_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Tie: first-seen wins (h1's value)
     assert_eq!(result.resolv_provenance, "NetworkManager");
@@ -1630,7 +1821,12 @@ fn test_merge_network_resolv_provenance_tie_break() {
 
 #[test]
 fn test_merge_storage_sections_all_none() {
-    let result = merge_storage_sections(vec![None], 1, &["h1".into()]);
+    let result = merge_storage_sections(
+        vec![None],
+        1,
+        &["h1".into()],
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -1670,7 +1866,13 @@ fn test_merge_storage_sections_fstab_merged() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_storage_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_storage_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // fstab merged by mount_point identity
     assert_eq!(result.fstab_entries.len(), 1);
@@ -1686,7 +1888,12 @@ fn test_merge_storage_sections_fstab_merged() {
 
 #[test]
 fn test_merge_scheduled_sections_all_none() {
-    let result = merge_scheduled_sections(vec![None], 1, &["h1".into()]);
+    let result = merge_scheduled_sections(
+        vec![None],
+        1,
+        &["h1".into()],
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -1729,7 +1936,13 @@ fn test_merge_scheduled_sections_cron_and_timers() {
         }],
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_scheduled_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_scheduled_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.cron_jobs.len(), 1);
     assert_eq!(result.cron_jobs[0].aggregate.as_ref().unwrap().count, 2);
@@ -1761,7 +1974,12 @@ fn fcontext_label(spec: &str) -> FcontextRule {
 
 #[test]
 fn test_merge_selinux_sections_all_none() {
-    let result = merge_selinux_sections(vec![None], 1, &["h1".into()]);
+    let result = merge_selinux_sections(
+        vec![None],
+        1,
+        &["h1".into()],
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -1802,7 +2020,13 @@ fn test_merge_selinux_sections_dedup_and_merge() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_selinux_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Port labels merged via merge_items
     assert_eq!(result.port_labels.len(), 1);
@@ -1878,6 +2102,7 @@ fn test_merge_selinux_boolean_conflicts() {
         ],
         3,
         &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
     assert_eq!(
@@ -1930,6 +2155,7 @@ fn test_merge_selinux_disabled_modules() {
         ],
         2,
         &["h1".into(), "h2".into()],
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
     assert_eq!(
@@ -1991,7 +2217,13 @@ fn test_merge_selinux_fcontext_order_and_disposition() {
     };
 
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_selinux_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Order: hostname order, then each host's collected order -- not
     // sorted by spec and not grouped by host. Round 3's ruling: one row
@@ -2105,7 +2337,13 @@ fn test_merge_selinux_fcontext_label_and_unlabel_share_a_key() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_selinux_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // One key, one surviving row (round 3 ruling, spec § 3.1: "hosts that
     // disagree on the context for one key keep the first in hostname
@@ -2168,6 +2406,7 @@ fn test_merge_selinux_most_prevalent_mode() {
         ],
         3,
         &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
 
@@ -2189,6 +2428,7 @@ fn test_merge_selinux_most_prevalent_tie_break() {
         vec![Some(make("permissive")), Some(make("enforcing"))],
         2,
         &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
 
@@ -2210,6 +2450,7 @@ fn test_merge_selinux_fips_mode_most_prevalent_true() {
         vec![Some(make(false)), Some(make(true)), Some(make(true))],
         3,
         &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
 
@@ -2222,7 +2463,12 @@ fn test_merge_selinux_fips_mode_most_prevalent_true() {
 
 #[test]
 fn test_merge_kernelboot_sections_all_none() {
-    let result = merge_kernelboot_sections(vec![None], 1, &["h1".into()]);
+    let result = merge_kernelboot_sections(
+        vec![None],
+        1,
+        &["h1".into()],
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -2261,7 +2507,13 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_kernelboot_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_kernelboot_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // loaded_modules merged
     assert_eq!(result.loaded_modules.len(), 2);
@@ -2304,6 +2556,7 @@ fn test_merge_kernelboot_most_prevalent_scalars() {
         vec![Some(s_minority), Some(s_majority1), Some(s_majority2)],
         3,
         &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
 
@@ -2328,7 +2581,13 @@ fn test_merge_kernelboot_scalar_tie_break() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_kernelboot_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_kernelboot_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Tie: first-seen wins (h1's value)
     assert_eq!(result.cmdline, "root=/dev/sda1 quiet");
@@ -2340,7 +2599,12 @@ fn test_merge_kernelboot_scalar_tie_break() {
 
 #[test]
 fn test_merge_nonrpm_sections_all_none() {
-    let result = merge_nonrpm_sections(vec![None], 1, &["h1".into()]);
+    let result = merge_nonrpm_sections(
+        vec![None],
+        1,
+        &["h1".into()],
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert!(result.is_none());
 }
 
@@ -2371,7 +2635,13 @@ fn test_merge_nonrpm_sections_items_and_env_files() {
         }],
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_nonrpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_nonrpm_sections(
+        vec![Some(s1), Some(s2)],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Items merged by name
     assert_eq!(result.items.len(), 1);
@@ -2497,6 +2767,7 @@ fn test_merge_rpm_sections_baseline_from_winning_host_not_first() {
         3,
         &hostnames,
         Some(1),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
 
@@ -2525,7 +2796,14 @@ fn test_merge_rpm_sections_no_baseline_gives_defaults() {
     let hostnames: Vec<String> = vec!["host-a".into()];
 
     // baseline_host_idx = None means no baseline was selected
-    let (result, _) = merge_rpm_sections(vec![Some(s1)], 1, &hostnames, None).unwrap();
+    let (result, _) = merge_rpm_sections(
+        vec![Some(s1)],
+        1,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.base_image, None);
     assert_eq!(result.baseline_package_names, None);
@@ -2571,7 +2849,12 @@ fn test_merge_items_representative_is_most_prevalent_payload() {
         ),
     ];
     let hostnames: Vec<String> = vec!["host-a".into(), "host-b".into(), "host-c".into()];
-    let merged = merge_items(items, 3, &hostnames);
+    let merged = merge_items(
+        items,
+        3,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert_eq!(merged.len(), 1);
     // Majority version wins — NOT first host
     assert_eq!(merged[0].version, "2.0");
@@ -2632,7 +2915,12 @@ fn test_merge_items_representative_tie_break_first_seen() {
         "host-c".into(),
         "host-d".into(),
     ];
-    let merged = merge_items(items, 4, &hostnames);
+    let merged = merge_items(
+        items,
+        4,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    );
     assert_eq!(merged.len(), 1);
     // Tie: 2x "1.0" vs 2x "2.0". First-seen (host-a, index 0) has "1.0".
     assert_eq!(merged[0].version, "1.0");
@@ -2689,8 +2977,14 @@ fn test_aggregate_leaf_intersection_filters_packages_added() {
     });
 
     let hostnames = vec!["host-a".into(), "host-b".into()];
-    let (merged, _conflicts) =
-        merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+    let (merged, _conflicts) = merge_rpm_sections(
+        vec![host_a, host_b],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // packages_added should contain ONLY the leaf package
     assert_eq!(merged.packages_added.len(), 1);
@@ -2780,7 +3074,14 @@ fn test_aggregate_dep_closures_cover_every_kept_package() {
     });
 
     let hostnames = vec!["host-a".into(), "host-b".into()];
-    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+    let (merged, _) = merge_rpm_sections(
+        vec![host_a, host_b],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     let kept: Vec<&str> = merged
         .packages_added
@@ -2855,7 +3156,14 @@ fn test_aggregate_leaf_intersection_excludes_partial_leaf() {
     });
 
     let hostnames = vec!["host-a".into(), "host-b".into()];
-    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+    let (merged, _) = merge_rpm_sections(
+        vec![host_a, host_b],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Only git is leaf on ALL authoritative hosts
     assert_eq!(merged.leaf_packages, Some(vec!["git.x86_64".into()]));
@@ -2896,7 +3204,14 @@ fn test_aggregate_leaf_intersection_skips_degraded_hosts() {
     });
 
     let hostnames = vec!["host-a".into(), "host-b".into()];
-    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+    let (merged, _) = merge_rpm_sections(
+        vec![host_a, host_b],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // vim passes — only 1 authoritative host, so intersection = that host's set
     assert_eq!(merged.leaf_packages, Some(vec!["vim.x86_64".into()]));
@@ -2939,7 +3254,14 @@ fn test_aggregate_leaf_intersection_all_degraded() {
     });
 
     let hostnames = vec!["host-a".into(), "host-b".into()];
-    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+    let (merged, _) = merge_rpm_sections(
+        vec![host_a, host_b],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Full degraded triplet
     assert_eq!(merged.leaf_packages, None);
@@ -2986,7 +3308,14 @@ fn test_aggregate_leaf_intersection_authoritative_empty() {
     });
 
     let hostnames = vec!["host-a".into(), "host-b".into()];
-    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+    let (merged, _) = merge_rpm_sections(
+        vec![host_a, host_b],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Intersection of {git.x86_64} and {} = empty, but Some (not None)
     assert_eq!(merged.leaf_packages, Some(vec![]));
@@ -3050,7 +3379,14 @@ fn test_aggregate_leaf_dep_tree_donor_from_authoritative_host() {
 
     // "alpha" sorts before "beta" — degraded host is first alphabetically
     let hostnames = vec!["alpha".into(), "beta".into()];
-    let (merged, _) = merge_rpm_sections(vec![host_alpha, host_beta], 2, &hostnames, None).unwrap();
+    let (merged, _) = merge_rpm_sections(
+        vec![host_alpha, host_beta],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Dep tree must come from beta (authoritative), NOT alpha (degraded)
     let tree = merged.leaf_dep_tree.as_object().unwrap();
@@ -3103,6 +3439,7 @@ fn test_aggregate_leaf_intersection_order_independent() {
         2,
         &hostnames_1,
         None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
 
@@ -3113,6 +3450,7 @@ fn test_aggregate_leaf_intersection_order_independent() {
         2,
         &hostnames_2,
         None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
 
@@ -3164,6 +3502,7 @@ fn test_aggregate_leaf_intersection_multiarch_identity() {
         2,
         &hostnames,
         None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
 
@@ -3214,7 +3553,14 @@ fn test_aggregate_leaf_intersection_host_absent_package() {
     });
 
     let hostnames = vec!["host-a".into(), "host-b".into()];
-    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+    let (merged, _) = merge_rpm_sections(
+        vec![host_a, host_b],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // Intersection is vim only (git not leaf on host_b because host_b
     // doesn't have it at all).
@@ -3292,8 +3638,14 @@ fn test_aggregate_leaf_filtered_packages_absent_from_repo_conflicts() {
     });
 
     let hostnames = vec!["host-a".into(), "host-b".into()];
-    let (merged, repo_conflicts) =
-        merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+    let (merged, repo_conflicts) = merge_rpm_sections(
+        vec![host_a, host_b],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // perl-libs is auto — must be filtered before repo-conflict detection
     assert!(
@@ -3379,7 +3731,14 @@ fn test_aggregate_leaf_triplet_coherence() {
     });
 
     let hostnames = vec!["host-a".into(), "host-b".into()];
-    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+    let (merged, _) = merge_rpm_sections(
+        vec![host_a, host_b],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // leaf_packages: intersection = {git.x86_64}
     assert_eq!(merged.leaf_packages, Some(vec!["git.x86_64".into()]));
@@ -3445,7 +3804,14 @@ fn test_aggregate_leaf_survivor_not_suppressed_by_non_universal_narrowing() {
     });
 
     let hostnames = vec!["alpha".into(), "beta".into()];
-    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+    let (merged, _) = merge_rpm_sections(
+        vec![host_a, host_b],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     // vim must be in packages_added AND include=true
     assert_eq!(merged.packages_added.len(), 1);
@@ -3481,7 +3847,14 @@ fn test_aggregate_degraded_state_json_contract() {
     });
 
     let hostnames = vec!["a".into(), "b".into()];
-    let (merged, _) = merge_rpm_sections(vec![host_a, host_b], 2, &hostnames, None).unwrap();
+    let (merged, _) = merge_rpm_sections(
+        vec![host_a, host_b],
+        2,
+        &hostnames,
+        None,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
 
     let json = serde_json::to_value(&merged).unwrap();
     assert!(
@@ -3552,8 +3925,13 @@ fn a_runtime_updater_excluded_on_every_host_merges_excluded() {
         enabled_on_any_host: Vec::new(),
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result =
-        merge_service_sections(vec![Some(section()), Some(section())], 2, &hostnames).unwrap();
+    let result = merge_service_sections(
+        vec![Some(section()), Some(section())],
+        2,
+        &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .unwrap();
     let row = |unit: &str| {
         result
             .state_changes
@@ -3626,6 +4004,7 @@ fn mount_findings_merge_to_one_row_per_unit_name() {
         ],
         3,
         &hostnames,
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .unwrap();
     // Unit name, mount point, nofail, count and hosts of each merged row.
@@ -3762,6 +4141,7 @@ fn a_state_change_merges_the_union_of_its_phase_4_lists() {
         vec![changes_section(vec![h1]), changes_section(vec![h2])],
         2,
         &host_names(2),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .expect("a merged section");
     assert_eq!(result.state_changes.len(), 1, "one row per unit name");
@@ -3793,6 +4173,7 @@ fn a_state_change_merges_the_union_of_its_phase_4_lists() {
         )])],
         1,
         &host_names(1),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .expect("a merged section");
     assert_eq!(
@@ -3840,7 +4221,13 @@ fn an_instance_merges_the_needs_unknown_of_any_host() {
             changes_section(vec![known.clone()]),
         ],
     ] {
-        let result = merge_service_sections(sections, 2, &host_names(2)).expect("a merged section");
+        let result = merge_service_sections(
+            sections,
+            2,
+            &host_names(2),
+            &inspectah_core::aggregate::merge::ClassPaths::default(),
+        )
+        .expect("a merged section");
         assert_eq!(result.state_changes.len(), 1, "one row per unit name");
         assert_eq!(result.state_changes[0].needs_unknown, Some(cause.clone()));
     }
@@ -3851,6 +4238,7 @@ fn an_instance_merges_the_needs_unknown_of_any_host() {
         ],
         2,
         &host_names(2),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .expect("a merged section");
     assert_eq!(control.state_changes[0].needs_unknown, None);
@@ -3879,7 +4267,13 @@ fn an_instance_merges_the_union_of_what_it_needs() {
             changes_section(vec![h1.clone()]),
         ],
     ] {
-        let result = merge_service_sections(sections, 2, &host_names(2)).expect("a merged section");
+        let result = merge_service_sections(
+            sections,
+            2,
+            &host_names(2),
+            &inspectah_core::aggregate::merge::ClassPaths::default(),
+        )
+        .expect("a merged section");
         assert_eq!(result.state_changes.len(), 1, "one row per unit name");
         let merged = &result.state_changes[0];
         assert_eq!(
@@ -3889,8 +4283,13 @@ fn an_instance_merges_the_union_of_what_it_needs() {
         assert_eq!(merged.data_paths, ["/var/lib/dirsrv/slapd-example"]);
     }
 
-    let alone = merge_service_sections(vec![changes_section(vec![h2])], 1, &host_names(1))
-        .expect("a merged section");
+    let alone = merge_service_sections(
+        vec![changes_section(vec![h2])],
+        1,
+        &host_names(1),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
+    )
+    .expect("a merged section");
     assert_eq!(
         alone.state_changes[0].required_config,
         ["/etc/dirsrv/slapd-example", "/etc/sysconfig/dirsrv-example"]
@@ -3986,6 +4385,7 @@ fn manual_links_merge_by_relation_parent_and_unit() {
         ],
         2,
         &host_names(2),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .expect("a merged section");
     let both = (2, 2, host_names(2));
@@ -4057,6 +4457,7 @@ fn manual_links_merge_by_relation_parent_and_unit() {
         ],
         2,
         &host_names(2),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .expect("a merged section");
     assert_eq!(swapped.manual_links.len(), 1);
@@ -4095,6 +4496,7 @@ fn undetermined_installs_merge_by_unit() {
         ],
         2,
         &host_names(2),
+        &inspectah_core::aggregate::merge::ClassPaths::default(),
     )
     .expect("a merged section");
     let rows: Vec<_> = result
@@ -4162,6 +4564,7 @@ fn the_default_target_merges_to_the_most_prevalent_one() {
             names.iter().map(|n| target_section(*n)).collect(),
             names.len(),
             &host_names(names.len()),
+            &inspectah_core::aggregate::merge::ClassPaths::default(),
         )
         .expect("a merged section")
         .default_target

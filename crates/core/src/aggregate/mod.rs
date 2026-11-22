@@ -85,6 +85,10 @@ pub fn merge_snapshots(
         section_host_counts,
     };
 
+    // The machine-state class wins over every section: the paths that
+    // are a class row on any host are settled before anything merges.
+    let class = merge::ClassPaths::from_hosts(&sorted_snapshots);
+
     // Extract section Option vecs for adapters (consumed by value)
     let rpm_sections: Vec<Option<_>> = sorted_snapshots.iter().map(|s| s.rpm.clone()).collect();
     let config_sections: Vec<Option<_>> =
@@ -239,21 +243,24 @@ pub fn merge_snapshots(
     merged.redaction_hints = merged_hints;
 
     // Merge each section via adapters
-    let rpm_merge_result = merge_rpm_sections(rpm_sections, total, &hostnames, baseline_host_idx);
+    let rpm_merge_result =
+        merge_rpm_sections(rpm_sections, total, &hostnames, baseline_host_idx, &class);
     if let Some((rpm_section, repo_conflicts)) = rpm_merge_result {
         merged.rpm = Some(rpm_section);
         merged.rpm_repo_conflicts = repo_conflicts;
     }
-    merged.config = merge_config_sections(config_sections, total, &hostnames);
-    merged.units = merge_service_sections(service_sections, total, &hostnames);
-    merged.network = merge_network_sections(network_sections, total, &hostnames);
-    merged.storage = merge_storage_sections(storage_sections, total, &hostnames);
-    merged.scheduled_tasks = merge_scheduled_sections(scheduled_sections, total, &hostnames);
-    merged.containers = merge_container_sections(container_sections, total, &hostnames);
-    merged.non_rpm_software = merge_nonrpm_sections(nonrpm_sections, total, &hostnames);
-    merged.unmanaged_files = merge_unmanaged_file_sections(unmanaged_sections, total, &hostnames);
-    merged.kernel_boot = merge_kernelboot_sections(kernelboot_sections, total, &hostnames);
-    merged.selinux = merge_selinux_sections(selinux_sections, total, &hostnames);
+    merged.config = merge_config_sections(config_sections, total, &hostnames, &class);
+    merged.units = merge_service_sections(service_sections, total, &hostnames, &class);
+    merged.network = merge_network_sections(network_sections, total, &hostnames, &class);
+    merged.storage = merge_storage_sections(storage_sections, total, &hostnames, &class);
+    merged.scheduled_tasks =
+        merge_scheduled_sections(scheduled_sections, total, &hostnames, &class);
+    merged.containers = merge_container_sections(container_sections, total, &hostnames, &class);
+    merged.non_rpm_software = merge_nonrpm_sections(nonrpm_sections, total, &hostnames, &class);
+    merged.unmanaged_files =
+        merge_unmanaged_file_sections(unmanaged_sections, total, &hostnames, &class);
+    merged.kernel_boot = merge_kernelboot_sections(kernelboot_sections, total, &hostnames, &class);
+    merged.selinux = merge_selinux_sections(selinux_sections, total, &hostnames, &class);
     merged.users_groups = merge_usersgroups_sections(usergroup_sections, total, &hostnames);
 
     Ok((merged, validation.warnings))

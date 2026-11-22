@@ -15,86 +15,6 @@
           ],
           "total": 2
         },
-        "category": "other",
-        "content": "host-b\n",
-        "diff_against_rpm": null,
-        "disposition": {
-          "include": false,
-          "kind": "machine_state",
-          "member": "hostname"
-        },
-        "kind": "unowned",
-        "package": null,
-        "path": "/etc/hostname",
-        "rpm_va_flags": null,
-        "variant_selection": "Selected"
-      },
-      "triage": {
-        "primary_reason": "config_unowned",
-        "triage": {
-          "bucket": "partial",
-          "mode": "aggregate",
-          "prevalence": {
-            "count": 1,
-            "total": 2
-          }
-        }
-      }
-    },
-    {
-      "entry": {
-        "aggregate": {
-          "aggregate_count": 2,
-          "aggregate_hosts": [
-            "host-a",
-            "host-b"
-          ],
-          "count": 1,
-          "hosts": [
-            "host-a"
-          ],
-          "total": 2
-        },
-        "category": "other",
-        "content": "host-a\n",
-        "diff_against_rpm": null,
-        "disposition": {
-          "include": false,
-          "kind": "machine_state",
-          "member": "hostname"
-        },
-        "kind": "unowned",
-        "package": null,
-        "path": "/etc/hostname",
-        "rpm_va_flags": null,
-        "variant_selection": "Alternative"
-      },
-      "triage": {
-        "primary_reason": "config_unowned",
-        "triage": {
-          "bucket": "partial",
-          "mode": "aggregate",
-          "prevalence": {
-            "count": 1,
-            "total": 2
-          }
-        }
-      }
-    },
-    {
-      "entry": {
-        "aggregate": {
-          "aggregate_count": 2,
-          "aggregate_hosts": [
-            "host-a",
-            "host-b"
-          ],
-          "count": 1,
-          "hosts": [
-            "host-b"
-          ],
-          "total": 2
-        },
         "category": "sysctl",
         "content": "vm.swappiness = 20\n",
         "diff_against_rpm": null,
@@ -190,11 +110,11 @@
         "total": 0
       },
       {
-        "advisory": 2,
+        "advisory": 0,
         "excluded": 2,
         "included": 0,
         "kind": "config",
-        "total": 4
+        "total": 2
       }
     ]
   },
