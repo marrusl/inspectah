@@ -3006,6 +3006,7 @@ mod tests {
             gpgkey_references: Default::default(),
             shipped_by_base: None,
             verified_base_owner: None,
+            redaction_changed: Default::default(),
             rejected: None,
         }
     }

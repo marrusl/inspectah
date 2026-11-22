@@ -1934,6 +1934,7 @@ fn excluding_the_serving_repo_annotates_the_package_in_the_projection() {
             gpgkey_references: Default::default(),
             shipped_by_base: None,
             verified_base_owner: None,
+            redaction_changed: Default::default(),
             rejected: None,
         }],
         ..Default::default()

@@ -958,6 +958,7 @@ fn a_disabled_repo_package_is_installed_only_while_its_repo_ships() {
             gpgkey_references: Default::default(),
             shipped_by_base: None,
             verified_base_owner: None,
+            redaction_changed: Default::default(),
             rejected: None,
         }],
         baseline_package_names: Some(vec!["filesystem".into()]),

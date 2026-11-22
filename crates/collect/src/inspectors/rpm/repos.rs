@@ -113,6 +113,7 @@ pub fn collect_repo_files(exec: &dyn Executor, left_out: &mut Vec<String>) -> Ve
             gpgkey_references: Default::default(),
             shipped_by_base: None,
             verified_base_owner: None,
+            redaction_changed: Default::default(),
             rejected: None,
         });
     }
@@ -293,6 +294,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
                     gpgkey_references,
                     shipped_by_base: None,
                     verified_base_owner: None,
+                    redaction_changed: Default::default(),
                     rejected: None,
                 });
                 continue;
@@ -320,6 +322,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
             gpgkey_references,
             shipped_by_base: None,
             verified_base_owner: None,
+            redaction_changed: Default::default(),
             rejected: Some(rejection),
         });
     }

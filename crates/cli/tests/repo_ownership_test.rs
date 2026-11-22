@@ -1750,6 +1750,104 @@ fn t5_a_case_variant_repo_keeps_its_own_route() {
     }
 }
 
+/// A certificate redacted across a `[site]` header: `a.repo` holds
+/// `name=-----BEGIN CERTIFICATE-----` in `[metadata]` and the matching END
+/// marker as `[site]`'s name, while `b.repo` defines an enabled `[SITE]`
+/// with another source. Redaction keeps the `[site]` header and records
+/// that it changed the section's definition, so the package the
+/// collector attributed to `site` is not handed to `[SITE]` and does not
+/// install by name from a definition the export no longer has, on both
+/// exports and in both file orders. `[SITE]`'s own package keeps its route.
+#[test]
+fn t5_a_redacted_section_is_not_replaced_by_its_case_variant() {
+    let lower = "[metadata]\nenabled=0\nname=-----BEGIN CERTIFICATE-----\n\
+                 [site]\nbaseurl=https://lower.example/rpm/\nenabled=1\ngpgcheck=0\n\
+                 name=-----END CERTIFICATE-----\n";
+    let upper = "[SITE]\nname=upper\nbaseurl=https://upper.example/rpm/\nenabled=1\ngpgcheck=0\n";
+    for (lower_file, upper_file) in [("a.repo", "b.repo"), ("b.repo", "a.repo")] {
+        let lower_path = format!("/etc/yum.repos.d/{lower_file}");
+        let host = UnitHost::new()
+            .base_package("bash")
+            .file(&lower_path, lower)
+            .file(&format!("/etc/yum.repos.d/{upper_file}"), upper)
+            .package_from("site-tool", "site")
+            .package_from("upper-tool", "SITE")
+            .enabled_repos(&["site", "SITE"]);
+        let snap = reload(&scan_finished(host));
+        let stored = rpm(&snap)
+            .repo_files
+            .iter()
+            .find(|f| f.path == lower_path)
+            .unwrap();
+        assert!(stored.content.contains("\n[site]\n"), "{}", stored.content);
+        assert!(
+            !stored.content.contains("lower.example"),
+            "{}",
+            stored.content
+        );
+        assert!(
+            stored
+                .redaction_changed
+                .iter()
+                .any(|s| s.as_str() == "site")
+        );
+        for (via, file) in both_containerfiles(&snap) {
+            let ctx = format!("{lower_file} then {upper_file}, {via}");
+            assert!(!installs(&file, "site-tool"), "{ctx}:\n{file}");
+            assert!(
+                file.contains("site-tool installs from repo site,"),
+                "{ctx}:\n{file}"
+            );
+            assert!(installs(&file, "upper-tool"), "{ctx}:\n{file}");
+        }
+    }
+}
+
+/// A package the collector attributed to `[site]` keeps that identity
+/// when the stored files no longer define `[site]`, as when its header was
+/// rewritten after the scan, and a `[SITE]` in another file survives: the
+/// case variant is another repo to dnf and never stands in, so the route
+/// is lost on both exports instead of installing by name from `[SITE]`.
+#[test]
+fn t5_a_vanished_section_is_not_replaced_by_its_case_variant() {
+    const LOWER: &str = "/etc/yum.repos.d/a.repo";
+    let lower = "[site]\nbaseurl=https://lower.example/rpm/\nenabled=1\ngpgcheck=0\n";
+    let upper = "[SITE]\nbaseurl=https://upper.example/rpm/\nenabled=1\ngpgcheck=0\n";
+    let host = UnitHost::new()
+        .base_package("bash")
+        .file(LOWER, lower)
+        .file("/etc/yum.repos.d/b.repo", upper)
+        .package_from("site-tool", "site")
+        .enabled_repos(&["site", "SITE"]);
+    let snap = reload(&scan_finished(host));
+    for (via, file) in both_containerfiles(&snap) {
+        assert!(installs(&file, "site-tool"), "{via}:\n{file}");
+    }
+
+    let mut rewritten = snap.clone();
+    let broken = "[site\nbaseurl=https://lower.example/rpm/\nenabled=1\ngpgcheck=0\n";
+    for file in &mut rewritten.rpm.as_mut().unwrap().repo_files {
+        if file.path == LOWER {
+            file.content = broken.into();
+        }
+    }
+    for file in &mut rewritten.config.as_mut().unwrap().files {
+        if file.path == LOWER {
+            file.content = broken.into();
+        }
+    }
+    settle_repo_ownership(&mut rewritten);
+    let rewritten = reload(&rewritten);
+    for (via, file) in both_containerfiles(&rewritten) {
+        assert!(!installs(&file, "site-tool"), "{via}:\n{file}");
+        assert!(
+            file.lines()
+                .any(|l| l == unrestorable_fixme("site-tool", "site")),
+            "{via}:\n{file}"
+        );
+    }
+}
+
 /// A key a repo names is a prerequisite of its packages only when dnf
 /// checks signatures for it. With `gpgcheck=0` and `repo_gpgcheck=0`, a
 /// retired key the host no longer has costs `site-tool` nothing, and the

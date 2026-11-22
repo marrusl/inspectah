@@ -267,8 +267,9 @@ of the two questions that ask it. Never resolve an id by walking
   `InstallRepos::is_lost`. Never write a second rule beside it: three
   rules disagreed on the base image's repos, case variants and keys. Lost
   exactly when (1) the host's dnf installed by name from the section (its
-  stored definition enabled with a source, or no stored file defines it
-  and the collector attributed the package to it before redaction), (2)
+  stored definition enabled with a source; or no stored file defines it,
+  or redaction changed its stored definition (`redaction_changed`), and
+  the collector attributed the package to it before redaction), (2)
   the base image does not supply it (`base_supplies`: a default repo
   file, or a file the collector marked `verified_base_owner`, as
   `fedora-repos` owns `fedora.repo`; a `company.repo` defining `[baseos]`
@@ -279,7 +280,11 @@ of the two questions that ask it. Never resolve an id by walking
   a replaced `fedora.repo` passed for the base image's. A fleet keeps the
   mark only where every host has it. And (3) the build's definition of that
   exact spelling does not serve, a key counting only when dnf checks
-  signatures for it. A package resolves exact spelling first, so `[site]`
+  signatures for it. A package the collector attributed (`Exact` or
+  `Resolved`) is routed by that captured section, whatever the stored
+  files define now: a surviving `[SITE]` never stands in for a `[site]`
+  redaction removed or changed, and the lost definition counts as lost.
+  Only an unattributed package resolves exact spelling first, so `[site]`
   losing its key never demotes `[SITE]`'s package. It is not installed
   by name: it gets the demotion FIXME, worked out once per exact section,
   and takes an upload. Its disposition never changes; the route is read

@@ -1578,6 +1578,7 @@ fn disabled_repo_snapshot(cache_path: &Path) -> InspectionSnapshot {
             gpgkey_references: Default::default(),
             shipped_by_base: None,
             verified_base_owner: None,
+            redaction_changed: Default::default(),
             rejected: None,
         }],
         ..Default::default()
@@ -1689,6 +1690,7 @@ fn repo_enabling_snapshot() -> InspectionSnapshot {
             gpgkey_references: Default::default(),
             shipped_by_base: None,
             verified_base_owner: None,
+            redaction_changed: Default::default(),
             rejected: None,
         }],
         ..Default::default()

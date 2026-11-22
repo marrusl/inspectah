@@ -335,29 +335,29 @@ impl InstallRepos {
     }
 
     /// The section `pkg` installed from on the source host, by exact
-    /// spelling: the section spelled as its recorded repo, or else its one
-    /// case variant, among the repo files the snapshot holds
-    /// ([`section_spelling`]). When none is, and the collector attributed
-    /// the package to a section a captured file defined
-    /// ([`RepoAttribution::Exact`] or [`RepoAttribution::Resolved`], read
-    /// from the files before redaction ran), that section: its definition
-    /// is no longer in any file the snapshot holds, which is the evidence
-    /// that no file the export copies can define it.
+    /// spelling.
+    ///
+    /// When the collector attributed the package to a section a captured
+    /// file defined ([`RepoAttribution::Exact`] or
+    /// [`RepoAttribution::Resolved`], read from the files before redaction
+    /// ran), that section, whatever the stored files define now: a
+    /// spelling that survives and differs only in case is another repo to
+    /// dnf, and never stands in for it. When no stored file defines it any
+    /// more, that is the evidence that no file the export copies can, and
+    /// the route is lost ([`route_lost`]). Otherwise, the section spelled
+    /// as its recorded repo, or else its one case variant, among the repo
+    /// files the snapshot holds ([`section_spelling`]).
     fn route_section(&self, pkg: &PackageEntry) -> Option<SectionId> {
         if pkg.source_repo.is_empty() {
             return None;
         }
-        if let Some(spelling) =
-            section_spelling(self.spellings.iter().map(String::as_str), &pkg.source_repo)
+        if let RepoAttribution::Exact { id } | RepoAttribution::Resolved { id, .. } =
+            &pkg.repo_attribution
         {
-            return Some(SectionId::new(spelling));
+            return Some(SectionId::new(id.as_str()));
         }
-        match &pkg.repo_attribution {
-            RepoAttribution::Exact { id } | RepoAttribution::Resolved { id, .. } => {
-                Some(SectionId::new(id.as_str()))
-            }
-            _ => None,
-        }
+        section_spelling(self.spellings.iter().map(String::as_str), &pkg.source_repo)
+            .map(SectionId::new)
     }
 
     /// The section `pkg` installed from on the source host, when the build
@@ -441,7 +441,9 @@ impl InstallRepos {
 ///    ([`effective_section_in`]), is enabled and has a source. A section
 ///    no stored file defines counts too: the collector attributed a
 ///    package to it from the files as captured, before redaction, and
-///    nothing the export copies can define it now.
+///    nothing the export copies can define it now. So does one whose
+///    stored definition redaction changed (`RepoFile::redaction_changed`):
+///    its scrubbed text says nothing about what the host read.
 /// 2. **The base image does not supply it** ([`base_supplies`]): the
 ///    host's definition is not in a default repo file, nor in a file the
 ///    collector verified a base image package owns unmodified, such as
@@ -465,7 +467,14 @@ fn route_lost(rpm: &RpmSection, repos: &InstallRepos, section: &SectionId) -> bo
     let Some((path, host)) = effective_section_in(host_files, section) else {
         return true;
     };
-    if !(host.enabled && host.has_source) || base_supplies(rpm, path) {
+    // A definition redaction changed is not the host's, and nothing is
+    // read from its scrubbed text: the collector attributed a package to
+    // the section from the files as captured, as for one no file defines.
+    let unknown = rpm
+        .repo_files
+        .iter()
+        .any(|f| f.path == path && f.redaction_changed.contains(section));
+    if !(unknown || (host.enabled && host.has_source)) || base_supplies(rpm, path) {
         return false;
     }
     !repos

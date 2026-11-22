@@ -103,6 +103,18 @@ repo to dnf, and every other pattern, private keys, certificates and
 JSON credentials among them, runs on every line. Elsewhere a YAML flow
 sequence `[token: x]` is a real secret, and nothing is spared.
 
+A secret that spans lines must not take a header either: a certificate
+from `name=-----BEGIN CERTIFICATE-----` in one section to its END marker
+as a later section's `name=` removed the `[site]` between them. In a
+`.repo` file every match is cut around repo-id header lines
+(`around_repo_id_headers`), checking every line the match spans, not
+only the line it starts on; the header and its line breaks stay, and the
+pieces on either side are replaced. The options between still go, so
+`redact()` records the sections whose definition it changed
+(`RepoFile::redaction_changed`), and the route-loss decision reads that
+record, never the scrubbed text, as "Content parsed after redaction is
+unknown" below requires.
+
 ## Search forward from the key, never from the start of the line
 
 This was the single defect behind eight separate credential leaks
@@ -518,6 +530,12 @@ the text:
   nothing would read it, and the explanation names the key as unknown.
 - A link target is a path, not a line systemd-sysctl parses, so a change
   there scrubs it without setting `redacted`.
+- `RepoFile::redaction_changed` names the sections of a `.repo` file
+  whose enabled state or source the pass changed and whose header
+  survives. The route-loss decision reads such a section's host
+  definition as unknown, as it reads one no stored file defines, and
+  routes a package by the section the collector attributed it to before
+  redaction, never by a case variant that survived.
 
 The cost is accepted: a host whose sysctl files hold a secret-bearing
 key gets no values or drift for any key (Mark, 2026-11-11). The

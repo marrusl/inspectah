@@ -232,6 +232,18 @@ pub struct RepoFile {
     /// a key, and in snapshots collected before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verified_base_owner: Option<String>,
+    /// For a repo file: the sections, by exact spelling, whose definition
+    /// redaction changed, so that what the stored content says of them
+    /// (enabled, with a source) is not what the host's dnf read. A secret
+    /// spanning lines took a section's options with it, and the stored
+    /// text then read as a sourceless repo the host never had. The
+    /// route-loss decision reads such a section's host definition as
+    /// unknown rather than parse the scrubbed text. Only sections the
+    /// stored content still defines are named, so the set holds no id
+    /// redaction rewrote. Empty for a key, for a file redaction left
+    /// alone, and in snapshots collected before the field existed.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub redaction_changed: BTreeSet<crate::types::repo::SectionId>,
     /// Set on a key the scan refused to store. Its `content` is a
     /// placeholder, and nothing stages it or counts it as a key in the
     /// image. `None` for a usable key and for a repo file.

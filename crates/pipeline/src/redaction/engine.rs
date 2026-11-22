@@ -7,14 +7,14 @@ use inspectah_core::types::redaction::{
 use inspectah_core::types::sysctl::{SysctlFileBody, SysctlSection};
 use regex::{Captures, Regex};
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 use std::sync::LazyLock;
 
 use crate::redaction::patterns::{PATTERNS, SECRET_GROUP, SecretPattern, scan_shadow};
 use crate::render::language_packages::scrub_manifest_auth;
 use inspectah_core::types::destination::Destination;
-use inspectah_core::types::repo::is_repo_id;
+use inspectah_core::types::repo::{SectionId, is_repo_id, parse_repo_sections};
 
 /// Paths that are known false-positive sources for credential scanning.
 /// Files under these prefixes use keywords like "password", "auth", and
@@ -81,6 +81,29 @@ fn scrub_repo_urls(text: &str, path: &str) -> Option<(String, RedactionFinding)>
         finding_kind: Some(FindingKind::Password),
     };
     Some((scrubbed, finding))
+}
+
+/// The sections `after`, a `.repo` file as redaction left it, still
+/// defines whose enabled state or source differs from what `before`, the
+/// file as collected, defined, or that `before` did not define: the ones
+/// whose stored definition is not the host's
+/// ([`RepoFile::redaction_changed`]). A section `after` no longer defines
+/// is not named: its id may be what a pattern replaced.
+///
+/// [`RepoFile::redaction_changed`]: inspectah_core::types::rpm::RepoFile::redaction_changed
+fn sections_redaction_changed(before: &str, after: &str) -> BTreeSet<SectionId> {
+    if before == after {
+        return BTreeSet::new();
+    }
+    let host: HashMap<SectionId, (bool, bool)> = parse_repo_sections(before)
+        .into_iter()
+        .map(|sec| (sec.id, (sec.enabled, sec.has_source)))
+        .collect();
+    parse_repo_sections(after)
+        .into_iter()
+        .filter(|sec| host.get(&sec.id) != Some(&(sec.enabled, sec.has_source)))
+        .map(|sec| sec.id)
+        .collect()
 }
 
 /// Returns true if `path` matches a known false-positive prefix.
@@ -450,6 +473,72 @@ fn is_repo_id_header(line: &str) -> bool {
         .is_some_and(is_repo_id)
 }
 
+/// `em`, a match in a `.repo` file, as the pieces of its secret that hold
+/// no repo-id header line ([`is_repo_id_header`]), each a match of its own
+/// with `em`'s claim.
+///
+/// A multi-line secret (a PEM block between `name=-----BEGIN ...` and a
+/// later `name=-----END ...`) replaced whole took every header between
+/// its ends, and with them sections the collector had attributed packages
+/// to. A header line is no part of a secret: its characters (letters,
+/// digits, `-_.:`) hold no PEM or key material, so keeping it leaves no
+/// secret byte. The line breaks on either side of a kept header stay too,
+/// and a `\r` before one, so the header stays a line of its own. The
+/// options between headers are still replaced, which `redact()` records
+/// in `redaction_changed`.
+fn around_repo_id_headers(em: EligibleMatch, content: &str) -> Vec<EligibleMatch> {
+    let secret = &content[em.start..em.end];
+    if !secret.contains('\n') {
+        return vec![em];
+    }
+    // Each line the secret touches, as the part of it inside the secret,
+    // with whether the whole line is a repo-id header.
+    let mut lines: Vec<(Range<usize>, bool)> = Vec::new();
+    let mut pos = em.start;
+    loop {
+        let line_start = content[..pos].rfind('\n').map_or(0, |i| i + 1);
+        let line_end = content[pos..].find('\n').map_or(content.len(), |i| pos + i);
+        let header = is_repo_id_header(&content[line_start..line_end]);
+        lines.push((pos..line_end.min(em.end), header));
+        if line_end >= em.end {
+            break;
+        }
+        pos = line_end + 1;
+    }
+    if !lines.iter().any(|(_, header)| *header) {
+        return vec![em];
+    }
+    let mut pieces = Vec::new();
+    let mut run: Option<Range<usize>> = None;
+    let mut flush = |run: &mut Option<Range<usize>>, before_header: bool| {
+        if let Some(mut piece) = run.take() {
+            if before_header && content[..piece.end].ends_with('\r') {
+                piece.end -= 1;
+            }
+            if piece.start < piece.end {
+                pieces.push(EligibleMatch {
+                    claim: em.claim.clone(),
+                    start: piece.start,
+                    end: piece.end,
+                    line_num: em.line_num + content[em.start..piece.start].matches('\n').count(),
+                });
+            }
+        }
+    };
+    for (span, header) in lines {
+        if header {
+            flush(&mut run, true);
+        } else {
+            run = Some(match run {
+                Some(r) => r.start..span.end,
+                None => span,
+            });
+        }
+    }
+    flush(&mut run, false);
+    pieces
+}
+
 /// Offset of the first line break (`\r` or `\n`) at or after `pos`, or the
 /// end of `content`.
 fn line_break_at_or_after(content: &str, pos: usize) -> usize {
@@ -532,9 +621,10 @@ fn collect_eligible_matches(
     path: Option<&str>,
 ) -> Vec<EligibleMatch> {
     let markers = comment_markers(path);
+    let repo_file = path.is_some_and(is_repo_file_path);
     // Repo-id headers this pattern leaves alone: only the generic one's,
     // and only in a `.repo` file dnf reads.
-    let headers_kept = pat.spares_repo_id_headers && path.is_some_and(is_repo_file_path);
+    let headers_kept = pat.spares_repo_id_headers && repo_file;
     let mut lines = LineCursor::new(content);
     let mut found = Vec::new();
     // The union of the eligible secrets kept last, which overlap one
@@ -600,7 +690,12 @@ fn collect_eligible_matches(
                 } else {
                     em.start..em.end
                 };
-                found.push(em);
+                if repo_file {
+                    // No pattern's secret takes a repo-id header line.
+                    found.extend(around_repo_id_headers(em, content));
+                } else {
+                    found.push(em);
+                }
                 true
             }
             None => false,
@@ -1323,6 +1418,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // Scan repo file contents for embedded credentials
     if let Some(ref mut rpm) = snapshot.rpm {
         for repo_file in &mut rpm.repo_files {
+            let before = repo_file.content.clone();
             if let Some((scrubbed, finding)) = scrub_repo_urls(&repo_file.content, &repo_file.path)
             {
                 repo_file.content = scrubbed;
@@ -1347,6 +1443,9 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 repo_file.content = content;
                 all_findings.extend(findings);
             }
+            repo_file
+                .redaction_changed
+                .extend(sections_redaction_changed(&before, &repo_file.content));
         }
 
         // Scan GPG key contents
@@ -3302,6 +3401,105 @@ baseurl = https://cdn.redhat.com
         // Not a `.repo` file dnf reads: its lines are searched whole.
         let other = redact_string("[token:vendor]\n");
         assert_ne!(other, "[token:vendor]\n");
+    }
+
+    /// No secret that spans lines in a `.repo` file takes a repo-id
+    /// header line: the parts of the secret on either side are replaced,
+    /// the header and its line breaks stay, and no byte of the secret
+    /// survives. A bracketed line that is no repo id goes with the secret,
+    /// and a `.repo` file is recorded with the sections whose definition
+    /// the pass changed. Another file's span is replaced whole.
+    #[test]
+    fn test_no_multi_line_secret_takes_a_repo_id_header() {
+        use inspectah_core::types::repo::SectionId;
+        use inspectah_core::types::rpm::{RepoFile, RpmSection};
+        const CERT: (&str, &str) = ("-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----");
+        const KEY: (&str, &str) = (
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "-----END RSA PRIVATE KEY-----",
+        );
+        // `(what, content, headers kept, sections recorded changed)`.
+        let cases: Vec<(&str, String, Vec<&str>, Vec<&str>)> = vec![
+            (
+                "a certificate across one header",
+                format!(
+                    "[metadata]\nenabled=0\nname={}\n[site]\nbaseurl=https://lower.example/\n\
+                     enabled=1\ngpgcheck=0\nname={}\n",
+                    CERT.0, CERT.1
+                ),
+                vec!["[metadata]", "[site]"],
+                vec!["site"],
+            ),
+            (
+                "a private key across two adjacent headers",
+                format!(
+                    "[a]\nname={}\nMIIEsecretA\n[b]\n[c]\nMIIEsecretB\nbaseurl=https://c.example/\n{}\n",
+                    KEY.0, KEY.1
+                ),
+                vec!["[a]", "[b]", "[c]"],
+                vec!["c"],
+            ),
+            (
+                "CRLF line breaks",
+                format!(
+                    "[a]\r\nname={}\r\nMIIEsecretA\r\n[site]\r\nbaseurl=https://s.example/\r\n\
+                     MIIEsecretB\r\n{}\r\n",
+                    KEY.0, KEY.1
+                ),
+                vec!["[a]", "[site]"],
+                vec!["site"],
+            ),
+            (
+                "a bracketed line that is no repo id",
+                format!(
+                    "[a]\nname={}\n[not a repo]\nMIIEsecretA\n{}\n",
+                    KEY.0, KEY.1
+                ),
+                vec!["[a]"],
+                vec![],
+            ),
+        ];
+        for (what, content, kept, changed) in cases {
+            let mut snapshot = InspectionSnapshot::new();
+            snapshot.rpm = Some(RpmSection {
+                repo_files: vec![RepoFile {
+                    path: "/etc/yum.repos.d/a.repo".into(),
+                    content: content.clone(),
+                    disposition: SnapshotFindingKind::included(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            redact(&mut snapshot, &RedactOptions::default());
+            let file = &snapshot.rpm.as_ref().unwrap().repo_files[0];
+            let got = &file.content;
+            let lines: Vec<&str> = got.lines().map(|l| l.trim_end_matches('\r')).collect();
+            for header in &kept {
+                assert!(lines.contains(header), "{what}: {header} in {got:?}");
+            }
+            for secret in [
+                "MIIEsecret",
+                "BEGIN",
+                "END",
+                "lower.example",
+                "s.example",
+                "c.example",
+            ] {
+                assert!(!got.contains(secret), "{what}: {secret} in {got:?}");
+            }
+            assert!(!got.contains("[not a repo]"), "{what}: {got:?}");
+            assert!(
+                !got.contains("\n\r") && got.matches('\r').count() == got.matches("\r\n").count(),
+                "{what}: line breaks kept whole: {got:?}"
+            );
+            let want: BTreeSet<SectionId> = changed.into_iter().map(SectionId::new).collect();
+            assert_eq!(file.redaction_changed, want, "{what}");
+        }
+
+        // Not a `.repo` file: the span is replaced whole.
+        let plain = format!("{}\n[site]\nx\n{}\n", CERT.0, CERT.1);
+        let other = redact_string(&plain);
+        assert!(!other.contains("[site]"), "{other}");
     }
 
     /// A credential in any URL of a `.repo` file, and of its Configuration
