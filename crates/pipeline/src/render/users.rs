@@ -548,13 +548,21 @@ impl ContainerfileUserPlan {
         }
     }
 
-    /// The account names the Containerfile creates, which a tmpfiles.d
-    /// line may name as an owner.
-    pub(crate) fn materialized_usernames(&self) -> HashSet<String> {
-        self.accepted
+    /// Whether the Containerfile creates the account `name`, so a
+    /// tmpfiles.d line may name it as an owner.
+    pub(crate) fn creates_user(&self, name: &str) -> bool {
+        self.accepted.iter().any(|u| u.name.as_str() == name)
+    }
+
+    /// The gid group `name` is guaranteed to have in the image: a group
+    /// line gives the image that name with that gid or stops the build.
+    /// `None` for any other group, which the image may lack, so a
+    /// tmpfiles.d line must not name it.
+    pub(crate) fn guaranteed_gid(&self, name: &str) -> Option<u32> {
+        self.groups
             .iter()
-            .map(|u| u.name.as_str().to_string())
-            .collect()
+            .find(|g| g.name.as_str() == name)
+            .map(|g| g.gid)
     }
 
     /// The section's body, without its header.

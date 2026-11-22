@@ -44,6 +44,7 @@ use super::unit_plan::{
     GeneratedSource, OmissionReason, declined_line, generated_unit_name, is_package_installable,
     manual_follow_up_line, plan_units, systemctl_lines, unit_state_lines,
 };
+use super::users::ContainerfileUserPlan;
 use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
 
 /// Human-readable label for a `DegradationReason`.
@@ -2386,15 +2387,6 @@ fn secrets_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 // --- /var directory provisioning ---
 
-/// Collect usernames being materialized via useradd in this Containerfile.
-///
-/// These are the users the users block's plan accepts, so their accounts
-/// are guaranteed to exist at image build time and tmpfiles.d entries can
-/// safely reference them by name. A user the block refuses is not one.
-fn collect_materialized_usernames(snap: &InspectionSnapshot) -> std::collections::HashSet<String> {
-    super::users::ContainerfileUserPlan::from_snapshot(snap).materialized_usernames()
-}
-
 /// Well-known RPM packages and the system accounts their scriptlets create.
 ///
 /// Many RPM packages create system accounts whose names differ from the package
@@ -2479,7 +2471,8 @@ fn collect_rpm_provided_accounts(
 ///
 /// Resolution order (first match wins):
 /// 1. Root (UID 0) -> `root root`
-/// 2. Account materialized via useradd -> name
+/// 2. Account materialized via useradd -> name; its group by name only
+///    when the users plan guarantees that group, else the numeric gid
 /// 3. Account created by a replicated RPM -> name + package comment
 ///    (uses KNOWN_PACKAGE_ACCOUNTS mapping for package!=account cases,
 ///    plus direct package-name==account-name match as fallback)
@@ -2487,7 +2480,7 @@ fn collect_rpm_provided_accounts(
 /// 5. Name unavailable -> numeric UID:GID
 fn resolve_tmpfiles_ownership(
     d: &inspectah_core::types::storage::VarDirectory,
-    materialized_users: &std::collections::HashSet<String>,
+    users_plan: &ContainerfileUserPlan,
     rpm_accounts: &std::collections::HashMap<String, String>,
     replicated_rpms: &std::collections::HashSet<String>,
 ) -> (ExportToken, ExportToken, String) {
@@ -2513,8 +2506,16 @@ fn resolve_tmpfiles_ownership(
     let group_name = proved_account_name(d.group_name.as_deref());
 
     // Case 2: materialized user (being created by useradd in this Containerfile)
-    if !owner_name.is_empty() && materialized_users.contains(owner_name) {
-        let group = if !group_name.is_empty() {
+    if !owner_name.is_empty() && users_plan.creates_user(owner_name) {
+        // The user exists because the plan creates it; its group exists
+        // only when a group line guarantees it. tmpfiles rejects a line
+        // naming a group the image lacks, so any other group, and one
+        // whose guaranteed gid differs from the host's, is written as
+        // the host's gid.
+        let guaranteed = users_plan
+            .guaranteed_gid(group_name)
+            .is_some_and(|image| d.owner_gid.is_none_or(|host| host == image));
+        let group = if !group_name.is_empty() && guaranteed {
             known_token(group_name)
         } else {
             numeric_token(gid)
@@ -2689,7 +2690,7 @@ fn unresolved_fixme_lines(
     path: &ExportPath,
     creator: &str,
     reason: UnresolvedReason,
-    materialized_users: &std::collections::HashSet<String>,
+    users_plan: &ContainerfileUserPlan,
     rpm_accounts: &std::collections::HashMap<String, String>,
     replicated_rpms: &std::collections::HashSet<String>,
 ) -> Vec<String> {
@@ -2699,7 +2700,7 @@ fn unresolved_fixme_lines(
                 return vec![refused_field_comment(&d.path, REFUSED_MODE_REASON)];
             };
             let (owner, group, _) =
-                resolve_tmpfiles_ownership(d, materialized_users, rpm_accounts, replicated_rpms);
+                resolve_tmpfiles_ownership(d, users_plan, rpm_accounts, replicated_rpms);
             (mode, owner, group)
         }
         None => (
@@ -2735,7 +2736,7 @@ fn unresolved_fixme_lines(
 /// snapshot can produce BOTH a tmpfiles.d conf AND `RUN mkdir` lines.
 pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> {
     let storage = snap.storage.as_ref()?;
-    let materialized_users = collect_materialized_usernames(snap);
+    let users_plan = ContainerfileUserPlan::from_snapshot(snap);
     let (rpm_accounts, replicated_rpms) = collect_rpm_provided_accounts(snap);
     let mut lines = Vec::new();
 
@@ -2764,12 +2765,8 @@ pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> 
                 if let Some(creator) = lost {
                     lines.push(lost_creator_comment(&path, creator));
                 }
-                let (owner, group, comment) = resolve_tmpfiles_ownership(
-                    d,
-                    &materialized_users,
-                    &rpm_accounts,
-                    &replicated_rpms,
-                );
+                let (owner, group, comment) =
+                    resolve_tmpfiles_ownership(d, &users_plan, &rpm_accounts, &replicated_rpms);
                 if !comment.is_empty() {
                     lines.push(format!("# {comment}"));
                 }
@@ -2785,7 +2782,7 @@ pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> 
                     &path,
                     creator,
                     *reason,
-                    &materialized_users,
+                    &users_plan,
                     &rpm_accounts,
                     &replicated_rpms,
                 ));
@@ -2806,7 +2803,7 @@ fn var_dir_section_lines(snap: &InspectionSnapshot, tmpfiles_staged: bool) -> Ve
         None => return Vec::new(),
     };
 
-    let materialized_users = collect_materialized_usernames(snap);
+    let users_plan = ContainerfileUserPlan::from_snapshot(snap);
     let (rpm_accounts, replicated_rpms) = collect_rpm_provided_accounts(snap);
     let mut body = Vec::new();
 
@@ -2849,7 +2846,7 @@ fn var_dir_section_lines(snap: &InspectionSnapshot, tmpfiles_staged: bool) -> Ve
                     &path,
                     creator,
                     *reason,
-                    &materialized_users,
+                    &users_plan,
                     &rpm_accounts,
                     &replicated_rpms,
                 ));

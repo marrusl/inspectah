@@ -52,3 +52,15 @@ earlier in the Containerfile can create the group or take the gid, and the
 operator can change `FROM` after the scan. The collector records the names
 and gids the check needs on each user (`primary_group`, `group_gids`), from
 any gid range; never infer a group name from a gid range.
+
+## A tmpfiles.d line names only groups the image is sure to have
+
+`systemd-tmpfiles` rejects a line whose owner or group it cannot resolve,
+so the directory is never made. A user the users block creates is safe to
+name, but the group the host recorded on that user's directory may be one
+no group line creates (`d /var/lib/svc 0750 svc homeowners -`, where no
+accepted user is in `homeowners`). Name a group in a tmpfiles.d line only
+when `ContainerfileUserPlan::guaranteed_gid` returns the host's gid for
+it; otherwise write the host's numeric gid, which the group-identity rule
+above keeps meaningful. Ask the plan; do not re-derive which groups exist
+from the snapshot, and do not assume a base group from its name.

@@ -451,6 +451,56 @@ fn u5_homes_across_the_whole_export() {
     assert!(!out.contains("Home directories are created"), "{out}");
 }
 
+/// U5b: the `/var` fragment names a materialized user's group only when a
+/// group line guarantees it. tmpfiles rejects a line whose group the image
+/// lacks, so a home owned by a group no accepted user is in keeps the
+/// host's gid. Rows: (`homeowners` member list, expected fragment line).
+#[test]
+fn u5b_var_home_group_by_name_only_when_guaranteed() {
+    let rows = [
+        // Nobody accepted is in `homeowners`: no group line creates it.
+        ("", "d /var/lib/svc 0750 svc 45001 -"),
+        // `svc` is in it, so its group line guarantees the name and gid.
+        ("svc", "d /var/lib/svc 0750 svc homeowners -"),
+    ];
+    for (members, expected) in rows {
+        let exec = with_var_lib(
+            MockExecutor::new()
+                .with_file(
+                    "/etc/passwd",
+                    "svc:x:1007:1007::/var/lib/svc:/sbin/nologin\n",
+                )
+                .with_file(
+                    "/etc/group",
+                    &format!("svc:x:1007:\nhomeowners:x:45001:{members}\n"),
+                ),
+            &[("/var/lib/svc", "0750 1007 45001 svc homeowners\n")],
+        );
+        let mut snap = useradd(collect_users(&exec, false), &["svc"]);
+        snap.storage = Some(collect_storage(&exec));
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        inspectah_pipeline::render::render_all(&snap, &RenderContext { target: None }, dir.path())
+            .expect("render");
+        let var_conf = std::fs::read_to_string(
+            dir.path()
+                .join("config/usr/lib/tmpfiles.d/inspectah-var.conf"),
+        )
+        .expect("the /var fragment");
+        assert_eq!(
+            active(&var_conf),
+            vec![expected],
+            "members {members:?}: {var_conf}"
+        );
+        let containerfile =
+            std::fs::read_to_string(dir.path().join("Containerfile")).expect("read");
+        assert!(
+            !containerfile.contains("# svc's home"),
+            "members {members:?}: the fragment creates the home:\n{containerfile}"
+        );
+    }
+}
+
 /// U6: the keys comment.
 #[test]
 fn u6_keys_comment() {
