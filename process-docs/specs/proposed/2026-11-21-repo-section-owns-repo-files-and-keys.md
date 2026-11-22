@@ -421,6 +421,12 @@ The export says so. Every export of a single-host snapshot holding such a key, t
 
 An aggregate's export gives § 6.5's notice for the key instead, with this one's second sentence appended when a redaction finding names a repo file, so each key gets one notice.
 
+**A repo file whose headers redaction rewrote.** A `[section]` header can match a credential pattern too, and a repo file whose every header redaction rewrote defines no section as stored, so it has no owner and is excluded like a key. Its wording is its own, never the key's, in every export, single-host and aggregate alike:
+
+`<path> is not copied: redaction changed the [section] headers in it, so it defines no repo the export can decide. Review the redacted headers; if the file is needed, restore them and add the file to the image yourself.`
+
+When no redaction finding names the file, the cause reads `its [section] headers were changed after the scan`.
+
 `<repo files>` are the paths of `snapshot.redactions` findings whose destination is in `rpm.repo_files`, shortened as § 6.5's host list is. In a single-host snapshot, redaction is the only stage after collection that rewrites repo content, so it is the only cause of a key with no owner there; for a snapshot another version wrote, where no redaction finding names a repo file, the clause reads `a gpgkey= reference that named it was changed after the scan`. Making redaction skip `gpgkey=` values is not this spec's call: a remote key URL can carry a real token, and the redaction rules are their own spec's.
 
 ## 7. The refine half (frontend)
@@ -566,8 +572,9 @@ The 422 `NoopTarget` texts change to § 5.3's.
   - `default_repo_file`: `This is a default repo file, which the export never copies. The build is expected to get it from the base image or the subscription mount.`
   - `rejected`: `The scan did not store this file because it <is not a PGP public key | holds private key material>, so the export never copies it.`
   - `withheld`: `The export withholds this file: <reason>.`
-  - `no_owner`, cause `redacted`: `The scan found this key because a repo file named it, but redaction changed that gpgkey= reference (<repo files>), so no repo file the export copies names it and the export never copies it. Review the redacted reference.`
-  - `no_owner`, cause `fleet` (the aggregate view does not show it in this release, § 7.3): `Every host that has this key had it because a repo file named it, but no version of a repo file that the export copies names it, so the export never copies it. Hosts with it: <hosts>.`
+  - `no_owner`, cause `redacted`, `kind: gpg_key`: `The scan found this key because a repo file named it, but redaction changed that gpgkey= reference (<repo files>), so no repo file the export copies names it and the export never copies it. Review the redacted reference.`
+  - `no_owner`, `kind: repo_file`, either cause: `Redaction changed the [section] headers in this file, so it defines no repo and the export never copies it. Review the redacted headers.` When `repo_files` does not hold the file's own path, `Redaction changed` reads `Its [section] headers were changed after the scan`.
+  - `no_owner`, cause `fleet`, `kind: gpg_key` (the aggregate view does not show it in this release, § 7.3): `Every host that has this key had it because a repo file named it, but no version of a repo file that the export copies names it, so the export never copies it. Hosts with it: <hosts>.`
 - **target:** `{ sectionId: "packages", itemId: "repo:<first owner by section id whose control is not none>" }`, or null when no owner has a switch or there is no owner (an entry with `no_owner`; a default repo file whose sections are distro, for instance)
 
 The row has no include checkbox: the server already refuses `SetInclude` on an `Inventory` entry. The single-host view gets this; the aggregate view renders shadowed config rows as it does for the Units shadow today, and does not change in this release.
