@@ -7,6 +7,10 @@
 use std::collections::HashMap;
 
 use inspectah_core::types::AdvisoryType;
+use inspectah_core::types::machine_state::{
+    MachineStateMember, MachineStateReason, OverrideLevel, ProvisioningNotice, ProvisioningStep,
+    RecreatedBy,
+};
 use inspectah_core::types::sysctl::SysctlDir;
 use inspectah_core::types::units::UnitName;
 use inspectah_core::types::users::UserGroupDecision;
@@ -686,6 +690,76 @@ pub struct ViewResponse {
     pub unmanaged_files: Vec<UnmanagedFileGroupDto>,
     /// Whether --include-unmanaged was used at scan time.
     pub has_unmanaged_scan: bool,
+    /// One row per machine-state class row: every `MachineState` config
+    /// entry, every `config.withheld` row and every
+    /// `unmanaged_files.withheld` row, sorted by path. Class rows are in
+    /// no other list.
+    pub machine_state: Vec<MachineStateRowDto>,
+    /// The owed provisioning steps of the rows not overridden, as the
+    /// export lists them.
+    pub machine_state_steps: Vec<ProvisioningStepDto>,
+    /// The class entries the next export's `x-export-warnings` carries.
+    pub machine_state_notices: Vec<ExportWarning>,
+}
+
+/// One machine-state row. The UI takes the control from `override`, the
+/// notice line from `notice` and the metadata line from
+/// `content_captured`, `mode` and `size`; it never derives a member's
+/// treatment from its path, member or reason.
+#[derive(Serialize, Clone, Debug)]
+pub struct MachineStateRowDto {
+    pub path: String,
+    pub member: MachineStateMember,
+    pub reason: MachineStateReason,
+    #[serde(rename = "override")]
+    pub override_level: OverrideLevel,
+    /// The current choice; always false for `never`.
+    pub include: bool,
+    /// False for every withheld row.
+    pub content_captured: bool,
+    /// Permission bits as four octal digits ("0600"), withheld rows only.
+    pub mode: Option<String>,
+    /// Withheld rows only.
+    pub size: Option<u64>,
+    pub notice: ProvisioningNoticeDto,
+    /// The `SetInclude` target. Absent exactly when `override` is `never`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<ItemId>,
+}
+
+/// A row's provisioning notice, with the owed step's display text.
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProvisioningNoticeDto {
+    Owed {
+        step: ProvisioningStep,
+        command: &'static str,
+    },
+    Automatic {
+        by: RecreatedBy,
+    },
+    None,
+}
+
+impl From<ProvisioningNotice> for ProvisioningNoticeDto {
+    fn from(notice: ProvisioningNotice) -> Self {
+        match notice {
+            ProvisioningNotice::Owed { step } => Self::Owed {
+                step,
+                command: step.command(),
+            },
+            ProvisioningNotice::Automatic { by } => Self::Automatic { by },
+            ProvisioningNotice::None => Self::None,
+        }
+    }
+}
+
+/// One owed provisioning step with the paths it covers.
+#[derive(Serialize, Clone, Debug)]
+pub struct ProvisioningStepDto {
+    pub step: ProvisioningStep,
+    pub command: &'static str,
+    pub paths: Vec<String>,
 }
 
 #[derive(Serialize)]

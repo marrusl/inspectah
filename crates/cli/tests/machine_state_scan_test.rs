@@ -1132,3 +1132,229 @@ fn walkdir_files(dir: &std::path::Path) -> Vec<String> {
     }
     files
 }
+
+fn set_include(path: &str, include: bool) -> inspectah_refine::types::RefinementOp {
+    inspectah_refine::types::RefinementOp::SetInclude {
+        item_id: inspectah_refine::types::ItemId::Config { path: path.into() },
+        include,
+    }
+}
+
+/// Collect case 17: a credential is never overridable. The session refuses
+/// the include with `NotCarriable` and records nothing, and the view row
+/// is `never` with no `item_id`.
+#[test]
+fn a_credential_override_is_refused() {
+    use inspectah_refine::types::RefineError;
+    let snap = scan_with(
+        SysctlHost::new().file_bytes("/etc/krb5.keytab", &binary_keytab()),
+        std_inspectors(),
+    );
+    let mut session = session(&snap);
+    let before = session.generation();
+    match session.apply(set_include("/etc/krb5.keytab", true)) {
+        Err(RefineError::NotCarriable(why)) => assert!(why.contains("/etc/krb5.keytab"), "{why}"),
+        other => panic!("expected NotCarriable, got {other:?}"),
+    }
+    assert_eq!(session.generation(), before, "nothing recorded");
+    assert!(!session.can_undo());
+    let view = inspectah_web::adapter::build_web_view(&session);
+    let row = view
+        .machine_state
+        .iter()
+        .find(|r| r.path == "/etc/krb5.keytab")
+        .expect("a view row");
+    assert_eq!(
+        serde_json::to_value(row).unwrap()["override"],
+        serde_json::json!("never")
+    );
+    assert!(row.item_id.is_none());
+    assert!(
+        !view
+            .config_files
+            .iter()
+            .any(|c| c.row.entry.path == "/etc/krb5.keytab")
+    );
+    let tree = export_session(&session);
+    assert!(!tree.path().join("config/etc/krb5.keytab").exists());
+}
+
+/// Collect case 18: a carriable override ships the captured file on both
+/// paths, with the `warn` notice on the refine export; undo removes it.
+#[test]
+fn a_carriable_override_ships_the_file_on_both_paths() {
+    let snap = scan_with(
+        SysctlHost::new()
+            .rpm_owned(IQN, "iscsi-initiator-utils")
+            .rpm_va("S.5....T.", IQN)
+            .file(IQN, "InitiatorName=iqn.1994-05.com.redhat:override\n"),
+        std_inspectors(),
+    );
+    let mut session = session(&snap);
+    let view = inspectah_web::adapter::build_web_view(&session);
+    let row = view
+        .machine_state
+        .iter()
+        .find(|r| r.path == IQN)
+        .expect("a view row");
+    assert_eq!(
+        serde_json::to_value(row).unwrap()["override"],
+        serde_json::json!("warn")
+    );
+    assert!(!view.config_files.iter().any(|c| c.row.entry.path == IQN));
+    session
+        .apply(set_include(IQN, true))
+        .expect("the include applies");
+    assert!(
+        inspectah_web::adapter::build_web_view(&session)
+            .machine_state
+            .iter()
+            .any(|r| r.path == IQN && r.include)
+    );
+
+    let staged = |tree: &tempfile::TempDir| {
+        std::fs::read_to_string(tree.path().join("config/etc/iscsi/initiatorname.iscsi")).ok()
+    };
+    let refine_tree = export_session(&session);
+    assert_eq!(
+        staged(&refine_tree).as_deref(),
+        Some("InitiatorName=iqn.1994-05.com.redhat:override\n")
+    );
+    let warnings = {
+        let packed = tempfile::tempdir().unwrap();
+        session
+            .export_plan(session.generation())
+            .unwrap()
+            .render(&packed.path().join("e.tar.gz"))
+            .unwrap()
+            .into_iter()
+            .map(|w| w.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        warnings.contains(&format!(
+            "Notice: Host identity included in the image: {IQN}"
+        )),
+        "{warnings:?}"
+    );
+    // The CLI path: the saved projection rendered with --from-snapshot.
+    let projected = reload(&session.snapshot_projected());
+    assert_eq!(
+        staged(&render_export(&projected)).as_deref(),
+        Some("InitiatorName=iqn.1994-05.com.redhat:override\n")
+    );
+
+    session.undo().expect("undo");
+    assert!(staged(&export_session(&session)).is_none());
+}
+
+/// Collect case 27: an `EditVariant` whose content is a key is refused
+/// before it is recorded; a session file edited to carry it is refused on
+/// resume, naming the path.
+#[test]
+fn a_credential_edit_is_refused_and_an_edited_session_file_does_not_resume() {
+    use inspectah_refine::types::{ItemId, RefineError, RefinementOp, TimelineEntry};
+    let cert = |n: u8| format!("-----BEGIN CERTIFICATE-----\nMIIB{n}\n-----END CERTIFICATE-----\n");
+    let merged = aggregate(vec![
+        fleet_host("host-a", |h| h.file("/etc/myapp/server.pem", &cert(1))),
+        fleet_host("host-b", |h| h.file("/etc/myapp/server.pem", &cert(2))),
+    ]);
+    let edit = RefinementOp::EditVariant {
+        item_id: ItemId::Config {
+            path: "/etc/myapp/server.pem".into(),
+        },
+        content: encrypted_key(),
+        based_on: None,
+    };
+
+    let tree = render_export(&merged);
+    let packed = tempfile::tempdir().unwrap();
+    let tarball = packed.path().join("fleet.tar.gz");
+    inspectah_pipeline::render::tarball::create_tarball(tree.path(), &tarball, "fleet").unwrap();
+    let mut session = inspectah_refine::tarball::from_tarball(&tarball).unwrap();
+    session.set_tarball_path(tarball.clone());
+    match session.apply(edit.clone()) {
+        Err(RefineError::NotCarriable(why)) => assert!(why.contains("deploy time"), "{why}"),
+        other => panic!("expected NotCarriable, got {other:?}"),
+    }
+    assert!(!session.can_undo());
+    let session_file = inspectah_refine::autosave::session_file_path(&tarball);
+    if session_file.exists() {
+        let saved = std::fs::read_to_string(&session_file).unwrap();
+        assert!(!saved.contains(MARKER), "the autosave holds no key bytes");
+    }
+
+    let state = inspectah_refine::autosave::SessionState {
+        schema_version: 3,
+        tarball_path: tarball.clone(),
+        tarball_hash: inspectah_refine::autosave::compute_tarball_hash(&tarball).unwrap(),
+        timeline: vec![TimelineEntry::Op(edit)],
+        cursor: 1,
+        saved_at: "2026-11-21T00:00:00Z".into(),
+    };
+    inspectah_refine::autosave::save_session(&state, &tarball).unwrap();
+    match inspectah_refine::session::RefineSession::resume_from(&tarball) {
+        Err(RefineError::SnapshotLoad(why)) => {
+            assert!(why.contains("/etc/myapp/server.pem"), "{why}")
+        }
+        Ok(_) => panic!("an edited session file must not resume"),
+        Err(other) => panic!("expected SnapshotLoad, got {other:?}"),
+    }
+}
+
+/// Collect case 21, the refine half, and case 31's refine half: on a
+/// fleet aggregate every class row is `never`, and an include of a
+/// withheld configuration or unmanaged path is refused.
+#[test]
+fn withheld_rows_are_never_overridable_in_refine() {
+    use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
+    let merged = aggregate(vec![
+        fleet_host("host-a", |h| {
+            h.file(IQN, "InitiatorName=iqn.2000-01.com.example:a\n")
+        }),
+        fleet_host("host-b", |h| {
+            h.file(IQN, "InitiatorName=iqn.2000-01.com.example:b\n")
+        }),
+    ]);
+    let rows = inspectah_web::adapter::machine_state_rows(&merged);
+    assert!(!rows.is_empty());
+    for row in &rows {
+        assert_eq!(
+            serde_json::to_value(row).unwrap()["override"],
+            serde_json::json!("never")
+        );
+        assert!(row.item_id.is_none());
+    }
+    let mut fleet = inspectah_refine::session::RefineSession::new(merged);
+    assert!(matches!(
+        fleet.apply(set_include(IQN, true)),
+        Err(RefineError::NotCarriable(_))
+    ));
+
+    let mut host = InspectionSnapshot::new();
+    host.unmanaged_files = Some(inspectah_core::types::nonrpm::UnmanagedFileSection {
+        withheld: vec![
+            inspectah_core::types::machine_state::WithheldUnmanagedEntry {
+                path: "/opt/app/k".into(),
+                member: MachineStateMember::PrivateKeyFile,
+                mode: Some(0o600),
+                size: Some(10),
+                aggregate: None,
+            },
+        ],
+        ..Default::default()
+    });
+    let steps = inspectah_web::adapter::machine_state_steps(&host);
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].paths, ["/opt/app/k"]);
+    let mut session = inspectah_refine::session::RefineSession::new(host);
+    assert!(matches!(
+        session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::UnmanagedFile {
+                path: "/opt/app/k".into()
+            },
+            include: true,
+        }),
+        Err(RefineError::NotCarriable(_))
+    ));
+}

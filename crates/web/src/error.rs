@@ -50,6 +50,13 @@ impl IntoResponse for AppError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 format!("nothing to change: {t}"),
             ),
+            // A withheld machine-state file, or an edit holding a
+            // credential: the export has nothing it could carry, so the op
+            // is refused and nothing is recorded.
+            RefineError::NotCarriable(t) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("not carried: {t}"),
+            ),
             // A snapshot whose recorded staged file fails confinement is a
             // conflict with the session's state, not a server fault: the
             // DELETE itself is well-formed, and the upload route already
@@ -80,6 +87,21 @@ mod tests {
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    /// A withheld machine-state file, or an edit holding a credential, is
+    /// a well-formed request the session refuses: 422, `not carried:`.
+    #[tokio::test]
+    async fn a_not_carriable_op_is_422_not_carried() {
+        let (status, body) = respond(RefineError::NotCarriable(
+            "/etc/krb5.keytab is withheld".into(),
+        ))
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            body,
+            r#"{"error":"not carried: /etc/krb5.keytab is withheld"}"#
+        );
     }
 
     #[tokio::test]

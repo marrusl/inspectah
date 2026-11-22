@@ -86,6 +86,24 @@
   "generated_timers": [],
   "generation": 0,
   "has_unmanaged_scan": false,
+  "machine_state": [
+    {
+      "content_captured": false,
+      "include": false,
+      "member": "hostname",
+      "mode": null,
+      "notice": {
+        "by": "provisioning",
+        "kind": "automatic"
+      },
+      "override": "never",
+      "path": "/etc/hostname",
+      "reason": "host_identity",
+      "size": null
+    }
+  ],
+  "machine_state_notices": [],
+  "machine_state_steps": [],
   "manual_links": [],
   "mount_findings": [],
   "not_carried_notice": null,

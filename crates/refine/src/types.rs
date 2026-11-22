@@ -744,6 +744,11 @@ pub enum RefineError {
     AdvisoryNotToggleable(String),
     #[error("nothing to change: {0}")]
     NoopTarget(String),
+    /// The op would carry a machine-state file the export cannot: a
+    /// withheld member, whose content the snapshot does not hold, or an
+    /// edit whose content is a private key or keytab. Never overridable.
+    #[error("not carried: {0}")]
+    NotCarriable(String),
     /// Removing an upload was refused because the snapshot's record of
     /// the staged file failed a confinement check. Display is the
     /// log-facing text; the HTTP boundary uses

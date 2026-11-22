@@ -78,7 +78,7 @@ expression: json
       }
     }
   ],
-  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source. Verify how to reinstall it in the image.\n\n# === Configuration Files ===\n# 3 config file(s) captured\n\nCOPY config/etc/ /etc/\n\n# === Container Workloads (1) ===\nCOPY quadlet/ /etc/containers/systemd/\n\n# === Security & Access Control ===\n# FIXME: 1 custom SELinux policy module(s) not carried: myapp_policy\n# On the host, `semodule -c -E <name>` writes <name>.cil. Put each file in\n# config/selinux/ and uncomment the two lines below.\n# COPY config/selinux/ /tmp/selinux/\n# RUN semodule -i /tmp/selinux/*.cil && rm -rf /tmp/selinux/\n# 1 SELinux boolean(s) set persistently on the host\nRUN setsebool -P httpd_can_network_connect on\n\n# === /etc/hosts Additions ===\n# FIXME: These /etc/hosts entries need to be added to the image:\n#   10.0.0.50 app-server\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source. Verify how to reinstall it in the image.\n\n# === Configuration Files ===\n# 3 config file(s) captured\n\nCOPY config/etc/ /etc/\n\n# === Provisioning ===\n# Not in the image: this host's identity. At provisioning:\n#   realm join (or ipa-client-install, adcli join)\n\n# === Container Workloads (1) ===\nCOPY quadlet/ /etc/containers/systemd/\n\n# === Security & Access Control ===\n# FIXME: 1 custom SELinux policy module(s) not carried: myapp_policy\n# On the host, `semodule -c -E <name>` writes <name>.cil. Put each file in\n# config/selinux/ and uncomment the two lines below.\n# COPY config/selinux/ /tmp/selinux/\n# RUN semodule -i /tmp/selinux/*.cil && rm -rf /tmp/selinux/\n# 1 SELinux boolean(s) set persistently on the host\nRUN setsebool -P httpd_can_network_connect on\n\n# === /etc/hosts Additions ===\n# FIXME: These /etc/hosts entries need to be added to the image:\n#   10.0.0.50 app-server\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
   "declined_generated": [],
   "flatpaks": [],
   "generated_timers": [],
@@ -101,6 +101,78 @@ expression: json
       ],
       "path": "/usr/local/bin/node",
       "system_site_packages": false
+    }
+  ],
+  "machine_state": [
+    {
+      "content_captured": true,
+      "include": false,
+      "item_id": {
+        "key": {
+          "path": "/etc/hostname"
+        },
+        "kind": "Config"
+      },
+      "member": "hostname",
+      "mode": null,
+      "notice": {
+        "by": "provisioning",
+        "kind": "automatic"
+      },
+      "override": "plain",
+      "path": "/etc/hostname",
+      "reason": "host_identity",
+      "size": null
+    },
+    {
+      "content_captured": true,
+      "include": false,
+      "item_id": {
+        "key": {
+          "path": "/etc/iscsi/initiatorname.iscsi"
+        },
+        "kind": "Config"
+      },
+      "member": "iscsi_initiator_name",
+      "mode": null,
+      "notice": {
+        "by": "first_boot",
+        "kind": "automatic"
+      },
+      "override": "warn",
+      "path": "/etc/iscsi/initiatorname.iscsi",
+      "reason": "host_identity",
+      "size": null
+    },
+    {
+      "content_captured": false,
+      "include": false,
+      "member": "kerberos_keytab",
+      "mode": "0600",
+      "notice": {
+        "command": "ipa-client-install, realm join or adcli join",
+        "kind": "owed",
+        "step": "realm_join"
+      },
+      "override": "never",
+      "path": "/etc/krb5.keytab",
+      "reason": "host_credential",
+      "size": 82
+    }
+  ],
+  "machine_state_notices": [
+    {
+      "kind": "notice",
+      "text": "3 machine-state files left out. At provisioning: realm join."
+    }
+  ],
+  "machine_state_steps": [
+    {
+      "command": "ipa-client-install, realm join or adcli join",
+      "paths": [
+        "/etc/krb5.keytab"
+      ],
+      "step": "realm_join"
     }
   ],
   "manual_links": [],

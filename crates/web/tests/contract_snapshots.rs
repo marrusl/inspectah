@@ -184,10 +184,41 @@ fn contract_snapshot() -> InspectionSnapshot {
     });
 
     // The audit rule and the PAM config are `config.files` entries (§ 3.6);
-    // Security & Access Control carries a pointer row for each.
+    // Security & Access Control carries a pointer row for each. One
+    // machine-state row per override level: the IQN (`warn`), the hostname
+    // (`plain`) and a withheld keytab (`never`), none in `config_files`.
     snap.config = Some(ConfigSection {
-        withheld: Vec::new(),
+        withheld: vec![inspectah_core::types::machine_state::WithheldConfigEntry {
+            path: "/etc/krb5.keytab".into(),
+            kind: ConfigFileKind::Unowned,
+            package: None,
+            member: inspectah_core::types::machine_state::MachineStateMember::KerberosKeytab,
+            mode: Some(0o600),
+            size: Some(82),
+            aggregate: None,
+        }],
         files: vec![
+            ConfigFileEntry {
+                path: "/etc/iscsi/initiatorname.iscsi".into(),
+                kind: ConfigFileKind::Unowned,
+                content: "InitiatorName=iqn.1994-05.com.redhat:contract".into(),
+                disposition: FindingKind::MachineState {
+                    member:
+                        inspectah_core::types::machine_state::CarriableMember::IscsiInitiatorName,
+                    include: false,
+                },
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/hostname".into(),
+                kind: ConfigFileKind::Unowned,
+                content: "contract-host\n".into(),
+                disposition: FindingKind::MachineState {
+                    member: inspectah_core::types::machine_state::CarriableMember::Hostname,
+                    include: false,
+                },
+                ..Default::default()
+            },
             ConfigFileEntry {
                 path: "/etc/audit/rules.d/10-custom.rules".into(),
                 kind: ConfigFileKind::Unowned,

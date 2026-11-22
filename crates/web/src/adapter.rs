@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 use inspectah_core::types::network::IFCFG_DEPRECATION_NOTE;
 use inspectah_core::types::nonrpm::FileType;
@@ -34,9 +35,10 @@ use crate::sysctl_view::project_sysctl;
 use crate::web_types::{
     ConfigFileDto, ContextAdvisory, ContextDecision, ContextItem, ContextSubsection,
     DropInDecisionDto, FlatpakDecisionDto, GeneratedTimerDto, GroupInfo, GroupMemberInfo,
-    LanguagePackageDto, LanguagePackageEnvDto, PackageProvenance, ProvenanceSignalsDto,
-    QuadletDecisionDto, ReferenceSection, RepoGroupInfo, ServiceDecisionDto, TunedDecisionDto,
-    UnmanagedFileGroupDto, UnmanagedFileItemDto, VersionChangeEntry, ViewResponse,
+    LanguagePackageDto, LanguagePackageEnvDto, MachineStateRowDto, PackageProvenance,
+    ProvenanceSignalsDto, ProvisioningStepDto, QuadletDecisionDto, ReferenceSection, RepoGroupInfo,
+    ServiceDecisionDto, TunedDecisionDto, UnmanagedFileGroupDto, UnmanagedFileItemDto,
+    VersionChangeEntry, ViewResponse,
 };
 
 /// Build a complete [`ViewResponse`] from session state.
@@ -563,7 +565,57 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         language_packages,
         unmanaged_files,
         has_unmanaged_scan,
+        machine_state: machine_state_rows(&projected),
+        machine_state_steps: machine_state_steps(&projected),
+        machine_state_notices: inspectah_pipeline::render::machine_state::export_notices(
+            &projected,
+        ),
     }
+}
+
+/// The view's machine-state rows, from the projected snapshot: the same
+/// rows every export surface reads ([`inspectah_pipeline::render::machine_state::class_rows`]).
+/// A row whose content the snapshot holds is offered at its member's
+/// level, with its config `item_id`; every other row is `never`, with no
+/// `item_id`, so a correct client never posts it.
+pub fn machine_state_rows(snap: &InspectionSnapshot) -> Vec<MachineStateRowDto> {
+    use inspectah_core::types::machine_state::OverrideLevel;
+    inspectah_pipeline::render::machine_state::class_rows(snap)
+        .into_iter()
+        .map(|row| {
+            let override_level = if row.content_captured {
+                row.member.override_level()
+            } else {
+                OverrideLevel::Never
+            };
+            MachineStateRowDto {
+                path: row.path.to_string(),
+                member: row.member,
+                reason: row.member.reason(),
+                override_level,
+                include: row.included,
+                content_captured: row.content_captured,
+                mode: row.mode.map(|m| format!("{m:04o}")),
+                size: row.size,
+                notice: row.member.notice().into(),
+                item_id: (override_level != OverrideLevel::Never).then(|| ItemId::Config {
+                    path: row.path.to_string(),
+                }),
+            }
+        })
+        .collect()
+}
+
+/// The view's owed provisioning steps, as the export lists them.
+pub fn machine_state_steps(snap: &InspectionSnapshot) -> Vec<ProvisioningStepDto> {
+    inspectah_pipeline::render::machine_state::provisioning_steps(snap)
+        .into_iter()
+        .map(|(step, paths)| ProvisioningStepDto {
+            step,
+            command: step.command(),
+            paths: paths.into_iter().map(str::to_string).collect(),
+        })
+        .collect()
 }
 
 /// Each generated-timer row's decision, with the excluded cron job that

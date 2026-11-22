@@ -287,6 +287,36 @@ fn cascade_repo_packages(rpm: &mut RpmSection, index: &RepoIndex, repo: &str, in
     }
 }
 
+/// Why `item_id` names a withheld machine-state file, when it does: a
+/// `config.withheld` or `unmanaged_files.withheld` path. Such a row has no
+/// content to carry, so including it is refused.
+fn withheld_target(snapshot: &InspectionSnapshot, item_id: &ItemId) -> Option<String> {
+    let key = |p: &str| inspectah_core::machine_state::normal_path(p).unwrap_or_default();
+    let member = match item_id {
+        ItemId::Config { path } => snapshot
+            .config
+            .as_ref()?
+            .withheld
+            .iter()
+            .find(|w| key(&w.path) == key(path))
+            .map(|w| (path, w.member)),
+        ItemId::UnmanagedFile { path } => snapshot
+            .unmanaged_files
+            .as_ref()?
+            .withheld
+            .iter()
+            .find(|w| key(&w.path) == key(path))
+            .map(|w| (path, w.member)),
+        _ => None,
+    };
+    member.map(|(path, member)| {
+        format!(
+            "{path} is a machine-state file ({}) whose contents are not captured",
+            member.as_str()
+        )
+    })
+}
+
 /// Check whether an item is locked in the original (normalized) snapshot.
 /// Locked items cannot be re-included via SetInclude ops.
 fn is_item_locked(snapshot: &InspectionSnapshot, item_id: &ItemId) -> bool {
@@ -2119,6 +2149,9 @@ impl RefineSession {
     fn validate_target(&self, op: &RefinementOp) -> Result<(), RefineError> {
         match op {
             RefinementOp::SetInclude { item_id, include } => {
+                if let Some(reason) = withheld_target(&self.original, item_id) {
+                    return Err(RefineError::NotCarriable(reason));
+                }
                 match item_id {
                     ItemId::Package { name, arch } => {
                         let found = self
@@ -2369,9 +2402,20 @@ impl RefineSession {
             }
             RefinementOp::EditVariant {
                 item_id,
-                content: _,
+                content,
                 based_on,
             } => {
+                // Checked before the op is recorded, so the timeline, the
+                // autosave and every later projection never hold it.
+                if let Some(member) =
+                    inspectah_core::machine_state::credential_content(content.as_bytes())
+                {
+                    return Err(RefineError::NotCarriable(format!(
+                        "the content is a {} file; deliver it at deploy time instead of \
+                         carrying it in the image",
+                        member.as_str()
+                    )));
+                }
                 match item_id {
                     ItemId::Config { path } => {
                         let found = self
@@ -3390,6 +3434,10 @@ impl RefineSession {
         let projected = self.project_snapshot();
         let mut all_packages = classify_packages(&projected);
         let mut config_files = classify_configs(&projected);
+        // Machine-state rows are decided in the view's own list, never as
+        // configuration rows, so the section's stats and its bulk
+        // controls never count or reach them.
+        config_files.retain(|c| !c.entry.disposition.is_machine_state());
 
         // The classifier re-derives include/locked from package metadata,
         // which overwrites user ops (e.g., anaconda Tier 4 always sets

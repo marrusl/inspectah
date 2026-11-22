@@ -35,6 +35,13 @@ pub struct AggregateViewResponse {
     pub repo_conflict_count: usize,
     /// The read-only sysctl panel; always `Aggregate` on a fleet.
     pub sysctl: SysctlViewDto,
+    /// One row per class path: on a fleet every row is a withheld row,
+    /// `override: "never"` with no `item_id`.
+    pub machine_state: Vec<crate::web_types::MachineStateRowDto>,
+    /// The owed provisioning steps, as the export lists them.
+    pub machine_state_steps: Vec<crate::web_types::ProvisioningStepDto>,
+    /// The class entries the next export's `x-export-warnings` carries.
+    pub machine_state_notices: Vec<inspectah_pipeline::export_warning::ExportWarning>,
 }
 
 #[derive(Serialize)]
@@ -481,6 +488,9 @@ fn build_aggregate_view_response(
         repo_groups,
         repo_conflict_count,
         sysctl: project_sysctl(&snap),
+        machine_state: crate::adapter::machine_state_rows(&snap),
+        machine_state_steps: crate::adapter::machine_state_steps(&snap),
+        machine_state_notices: inspectah_pipeline::render::machine_state::export_notices(&snap),
     }
 }
 
