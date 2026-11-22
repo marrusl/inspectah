@@ -29,8 +29,7 @@ empty, and `create_confined_dir` treats that as the root itself.
 
 A snapshot string that names a single file or directory under a fixed export
 directory is the same class with a smaller input: a manifest file name in
-`language_packages.rs`, a user name in `users/home/{name}/.ssh`, a timer or
-quadlet unit name in `configtree.rs`. `Path::join` with an absolute name
+`language_packages.rs`, or a timer or quadlet unit name in `configtree.rs`. `Path::join` with an absolute name
 replaces the base, and `..` leaves it. Check such a value with
 `is_single_normal_component` before the join, and skip a refused one with a
 warning (or a Containerfile FIXME where the Containerfile would otherwise

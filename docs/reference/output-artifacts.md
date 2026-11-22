@@ -66,7 +66,6 @@ system did not have the relevant configuration.
 | `subscription/` | `--preserve subscription` used during scan | RHEL subscription material for non-RHEL builds. Contains `entitlement/` (cert/key pairs), `rhsm/ca/` (CA certs), `rhsm/rhsm.conf`, and `redhat.repo`. |
 | `inspectah-users.ks` | `users_groups` has included users or custom groups | Kickstart fragment for user/group provisioning. |
 | `inspectah-users.toml` | `users_groups` has included users or custom groups | Blueprint TOML fragment for bootc-image-builder user/group provisioning. |
-| `users/` | Users have `authorized_keys` data | SSH key staging tree (e.g., `users/home/<user>/.ssh/authorized_keys`). |
 | `language-packages/` | `non_rpm_software.language_packages` has included entries | Manifest files for pip/npm/gem language package environments. |
 | `unmanaged/` | `--include-unmanaged` was used and `unmanaged_files` has included entries | Files from `/opt`, `/srv`, `/usr/local` not owned by RPM or language packages. Symlinks preserved as tar symlink entries. Findings under `/srv` are bundled here too, but the Containerfile emits no `COPY` for them: it carries a comment block, and `audit-report.md` a note, saying to carry them with your `/var` strategy (restore them into `/var/srv` after deployment, or give them their own mount). |
 | `repoless-packages/` | Repo-less RPMs detected with cached or uploaded `.rpm` files | RPM files for packages with no repository source. Used by `dnf localinstall` in the Containerfile. |
@@ -309,7 +308,6 @@ Same conditions as scan, except for `compose/`, which only the export writes:
 | `flatpak/` | Included flatpak apps exist. |
 | `drop-ins/` | Included unit drop-ins exist. |
 | `tuned/` | Tuned profiles included. |
-| `users/` | SSH keys exist for included users. |
 | `inspectah-users.ks` | Included users or custom groups exist. |
 | `inspectah-users.toml` | Included users or custom groups exist. |
 | `language-packages/` | Included language package manifests exist. |
@@ -372,8 +370,8 @@ release those counts include them.
 
 This listing is from a scan with `--include-unmanaged`, so `unmanaged/`
 appears. A default scan omits that directory. Other conditional
-directories from the tables above, such as `env-files/`, `subscription/`,
-and `users/`, do not appear because this scan had nothing for them or
+directories from the tables above, such as `env-files/` and
+`subscription/`, do not appear because this scan had nothing for them or
 was not asked for them.
 
 ```
