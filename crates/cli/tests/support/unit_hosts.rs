@@ -963,6 +963,15 @@ pub fn scan_finished(host: UnitHost) -> InspectionSnapshot {
     snapshot
 }
 
+/// The whole scan path with `--no-redaction`: `collect()`, `validate`,
+/// the snapshot marked raw, then `finish_scan` over the same host.
+pub fn scan_finished_raw(host: UnitHost) -> InspectionSnapshot {
+    let (mut snapshot, exec) = scan_collected(host);
+    snapshot.redaction_state = Some(inspectah_core::types::redaction::RedactionState::Raw);
+    inspectah_pipeline::orchestrate::finish_scan(&mut snapshot, &exec);
+    snapshot
+}
+
 /// The snapshot as written and loaded again: serialized, then through
 /// `InspectionSnapshot::load`, the path every consumer reads.
 pub fn reload(snap: &InspectionSnapshot) -> InspectionSnapshot {

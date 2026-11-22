@@ -181,8 +181,14 @@ image will find the key (`keys_included`, `dropped_owned_path`). The
 refine include cascade skips a `shipped_by_base` key, the aggregate keeps
 the field only when every host that has the key set it, and the one
 wording is `RepoFile::base_image_ships_reason`. A key the scan refused
-carries `rejected` and is never offered, counted or re-included. Neither
-kind is carriable: no repo op includes one, and the operator sees the
+carries `rejected` and is never offered, counted or re-included. Its
+content is `KeyRejection::placeholder`, and `settle_repo_ownership` puts
+the same placeholder into every Configuration row at its path, since the
+config walk reads the file on its own: never let a twin keep the bytes the
+RPM reader refused. `KeyRejection::of_content` is the one classification,
+for the collector and for the load check, which refuses a usable key that
+fails it and a rejected key or twin holding more than its placeholder.
+Neither kind is carriable: no repo op includes one, and the operator sees the
 decision in the Containerfile comment, the audit table and the view's
 `repo_owned` entry.
 

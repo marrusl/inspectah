@@ -118,55 +118,6 @@ pub fn collect_repo_files(exec: &dyn Executor, left_out: &mut Vec<String>) -> Ve
     repo_files
 }
 
-/// PGP public key block header. A file with a line that begins with it is
-/// taken as a GPG key.
-const PGP_HEADER: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
-
-/// Armor lines of PGP private key material. A file holding any of them is
-/// refused even if it also holds a public key block, since the redaction
-/// patterns do not cover PGP armor and the file would otherwise be stored
-/// verbatim and staged into the image.
-const PGP_PRIVATE_ARMOR: [&str; 4] = [
-    "-----BEGIN PGP PRIVATE KEY BLOCK-----",
-    "-----END PGP PRIVATE KEY BLOCK-----",
-    "-----BEGIN PGP SECRET KEY BLOCK-----",
-    "-----END PGP SECRET KEY BLOCK-----",
-];
-
-/// What a key file's content is, for deciding whether to store it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GpgContent {
-    /// A public key: stored verbatim.
-    PublicKey,
-    /// No line begins with the public key header.
-    NotPgp,
-    /// PGP private or secret key armor appears somewhere in it.
-    PrivateKeyMaterial,
-}
-
-/// Classify key file content. Any PGP private or secret key armor, anywhere,
-/// makes it [`GpgContent::PrivateKeyMaterial`], even beside a valid public
-/// block. Otherwise it is a public key when some line begins with the
-/// armored header, after optional spaces or tabs. Text before the header is
-/// allowed, since the stock `RPM-GPG-KEY-redhat-release` opens with prose.
-/// A header that only appears inside a line is not accepted. Everything but
-/// a public key is refused, to prevent arbitrary file ingestion.
-fn classify_gpg_content(content: &str) -> GpgContent {
-    if PGP_PRIVATE_ARMOR
-        .iter()
-        .any(|armor| content.contains(armor))
-    {
-        GpgContent::PrivateKeyMaterial
-    } else if content
-        .lines()
-        .any(|line| line.trim_start_matches([' ', '\t']).starts_with(PGP_HEADER))
-    {
-        GpgContent::PublicKey
-    } else {
-        GpgContent::NotPgp
-    }
-}
-
 /// Why a key that a repo file names was not collected.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnreadReason {
@@ -296,8 +247,8 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
             }
         };
 
-        let (reason, placeholder, rejection) = match classify_gpg_content(&content) {
-            GpgContent::PublicKey => {
+        let rejection = match KeyRejection::of_content(&content) {
+            None => {
                 scan.keys.push(RepoFile {
                     path: key_path.to_string(),
                     content,
@@ -311,16 +262,13 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
                 });
                 continue;
             }
-            GpgContent::NotPgp => (
-                UnreadReason::NotPgp(key_path.to_string()),
-                "did not contain a PGP public key block",
-                KeyRejection::NotPgp,
-            ),
-            GpgContent::PrivateKeyMaterial => (
-                UnreadReason::PrivateKeyMaterial(key_path.to_string()),
-                "held PGP private key material",
-                KeyRejection::PrivateKeyMaterial,
-            ),
+            Some(rejection) => rejection,
+        };
+        let reason = match rejection {
+            KeyRejection::NotPgp => UnreadReason::NotPgp(key_path.to_string()),
+            KeyRejection::PrivateKeyMaterial => {
+                UnreadReason::PrivateKeyMaterial(key_path.to_string())
+            }
         };
         // Include with a placeholder, so the snapshot says the key was
         // named, without leaking host file content into it.
@@ -331,7 +279,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
         });
         scan.keys.push(RepoFile {
             path: key_path.to_string(),
-            content: format!("# REDACTED: file {placeholder} (source: {key_path})"),
+            content: rejection.placeholder(key_path),
             is_default_repo: false,
             disposition: FindingKind::excluded(),
             locked: false,
@@ -768,24 +716,21 @@ uid                  Red Hat, Inc. (release key 2) <security@redhat.com>
     #[test]
     fn test_classify_gpg_content() {
         let cases = [
+            ("-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata", None),
+            ("  \n-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata", None),
             (
-                "-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata",
-                GpgContent::PublicKey,
+                "root:$6$salt$hash:19000:0:99999:7:::",
+                Some(KeyRejection::NotPgp),
             ),
-            (
-                "  \n-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata",
-                GpgContent::PublicKey,
-            ),
-            ("root:$6$salt$hash:19000:0:99999:7:::", GpgContent::NotPgp),
-            ("not a key", GpgContent::NotPgp),
-            ("", GpgContent::NotPgp),
+            ("not a key", Some(KeyRejection::NotPgp)),
+            ("", Some(KeyRejection::NotPgp)),
             (
                 "-----BEGIN PGP SECRET KEY BLOCK-----\n-----BEGIN PGP PUBLIC KEY BLOCK-----\n",
-                GpgContent::PrivateKeyMaterial,
+                Some(KeyRejection::PrivateKeyMaterial),
             ),
         ];
         for (content, expected) in cases {
-            assert_eq!(classify_gpg_content(content), expected, "{content:?}");
+            assert_eq!(KeyRejection::of_content(content), expected, "{content:?}");
         }
     }
 }

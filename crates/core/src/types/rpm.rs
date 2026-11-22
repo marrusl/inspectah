@@ -237,6 +237,20 @@ pub enum KeyRejection {
     PrivateKeyMaterial,
 }
 
+/// The PGP public key block header. A key file with a line that begins
+/// with it, after optional spaces or tabs, is taken as a GPG key.
+const PGP_PUBLIC_HEADER: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
+
+/// Armor lines of PGP private key material. A key file holding any of them
+/// is refused even when it also holds a public key block, since storing it
+/// would carry the private key into the snapshot and the image.
+const PGP_PRIVATE_ARMOR: [&str; 4] = [
+    "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+    "-----END PGP PRIVATE KEY BLOCK-----",
+    "-----BEGIN PGP SECRET KEY BLOCK-----",
+    "-----END PGP SECRET KEY BLOCK-----",
+];
+
 impl KeyRejection {
     /// What the file is, completing "the scan did not store this file
     /// because it ...".
@@ -245,6 +259,46 @@ impl KeyRejection {
             Self::NotPgp => "is not a PGP public key",
             Self::PrivateKeyMaterial => "holds private key material",
         }
+    }
+
+    /// Why the scan refuses to store `content`, a key file a `gpgkey=`
+    /// named, or `None` for a usable public key. The one classification
+    /// the collector stores a key by and the load check holds a snapshot
+    /// to.
+    ///
+    /// PGP private or secret key armor anywhere makes it
+    /// [`PrivateKeyMaterial`](Self::PrivateKeyMaterial), even beside a
+    /// valid public block. Otherwise it is usable when some line begins
+    /// with the public key header after optional spaces or tabs: text
+    /// before the header is allowed, since the stock
+    /// `RPM-GPG-KEY-redhat-release` opens with prose, but a header inside
+    /// a line is not. Anything else is [`NotPgp`](Self::NotPgp), which keeps
+    /// an arbitrary host file out of the snapshot.
+    pub fn of_content(content: &str) -> Option<Self> {
+        if PGP_PRIVATE_ARMOR
+            .iter()
+            .any(|armor| content.contains(armor))
+        {
+            Some(Self::PrivateKeyMaterial)
+        } else if content.lines().any(|line| {
+            line.trim_start_matches([' ', '\t'])
+                .starts_with(PGP_PUBLIC_HEADER)
+        }) {
+            None
+        } else {
+            Some(Self::NotPgp)
+        }
+    }
+
+    /// The content a refused key is stored with, in its own entry and in
+    /// every configuration row at its path: fixed text and the path, never
+    /// the file's bytes.
+    pub fn placeholder(self, path: &str) -> String {
+        let what = match self {
+            Self::NotPgp => "did not contain a PGP public key block",
+            Self::PrivateKeyMaterial => "held PGP private key material",
+        };
+        format!("# REDACTED: file {what} (source: {path})")
     }
 }
 

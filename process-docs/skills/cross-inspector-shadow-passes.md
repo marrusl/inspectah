@@ -82,8 +82,9 @@ Two passes: `shadow_unit_owned_paths` (`ConfigShadow::Units`) and
 `shadow_repo_owned_paths`, which calls core's
 `repo_ownership::settle_repo_ownership` (`ConfigShadow::Repositories`):
 every config entry at the destination of an `rpm.repo_files` or
-`rpm.gpg_keys` entry becomes inventory, and a repo file or key no repo op
-can carry is excluded. A sysctl pass sat beside them until sysctl files
+`rpm.gpg_keys` entry becomes inventory, a repo file or key no repo op
+can carry is excluded, and every config entry at a rejected key's path
+takes that key's placeholder as its content. A sysctl pass sat beside them until sysctl files
 became ordinary config entries. Each pass owns its own missing-section
 `return`s, and each is its own function called from the dispatcher,
 never appended to another pass's body.

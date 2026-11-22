@@ -156,6 +156,9 @@ pub fn repo_ownership(rpm: &RpmSection) -> RepoOwnership;
 ///    `FindingKind::Inventory` with
 ///    `shadowed_by: Some(ConfigShadow::Repositories)`, an advisory entry
 ///    excepted.
+/// 3. Replaces the content of every config entry at a rejected key's
+///    destination, every variant and spelling included, with that key's
+///    placeholder, and drops its diff (§ 3.6). An empty entry stays empty.
 pub fn settle_repo_ownership(snapshot: &mut InspectionSnapshot);
 
 /// The invariants `settle_repo_ownership` establishes, checked without
@@ -195,6 +198,13 @@ pub enum RepoOwnershipViolation {
     /// An included default repo file, rejected key, base-shipped key, or
     /// repo file or key with no owner.
     UncarriableIncluded { path: String },
+    /// A key recorded as usable whose content `KeyRejection::of_content`
+    /// refuses: not a PGP public key, or one with private key armor.
+    UnusableKey { path: String },
+    /// A rejected key holding PGP armor of either kind, or a config entry
+    /// at its destination holding anything but that key's placeholder, or
+    /// a diff.
+    RejectedKeyContent { path: String },
 }
 ```
 
@@ -234,7 +244,9 @@ pub enum KeyRejection {
 }
 ```
 
-- `extract_gpg_keys` sets `rejected` on its two placeholder branches (`repos.rs:317-342`), which already record the key excluded. `UnreadReason` keeps its path and its warning text.
+- `extract_gpg_keys` sets `rejected` on its two placeholder branches (`repos.rs:317-342`), which already record the key excluded. `UnreadReason` keeps its path and its warning text. The classification and the placeholder text live on `KeyRejection` in core (`of_content`, `placeholder`), so the collector and the load check read one rule.
+- **The config twin holds the placeholder too.** The config walk reads the key file on its own, so the bytes the scan refused to store as a key would otherwise reach `config.files[].content` (and `diff_against_rpm`), and from there `inspection-snapshot.json`, `/api/view` and a fleet's config alternatives under `aggregate/variants/`, however the repo is decided. Step 3 of § 3.4's pass replaces every such entry's content with the key's placeholder, so each producer leaves none. A file that is an OpenPGP secret key and nothing else never gets this far: the machine-state read gate withholds it, the RPM reader records it unread, and the config walk records a withheld row (machine-state spec § 4).
+- **At load**, a key recorded as usable must pass `KeyRejection::of_content`, so deleting a `rejected` marker cannot turn a placeholder into a carriable key, and a rejected key and its config entries must hold its placeholder and no PGP armor (`UnusableKey`, `RejectedKeyContent`).
 - A rejected key is never carriable (§ 3.2): the include arm and `toggle_restores` skip it, as they skip a base-shipped key, so excluding and including its repo leaves it excluded.
 - `offers` never offers it, so it is never staged, `InstallRepos::copies_key` is never true for it, and `keys_included` cannot count it as the key a section needs. `RepoFile::is_in_image` returns false for it. A rejected key never carries `shipped_by_base`: `leave_out_keys_the_base_ships` already considers only included keys.
 - `RepoIndex` provenance counts only a usable or base-shipped key as captured, so a section whose key was rejected is `Incomplete`, as for a key the scan could not read.
@@ -646,7 +658,7 @@ The parser inputs, all unowned, added for T1 to T3:
 
 **T2. The ownership pass on a scan** (`pipeline::collect::finalize_tests`). The config rows for `custom.repo`, `epel.repo`, `RPM-GPG-KEY-custom`, `A`, `B` and `BARE` are `Inventory` with `ConfigShadow::Repositories`; the rows for `RPM-GPG-KEY-orphan`, `custom.repo.rpmnew`, `empty.repo`, `OLD` and `PRE` stay actionable and unshadowed. One case writes the key reference as `file:///etc/pki/rpm-gpg//RPM-GPG-KEY-custom` and is still shadowed. One case runs the config walk's ostree branch, which records `etc/yum.repos.d/custom.repo`, and that row is shadowed. Two direction tests, as the skill requires: the repo pass runs on a host where the units pass returns early (no units section), and the units pass runs where the repo pass does (no RPM section). The scan's second run, after redaction, is T10's.
 
-**T3. Refine four-state contract and reach** (`crates/cli/tests`, new `repo_ownership_test.rs`). For each of `custom.repo`, `epel.repo` and `RPM-GPG-KEY-custom`, drive the repo switch and the config row through `RefineSession`, both directions each. Assert the contract, not a table: `SetInclude` on the config row is refused with `InventoryNotToggleable` every time; every repo op the session accepts is obeyed by the staged tree **and** the Containerfile; no path is written twice; `x-export-warnings` holds no `failure`. After every op, the projected `repo_files` and `gpg_keys` dispositions differ from the scan's only where a repo op moved them (the one-writer rule, § 3.7). **Reach:** for every carriable entry whose config row is shadowed, excluding every owner whose control is not `none`, in sorted order and in reverse, leaves it out of the staged tree; the rejected keys, a base-shipped key and a default repo file (T6's second host) are never staged in any state, and excluding then including `[rej]` leaves both rejected keys excluded, unstaged, and failing `keys_included`.
+**T3. Refine four-state contract and reach** (`crates/cli/tests`, new `repo_ownership_test.rs`). For each of `custom.repo`, `epel.repo` and `RPM-GPG-KEY-custom`, drive the repo switch and the config row through `RefineSession`, both directions each. Assert the contract, not a table: `SetInclude` on the config row is refused with `InventoryNotToggleable` every time; every repo op the session accepts is obeyed by the staged tree **and** the Containerfile; no path is written twice; `x-export-warnings` holds no `failure`. After every op, the projected `repo_files` and `gpg_keys` dispositions differ from the scan's only where a repo op moved them (the one-writer rule, § 3.7). **Reach:** for every carriable entry whose config row is shadowed, excluding every owner whose control is not `none`, in sorted order and in reverse, leaves it out of the staged tree; the rejected keys, a base-shipped key and a default repo file (T6's second host) are never staged in any state, and excluding then including `[rej]` leaves both rejected keys excluded, unstaged, and failing `keys_included`. **Refused bytes:** over T1's host, raw and redacted, each rejected key's config row holds its placeholder and no diff, and `PRIVATE_MATERIAL` (the private block's body) and the non-key text are in neither the serialized snapshot, the scan tree, `/api/view` nor the refine export; the public key ships. An aggregate of that host and one whose key at the same path is usable keeps two config alternatives, one the placeholder, and the material is in neither the aggregate, its tree nor its refine export with `aggregate/variants/`. A whole-file OpenPGP secret key a repo names is withheld: no key entry, a withheld config row, the bytes nowhere.
 
 **T4. Zero-member repos and initial exclusions, refine export** (same file):
 
@@ -690,7 +702,7 @@ The ownership cases below build each host with `UnitHost` through `collect()` an
 - a `"units"` config row with a relative ostree path, joined through `config_paths`;
 - the hand-maintained e2e fixtures under `crates/web/ui/e2e/fixtures/` gain `control`, `kept`, the carriage counts, `owns`, `repo_owned` and `config_paths`, and lose `enabled` (the `e2e-fixtures-are-hand-maintained` skill).
 
-**T9. Schema and load.** A schema-28 snapshot is refused by `refine` and `aggregate`. In `crates/core`, over the JSON of T7's K aggregate: three edited copies, one per `RepoOwnershipViolation` (K's config row made actionable and included; a `Repositories` shadow on a config path the repo inventory does not record; T7's B made included in the correlated aggregate), are each refused by `InspectionSnapshot::load` with that violation and path, and the unedited JSON loads. `settle_repo_ownership` run a second time on each merged snapshot of T7 changes nothing, and `RepoIndex::build`'s owner maps equal `repo_ownership`'s over T1's host, T5's case-variant host in both section orders, and T7's correlated aggregate.
+**T9. Schema and load.** A schema-28 snapshot is refused by `refine` and `aggregate`. In `crates/core`, over the JSON of T7's K aggregate: three edited copies, one per `RepoOwnershipViolation` (K's config row made actionable and included; a `Repositories` shadow on a config path the repo inventory does not record; T7's B made included in the correlated aggregate), are each refused by `InspectionSnapshot::load` with that violation and path, and the unedited JSON loads. Over T1's host: removing `RPM-GPG-KEY-notpgp`'s `rejected` field is refused as `UnusableKey`, and putting the refused bytes back into `RPM-GPG-KEY-priv`'s entry or its config row is refused as `RejectedKeyContent`. `settle_repo_ownership` run a second time on each merged snapshot of T7 changes nothing, and `RepoIndex::build`'s owner maps equal `repo_ownership`'s over T1's host, T5's case-variant host in both section orders, and T7's correlated aggregate.
 
 **T10. Redaction** (`crates/cli/tests/repo_ownership_test.rs`). A host built with `UnitHost`: an unowned `/etc/yum.repos.d/vend.repo` with `[vend]` enabled, a `baseurl`, and `gpgkey=file:///etc/pki/rpm-gpg/token=vendor`; that key file present, unowned, a public key block, and named by no other section; `pkg` from `vend`, included. Through each stage, in order:
 

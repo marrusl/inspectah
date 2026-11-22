@@ -23,7 +23,7 @@ use crate::types::FindingKind;
 use crate::types::config::{ConfigShadow, shadow_matching_config_entries};
 use crate::types::destination::Destination;
 use crate::types::repo::{SectionId, parse_repo_sections};
-use crate::types::rpm::{RepoFile, RpmSection};
+use crate::types::rpm::{KeyRejection, RepoFile, RpmSection};
 
 /// Which inventory an owned entry is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -182,6 +182,13 @@ pub fn repo_ownership(rpm: &RpmSection) -> RepoOwnership {
 ///    `FindingKind::Inventory` with
 ///    `shadowed_by: Some(ConfigShadow::Repositories)`, an advisory or
 ///    machine-state entry excepted.
+/// 3. Replaces the content of every config entry at a rejected key's
+///    destination, every variant and spelling included, with that key's
+///    placeholder, and drops its diff: the config walk reads the file on
+///    its own, and the bytes the scan refused to store as a key must not
+///    reach the snapshot through its config row either
+///    ([`rejected_key_placeholders`]). An entry with no content stays
+///    empty.
 pub fn settle_repo_ownership(snapshot: &mut InspectionSnapshot) {
     let Some(rpm) = snapshot.rpm.as_mut() else {
         return;
@@ -201,7 +208,33 @@ pub fn settle_repo_ownership(snapshot: &mut InspectionSnapshot) {
         }
     }
     let owned: BTreeSet<Destination> = ownership.entries().map(|(d, _)| d.clone()).collect();
+    let placeholders = rejected_key_placeholders(rpm);
     shadow_matching_config_entries(snapshot.config.as_mut(), &owned, ConfigShadow::Repositories);
+    for entry in snapshot.config.iter_mut().flat_map(|c| c.files.iter_mut()) {
+        let Some(placeholder) = Destination::new(&entry.path)
+            .ok()
+            .and_then(|d| placeholders.get(&d))
+        else {
+            continue;
+        };
+        if !entry.content.is_empty() {
+            entry.content = placeholder.clone();
+        }
+        entry.diff_against_rpm = None;
+    }
+}
+
+/// The content every config entry at a rejected key's destination holds:
+/// the rejected entry's own placeholder, the first in list order where
+/// two spellings of one destination are recorded.
+fn rejected_key_placeholders(rpm: &RpmSection) -> BTreeMap<Destination, String> {
+    let mut out = BTreeMap::new();
+    for key in rpm.gpg_keys.iter().filter(|k| k.rejected.is_some()) {
+        if let Ok(dest) = Destination::new(&key.path) {
+            out.entry(dest).or_insert_with(|| key.content.clone());
+        }
+    }
+    out
 }
 
 /// Whether the ownership rules alone keep `entry` out of the export,
@@ -240,6 +273,16 @@ pub enum RepoOwnershipViolation {
     /// repo file or key with no owner.
     #[error("{path}: a repo file or key no repo op can carry is included")]
     UncarriableIncluded { path: String },
+    /// A key recorded as usable whose content the scan would have refused
+    /// ([`KeyRejection::of_content`]): not a PGP public key, or one with
+    /// private key armor in it.
+    #[error("{path}: a key recorded as usable is not a PGP public key, or holds private key armor")]
+    UnusableKey { path: String },
+    /// A rejected key that holds more than a placeholder (PGP armor of
+    /// either kind), or a config entry at its destination that holds
+    /// anything but that key's placeholder, or a diff.
+    #[error("{path}: a key the scan refused to store, or its configuration row, holds its content")]
+    RejectedKeyContent { path: String },
 }
 
 /// The invariants [`settle_repo_ownership`] establishes, checked without
@@ -256,6 +299,42 @@ pub fn check_repo_ownership(snapshot: &InspectionSnapshot) -> Result<(), RepoOwn
         violations.entry(key).or_insert(v);
     };
 
+    for key in &rpm.gpg_keys {
+        let found = KeyRejection::of_content(&key.content);
+        match key.rejected {
+            None if found.is_some() => note(
+                &key.path,
+                RepoOwnershipViolation::UnusableKey {
+                    path: key.path.clone(),
+                },
+            ),
+            Some(_) if found != Some(KeyRejection::NotPgp) => note(
+                &key.path,
+                RepoOwnershipViolation::RejectedKeyContent {
+                    path: key.path.clone(),
+                },
+            ),
+            _ => {}
+        }
+    }
+    let placeholders = rejected_key_placeholders(rpm);
+    for entry in snapshot.config.iter().flat_map(|c| &c.files) {
+        let Some(placeholder) = Destination::new(&entry.path)
+            .ok()
+            .and_then(|d| placeholders.get(&d))
+        else {
+            continue;
+        };
+        let holds = !entry.content.is_empty() && entry.content != *placeholder;
+        if holds || entry.diff_against_rpm.is_some() {
+            note(
+                &entry.path,
+                RepoOwnershipViolation::RejectedKeyContent {
+                    path: entry.path.clone(),
+                },
+            );
+        }
+    }
     for (kind, list) in [
         (OwnedKind::RepoFile, &rpm.repo_files),
         (OwnedKind::GpgKey, &rpm.gpg_keys),
@@ -322,6 +401,11 @@ mod tests {
         }
     }
 
+    const PUBLIC: &str =
+        "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENB\n-----END PGP PUBLIC KEY BLOCK-----\n";
+    const PRIVATE: &str = "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQdGBsecret\n\
+                           -----END PGP PRIVATE KEY BLOCK-----\n";
+
     fn snapshot() -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
         snap.rpm = Some(RpmSection {
@@ -331,8 +415,8 @@ mod tests {
                  gpgkey=file:///etc/pki/rpm-gpg/K\n",
             )],
             gpg_keys: vec![
-                repo("/etc/pki/rpm-gpg/K", "key"),
-                repo("/etc/pki/rpm-gpg/ORPHAN", "key"),
+                repo("/etc/pki/rpm-gpg/K", PUBLIC),
+                repo("/etc/pki/rpm-gpg/ORPHAN", PUBLIC),
             ],
             ..Default::default()
         });
@@ -417,6 +501,81 @@ mod tests {
             Err(RepoOwnershipViolation::UncarriableIncluded {
                 path: "/etc/pki/rpm-gpg/ORPHAN".into()
             })
+        );
+
+        let key = "/etc/pki/rpm-gpg/K".to_owned();
+        for content in ["not a key", PRIVATE, &format!("{PUBLIC}{PRIVATE}")] {
+            let mut unusable = snap.clone();
+            unusable.rpm.as_mut().unwrap().gpg_keys[0].content = content.into();
+            assert_eq!(
+                check_repo_ownership(&unusable),
+                Err(RepoOwnershipViolation::UnusableKey { path: key.clone() }),
+                "{content}"
+            );
+        }
+
+        let mut rejected = snap.clone();
+        let entry = &mut rejected.rpm.as_mut().unwrap().gpg_keys[0];
+        entry.rejected = Some(KeyRejection::PrivateKeyMaterial);
+        entry.content = KeyRejection::PrivateKeyMaterial.placeholder(&key);
+        rejected.config.as_mut().unwrap().files[1].content = PRIVATE.into();
+        assert_eq!(
+            check_repo_ownership(&rejected),
+            Err(RepoOwnershipViolation::RejectedKeyContent { path: key.clone() }),
+            "a config row keeps the refused bytes"
+        );
+        settle_repo_ownership(&mut rejected);
+        check_repo_ownership(&rejected).expect("settled");
+        let mut raw = rejected.clone();
+        raw.rpm.as_mut().unwrap().gpg_keys[0].content = format!("{PUBLIC}{PRIVATE}");
+        assert_eq!(
+            check_repo_ownership(&raw),
+            Err(RepoOwnershipViolation::RejectedKeyContent { path: key.clone() }),
+            "the rejected entry keeps the refused bytes"
+        );
+        let mut diff = rejected.clone();
+        diff.config.as_mut().unwrap().files[1].diff_against_rpm = Some("+secret".into());
+        assert_eq!(
+            check_repo_ownership(&diff),
+            Err(RepoOwnershipViolation::RejectedKeyContent { path: key }),
+            "a diff of the refused bytes"
+        );
+    }
+
+    /// Every config entry at a rejected key's destination, each spelling
+    /// and variant, holds the key's placeholder after settling, and none
+    /// keeps a diff; an entry the walk recorded empty stays empty.
+    #[test]
+    fn settle_replaces_a_rejected_keys_config_content_with_its_placeholder() {
+        let mut snap = snapshot();
+        let key = "/etc/pki/rpm-gpg/K";
+        let placeholder = KeyRejection::PrivateKeyMaterial.placeholder(key);
+        let entry = &mut snap.rpm.as_mut().unwrap().gpg_keys[0];
+        entry.rejected = Some(KeyRejection::PrivateKeyMaterial);
+        entry.content = placeholder.clone();
+        entry.disposition = FindingKind::excluded();
+        let files = &mut snap.config.as_mut().unwrap().files;
+        files[1].content = PRIVATE.into();
+        files[1].diff_against_rpm = Some(format!("+{PRIVATE}"));
+        files.push(ConfigFileEntry {
+            content: format!("{PUBLIC}{PRIVATE}"),
+            ..config("/etc/pki/rpm-gpg//K")
+        });
+        files.push(config("etc/pki/rpm-gpg/K"));
+        settle_repo_ownership(&mut snap);
+        check_repo_ownership(&snap).expect("settled");
+        let at_key: Vec<_> = snap.config.as_ref().unwrap().files[1..]
+            .iter()
+            .filter(|f| Destination::new(&f.path).unwrap().as_str() == key)
+            .map(|f| (f.content.as_str(), f.diff_against_rpm.is_some()))
+            .collect();
+        assert_eq!(
+            at_key,
+            [
+                (placeholder.as_str(), false),
+                (placeholder.as_str(), false),
+                ("", false)
+            ]
         );
     }
 }

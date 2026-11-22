@@ -11,7 +11,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::unit_hosts::{
-    UnitHost, export_session, reload, render_export, scan, scan_finished, scan_unredacted, session,
+    UnitHost, export_session, reload, render_export, scan, scan_finished, scan_finished_raw,
+    scan_unredacted, session,
 };
 use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::repo_ownership::{check_repo_ownership, repo_ownership, settle_repo_ownership};
@@ -439,6 +440,176 @@ fn t3_every_carriable_entry_can_be_dropped_and_rejected_keys_never_ship() {
 // ---------------------------------------------------------------------
 // T4. Zero-member repos and initial exclusions.
 // ---------------------------------------------------------------------
+
+/// Every file under `root`, with its bytes.
+fn tree_files(root: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                out.push((path.display().to_string(), bytes));
+            }
+        }
+    }
+    out
+}
+
+/// `secret` is in none of `artifacts`.
+fn assert_absent_from(secret: &str, artifacts: &[(String, Vec<u8>)]) {
+    for (name, bytes) in artifacts {
+        assert!(
+            !bytes.windows(secret.len()).any(|w| w == secret.as_bytes()),
+            "{secret} is in {name}"
+        );
+    }
+}
+
+/// What a refine session shows and exports: `/api/view` as served, and
+/// every file of the export tree.
+fn refine_artifacts(s: &RefineSession) -> Vec<(String, Vec<u8>)> {
+    let view = inspectah_web::adapter::build_web_view(s);
+    let mut all = vec![(
+        "/api/view".to_string(),
+        serde_json::to_vec(&view).expect("the view serializes"),
+    )];
+    all.extend(tree_files(export_session(s).path()));
+    all
+}
+
+/// A key file the scan refused to store reaches no snapshot, view or
+/// export through its Configuration twin: a raw and a redacted scan, the
+/// scan tarball, refine's view and export, and an aggregate with its
+/// config alternatives, where another host's usable key at the same path
+/// ships. The public key beside it still ships everywhere.
+#[test]
+fn t3_a_rejected_keys_bytes_reach_no_snapshot_view_or_export() {
+    let host = || with_parser_inputs(base_host());
+    let priv_key = "/etc/pki/rpm-gpg/RPM-GPG-KEY-priv";
+    let notpgp = "/etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp";
+    for (via, snap) in [
+        ("raw", scan_finished_raw(host())),
+        ("redacted", scan_finished(host())),
+    ] {
+        for (path, why) in [
+            (priv_key, KeyRejection::PrivateKeyMaterial),
+            (notpgp, KeyRejection::NotPgp),
+        ] {
+            let twin = config_row(&snap, path).expect("the config walk records it");
+            assert_eq!(twin.content, why.placeholder(path), "{via}: {path}");
+            assert!(twin.diff_against_rpm.is_none(), "{via}: {path}");
+        }
+        let mut all = vec![(
+            format!("{via} snapshot"),
+            serde_json::to_vec(&snap).expect("the snapshot serializes"),
+        )];
+        let loaded = reload(&snap);
+        let tree = render_export(&loaded);
+        assert!(
+            staged(tree.path(), CUSTOM_KEY).is_some(),
+            "{via}: public key"
+        );
+        all.extend(tree_files(tree.path()));
+        let s = session(&loaded);
+        let refine = refine_artifacts(&s);
+        assert!(
+            refine
+                .iter()
+                .any(|(_, b)| b.windows(10).any(|w| w == b"mQENBFtest")),
+            "{via}: the public key is in the refine export"
+        );
+        all.extend(refine);
+        assert_absent_from(PRIVATE_MATERIAL, &all);
+        assert_absent_from("plain text, not a key", &all);
+    }
+
+    // A fleet where one host refused the key and the other has a usable
+    // one at the same path: the usable one is the representative, and
+    // the refused host's config alternative is its placeholder.
+    let usable = || {
+        base_host()
+            .file(
+                "/etc/yum.repos.d/reject.repo",
+                &format!("[rej]\nbaseurl=https://rej.example/\ngpgkey=file://{priv_key}\n"),
+            )
+            .file(priv_key, PGP)
+    };
+    let (merged, _) =
+        merge_snapshots(vec![named(host(), "h1"), named(usable(), "h2")], None, None).unwrap();
+    assert_fleet_invariants(&merged);
+    let rows: Vec<&str> = merged
+        .config
+        .iter()
+        .flat_map(|c| &c.files)
+        .filter(|f| f.path == priv_key)
+        .map(|f| f.content.as_str())
+        .collect();
+    assert_eq!(rows.len(), 2, "two alternatives: {rows:?}");
+    assert!(
+        rows.contains(
+            &KeyRejection::PrivateKeyMaterial
+                .placeholder(priv_key)
+                .as_str()
+        )
+    );
+    let mut all = vec![(
+        "aggregate".to_string(),
+        serde_json::to_vec(&merged).expect("the aggregate serializes"),
+    )];
+    all.extend(tree_files(render_export(&merged).path()));
+    let s = session(&reload(&merged));
+    let refine = refine_artifacts(&s);
+    assert!(
+        refine
+            .iter()
+            .any(|(name, _)| name.contains("aggregate/variants/")),
+        "the refine export writes the config alternatives"
+    );
+    all.extend(refine);
+    assert_absent_from(PRIVATE_MATERIAL, &all);
+}
+
+/// A key file that is an OpenPGP secret key and nothing else is withheld
+/// by the read gate: no key entry, a withheld config row, the reason
+/// recorded, and its bytes nowhere.
+#[test]
+fn t3_a_whole_file_secret_key_a_repo_names_is_withheld() {
+    const WHOLE: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-whole";
+    let host = base_host()
+        .file(
+            "/etc/yum.repos.d/signed.repo",
+            &format!("[signed]\nbaseurl=https://signed.example/\ngpgkey=file://{WHOLE}\n"),
+        )
+        .file(
+            WHOLE,
+            &format!(
+                "-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment: build <b@example.invalid>\n\n\
+                 {PRIVATE_MATERIAL}\n=Xb7Q\n-----END PGP PRIVATE KEY BLOCK-----\n"
+            ),
+        );
+    let snap = scan_finished_raw(host);
+    assert!(!key_paths(&snap).contains(WHOLE));
+    assert!(config_row(&snap, WHOLE).is_none());
+    assert!(
+        snap.config
+            .as_ref()
+            .unwrap()
+            .withheld
+            .iter()
+            .any(|w| w.path == WHOLE)
+    );
+    let mut all = vec![(
+        "snapshot".to_string(),
+        serde_json::to_vec(&snap).expect("the snapshot serializes"),
+    )];
+    let loaded = reload(&snap);
+    all.extend(tree_files(render_export(&loaded).path()));
+    all.extend(refine_artifacts(&session(&loaded)));
+    assert_absent_from(PRIVATE_MATERIAL, &all);
+}
 
 #[test]
 fn t4_a_repo_whose_members_are_all_excluded_still_decides_its_files() {
@@ -1156,6 +1327,68 @@ fn t9_load_refuses_each_violation() {
         serde_json::to_value(FindingKind::inventory()).unwrap();
     let err = InspectionSnapshot::load(&stray.to_string()).unwrap_err();
     assert!(err.to_string().contains("no repo records it"), "{err}");
+}
+
+/// A key the scan refused cannot come back through edited JSON: dropping
+/// its `rejected` marker leaves a placeholder recorded as a usable key,
+/// and putting the refused bytes back into the key or its config row is
+/// refused too.
+#[test]
+fn t9_load_refuses_a_rejected_key_made_usable_or_given_its_bytes() {
+    const NOTPGP: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp";
+    const PRIV: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-priv";
+    let snap = scan(with_parser_inputs(base_host()));
+    let json = serde_json::to_value(&snap).unwrap();
+    InspectionSnapshot::load(&json.to_string()).expect("the unedited snapshot loads");
+    let key_at = |path: &str| {
+        json["rpm"]["gpg_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|k| k["path"] == path)
+            .unwrap()
+    };
+    let row_at = |path: &str| {
+        json["config"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|f| f["path"] == path)
+            .unwrap()
+    };
+
+    let mut unmarked = json.clone();
+    unmarked["rpm"]["gpg_keys"][key_at(NOTPGP)]
+        .as_object_mut()
+        .unwrap()
+        .remove("rejected");
+    let err = InspectionSnapshot::load(&unmarked.to_string()).unwrap_err();
+    assert!(
+        err.to_string().contains(&format!(
+            "{NOTPGP}: a key recorded as usable is not a PGP public key"
+        )),
+        "{err}"
+    );
+
+    let mut key_bytes = json.clone();
+    key_bytes["rpm"]["gpg_keys"][key_at(PRIV)]["content"] =
+        serde_json::json!(private_beside_public());
+    let err = InspectionSnapshot::load(&key_bytes.to_string()).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains(&format!("{PRIV}: a key the scan refused")),
+        "{err}"
+    );
+
+    let mut row_bytes = json.clone();
+    row_bytes["config"]["files"][row_at(PRIV)]["content"] =
+        serde_json::json!(private_beside_public());
+    let err = InspectionSnapshot::load(&row_bytes.to_string()).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains(&format!("{PRIV}: a key the scan refused")),
+        "{err}"
+    );
 }
 
 // ---------------------------------------------------------------------
