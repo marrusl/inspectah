@@ -225,7 +225,10 @@ Two constraints on that report:
 ## Comment exemptions follow the file's parser
 
 Redaction skips a line that starts with a comment marker, so each marker
-is a promise about the parser that reads the file. `#` holds everywhere.
+is a promise about the parser that reads the file. `#` holds everywhere
+but the kernel command line, which has no comments: a `#` opening
+`/proc/cmdline` is an argument, and exempting it left every password on
+the line in the snapshot and the kargs.d file.
 `;` and `//` hold only where that file's parser says so
 (`comment_markers` in `redaction/engine.rs`); elsewhere a line such as
 `//srv/share/password=x` is data and must be scanned. Decide from the
@@ -338,6 +341,18 @@ Every pattern goes through that one function, so every filter applies to
 every pattern, and the filters read the secret's text, never the key:
 comment lines, the NSS/PAM values (`password: files`), and password
 hashes in a shadow file. Do not add a second matching path.
+
+**A filter is a claim about one file format; scope it by path.** The
+NSS/PAM filter and the comment markers describe nsswitch, PAM and config
+file syntax, and neither applies to `/proc/cmdline`
+(`is_kernel_cmdline`). There the generic pattern's secret can be only
+the first word of a quoted value, so in
+`"rd.iscsi.password=files bravo7k"` the filter dropped `files`, the scan
+found nothing, the whole-value pass never ran, and the password reached
+both exports. `rd.iscsi.password=files` is a password on its own too.
+Before a new filter goes in, check it against the kernel command line
+and any other path whose format it does not describe
+(`nss_pam_and_comment_exemptions_do_not_apply_to_kernel_arguments`).
 
 **No filter skips a value because it looks like a token.** Keeping the
 key means a second pass over redacted text sees

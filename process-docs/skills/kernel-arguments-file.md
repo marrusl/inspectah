@@ -58,7 +58,10 @@ by splitting on whitespace or matching raw text:
   the first space, so replacing only its match left
   `"rd.iscsi.password=REDACTED_PASSWORD_1 bravo"` in the snapshot. The
   cmdline hint check reads the value to the end of the argument, quotes
-  aside, for the same reason.
+  aside, for the same reason. The config-file filters (NSS/PAM words,
+  `#` comment lines) do not run on the command line: a dropped first
+  word (`"rd.iscsi.password=files bravo7k"`) meant no finding, so no
+  argument was redacted at all.
 
 ## A redacted argument is owed, never written
 

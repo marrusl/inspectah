@@ -359,10 +359,16 @@ fn is_systemd_syntax(path: &str) -> bool {
 }
 
 /// Returns the line-comment markers that are real comment syntax for
-/// the file at `path`. `#` always applies; `;` and `//` apply only to
-/// file types that use them, because elsewhere a line starting with
-/// them (`//srv/share/...`) is data and must still be scanned.
+/// the file at `path`. `#` applies everywhere but the kernel command
+/// line, which has no comments: a `#` there is an argument, and treating
+/// a line that starts with one as a comment left every secret on it.
+/// `;` and `//` apply only to file types that use them, because
+/// elsewhere a line starting with them (`//srv/share/...`) is data and
+/// must still be scanned.
 fn comment_markers(path: Option<&str>) -> Vec<&'static str> {
+    if is_kernel_cmdline(path) {
+        return Vec::new();
+    }
     let mut markers = vec![HASH_COMMENT];
     let Some(path) = path else {
         return markers;
@@ -561,9 +567,10 @@ fn line_break_at_or_after(content: &str, pos: usize) -> usize {
 const MAX_REDUNDANT_RESCANS_PER_LINE: usize = 4;
 
 /// Collect regex matches from `content` for a single `pat`, filtering out:
-/// - Matches on comment lines (`#`, plus `;` / `//` where `path` uses them)
+/// - Matches on comment lines (`#`, plus `;` / `//` where `path` uses them;
+///   none on the kernel command line)
 /// - Matches whose value is a known NSS/PAM token, for a pattern with
-///   `filter_nss_pam_tokens` set
+///   `filter_nss_pam_tokens` set, except on the kernel command line
 /// - PasswordHash matches when `path` is a shadow file
 ///
 /// Every pattern goes through this one path, with or without a
@@ -772,8 +779,12 @@ fn eligible_match(
 
     // Filter 2: skip matches whose value is a known NSS/PAM
     // false-positive token, for the patterns that ask for it
-    // (`SecretPattern::filter_nss_pam_tokens`)
-    if pat.filter_nss_pam_tokens && is_false_positive_value(text) {
+    // (`SecretPattern::filter_nss_pam_tokens`). Not on the kernel command
+    // line: the words are nsswitch and PAM syntax, and there a pattern's
+    // secret can be only the first word of a quoted value
+    // (`"rd.iscsi.password=files bravo"`), so skipping it left the whole
+    // value unredacted. `files` alone is a password there too.
+    if pat.filter_nss_pam_tokens && !is_kernel_cmdline(path) && is_false_positive_value(text) {
         return None;
     }
 
@@ -920,6 +931,12 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
 /// The path of the kernel command line, where a high-confidence hint is
 /// raised for each sensitive parameter.
 const KERNEL_CMDLINE_PATH: &str = "/proc/cmdline";
+
+/// Whether `path` is the kernel command line, which the filters for
+/// config-file syntax (comments, NSS/PAM words) do not apply to.
+fn is_kernel_cmdline(path: Option<&str>) -> bool {
+    path == Some(KERNEL_CMDLINE_PATH)
+}
 
 /// Redacts a kernel command line one kernel argument at a time.
 ///
@@ -4108,6 +4125,26 @@ baseurl = https://cdn.redhat.com
                 "quiet password=hunter2 rd.lvm.lv=vg/root",
                 "quiet password=REDACTED_PASSWORD_1 rd.lvm.lv=vg/root",
             ),
+            // A value whose first word is an NSS or PAM keyword is still
+            // a password here: those exemptions are for nsswitch and PAM
+            // files, not kernel arguments.
+            (
+                "ro \"rd.iscsi.password=files bravo7k\" nosmt=force",
+                "ro \"rd.iscsi.password=REDACTED_PASSWORD_1\" nosmt=force",
+            ),
+            (
+                "ro rd.iscsi.password=\"files bravo7k\"",
+                "ro rd.iscsi.password=\"REDACTED_PASSWORD_1\"",
+            ),
+            (
+                "ro rd.iscsi.password=files quiet",
+                "ro rd.iscsi.password=REDACTED_PASSWORD_1 quiet",
+            ),
+            // The kernel has no comments: a leading `#` is an argument.
+            (
+                "# ro rd.iscsi.password=bravo7k",
+                "# ro rd.iscsi.password=REDACTED_PASSWORD_1",
+            ),
         ];
         for (cmdline, want) in cases {
             let mut snapshot = InspectionSnapshot::new();
@@ -4128,7 +4165,7 @@ baseurl = https://cdn.redhat.com
             redact(&mut snapshot, &RedactOptions::default());
             let got = &snapshot.kernel_boot.as_ref().unwrap().cmdline;
             assert_eq!(got, want, "{cmdline}");
-            for fragment in ["alpha", "bravo", "hunter2"] {
+            for fragment in ["alpha", "bravo", "hunter2", "files"] {
                 assert!(!got.contains(fragment), "{cmdline}: {got}");
             }
             assert!(

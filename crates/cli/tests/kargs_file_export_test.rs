@@ -230,3 +230,120 @@ fn quoted_kernel_arguments_are_read_as_the_kernel_reads_them() {
         assert_quoted_export(&format!("{label}, refine export"), &from_refine);
     }
 }
+
+/// The password word on the exempt-word hosts' command lines.
+const EXEMPT_WORD_SECRET: &str = "bravo7k";
+
+/// The NSS keyword each exempt-word password's value starts with, as the
+/// value of the password argument in every spelling a file can hold it:
+/// raw, quoted, and quoted inside JSON.
+const EXEMPT_WORD_VALUES: &[&str] = &["password=files", "password=\"files", "password=\\\"files"];
+
+/// One host whose password value starts with a word the NSS and PAM
+/// exemptions skip, or whose command line starts with the `#` a config
+/// file comments with. Neither means anything to the kernel.
+struct ExemptWordHost {
+    label: &'static str,
+    cmdline: &'static str,
+    /// The kernel arguments file's whole array.
+    kargs: &'static [&'static str],
+    /// How the audit report's command line shows the redacted argument.
+    audit_shows: &'static str,
+}
+
+const EXEMPT_WORD_HOSTS: &[ExemptWordHost] = &[
+    ExemptWordHost {
+        label: "whole-argument quotes, NSS first word",
+        cmdline: "ro \"rd.iscsi.password=files bravo7k\" nosmt=force\n",
+        kargs: &["nosmt=force"],
+        audit_shows: "\"rd.iscsi.password=REDACTED_PASSWORD_1\"",
+    },
+    ExemptWordHost {
+        label: "value quotes, NSS first word",
+        cmdline: "ro rd.iscsi.password=\"files bravo7k\" nosmt=force\n",
+        kargs: &["nosmt=force"],
+        audit_shows: "rd.iscsi.password=\"REDACTED_PASSWORD_1\"",
+    },
+    ExemptWordHost {
+        label: "NSS word as the whole value",
+        cmdline: "ro rd.iscsi.password=files nosmt=force\n",
+        kargs: &["nosmt=force"],
+        audit_shows: "rd.iscsi.password=REDACTED_PASSWORD_1 ",
+    },
+    ExemptWordHost {
+        label: "leading #",
+        cmdline: "# ro rd.iscsi.password=bravo7k nosmt=force\n",
+        kargs: &["#", "nosmt=force"],
+        audit_shows: "rd.iscsi.password=REDACTED_PASSWORD_1 ",
+    },
+];
+
+/// Panics if `text` holds the exempt-word password or its value.
+fn assert_no_exempt_word_secret(label: &str, what: &str, text: &str) {
+    assert!(
+        !text.contains(EXEMPT_WORD_SECRET),
+        "{label}: {what} holds {EXEMPT_WORD_SECRET:?}"
+    );
+    for value in EXEMPT_WORD_VALUES {
+        assert!(!text.contains(value), "{label}: {what} holds {value:?}");
+    }
+}
+
+/// One exempt-word host's export tree.
+fn assert_exempt_word_export(host: &ExemptWordHost, label: &str, tree: &tempfile::TempDir) {
+    let kargs = read(tree, KARGS_FILE);
+    assert_eq!(parse_kargs(&kargs), host.kargs, "{label}:\n{kargs}");
+    assert!(!kargs.contains("iscsi"), "{label}: {kargs}");
+    let containerfile = read(tree, "Containerfile");
+    assert!(
+        containerfile.contains(&format!("#   bootc install to-disk --karg {OWED}\n")),
+        "{label}:\n{containerfile}"
+    );
+    let audit = read(tree, "audit-report.md");
+    assert!(
+        audit.contains(host.audit_shows),
+        "{label}: the audit's command line shows the whole value redacted:\n{audit}"
+    );
+    for entry in walk(tree.path()) {
+        let Ok(text) = std::fs::read_to_string(&entry) else {
+            continue;
+        };
+        assert_no_exempt_word_secret(label, &entry.display().to_string(), &text);
+    }
+}
+
+/// The exemptions the redaction patterns make for nsswitch and PAM files
+/// (a value that is an NSS or PAM keyword, a line starting with `#`) do
+/// not apply to the kernel command line: each password here is redacted
+/// whole, left out of the kernel arguments file and owed, and neither it
+/// nor its first word as the value reaches the snapshot, the notices or
+/// any file of either export.
+#[test]
+fn nss_pam_and_comment_exemptions_do_not_apply_to_kernel_arguments() {
+    for host in EXEMPT_WORD_HOSTS {
+        let label = host.label;
+        let snap = reload(&scan(SysctlHost::new().file("/proc/cmdline", host.cmdline)));
+        let json = serde_json::to_string(&snap).expect("the snapshot serializes");
+        assert_no_exempt_word_secret(label, "the snapshot", &json);
+        let notices: Vec<String> = inspectah_pipeline::render::machine_state::export_notices(&snap)
+            .iter()
+            .map(|n| n.text().to_owned())
+            .collect();
+        for notice in &notices {
+            assert_no_exempt_word_secret(label, "a notice", notice);
+        }
+        assert!(
+            notices.contains(
+                &"1 kernel argument left out: the value was redacted. At install time: bootc \
+                  install to-disk --karg."
+                    .to_owned()
+            ),
+            "{label}: {notices:?}"
+        );
+
+        let from_scan = render_export(&snap);
+        assert_exempt_word_export(host, &format!("{label}, scan export"), &from_scan);
+        let from_refine = export_session(&session(&snap));
+        assert_exempt_word_export(host, &format!("{label}, refine export"), &from_refine);
+    }
+}
