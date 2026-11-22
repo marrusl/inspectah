@@ -266,3 +266,26 @@ async fn machine_state_host_with_overrides() {
     }
     record("machine-state-included", session, &[("view", "/api/view")]).await;
 }
+
+/// The machine-state host after the operator excluded its one ordinary
+/// config, the sysctl drop-in: Configuration's decision list is all
+/// excluded while the machine-state block still has every row.
+#[tokio::test]
+async fn machine_state_host_with_configs_excluded() {
+    use inspectah_refine::types::{ItemId, RefinementOp};
+    let mut session = session(&machine_state_snapshot());
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: "/etc/sysctl.d/90-x.conf".into(),
+            },
+            include: false,
+        })
+        .expect("an ordinary config is excluded");
+    record(
+        "machine-state-configs-excluded",
+        session,
+        &[("view", "/api/view")],
+    )
+    .await;
+}

@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import type { ReactNode } from "react";
 import {
   Skeleton,
   EmptyState,
@@ -838,10 +839,6 @@ export function MainContent({
     const machineStateMatches = hasFilter
       ? filterMachineStateRows(machineStateRows, filterText).length
       : machineStateRows.length;
-    // The block's matches count with the decision list's, and "no
-    // results" means neither has one.
-    const noResults =
-      hasFilter && filteredConfigItems.length === 0 && machineStateMatches === 0;
     // "All excluded" is a statement about decisions the user made, so only
     // actionable entries can produce it. Advisories are not excluded — they
     // were never candidates — and a host whose only config findings are
@@ -855,36 +852,55 @@ export function MainContent({
     );
     const allConfigsExcluded =
       configItems.length > 0 && !anyConfigIncluded && !anyAdvisoryOrInventory;
-    // The block is at the foot of the section whatever the list shows: an
-    // empty state renders above it, never in place of it.
-    const machineStateBlock = (
-      <MachineStateGroup
-        rows={machineStateRows}
-        stepCount={viewData?.machine_state_steps.length ?? 0}
-        filterText={filterText}
-        onSetInclude={handleMachineStateSetInclude}
-        pendingKeys={machineStateGuard.pendingKeys}
-        failures={machineStateFailures.failures}
-        onDismissFailure={clearMachineStateFailure}
-        revealItemId={revealItemId}
-        reveal={revealMachineState}
-        onRevealed={onMachineStateRevealed}
-      />
-    );
+    // The decision list's rows on screen: none while the all-excluded
+    // state stands in for the list.
+    const listedConfigCount = allConfigsExcluded ? 0 : filteredConfigItems.length;
+    // The block's matches count with the decision list's, and "no
+    // results" means neither has one.
+    const noResults =
+      hasFilter && listedConfigCount === 0 && machineStateMatches === 0;
+    // One layout for every state: the heading, the search and the block
+    // stay where they are, and an empty state replaces only the decision
+    // list. A different tree for "all excluded" would drop the search
+    // while its query still filters the block, and remount the block,
+    // collapsing it.
+    let decisionArea: ReactNode = null;
     if (allConfigsExcluded) {
-      return (
-        <>
-          <EmptyState
-            titleText="All configuration files excluded"
-            headingLevel="h3"
-            data-testid="config-all-excluded"
-          >
-            <EmptyStateBody>
-              Use undo or re-include individual config files to restore them.
-            </EmptyStateBody>
-          </EmptyState>
-          {machineStateBlock}
-        </>
+      decisionArea = (
+        <EmptyState
+          titleText="All configuration files excluded"
+          headingLevel="h3"
+          data-testid="config-all-excluded"
+        >
+          <EmptyStateBody>
+            Use undo or re-include individual config files to restore them.
+          </EmptyStateBody>
+        </EmptyState>
+      );
+    } else if (noResults) {
+      decisionArea = (
+        <EmptyState titleText="No items match your search" headingLevel="h3">
+          <EmptyStateBody>
+            <Button variant="link" onClick={() => setFilterText("")}>
+              Clear filter
+            </Button>
+          </EmptyStateBody>
+        </EmptyState>
+      );
+    } else if (filteredConfigItems.length > 0 || machineStateMatches === 0) {
+      // With only block rows to show, the list's own "No items" empty
+      // state would contradict the block under it.
+      decisionArea = (
+        <DecisionList
+          items={filteredConfigItems}
+          sectionLabel="Config Files"
+          filterText={filterText}
+          revealItemId={revealItemId}
+          shadowOwners={shadowOwners}
+          onViewUpdate={onViewUpdate}
+          onMutationError={onMutationError}
+          onNavigateToOwner={onNavigateToItem}
+        />
       );
     }
     return (
@@ -899,35 +915,24 @@ export function MainContent({
             onClose={handleSearchClose}
             onArrowDown={handleArrowDown}
             resultCount={
-              filteredConfigItems.length + (hasFilter ? machineStateMatches : 0)
+              listedConfigCount + (hasFilter ? machineStateMatches : 0)
             }
           />
         )}
-        {noResults ? (
-          <EmptyState titleText="No items match your search" headingLevel="h3">
-            <EmptyStateBody>
-              <Button variant="link" onClick={() => setFilterText("")}>
-                Clear filter
-              </Button>
-            </EmptyStateBody>
-          </EmptyState>
-        ) : (
-          // With only block rows to show, the list's own "No items"
-          // empty state would contradict the block under it.
-          (filteredConfigItems.length > 0 || machineStateMatches === 0) && (
-            <DecisionList
-              items={filteredConfigItems}
-              sectionLabel="Config Files"
-              filterText={filterText}
-              revealItemId={revealItemId}
-              shadowOwners={shadowOwners}
-              onViewUpdate={onViewUpdate}
-              onMutationError={onMutationError}
-              onNavigateToOwner={onNavigateToItem}
-            />
-          )
-        )}
-        {machineStateBlock}
+        {decisionArea}
+        {/* At the foot of the section whatever the list area shows. */}
+        <MachineStateGroup
+          rows={machineStateRows}
+          stepCount={viewData?.machine_state_steps.length ?? 0}
+          filterText={filterText}
+          onSetInclude={handleMachineStateSetInclude}
+          pendingKeys={machineStateGuard.pendingKeys}
+          failures={machineStateFailures.failures}
+          onDismissFailure={clearMachineStateFailure}
+          revealItemId={revealItemId}
+          reveal={revealMachineState}
+          onRevealed={onMachineStateRevealed}
+        />
       </>
     );
   }

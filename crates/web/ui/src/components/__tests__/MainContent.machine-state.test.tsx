@@ -11,7 +11,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MainContent } from "../MainContent";
-import type { RefinedConfig, ViewResponse } from "../../api/types";
+import { filterMachineStateRows } from "../MachineStateGroup";
+import type { ViewResponse } from "../../api/types";
 import { emptyView } from "../../test-utils/emptyView";
 import { loadUnitFields } from "../../__tests__/fixtures/systemd-units/load";
 
@@ -29,10 +30,13 @@ function recorded(name: string): ViewResponse {
 
 const VIEW = recorded("machine-state");
 const INCLUDED = recorded("machine-state-included");
+const CONFIGS_EXCLUDED = recorded("machine-state-configs-excluded");
 
 const HOSTNAME = "/etc/hostname";
 const IQN = "/etc/iscsi/initiatorname.iscsi";
 const KEYTAB = "/etc/krb5.keytab";
+const SYSCTL_CONF = "/etc/sysctl.d/90-x.conf";
+const SSH_KEY = "/etc/ssh/ssh_host_ed25519_key";
 
 type Reply =
   | { status: 200; view: ViewResponse }
@@ -114,13 +118,74 @@ describe("MainContent: the machine-state block", () => {
   });
 
   it("stays rendered under the all-excluded empty state", () => {
-    const excluded: RefinedConfig[] = VIEW.config_files.map((c) => ({
-      ...c,
-      entry: { ...c.entry, disposition: { kind: "actionable", include: false } },
-    }));
-    render(<Harness initial={{ ...VIEW, config_files: excluded }} />);
+    render(<Harness initial={CONFIGS_EXCLUDED} sectionSearchOpen />);
     expect(screen.getByTestId("config-all-excluded")).toBeInTheDocument();
     expect(screen.getByTestId("machine-state-group")).toBeInTheDocument();
+    // The section keeps its heading and its search.
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Config Files" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Filter section items")).toBeInTheDocument();
+  });
+
+  it("keeps the search and its query when the last config is excluded", async () => {
+    const user = userEvent.setup();
+    render(<Harness initial={VIEW} sectionSearchOpen />);
+    const search = screen.getByLabelText("Filter section items");
+    // Matches the sysctl config and the SSH host key row.
+    await user.type(search, "/etc/s");
+    expect(rowEl(SSH_KEY)).toBeVisible();
+    replies.push({ status: 200, view: CONFIGS_EXCLUDED });
+
+    await user.click(
+      screen.getByRole("checkbox", { name: `Toggle ${SYSCTL_CONF}` }),
+    );
+
+    expect(
+      await screen.findByTestId("config-all-excluded"),
+    ).toBeInTheDocument();
+    expect(bodies).toEqual([
+      {
+        kind: "Op",
+        op: "SetInclude",
+        target: {
+          item_id: { kind: "Config", key: { path: SYSCTL_CONF } },
+          include: false,
+        },
+      },
+    ]);
+    // The query still filters the block, and the box that holds it is
+    // still there to change or clear it.
+    expect(screen.getByLabelText("Filter section items")).toHaveValue("/etc/s");
+    expect(rowEl(SSH_KEY)).toBeVisible();
+    expect(screen.queryByTestId(`machine-state-row-${KEYTAB}`)).toBeNull();
+    // The excluded config is not on screen, so only block rows count.
+    const matches = filterMachineStateRows(
+      CONFIGS_EXCLUDED.machine_state,
+      "/etc/s",
+    ).length;
+    expect(
+      screen.getByText(`${matches} ${matches === 1 ? "match" : "matches"}`),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the block expanded when the last config is excluded", async () => {
+    const user = userEvent.setup();
+    render(<Harness initial={VIEW} />);
+    await expand(user);
+    replies.push({ status: 200, view: CONFIGS_EXCLUDED });
+
+    await user.click(
+      screen.getByRole("checkbox", { name: `Toggle ${SYSCTL_CONF}` }),
+    );
+
+    expect(
+      await screen.findByTestId("config-all-excluded"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Machine state/ }),
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(rowEl(KEYTAB)).toBeVisible();
   });
 
   it("counts block matches in a search and keeps the block", async () => {
