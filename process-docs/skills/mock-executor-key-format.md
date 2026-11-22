@@ -119,3 +119,17 @@ with incomplete data. You end up testing the wrong scenario.
 - `crates/collect/src/executor/mock.rs` -- full implementation
 - `crates/collect/src/executor/real.rs` -- real executor for comparison
 - `crates/core/src/traits/executor.rs` -- `Executor` trait definition
+
+## Content, links and the read log
+
+`with_file` stores bytes; `with_file_bytes` registers content that is not
+UTF-8, and `read_file` on it fails with `InvalidData`, as
+`std::fs::read_to_string` does. `read_file` follows registered symlinks
+(an ancestor directory's too) when nothing is registered at the path
+itself, and `with_hard_link` gives two paths one content and one inode.
+`file_metadata` follows links; `with_file_mode` sets its mode bits. Every
+`read_file` and `read_head` is logged with its byte count (`read_log`,
+`was_read`), which machine-state tests use to prove a file was never
+opened, or only its two-byte header was. An inspector test builds its
+context with `ScreenedExecutor::new(&mock)`.
+

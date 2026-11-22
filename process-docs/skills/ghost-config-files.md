@@ -47,13 +47,13 @@ path just because `rpm -Va` named it.
 - **Carries only general configuration no other section owns.**
   `classify_ghost` decides every path before anything reads it, in this
   order:
-  - `Credential`: key material by path (`GHOST_CREDENTIAL_EXACT`:
-    `chrony.keys`, bind's `rndc.key` and `rndc.conf`, unbound's control
-    and server keys). Never opened; a scan warning names the path and
-    says the content was withheld.
-  - `MachineState`: the § 5.2 members of the machine-state class spec by
-    path (`is_machine_state_member`). Skipped silently until the class
-    lands.
+  - `MachineState`: a member of the machine-state class by path
+    (`inspectah_core::machine_state::classify_path`), key files such as
+    `chrony.keys`, bind's `rndc.key` and `rndc.conf` and unbound's keys
+    included (member `service_key`). Admitted like configuration: the
+    collector's read gate withholds it as a `config.withheld` row, never
+    opened, or records a carriable member (the hostname) as a
+    `MachineState` entry. See [machine-state-class](machine-state-class.md).
   - `OwnedBy(inspector)`: a file another section records. The tables
     (`OWNED_ELSEWHERE`, `OWNED_BY_RULE_ELSEWHERE`) hold each owner's own
     constant or predicate, the one it reads the file by: storage's
@@ -80,18 +80,19 @@ path just because `rpm -Va` named it.
 - **Skipped before the class:** a path an earlier branch already
   collected (an `rpm -Va` row with a content flag). **After it:** the
   unowned walk's checks that need the host (the unit-link test, DHCP
-  connections); and, after the read, a file whose content is a keytab
-  (first bytes `05 01` or `05 02`) or a whole-file private key (§ 5.3),
-  dropped before its content is kept, with the same warning as a
-  credential by path. A key embedded in a larger configuration file is
-  configuration and stays with redaction.
+  connections). A file whose content is a keytab (first bytes `05 01` or
+  `05 02`) or a whole-file private key is refused by the read gate inside
+  `ConfigCollector::admit`, on this branch and every other, under any
+  alias spelling, and becomes a withheld row. A key embedded in a larger
+  configuration file is configuration and stays with redaction.
 - **Not run** when `owned_paths` is empty; a failed query degrades the
   section. Mocks that run the config inspector with owned paths must
   register the query (an empty answer is fine), or the section reads
   degraded.
 
-When the machine-state class lands, the member skips go and the push
-becomes `ConfigCollector::admit` with the same fields.
+Each surviving candidate goes through `ConfigCollector::admit` with
+`kind: RpmOwnedModified`, `package: Some(..)` and `rpm_va_flags: None`;
+the branch never pushes an entry itself.
 
 ## Every ghost file on the test hosts, classified
 

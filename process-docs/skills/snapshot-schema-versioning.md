@@ -9,11 +9,11 @@ description: Snapshot JSON schema is version-gated by exact match (MIN_SCHEMA ==
 `schema_version` field. The loading contract is an exact match:
 
 ```rust
-pub const SCHEMA_VERSION: u32 = 30;
+pub const SCHEMA_VERSION: u32 = 31;
 
 // ...
 
-const MIN_SCHEMA: u32 = 30;
+const MIN_SCHEMA: u32 = 31;
 
 // `schema_version` is read alone first, then the rest
 if !(Self::MIN_SCHEMA..=SCHEMA_VERSION).contains(&version) {
@@ -23,7 +23,7 @@ if !(Self::MIN_SCHEMA..=SCHEMA_VERSION).contains(&version) {
 
 `MIN_SCHEMA` and `SCHEMA_VERSION` are independent constants, not tied
 together by the type system -- they just currently hold the same value
-(both 30). Only `schema_version == 30` loads; any other value is
+(both 31). Only `schema_version == 31` loads; any other value is
 rejected. Snapshots on an older schema must be re-scanned -- there is no
 migration path, and with the window closed to an exact match there is no
 longer even a one-release grace period for a prior version.
@@ -106,6 +106,19 @@ Seven bumps, two different arguments, all landing on "reject":
   `testdata/fixtures/snapshot/schema-29-selinux-runtime-booleans.json`,
   and the core test also loads it at the current version to show the
   field error the order avoids.
+
+- 30 -> 31 added the machine-state class: `FindingKind::MachineState`,
+  `config.withheld`, `unmanaged_files.withheld` and the sysctl body
+  `withheld`. A schema-30 payload parses, but its keytab, SSH host keys
+  or IQN are ordinary config entries the export copies into the image,
+  or were dropped by a silent list with nothing to say so. **Semantic
+  staleness**, with a disclosure cost. The refusal tests read
+  `testdata/fixtures/snapshot/schema-30-keytab-carried.json`; the core
+  test also loads it at the current version, where machine-state
+  validation refuses it. From 31 on, `load` also runs
+  `machine_state::validate`, so a hand-written fixture with a config
+  entry at a class path fails to load: use a `MachineState` entry or a
+  `withheld` row.
 
 The second argument does not follow from the first. A renamed field
 would force the bump even if the data were recoverable, and stale

@@ -12,7 +12,7 @@ image-mode migration. The structure has 32 top-level fields, listed in the
 tables below. A snapshot loads only in the inspectah release that wrote it:
 see [Loading and schema version](#loading-and-schema-version).
 
-**Schema version:** 30
+**Schema version:** 31
 {: .label .label-blue }
 
 **Source:** `crates/core/src/snapshot.rs`
@@ -40,7 +40,7 @@ see [Loading and schema version](#loading-and-schema-version).
 
 | Field | Type | Description |
 |:------|:-----|:------------|
-| `schema_version` | `u32` | Schema version number, currently **30**. Checked on load: any other value is rejected. |
+| `schema_version` | `u32` | Schema version number, currently **31**. Checked on load: any other value is rejected. |
 | `meta` | `Map<String, Value>` | Free-form metadata written by `scan`: `hostname`, `hostname_source`, `timestamp` (RFC 3339), and `inspectah_version`. `hostname` is the static name from `/etc/hostname`, or when that is empty the transient name from `/proc/sys/kernel/hostname`, and is omitted when neither names the host. `hostname_source` is the file that supplied it, or `none` when no name was found. |
 | `os_release` | `OsRelease?` | Parsed `/etc/os-release` fields (name, version, version ID, ID, ID-like, pretty name, variant ID). |
 | `system_type` | `SystemType` | Detected system kind, serialized as `package-mode`, `rpm-ostree`, or `bootc`. Default: `unknown`. |
@@ -53,14 +53,14 @@ All are `Option` types: absent when the inspector did not run or was not applica
 | Field | Type | Inspector | Description |
 |:------|:-----|:----------|:------------|
 | `rpm` | `RpmSection?` | `RpmInspector` | Installed packages, version changes, repo files, GPG keys, module streams, leaf/auto classification, and dependency trees: `dep_closures` maps each leaf and each dependency-installed package to the added packages installing it certainly brings, those it requires that nothing else provides, `dep_alternatives` maps it to the added packages it may bring as one of several providers of something it requires, and `leaf_dep_tree` maps each leaf to the dependency-installed packages it pulled in on the source host. On an aggregate, both cover every package the merge kept: `dep_closures` what it certainly installs on every host that has it, `dep_alternatives` the rest of what it may install on any. `unresolved_requirements` lists the added packages with a requirement that may need a package the host did not have, or one the scan could not read; it is absent on an aggregate. |
-| `config` | `ConfigSection?` | `ConfigInspector` | RPM-owned modified files (`rpm -Va`), unowned `/etc` files, orphaned configs, including PAM files, audit rules, and custom tuned profiles. Ostree systems use `/usr/etc` overlay diffing instead. |
+| `config` | `ConfigSection?` | `ConfigInspector` | RPM-owned modified files (`rpm -Va`), unowned `/etc` files, orphaned configs, including PAM files, audit rules, and custom tuned profiles. Ostree systems use `/usr/etc` overlay diffing instead. `withheld`: machine-state files whose contents the snapshot does not hold (credentials, and identity files a copy breaks), each with its member, mode and size. |
 | `units` | `UnitSection?` | `UnitsInspector` | Systemd unit state for every unit kind. `state_changes`: enabled, disabled and masked units whose state differs from what the image would have, each with the unit file it loads and its owning package, and where they apply the units its `Also=` reaches (`also`), its `[Install]` drop-ins (`install_drop_ins`, `vendor_drop_ins`) and, for an enabled template instance, the configuration under `/etc` it reads (`required_config`) and the data under `/var` it keeps (`data_paths`), or, when what it reads could not be read, why (`needs_unknown`: the setting, file and line, or the file that could not be read, never the value). `inventory`: every unit with an install state or a mask, once each, with its preset. `drop_ins`: drop-in overrides and full unit shadows. `mount_findings`: the administrator's mount, automount and swap units. `manual_links` and `undetermined_installs`: links and `[Install]` sections inspectah reports and does not carry. `default_target`: the default target, when the host sets one. `enabled_on_any_host`: on an aggregate, every unit enabled on at least one host, whatever state the merged `inventory` keeps. |
 | `network` | `NetworkSection?` | `NetworkInspector` | NetworkManager connections, firewall zones/direct rules, static routes, `/etc/hosts` additions, proxy settings, DNS provenance. |
 | `storage` | `StorageSection?` | `StorageInspector` | fstab entries, active mount points, LVM volumes, `/var` directories with their backing, credential references in mount options. |
 | `scheduled_tasks` | `ScheduledTaskSection?` | `ScheduledTasksInspector` | Cron jobs (system + user), systemd timers, at jobs, generated timer unit conversions. |
 | `containers` | `ContainerSection?` | `ContainersInspector` | Quadlet unit files, compose YAML files, running containers (via Podman), installed Flatpak applications. |
 | `non_rpm_software` | `NonRpmSoftwareSection?` | `NonRpmInspector` | Python virtualenvs, pip packages, Node.js modules, `.env` files, git repositories, unpackaged binaries. |
-| `unmanaged_files` | `UnmanagedFileSection?` | `scan` | Files under `/opt`, `/srv`, and `/usr/local` that no RPM owns, with size, type, and provenance signals. Present only when the scan ran with `--include-unmanaged`; omitted from the JSON otherwise. |
+| `unmanaged_files` | `UnmanagedFileSection?` | `scan` | Files under `/opt`, `/srv`, and `/usr/local` that no RPM owns, with size, type, and provenance signals. `withheld`: files there that are a link to a machine-state file, never bundled. Present only when the scan ran with `--include-unmanaged`; omitted from the JSON otherwise. |
 | `kernel_boot` | `KernelBootSection?` | `KernelbootInspector` | Kernel command line, GRUB defaults, the sysctl section (`sysctl`: the files on the sysctl search path and the running value of each key they name, recorded for explanation only), loaded kernel modules (`lsmod`), active tuned profile, locale, timezone, alternatives. Loaded modules carry their own dispositions and the sysctl section carries none; module-loading configuration and sysctl files are in `config`. `sysctl` is absent when its collection failed and on an aggregate. |
 | `selinux` | `SelinuxSection?` | `SelinuxInspector` | SELinux mode, custom modules, modules disabled with `semodule -d`, booleans set persistently (and, in a fleet aggregate, the booleans hosts set differently), fcontext rules and where they were read from, port labels, FIPS mode. PAM files, audit rules, and custom tuned profiles are not here: they are `config` entries. |
 | `users_groups` | `UserGroupSection?` | `UsersGroupsInspector` | Non-system users/groups, shadow entries, sudoers rules, SSH key references, subuid/subgid mappings. |
@@ -122,16 +122,16 @@ Snapshots serialize to JSON via `serde`. Key behaviors:
 
 ## Loading and schema version
 
-`SCHEMA_VERSION` and `MIN_SCHEMA` in `crates/core/src/snapshot.rs` are both 30. The loading contract is an exact match, not a rolling window: a snapshot whose `schema_version` is anything other than 30 does not load, whether it is older or newer. There is no migration. A schema bump renames or retypes fields, and some of the data a new field holds is observed on the host at scan time, so it cannot be derived from an older snapshot afterward. Schema 30 replaces `selinux.boolean_overrides` with the booleans set persistently on the host (`setsebool -P`), each `{"name", "value"}`, read from the policy store. It adds `selinux.disabled_modules`, each `{"name", "origin"}` with origin `local` or `packaged`, and `selinux.boolean_conflicts`, each `{"name", "on_hosts", "off_hosts"}`, which only a fleet aggregate fills. Older snapshots listed the booleans whose running value differed from the stored one: runtime-only changes, with every persistent change missing.
+`SCHEMA_VERSION` and `MIN_SCHEMA` in `crates/core/src/snapshot.rs` are both 31. The loading contract is an exact match, not a rolling window: a snapshot whose `schema_version` is anything other than 31 does not load, whether it is older or newer. There is no migration. A schema bump renames or retypes fields, and some of the data a new field holds is observed on the host at scan time, so it cannot be derived from an older snapshot afterward. Schema 30 replaces `selinux.boolean_overrides` with the booleans set persistently on the host (`setsebool -P`), each `{"name", "value"}`, read from the policy store. It adds `selinux.disabled_modules`, each `{"name", "origin"}` with origin `local` or `packaged`, and `selinux.boolean_conflicts`, each `{"name", "on_hosts", "off_hosts"}`, which only a fleet aggregate fills. Older snapshots listed the booleans whose running value differed from the stored one: runtime-only changes, with every persistent change missing. Schema 31 adds the machine-state class: `config.withheld` and `unmanaged_files.withheld` list the files that belong to one machine and whose contents the snapshot does not hold, a config entry may have the disposition `{"kind": "machine_state", "member", "include"}`, and a sysctl file's body may be `withheld`. A schema-30 snapshot carried such files as ordinary configuration, or dropped them without a trace.
 
 In practice:
 
 - A tarball from a different inspectah release does not load in `refine` or `aggregate` when the two releases use different schema versions, which is the usual case between releases. Re-scan the host with the release you are running.
-- `refine` stops with an error. For a tarball whose snapshot is schema 29, the output is:
+- `refine` stops with an error. For a tarball whose snapshot is schema 30, the output is:
 
   ```text
   Loading snapshot...
-  error: snapshot load error: unsupported schema version: 29 (accepted: 30)
+  error: snapshot load error: unsupported schema version: 30 (accepted: 31)
   ```
 
 - `aggregate` prints a warning for each tarball it cannot load and skips it, then refuses to merge fewer than two snapshots.

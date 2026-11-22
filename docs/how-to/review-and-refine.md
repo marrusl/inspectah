@@ -290,6 +290,34 @@ dependency needs once the export leaves another package out.
 The group is not shown when nothing is listed, and also when the scan
 has no leaf data to decide what is needed.
 
+### Machine state
+
+Some configuration files belong to one machine rather than to the image:
+Kerberos keytabs, SSH host keys and certificates, private keys, RHSM and
+Insights registration, `/etc/machine-id`, the hostname and the iSCSI
+initiator name. The Configuration section lists them in a collapsed
+**Machine state** block, apart from the configuration files, and the export
+leaves each one out. Every row says why the file belongs to the host and
+what replaces it on a deployed machine: a step to run at provisioning, such
+as `realm join` or `subscription-manager register`, or a file first boot or
+the installer recreates.
+
+What you can do with a row depends on what it is:
+
+- **Host credentials** (keys, keytabs, certificates) are never carried.
+  The scan does not keep their contents, so there is nothing to include.
+  Deliver them at deploy time.
+- **Host identity** files the scan captured, such as the hostname or
+  `/etc/nvme/hostnqn`, can be included. The iSCSI initiator name and the
+  Salt minion id ask you to confirm first, since every machine built from
+  the image would share that identity.
+- On a fleet aggregate, no machine-state file can be included: a fleet
+  image carrying one host's identity is what the list exists to prevent.
+
+The export's audit report lists every machine-state file, and the
+Containerfile, the audit report and the export warnings name the
+provisioning steps the files owe.
+
 ### Package groups
 
 A package group installed with `dnf group install` appears as one row with

@@ -208,6 +208,28 @@ redaction withholds the `enable`: provision the secret on the deployed host and
 enable the unit there. An instance that keeps data under `/var` also
 gets an `# Advisory:` line, since the image does not carry the data.
 
+### Machine-state files
+
+Files that belong to one machine (keytabs, SSH host keys, private keys,
+RHSM and Insights registration, `/etc/machine-id`, the hostname, the iSCSI
+initiator name and similar) are never copied into the image. The scan does
+not keep the contents of credentials at all. Each file is listed in the
+audit report's Configuration section under **Machine state**, with its
+reason and what replaces it.
+
+When a file owes a step at provisioning, every export says so:
+
+- the Containerfile has a comment-only `# === Provisioning ===` section
+  after the configuration files, one line per step and no paths;
+- `audit-report.md`, and the scan's `README.md`, have a
+  `## Provisioning steps` section with each step and the paths it covers;
+- the scan prints a `Notice:` line on stderr, and the refine export carries
+  the same notice in its warnings.
+
+A snapshot that holds a credential, or a configuration row at a
+machine-state path, is refused when it is loaded or rendered. Re-scan the
+host to produce one that loads.
+
 ### `--inspect-only` mode
 
 When `--inspect-only` is passed, the scan writes only

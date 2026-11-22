@@ -73,6 +73,8 @@ Each module defines the data model for a snapshot section:
 
 **Core data containers:** `snapshot.rs`, `pipeline.rs`, `baseline.rs` at `crates/core/src/`. `baseline.rs` also holds the named unit lists: `TARGET_NEEDED_UNITS` and `TMP_MOUNT` (units the export never switches off, with `target_needs_unit_text`), `RUNTIME_UPDATERS`, `STOCK_STATE` and `INCOMPATIBLE_SERVICES`
 
+**Machine-state class:** `crates/core/src/machine_state.rs` (the rule table, `classify_path`, `normal_path`, the content sniffs, the `ScreenedExecutor` read gate, `validate`) and `crates/core/src/types/machine_state.rs` (members, notices, `WithheldConfigEntry`, `WithheldUnmanagedEntry`); `crates/pipeline/src/render/machine_state.rs` builds the provisioning surfaces; `crates/collect/clippy.toml` refuses the direct routes around the gate (see `machine-state-class.md`)
+
 **Core helper modules:** `crates/core/src/`
 - `rpm_filename.rs` — RPM filename parsing (`RpmFilename::parse_untrusted`) and the staged-upload filename allowlist (`validate_staged_name`)
 
@@ -89,8 +91,9 @@ only when the subscription is preserved), and the pipeline runs it through
   - `rpm/repoless.rs` — Repo-less RPM detection (empty/disabled repos) and dnf cache scanning
   - `rpm/dnf_vars.rs`: the host's dnf variables, used to expand `gpgkey=` paths in `rpm/repos.rs`
 - `config/`: the config files the image carries, from four branches in `mod.rs`: modified packaged files (`rpm -Va`), `%ghost` files, the unowned `/etc` walk (`walk.rs`) and orphans of removed packages
+  - `collector.rs`: `ConfigCollector::admit`, the only way a file enters the section: reads through the machine-state read gate and records a withheld row, a `MachineState` entry or an ordinary entry (see `machine-state-class.md`)
   - `admit.rs`: the checks before any read of a candidate: `locate` (a path under a directory link is admitted in both spellings, physical under `/etc` and both carried at their own path, and each branch's exclusions match both) and `readable` (never a FIFO, socket or device; a final link is read only to carried config under `/etc`). `capture_config` in `mod.rs` asks `readable` on every branch
-  - `ghost.rs`: the `%ghost` branch: the file-flags query, `classify_ghost` (what is general config, a credential, machine state, another section's file, generated, deferred), the interim machine-state member list and the `authselect check`/`authselect test` parsing (see `ghost-config-files.md`)
+  - `ghost.rs`: the `%ghost` branch: the file-flags query, `classify_ghost` (what is general config, a machine-state member, another section's file, generated, deferred) and the `authselect check`/`authselect test` parsing (see `ghost-config-files.md`)
   - `audit_rules.rs`: whether `/etc/audit/audit.rules` is written by `augenrules`: only when the audit loader units are exactly as packaged, decided by what is present in the unit search path, never by reading a unit
 - `units/`: `UnitsInspector`, which writes the `units` section for every unit kind
   - `mod.rs`: the inspector: `systemctl list-unit-files`, the name gate, masks, drop-ins, owners, state changes, mount findings, instances found from links, the install comparison and the default target
