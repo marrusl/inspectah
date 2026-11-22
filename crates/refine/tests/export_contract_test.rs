@@ -294,6 +294,7 @@ fn export_exact_file_set() {
         "inspection-snapshot.json",
         "Containerfile",
         "audit-report.md",
+        "secrets-review.md",
         "schema/snapshot.schema.json",
         // config tree materialized from the included config file:
         "config/etc/httpd/conf/httpd.conf",

@@ -3,7 +3,7 @@
 //! line on how to supply the real value, the same file on every export
 //! path, and no byte of any secret in it.
 
-use crate::sysctl_hosts::{SysctlHost, reload, render_export, scan};
+use crate::sysctl_hosts::{SysctlHost, export_session, reload, render_export, scan, session};
 use inspectah_core::aggregate::merge_snapshots;
 
 /// A config file with two secrets the image carries.
@@ -167,4 +167,16 @@ fn the_fleet_export_groups_findings_per_file() {
     assert!(!rows(app).is_empty(), "{app}");
     advice(app);
     advice(file_section(&md, BACKUP_CONF));
+}
+
+/// The refine export writes the same file as the scan export, byte for
+/// byte, from a session opened on the scan's tarball.
+#[test]
+fn the_refine_export_writes_the_same_file() {
+    let snap = reload(&scan(secret_host()));
+    let from_scan = read(&render_export(&snap), "secrets-review.md");
+    let from_refine = read(&export_session(&session(&snap)), "secrets-review.md");
+    assert_no_canary("refine export", &from_refine);
+    assert_eq!(from_scan, from_refine);
+    advice(file_section(&from_refine, APP_CONF));
 }

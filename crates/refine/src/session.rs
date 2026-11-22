@@ -4852,17 +4852,17 @@ pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
 /// `tarball_path`.
 ///
 /// This is NOT `render_all()`. The pipeline's `render_all()` writes 8
-/// artifacts (including report.html, README.md, secrets-review.md,
-/// kickstart-suggestion.ks) that are outside the approved refine export
-/// contract. This function materializes only the contracted set:
+/// artifacts (including report.html, README.md, kickstart-suggestion.ks)
+/// that are outside the approved refine export contract. This function
+/// materializes only the contracted set:
 ///
 /// Required: inspection-snapshot.json, Containerfile, audit-report.md,
-///           schema/snapshot.schema.json
+///           secrets-review.md, schema/snapshot.schema.json
 /// Conditional: config/ (when snapshot has included config files),
 ///              env-files/ (when snapshot has env-file data),
 ///              compose/ (when snapshot has compose files with raw content)
-/// Excluded: report.html, README.md, secrets-review.md,
-///           kickstart-suggestion.ks, original-inspection-snapshot.json
+/// Excluded: report.html, README.md, kickstart-suggestion.ks,
+///           original-inspection-snapshot.json
 ///
 /// Preview/export fidelity is conditional on `render_ctx`. Both paths
 /// call `render_containerfile` with the same materialized root set, so
@@ -5083,6 +5083,7 @@ pub fn render_refine_export(
         "inspection-snapshot.json",
         "Containerfile",
         "audit-report.md",
+        "secrets-review.md",
         "inspectah-users.ks",
         "inspectah-users.toml",
         "language-packages",
@@ -5136,6 +5137,12 @@ pub fn render_refine_export(
     // 4. audit-report.md
     let audit = inspectah_pipeline::render::audit::render_audit(snap);
     std::fs::write(out.join("audit-report.md"), audit)?;
+
+    // 4b. secrets-review.md: the same renderer as the scan's export, so
+    //     both paths tell the operator the same thing about each redacted
+    //     file.
+    let secrets = inspectah_pipeline::render::secrets::render_secrets_review(snap);
+    std::fs::write(out.join("secrets-review.md"), secrets)?;
 
     // 5. inspection-snapshot.json
     //    Serialized as-is. `redact()` owns manifest_files and compose

@@ -185,7 +185,11 @@ const NOT_IMAGE_CONTENT: &[(&str, &str)] = &[
         "aggregate",
         "per-variant material for multi-host review; a single image is built from one variant, not from these",
     ),
-    // The four below are staged by the CLI scan path only.
+    (
+        "secrets-review.md",
+        "the redaction review the operator reads before sharing the tarball; must never be installed",
+    ),
+    // The three below are staged by the CLI scan path only.
     (
         "README.md",
         "operator instructions for the tarball, including how to run the build",
@@ -197,10 +201,6 @@ const NOT_IMAGE_CONTENT: &[(&str, &str)] = &[
     (
         "kickstart-suggestion.ks",
         "a suggestion for the operator to adapt, consumed by Anaconda if used at all",
-    ),
-    (
-        "secrets-review.md",
-        "the redaction review the operator reads before sharing the tarball; must never be installed",
     ),
 ];
 

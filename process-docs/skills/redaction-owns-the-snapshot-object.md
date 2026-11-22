@@ -581,7 +581,7 @@ the class line only, so it never also reads as carried. A new pass with a
 new `source` needs a `replaced_with` arm, and a new kind of file a rule,
 or it falls to the generic line.
 
-The scan and the fleet aggregate write the file
+The scan, the fleet aggregate and the refine export all write the file
 through this one function.
 
 ## Testing it

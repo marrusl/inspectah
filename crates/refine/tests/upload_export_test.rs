@@ -1504,6 +1504,7 @@ const NOT_IMAGE_CONTENT: &[&str] = &[
     "Containerfile",
     "inspection-snapshot.json",
     "audit-report.md",
+    "secrets-review.md",
     "schema",
     "inspectah-users.ks",
     "inspectah-users.toml",
