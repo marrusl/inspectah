@@ -16,6 +16,7 @@ mod test_files_declared;
 
 mod aggregate_host_labels_test;
 mod baseline_requirement_test;
+mod baseline_summary_scan_test;
 mod copy_source_exists_test;
 mod fleet_repo_precedence_test;
 mod ghost_config_scan_test;

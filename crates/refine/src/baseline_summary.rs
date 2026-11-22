@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -32,10 +34,22 @@ pub fn derive_baseline_summary(
     let target = snap.target_image.as_ref()?;
     let baseline = snap.baseline.as_ref()?;
 
-    let baseline_count = packages
+    // The scan removes base-image packages from `packages_added` and
+    // records them in `baseline_suppressed`, so on a scanned host refine's
+    // packages hold no base match and the count comes from that list. A
+    // package classified as a base match is counted too, once.
+    let mut matched: BTreeSet<String> = snap
+        .rpm
         .iter()
-        .filter(|p| p.triage.primary_reason == TriageReason::PackageBaselineMatch)
-        .count();
+        .flat_map(|rpm| rpm.baseline_suppressed.iter().flatten().cloned())
+        .collect();
+    matched.extend(
+        packages
+            .iter()
+            .filter(|p| p.triage.primary_reason == TriageReason::PackageBaselineMatch)
+            .map(|p| format!("{}.{}", p.entry.name, p.entry.arch)),
+    );
+    let baseline_count = matched.len();
     let user_added_count = packages
         .iter()
         .filter(|p| p.triage.primary_reason == TriageReason::PackageUserAdded)
