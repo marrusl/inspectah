@@ -1,9 +1,25 @@
+/// <reference types="vite/client" />
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ExportDialog } from "../ExportDialog";
 import type { NotCarriedRow, ViewResponse } from "../../api/types";
 import { mockStats } from "../../test-utils/mockStats";
+
+/** Views the real handlers return for the machine-state host. */
+const MACHINE_STATE_FIXTURES = import.meta.glob<{ default: ViewResponse }>(
+  "../../__tests__/fixtures/system-tuning/machine-state*.view.json",
+  { eager: true },
+);
+
+function recordedView(name: string): ViewResponse {
+  const entry =
+    MACHINE_STATE_FIXTURES[
+      `../../__tests__/fixtures/system-tuning/${name}.view.json`
+    ];
+  if (!entry) throw new Error(`no recorded fixture ${name}.view.json`);
+  return entry.default;
+}
 
 // --- Mock fetch globally ---
 const mockFetch = vi.fn();
@@ -51,6 +67,9 @@ const MOCK_VIEW: ViewResponse = {
   session_is_sensitive: false,
   not_carried_packages: [],
   not_carried_notice: null,
+  machine_state: [],
+  machine_state_steps: [],
+  machine_state_notices: [],
 };
 
 function notCarried(name: string, units: string[]): NotCarriedRow {
@@ -983,6 +1002,130 @@ describe("ExportDialog", () => {
         screen.queryByRole("button", { name: "Review not-carried packages" }),
       ).toBeNull();
       expect(screen.getByTestId("not-carried-notice")).toBeInTheDocument();
+    });
+  });
+
+  describe("machine state", () => {
+    const LEFT_OUT = recordedView("machine-state");
+    const OVERRIDDEN = recordedView("machine-state-included");
+
+    function renderMachineState(
+      view: ViewResponse,
+      props: Partial<React.ComponentProps<typeof ExportDialog>> = {},
+    ) {
+      const handlers = { onClose: vi.fn(), onReviewMachineState: vi.fn() };
+      render(
+        <ExportDialog
+          isOpen={true}
+          stats={MOCK_STATS}
+          generation={7}
+          sessionIsSensitive={false}
+          onViewUpdate={vi.fn()}
+          machineStateRows={view.machine_state}
+          machineStateSteps={view.machine_state_steps}
+          machineStateNotices={view.machine_state_notices}
+          {...handlers}
+          {...props}
+        />,
+      );
+      return handlers;
+    }
+
+    it("shows nothing when the view has no machine-state rows", () => {
+      renderMachineState(MOCK_VIEW);
+      expect(screen.queryByTestId("machine-state-notice")).toBeNull();
+      expect(screen.queryByTestId("machine-state-included-warning")).toBeNull();
+    });
+
+    it("counts the files left out and the steps owed", () => {
+      renderMachineState(LEFT_OUT);
+      const alert = screen.getByTestId("machine-state-notice");
+      expect(alert).toHaveClass("pf-m-info");
+      expect(alert).toHaveTextContent(
+        "6 machine-state files left out · 2 provisioning steps",
+      );
+      expect(screen.queryByTestId("machine-state-included-warning")).toBeNull();
+    });
+
+    it("lists the steps in the server's order, each with its paths", async () => {
+      const user = userEvent.setup();
+      renderMachineState(LEFT_OUT);
+      const alert = screen.getByTestId("machine-state-notice");
+      await user.click(
+        within(alert).getByRole("button", {
+          name: "Show machine-state details",
+        }),
+      );
+      const steps = within(alert).getAllByTestId("machine-state-step");
+      expect(steps.map((li) => li.firstChild?.textContent)).toEqual(
+        LEFT_OUT.machine_state_steps.map((s) => s.command),
+      );
+      expect(
+        within(steps[0]).getByText("/etc/krb5.keytab").tagName,
+      ).toBe("CODE");
+      expect(alert).toHaveTextContent(
+        "The other files are recreated without any step.",
+      );
+    });
+
+    it("links to the block, closing the dialog", async () => {
+      const user = userEvent.setup();
+      const { onClose, onReviewMachineState } = renderMachineState(LEFT_OUT);
+      await user.click(
+        screen.getByRole("button", { name: "Review machine state" }),
+      );
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onReviewMachineState).toHaveBeenCalledTimes(1);
+    });
+
+    it("warns when a host identity file is included, naming it", () => {
+      renderMachineState(OVERRIDDEN);
+      expect(screen.getByTestId("machine-state-notice")).toHaveTextContent(
+        "4 machine-state files left out · 2 provisioning steps",
+      );
+      const warning = screen.getByTestId("machine-state-included-warning");
+      expect(warning).toHaveClass("pf-m-warning");
+      expect(warning).toHaveTextContent(
+        "1 host identity file is included in the image",
+      );
+      expect(warning).toHaveTextContent("/etc/iscsi/initiatorname.iscsi");
+      // A plain override is not an identity warning.
+      expect(warning).not.toHaveTextContent("/etc/hostname");
+    });
+
+    it("drops the header entries equal to the view's machine-state notices", async () => {
+      const user = userEvent.setup();
+      const FAILURE = "epel-release.noarch: staged RPM not verified, not exported";
+      const drifted = {
+        kind: "notice" as const,
+        text: "5 machine-state files left out.",
+      };
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({
+          "x-export-warnings": JSON.stringify([
+            ...OVERRIDDEN.machine_state_notices,
+            drifted,
+            { kind: "failure", text: FAILURE },
+          ]),
+        }),
+        blob: () => Promise.resolve(new Blob(["fake tarball"])),
+      });
+      vi.stubGlobal("URL", {
+        ...URL,
+        createObjectURL: vi.fn(() => "blob:http://localhost/fake-url"),
+        revokeObjectURL: vi.fn(),
+      });
+      renderMachineState(OVERRIDDEN);
+
+      await user.click(screen.getByRole("button", { name: "Export" }));
+
+      await screen.findByText("Downloaded, with warnings");
+      expect(screen.getByTestId("export-warning-0")).toHaveTextContent(
+        drifted.text,
+      );
+      expect(screen.getByTestId("export-warning-1")).toHaveTextContent(FAILURE);
+      expect(screen.queryByTestId("export-warning-2")).toBeNull();
     });
   });
 });

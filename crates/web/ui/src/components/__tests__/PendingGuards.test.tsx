@@ -26,6 +26,7 @@ import type {
   FlatpakDecisionDto,
   GroupInfo,
   LanguagePackageEnv,
+  MachineStateRowDto,
   QuadletDecisionDto,
   RefinedPackage,
   RepoGroupInfo,
@@ -262,6 +263,28 @@ function renderMainContent(onMutationError: (err: Error) => void) {
   renderSection("packages", {}, onMutationError);
 }
 
+/**
+ * Configuration with one `plain` machine-state row, its block expanded:
+ * MainContent guards the row's include by `machine-state:<path>`.
+ */
+const HOSTNAME_ROW: MachineStateRowDto = {
+  path: "/etc/hostname",
+  member: "hostname",
+  reason: "host_identity",
+  override: "plain",
+  include: false,
+  content_captured: true,
+  mode: null,
+  size: null,
+  notice: { kind: "automatic", by: "provisioning" },
+  item_id: { kind: "Config", key: { path: "/etc/hostname" } },
+};
+
+function renderMachineState(onMutationError: (err: Error) => void) {
+  renderSection("configs", { machine_state: [HOSTNAME_ROW] }, onMutationError);
+  fireEvent.click(screen.getByRole("button", { name: /^Machine state/ }));
+}
+
 interface GuardCase {
   name: string;
   request: "applyOp" | "ungroupGroup" | "setUserStrategy" | "setUserPassword";
@@ -352,6 +375,13 @@ const CASES: GuardCase[] = [
     request: "applyOp",
     renderWith: renderScheduled,
     control: () => screen.getByRole("checkbox", { name: "Toggle cron-backup" }),
+  },
+  {
+    name: "machine-state include",
+    request: "applyOp",
+    renderWith: renderMachineState,
+    control: () =>
+      screen.getByRole("button", { name: "Include /etc/hostname" }),
   },
   {
     name: "user include checkbox",

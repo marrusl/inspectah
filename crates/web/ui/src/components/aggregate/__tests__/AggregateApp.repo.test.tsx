@@ -122,6 +122,9 @@ function makeView(repo: RepoGroupInfo): AggregateViewResponse {
     sections: [packagesSection],
     repo_groups: [repo],
     repo_conflict_count: 0,
+    machine_state: [],
+    machine_state_steps: [],
+    machine_state_notices: [],
     sysctl: { state: "aggregate" },
   };
 }

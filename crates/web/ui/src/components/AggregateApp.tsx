@@ -31,6 +31,13 @@ import {
   usePrevalenceDisplayState,
 } from "../hooks/usePrevalenceDisplay";
 import { AppShell } from "./AppShell";
+import {
+  MACHINE_STATE_ITEM_PREFIX,
+  MachineStateGroup,
+} from "./MachineStateGroup";
+
+/** The fleet's rows offer no control, so the block never sends an op. */
+const NO_MACHINE_STATE_OP = () => {};
 import { AggregateSidebar } from "./aggregate/AggregateSidebar";
 import { AggregateBanner } from "./aggregate/AggregateBanner";
 import { AggregateSectionContent } from "./aggregate/AggregateSection";
@@ -297,10 +304,21 @@ export function AggregateApp({
     [],
   );
 
+  // A GlobalSearch pick of a machine-state row: its section opens with the
+  // block expanded.
+  const [machineStateReveal, setMachineStateReveal] = useState<
+    string | undefined
+  >(undefined);
+
   const handleSearchNavigate = useCallback(
     (sectionId: string, itemId: string) => {
-      // itemId was serialized via JSON.stringify in buildAggregateSearchSections
       setFilterText(""); // clear any active section filter
+      if (itemId.startsWith(MACHINE_STATE_ITEM_PREFIX)) {
+        setMachineStateReveal(itemId);
+        handleSelectSection(sectionId);
+        return;
+      }
+      // itemId was serialized via JSON.stringify in buildAggregateSearchSections
       try {
         const parsed = JSON.parse(itemId) as ItemId;
         setPendingNavTarget({ sectionId, itemId: parsed });
@@ -510,6 +528,9 @@ export function AggregateApp({
           searchConfigItems={[]}
           searchContextSections={searchContextSections}
           onSearchNavigate={handleSearchNavigate}
+          machineStateRows={aggregateView.machine_state}
+          machineStateSteps={aggregateView.machine_state_steps}
+          machineStateNotices={aggregateView.machine_state_notices}
           toolbarExtra={
             <>
               <AckProgress
@@ -634,6 +655,19 @@ export function AggregateApp({
                     />
                     {activeSection === "system_tuning" && (
                       <SysctlPanel sysctl={aggregateView.sysctl} />
+                    )}
+                    {(activeSection === "configs" ||
+                      activeSection === "config_files") && (
+                      // Every fleet row is withheld (`override: "never"`,
+                      // no `item_id`), so the block offers no control and
+                      // nothing here sends an op.
+                      <MachineStateGroup
+                        rows={aggregateView.machine_state}
+                        stepCount={aggregateView.machine_state_steps.length}
+                        filterText={filterText}
+                        onSetInclude={NO_MACHINE_STATE_OP}
+                        revealItemId={machineStateReveal}
+                      />
                     )}
                     </>
                   )}

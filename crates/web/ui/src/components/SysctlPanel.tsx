@@ -37,6 +37,7 @@ import {
   OUTSIDE_LINK_LINE,
   REDACTED_FILE_LINE,
   REDACTED_RUNTIME_LINE,
+  WITHHELD_FILE_LINE,
   RUNTIME_NOT_EXPOSED,
   RUNTIME_SAME,
   TRUST_LINE,
@@ -72,6 +73,7 @@ const FILE_READ_THROUGH_LINK = "read through a link to {target}";
 const FILE_MASK = "mask";
 const FILE_OUTSIDE_LINK =
   "link outside the sysctl directories to {target}, not read";
+const FILE_WITHHELD = "machine-state file, contents not captured";
 const NO_CONFIG_ROW = "none";
 
 /** `<path>:<line>` of a sysctl line, as the audit writes it. */
@@ -318,6 +320,8 @@ function unknownInputRuns(
       });
     case "redacted_file":
       return fillRuns(REDACTED_FILE_LINE, { path: pathHole(input.path) });
+    case "withheld_file":
+      return fillRuns(WITHHELD_FILE_LINE, { path: pathHole(input.path) });
     case "redacted_runtime":
       return fillRuns(REDACTED_RUNTIME_LINE, { key: { value: input.key } });
   }
@@ -457,11 +461,13 @@ function FilesTable({
               ? fillRuns(FILE_MASK, {})
               : body.kind === "outside_link"
                 ? fillRuns(FILE_OUTSIDE_LINK, { target: { value: body.target } })
-                : body.link_target !== null
-                  ? fillRuns(FILE_READ_THROUGH_LINK, {
-                      target: { value: body.link_target },
-                    })
-                  : fillRuns(FILE_READ, {});
+                : body.kind === "withheld"
+                  ? fillRuns(FILE_WITHHELD, {})
+                  : body.link_target !== null
+                    ? fillRuns(FILE_READ_THROUGH_LINK, {
+                        target: { value: body.link_target },
+                      })
+                    : fillRuns(FILE_READ, {});
           const row =
             f.config_path === null
               ? fillRuns(NO_CONFIG_ROW, {})

@@ -1739,3 +1739,103 @@ body,
 .inspectah-not-carried__include {
   flex-shrink: 0;
 }
+
+/* Machine state: files that belong to one host (machine-state class).
+   Built like the Not carried group; the row wraps so its notice, metadata
+   and any failure take full lines under the path and the control. */
+.inspectah-machine-state {
+  margin-top: var(--pf-t--global--spacer--lg);
+  scroll-margin-top: var(--pf-t--global--spacer--lg);
+}
+
+.inspectah-machine-state__help {
+  margin: 0 0 var(--pf-t--global--spacer--sm);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.inspectah-machine-state__sublist + .inspectah-machine-state__sublist {
+  margin-top: var(--pf-t--global--spacer--md);
+}
+
+.inspectah-machine-state__heading {
+  margin: 0 0 var(--pf-t--global--spacer--xs);
+  font-size: var(--pf-t--global--font--size--body--default);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.inspectah-machine-state__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.inspectah-machine-state__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md);
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+}
+
+.inspectah-machine-state__row:focus-visible {
+  outline: 2px solid var(--pf-t--global--color--brand--default);
+  outline-offset: -2px;
+}
+
+.inspectah-machine-state__main {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm);
+  min-width: 0;
+}
+
+/* A host path can be one unbroken token wider than the column. */
+.inspectah-machine-state__path {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.inspectah-machine-state__action {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm);
+}
+
+.inspectah-machine-state__outcome {
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+/* The unit-note style without the unit row's checkbox indent. */
+.inspectah-machine-state__note,
+.inspectah-machine-state__meta,
+.inspectah-machine-state__failure {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.inspectah-unit-note.inspectah-machine-state__note {
+  padding: 0;
+}
+
+.inspectah-unit-note--withheld.inspectah-machine-state__note {
+  margin-left: 0;
+  padding-left: var(--pf-t--global--spacer--sm);
+}
+
+.inspectah-machine-state__meta {
+  font-size: var(--pf-t--global--font--size--xs);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+/* Kept in the tree while empty so the live region announces a failure;
+   zero width so it adds no line. */
+.inspectah-machine-state__failure:empty {
+  flex-basis: 0;
+}

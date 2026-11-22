@@ -10,13 +10,22 @@ import {
   Alert,
   AlertActionLink,
 } from "@patternfly/react-core";
-import type { NotCarriedRow, RefineStats, ViewResponse } from "../api/types";
+import type {
+  MachineStateRowDto,
+  NotCarriedRow,
+  ProvisioningStepDto,
+  RefineStats,
+  ViewResponse,
+} from "../api/types";
 import { exportTarball, fetchView } from "../api/client";
 import { ApiError } from "../api/types";
 import { withoutShownNotice } from "../api/exportWarnings";
 import type { ExportWarning } from "../api/exportWarnings";
 
 const NO_ROWS: NotCarriedRow[] = [];
+const NO_MACHINE_STATE: MachineStateRowDto[] = [];
+const NO_STEPS: ProvisioningStepDto[] = [];
+const NO_NOTICES: ExportWarning[] = [];
 
 export interface ExportDialogProps {
   isOpen: boolean;
@@ -36,6 +45,17 @@ export interface ExportDialogProps {
   notCarriedNotice?: ExportWarning | null;
   /** Shows the Not carried group. Without it the notice has no link. */
   onReviewNotCarried?: () => void;
+  /** The view's `machine_state`; non-empty shows the machine-state notice. */
+  machineStateRows?: MachineStateRowDto[];
+  /** The view's `machine_state_steps`, listed in their order. */
+  machineStateSteps?: ProvisioningStepDto[];
+  /**
+   * The view's `machine_state_notices`: the post-download list skips the
+   * header entries equal to them, since the dialog showed what they say.
+   */
+  machineStateNotices?: ExportWarning[];
+  /** Shows the machine-state block. Without it the notice has no link. */
+  onReviewMachineState?: () => void;
 }
 
 export function ExportDialog({
@@ -49,6 +69,10 @@ export function ExportDialog({
   notCarriedPackages = NO_ROWS,
   notCarriedNotice = null,
   onReviewNotCarried,
+  machineStateRows = NO_MACHINE_STATE,
+  machineStateSteps = NO_STEPS,
+  machineStateNotices = NO_NOTICES,
+  onReviewMachineState,
 }: ExportDialogProps) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,8 +114,12 @@ export function ExportDialog({
       a.download = "inspectah-refine-output.tar.gz";
       a.click();
       URL.revokeObjectURL(url);
-      // The notice was on screen before download; do not repeat it.
-      const unseen = withoutShownNotice(warnings, notCarriedNotice);
+      // The notices were on screen before download; do not repeat them.
+      const shown =
+        notCarriedNotice === null
+          ? machineStateNotices
+          : [notCarriedNotice, ...machineStateNotices];
+      const unseen = withoutShownNotice(warnings, shown);
       if (unseen.length > 0) {
         setDownloadWarnings(unseen);
       } else {
@@ -122,7 +150,14 @@ export function ExportDialog({
     } finally {
       setExporting(false);
     }
-  }, [generation, sensitiveAck, notCarriedNotice, onClose, onViewUpdate]);
+  }, [
+    generation,
+    sensitiveAck,
+    notCarriedNotice,
+    machineStateNotices,
+    onClose,
+    onViewUpdate,
+  ]);
 
   const handleClose = useCallback(() => {
     setError(null);
@@ -138,9 +173,29 @@ export function ExportDialog({
     onReviewNotCarried?.();
   }, [handleClose, onReviewNotCarried]);
 
+  const handleReviewMachineState = useCallback(() => {
+    handleClose();
+    onReviewMachineState?.();
+  }, [handleClose, onReviewMachineState]);
+
   // The server's flag decides ownership; the rows with it set are exactly
   // the packages the notice counts.
   const unitOwners = notCarriedPackages.filter((r) => r.owns_enabled_unit);
+
+  // Machine state: the rows left out, and the `warn` rows the operator
+  // included, which every machine built from the image will share.
+  const machineStateLeftOut = machineStateRows.filter((r) => !r.include).length;
+  const identityIncluded = machineStateRows.filter(
+    (r) => r.override === "warn" && r.include,
+  );
+  const machineStateTitle = [
+    `${machineStateLeftOut} machine-state ${machineStateLeftOut === 1 ? "file" : "files"} left out`,
+    ...(machineStateSteps.length > 0
+      ? [
+          `${machineStateSteps.length} provisioning ${machineStateSteps.length === 1 ? "step" : "steps"}`,
+        ]
+      : []),
+  ].join(" · ");
 
   if (downloadWarnings !== null) {
     return (
@@ -250,6 +305,73 @@ export function ExportDialog({
                 The export lists them in the audit report's Not carried table
                 and the Containerfile's <code># Not carried</code> block.
               </p>
+            </Content>
+          </Alert>
+        )}
+
+        {machineStateRows.length > 0 && (
+          // Built as the not-carried notice is: info, collapsed, with a
+          // link to the block. The steps are the server's, in its order.
+          <Alert
+            variant="info"
+            isInline
+            isExpandable
+            toggleAriaLabel="Show machine-state details"
+            data-testid="machine-state-notice"
+            title={machineStateTitle}
+            actionLinks={
+              onReviewMachineState ? (
+                <AlertActionLink onClick={handleReviewMachineState}>
+                  Review machine state
+                </AlertActionLink>
+              ) : undefined
+            }
+            style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}
+          >
+            <Content>
+              {machineStateSteps.length > 0 && (
+                <>
+                  <p>At provisioning:</p>
+                  <ul>
+                    {machineStateSteps.map((s) => (
+                      <li key={s.step} data-testid="machine-state-step">
+                        <span>{s.command}</span>
+                        <br />
+                        {s.paths.map((p) => (
+                          <code key={p} style={{ marginRight: "0.5em" }}>
+                            {p}
+                          </code>
+                        ))}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              <p>The other files are recreated without any step.</p>
+            </Content>
+          </Alert>
+        )}
+
+        {identityIncluded.length > 0 && (
+          <Alert
+            variant="warning"
+            isInline
+            data-testid="machine-state-included-warning"
+            title={
+              identityIncluded.length === 1
+                ? "1 host identity file is included in the image"
+                : `${identityIncluded.length} host identity files are included in the image`
+            }
+            style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}
+          >
+            <Content>
+              <ul>
+                {identityIncluded.map((r) => (
+                  <li key={r.path}>
+                    <code>{r.path}</code>
+                  </li>
+                ))}
+              </ul>
             </Content>
           </Alert>
         )}

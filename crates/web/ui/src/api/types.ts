@@ -16,15 +16,106 @@ export type AdvisoryType =
 /**
  * Rust: FindingKind — #[serde(tag = "kind", rename_all = "snake_case")]
  *
- * Three dispositions, not a boolean. Only `actionable` carries an `include`
- * key, so reading `include` off the other two yields `undefined` — which is
- * why this is a discriminated union and not `{ kind: string; include?: boolean }`.
- * Use the helpers in `api/disposition.ts` rather than reading fields directly.
+ * Four dispositions, not a boolean. Only `actionable` and `machine_state`
+ * carry an `include` key, so reading `include` off the others yields
+ * `undefined`, which is why this is a discriminated union and not
+ * `{ kind: string; include?: boolean }`. Use the helpers in
+ * `api/disposition.ts` rather than reading fields directly.
  */
 export type Disposition =
   | { kind: "actionable"; include: boolean }
   | { kind: "advisory"; advisory_type: AdvisoryType; rationale: string }
-  | { kind: "inventory" };
+  | { kind: "inventory" }
+  /**
+   * A configuration file that belongs to one machine. Excluded by default;
+   * `include` is true only after an operator override. Never in
+   * `config_files`: the view lists these rows in `machine_state`.
+   */
+  | { kind: "machine_state"; member: CarriableMember; include: boolean };
+
+// --- Machine-state class (inspectah-core/src/types/machine_state.rs) ---
+
+/** Rust: CarriableMember, snake_case. A member whose content may be held. */
+export type CarriableMember =
+  | "hostname"
+  | "syspurpose"
+  | "nvme_host_id"
+  | "iscsi_initiator_name"
+  | "ipa_default_conf"
+  | "salt_minion_id"
+  | "authselect_switchable"
+  | "grub_tuned";
+
+/**
+ * Rust: MachineStateMember, a flat snake_case string whichever enum holds
+ * it. Display only: the UI never derives a row's treatment from it.
+ */
+export type MachineStateMember =
+  | "machine_id"
+  | "insights_state"
+  | "rhsm_consumer"
+  | "rhsm_entitlement"
+  | "lvm_system_devices"
+  | "kerberos_keytab"
+  | "ssh_host_key"
+  | "ssh_host_certificate"
+  | "private_key_file"
+  | "config_agent_key"
+  | CarriableMember;
+
+/** Rust: MachineStateReason. */
+export type MachineStateReason = "host_identity" | "host_credential" | "generated";
+
+/** Rust: OverrideLevel. How refine offers to carry the row anyway. */
+export type OverrideLevel = "never" | "warn" | "plain";
+
+/** Rust: ProvisioningStep. `command` beside it holds the display text. */
+export type ProvisioningStep =
+  | "realm_join"
+  | "subscription_register"
+  | "insights_register"
+  | "resign_ssh_host_certs"
+  | "deliver_private_key"
+  | "rebootstrap_config_agent";
+
+/** Rust: RecreatedBy. */
+export type RecreatedBy = "first_boot" | "provisioning" | "carried_setting";
+
+/** Rust: ProvisioningNoticeDto, tagged on `kind`. */
+export type ProvisioningNoticeDto =
+  | { kind: "owed"; step: ProvisioningStep; command: string }
+  | { kind: "automatic"; by: RecreatedBy }
+  | { kind: "none" };
+
+/**
+ * One machine-state row (Rust: `MachineStateRowDto`). The control comes
+ * from `override`, the notice line from `notice`, the metadata line from
+ * `content_captured`, `mode` and `size`.
+ */
+export interface MachineStateRowDto {
+  path: string;
+  member: MachineStateMember;
+  reason: MachineStateReason;
+  override: OverrideLevel;
+  /** The current choice; always false for `never`. */
+  include: boolean;
+  /** False for every withheld row. */
+  content_captured: boolean;
+  /** Permission bits as four octal digits ("0600"), withheld rows only. */
+  mode: string | null;
+  /** Withheld rows only. */
+  size: number | null;
+  notice: ProvisioningNoticeDto;
+  /** The `SetInclude` target. Absent exactly when `override` is `never`. */
+  item_id?: ItemIdConfig;
+}
+
+/** One owed provisioning step and the paths it covers (Rust: `ProvisioningStepDto`). */
+export interface ProvisioningStepDto {
+  step: ProvisioningStep;
+  command: string;
+  paths: string[];
+}
 
 // --- Package types (inspectah-core/src/types/rpm.rs) ---
 
@@ -754,6 +845,8 @@ export interface SysctlDriftDto {
 export type UnknownInputDto =
   | { kind: "outside_link"; path: string; target: string }
   | { kind: "redacted_file"; path: string }
+  /** A machine-state file the scan did not read. */
+  | { kind: "withheld_file"; path: string }
   | { kind: "redacted_runtime"; key: string };
 
 /** Rust: VendorReplacementDto. */
@@ -819,7 +912,9 @@ export interface SysctlFileDto {
 export type SysctlFileBodyDto =
   | { kind: "read"; link_target: string | null }
   | { kind: "mask" }
-  | { kind: "outside_link"; target: string };
+  | { kind: "outside_link"; target: string }
+  /** A machine-state file the scan did not read. */
+  | { kind: "withheld" };
 
 /** A classified tuned profile selection, projected for the view response. */
 export interface TunedDecisionDto {
@@ -938,6 +1033,18 @@ export interface ViewResponse extends RefinedView {
    * byte, or null when no listed package owns an enabled unit.
    */
   not_carried_notice: ExportWarning | null;
+  /**
+   * One row per machine-state class row, sorted by path. Class rows are in
+   * no other list. Always present.
+   */
+  machine_state: MachineStateRowDto[];
+  /** The owed provisioning steps, in the export's order. Always present. */
+  machine_state_steps: ProvisioningStepDto[];
+  /**
+   * The class entries the next export's `x-export-warnings` carries, byte
+   * for byte. Always present.
+   */
+  machine_state_notices: ExportWarning[];
 }
 
 /** One row of `not_carried_packages` (Rust: `NotCarriedRow`). */
@@ -1405,6 +1512,10 @@ export interface AggregateViewResponse {
   repo_conflict_count: number;
   /** The read-only sysctl panel; always `aggregate` on a fleet. */
   sysctl: SysctlViewDto;
+  /** Every row is withheld on a fleet: `override: "never"`, no `item_id`. */
+  machine_state: MachineStateRowDto[];
+  machine_state_steps: ProvisioningStepDto[];
+  machine_state_notices: ExportWarning[];
 }
 
 export interface LineRange {

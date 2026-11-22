@@ -37,6 +37,9 @@ export const OUTSIDE_LINK_LINE =
 /** Item 2, `Unknown`: a surviving file redaction changed. */
 export const REDACTED_FILE_LINE =
   "{path} held text that redaction replaced, so what it sets is not known.";
+/** Item 2, `Unknown`: a machine-state file the scan did not read. */
+export const WITHHELD_FILE_LINE =
+  "{path} is a machine-state file whose contents were not captured, so what it sets is not known.";
 /** Item 2, `Unknown`: a runtime value redaction removed. */
 export const REDACTED_RUNTIME_LINE =
   "The running value of {key} held text that redaction removed.";

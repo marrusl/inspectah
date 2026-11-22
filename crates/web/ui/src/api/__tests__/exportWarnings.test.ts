@@ -112,12 +112,12 @@ describe("withoutShownNotice", () => {
 
   it("skips the header entry equal to the notice already shown", () => {
     const parsed = parseExportWarnings(JSON.stringify([NOTICE, FAILURE]));
-    expect(withoutShownNotice(parsed, NOTICE)).toEqual([FAILURE]);
+    expect(withoutShownNotice(parsed, [NOTICE])).toEqual([FAILURE]);
   });
 
   it("leaves nothing when the notice was the only entry", () => {
     const parsed = parseExportWarnings(JSON.stringify([NOTICE]));
-    expect(withoutShownNotice(parsed, NOTICE)).toEqual([]);
+    expect(withoutShownNotice(parsed, [NOTICE])).toEqual([]);
   });
 
   it("keeps a header notice that differs from the one shown", () => {
@@ -125,23 +125,42 @@ describe("withoutShownNotice", () => {
     // this text, so it stays.
     const drifted = { kind: "notice" as const, text: NOTICE.text.replace("1 package", "2 packages") };
     const parsed = parseExportWarnings(JSON.stringify([drifted, FAILURE]));
-    expect(withoutShownNotice(parsed, NOTICE)).toEqual([drifted, FAILURE]);
+    expect(withoutShownNotice(parsed, [NOTICE])).toEqual([drifted, FAILURE]);
   });
 
   it("matches on kind as well as text", () => {
     const sameTextFailure = { kind: "failure" as const, text: NOTICE.text };
-    expect(withoutShownNotice([sameTextFailure], NOTICE)).toEqual([
+    expect(withoutShownNotice([sameTextFailure], [NOTICE])).toEqual([
       sameTextFailure,
     ]);
   });
 
   it("does not match on a text pattern", () => {
     const prefix = { kind: "notice" as const, text: NOTICE.text.slice(0, 40) };
-    expect(withoutShownNotice([prefix], NOTICE)).toEqual([prefix]);
+    expect(withoutShownNotice([prefix], [NOTICE])).toEqual([prefix]);
   });
 
-  it("returns the list unchanged when no notice was shown", () => {
+  it("keeps everything when nothing was shown", () => {
     const parsed = parseExportWarnings(JSON.stringify([NOTICE, FAILURE]));
-    expect(withoutShownNotice(parsed, null)).toEqual([NOTICE, FAILURE]);
+    expect(withoutShownNotice(parsed, [])).toEqual([NOTICE, FAILURE]);
+  });
+
+  it("skips every entry equal to one of several shown", () => {
+    // The not-carried notice and the machine-state notices are all on
+    // screen before download.
+    const LEFT_OUT = {
+      kind: "notice" as const,
+      text: "6 machine-state files left out. At provisioning: realm join.",
+    };
+    const IDENTITY = {
+      kind: "notice" as const,
+      text: "Host identity included in the image: /etc/iscsi/initiatorname.iscsi",
+    };
+    const parsed = parseExportWarnings(
+      JSON.stringify([NOTICE, LEFT_OUT, IDENTITY, FAILURE]),
+    );
+    expect(withoutShownNotice(parsed, [NOTICE, LEFT_OUT, IDENTITY])).toEqual([
+      FAILURE,
+    ]);
   });
 });

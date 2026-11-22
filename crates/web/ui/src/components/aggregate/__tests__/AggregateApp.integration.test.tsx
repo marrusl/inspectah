@@ -251,6 +251,9 @@ function mockAggregateViewResponse(
       },
     ],
     repo_conflict_count: 0,
+    machine_state: [],
+    machine_state_steps: [],
+    machine_state_notices: [],
     sysctl: { state: "aggregate" },
     ...overrides,
   };
@@ -778,6 +781,9 @@ describe("AggregateApp integration", () => {
     function makeConflictView(): AggregateViewResponse {
       return mockAggregateViewResponse({
         repo_conflict_count: 1,
+        machine_state: [],
+        machine_state_steps: [],
+        machine_state_notices: [],
         repo_groups: [
           {
             section_id: "baseos",

@@ -31,6 +31,10 @@ import { AggregateApp } from "./components/AggregateApp";
 import { RpmUploadModal } from "./components/RpmUploadModal";
 import { RpmBatchUploadModal } from "./components/RpmBatchUploadModal";
 import { rowKeyForItemId, type RowKey } from "./components/unitOutcome";
+import {
+  MACHINE_STATE_ITEM_PREFIX,
+  MACHINE_STATE_ROW_TESTID_PREFIX,
+} from "./components/MachineStateGroup";
 import "highlight.js/styles/github.css";
 import "./App.css";
 
@@ -608,7 +612,19 @@ function SingleHostApp({
 
     requestAnimationFrame(() => {
       let el: HTMLElement | null;
-      if (activeSection === "units") {
+      // The element that takes focus, when it is not `el` itself.
+      let focusTarget: HTMLElement | null = null;
+      if (itemId.startsWith(MACHINE_STATE_ITEM_PREFIX)) {
+        // A machine-state row: its button takes focus, or the row itself
+        // when it has none (a `never` row).
+        el = elementByTestId(
+          `${MACHINE_STATE_ROW_TESTID_PREFIX}${itemId.slice(MACHINE_STATE_ITEM_PREFIX.length)}`,
+        );
+        focusTarget =
+          el?.querySelector<HTMLElement>(
+            ".inspectah-machine-state__action button",
+          ) ?? null;
+      } else if (activeSection === "units") {
         // The units section names its rows by row key, not by test id
         // (spec § 6.11); an id that names no row finds nothing.
         const key = rowKeyForItemId(itemId);
@@ -637,13 +653,13 @@ function SingleHostApp({
         requestAnimationFrame(() => {
           el.scrollIntoView({ behavior: "smooth", block: "nearest" });
           el.classList.add("inspectah-highlight");
-          el.focus();
+          (focusTarget ?? el).focus();
           setTimeout(() => el.classList.remove("inspectah-highlight"), 1500);
         });
       } else {
         el.scrollIntoView({ behavior: "smooth", block: "nearest" });
         el.classList.add("inspectah-highlight");
-        el.focus();
+        (focusTarget ?? el).focus();
         setTimeout(() => el.classList.remove("inspectah-highlight"), 1500);
       }
     });
@@ -673,6 +689,17 @@ function SingleHostApp({
   }, []);
   const handleNotCarriedRevealed = useCallback(() => {
     setRevealNotCarried(false);
+  }, []);
+
+  // The Export dialog's "Review machine state" link: bring up
+  // Configuration and have the machine-state block expand into view.
+  const [revealMachineState, setRevealMachineState] = useState(false);
+  const handleReviewMachineState = useCallback(() => {
+    setActiveSection("config");
+    setRevealMachineState(true);
+  }, []);
+  const handleMachineStateRevealed = useCallback(() => {
+    setRevealMachineState(false);
   }, []);
 
   // The Export dialog fetched this view after a stale export. Show it in the
@@ -772,6 +799,10 @@ function SingleHostApp({
         notCarriedPackages={view.data?.not_carried_packages}
         notCarriedNotice={view.data?.not_carried_notice}
         onReviewNotCarried={handleReviewNotCarried}
+        machineStateRows={view.data?.machine_state}
+        machineStateSteps={view.data?.machine_state_steps}
+        machineStateNotices={view.data?.machine_state_notices}
+        onReviewMachineState={handleReviewMachineState}
         toolbarExtra={
           rpmUpload.needsUploadCount > 0 ? (
             <ToolbarItem>
@@ -864,6 +895,8 @@ function SingleHostApp({
                 onRemoveRpmUpload={handleRemoveRpmUpload}
                 revealNotCarried={revealNotCarried}
                 onNotCarriedRevealed={handleNotCarriedRevealed}
+                revealMachineState={revealMachineState}
+                onMachineStateRevealed={handleMachineStateRevealed}
               />
             </div>
             {isMobile && sidebarOverlayOpen && (

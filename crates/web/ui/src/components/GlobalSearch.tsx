@@ -19,10 +19,15 @@ import type {
   ReferenceSection,
   ServiceDecisionDto,
   UndeterminedInstallView,
+  MachineStateRowDto,
   UnmanagedFileGroup,
   UserDecision,
 } from "../api/types";
 import { unitSearchEntries } from "./unitOutcome";
+import {
+  machineStateItemId,
+  machineStateSearchText,
+} from "./MachineStateGroup";
 
 export interface GlobalSearchResult {
   /** Section ID (e.g. "packages", "configs", "units"). */
@@ -100,6 +105,11 @@ export interface GlobalSearchProps {
   manualLinks?: ManualLinkView[];
   /** The view response's undetermined installs, single-host mode only. */
   undeterminedInstalls?: UndeterminedInstallView[];
+  /**
+   * The view's machine-state rows: one entry each, in Configuration, with
+   * item id `machine-state:<path>`.
+   */
+  machineStateRows?: MachineStateRowDto[];
   /** Called when user selects a result -- navigates to section + item. */
   onNavigate: (sectionId: string, itemId: string) => void;
 }
@@ -156,6 +166,7 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       mountFindings,
       manualLinks,
       undeterminedInstalls,
+      machineStateRows,
       onNavigate,
     },
     ref,
@@ -188,6 +199,16 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
           sectionLabel: SECTION_LABELS.configs,
           title: itemName(item),
           itemId: getItemId(item),
+        });
+      }
+
+      for (const row of machineStateRows ?? []) {
+        results.push({
+          sectionId: "configs",
+          sectionLabel: SECTION_LABELS.configs,
+          title: row.path,
+          itemId: machineStateItemId(row.path),
+          searchText: machineStateSearchText(row),
         });
       }
 
@@ -309,6 +330,7 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       mountFindings,
       manualLinks,
       undeterminedInstalls,
+      machineStateRows,
     ]);
 
     // Build searchable text keyed by a composite of sectionId + itemId.

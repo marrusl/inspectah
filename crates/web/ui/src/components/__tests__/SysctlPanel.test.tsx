@@ -222,6 +222,33 @@ describe("SysctlPanel", () => {
     );
   });
 
+  it("says a withheld machine-state file was not read", () => {
+    const { panel } = renderPanel(
+      host({
+        explanation: {
+          state: "unknown",
+          inputs: [{ kind: "withheld_file", path: "/etc/sysctl.d/90-key.conf" }],
+        },
+        files: [
+          {
+            path: "/etc/sysctl.d/90-key.conf",
+            dir: "etc",
+            body: { kind: "withheld" },
+            config_path: null,
+          },
+        ],
+      }),
+    );
+    paragraph(
+      panel,
+      "/etc/sysctl.d/90-key.conf is a machine-state file whose contents were not captured, so what it sets is not known.",
+    );
+    const files = within(panel).getByRole("table", { name: "Sysctl files" });
+    expect(
+      within(files).getByText("machine-state file, contents not captured"),
+    ).toBeInTheDocument();
+  });
+
   it("names the active tuned profile in the drift paragraph", () => {
     const { panel } = renderPanel(
       host({

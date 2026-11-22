@@ -20,7 +20,9 @@ import type {
   ContextItem,
   DeclinedGeneratedView,
   DeclinedView,
+  MachineStateRowDto,
 } from "../api/types";
+import { ApiError } from "../api/types";
 import { isIncluded, isToggleable } from "../api/disposition";
 import { applyOp, ungroupGroup } from "../api/client";
 import { usePendingGuard } from "../hooks/usePendingGuard";
@@ -42,6 +44,12 @@ import { LanguagePackageList } from "./LanguagePackageList";
 import { UnmanagedFileList } from "./UnmanagedFileList";
 import { SystemTuningSection } from "./SystemTuningSection";
 import { NotCarriedGroup, notCarriedRowKey } from "./NotCarriedGroup";
+import {
+  MachineStateGroup,
+  filterMachineStateRows,
+  machineStateItemId,
+} from "./MachineStateGroup";
+import type { MachineStateFailure } from "./MachineStateGroup";
 import { buildShadowOwners } from "./shadowOwner";
 import { Content } from "@patternfly/react-core";
 
@@ -136,6 +144,34 @@ export interface MainContentProps {
   revealNotCarried?: boolean;
   /** Called once the Not carried group has handled a reveal. */
   onNotCarriedRevealed?: () => void;
+  /** Expand and scroll to the machine-state block (the Export dialog's link). */
+  revealMachineState?: boolean;
+  /** Called once the machine-state block has handled a reveal. */
+  onMachineStateRevealed?: () => void;
+}
+
+/** The prefix of a 422 the session sends for a file it will not carry. */
+const NOT_CARRIED_PREFIX = "not carried:";
+
+/**
+ * What a machine-state row shows when its request failed. A 422
+ * `not carried:` is the server stating a fact about the file, so it is
+ * worded as one; anything else says the change did not happen.
+ */
+export function machineStateFailure(err: unknown): MachineStateFailure {
+  if (
+    err instanceof ApiError &&
+    err.status === 422 &&
+    err.message.startsWith(NOT_CARRIED_PREFIX)
+  ) {
+    const why = err.message.slice(NOT_CARRIED_PREFIX.length).trim().replace(/\.$/, "");
+    return {
+      kind: "not_carried",
+      text: `inspectah does not carry this file: ${why}. Nothing was changed.`,
+    };
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return { kind: "failed", text: `The change was not saved: ${message}` };
 }
 
 interface ToastEntry {
@@ -190,6 +226,8 @@ export function MainContent({
   onSetBulkPackagePin,
   revealNotCarried = false,
   onNotCarriedRevealed,
+  revealMachineState = false,
+  onMachineStateRevealed,
 }: MainContentProps) {
   const [filterText, setFilterText] = useState("");
   const toastIdRef = useRef(0);
@@ -282,10 +320,34 @@ export function MainContent({
     [viewData],
   );
 
-  // The units section links a required_config path to its config row.
-  const configPaths = useMemo(
-    () => new Set(viewData ? viewData.config_files.map((c) => c.entry.path) : []),
+  // Machine-state rows, by path: a class path has no config row, and a
+  // link to it reveals its machine-state row instead.
+  const machineStatePaths = useMemo(
+    () => new Set((viewData?.machine_state ?? []).map((r) => r.path)),
     [viewData],
+  );
+
+  // The units section links a required_config path to its config row, or
+  // to its machine-state row.
+  const configPaths = useMemo(
+    () =>
+      new Set([
+        ...(viewData ? viewData.config_files.map((c) => c.entry.path) : []),
+        ...machineStatePaths,
+      ]),
+    [viewData, machineStatePaths],
+  );
+
+  // The item id a link to a Configuration path reveals.
+  const navigateToConfig = useCallback(
+    (configPath: string) =>
+      onNavigateToItem?.(
+        "config",
+        machineStatePaths.has(configPath)
+          ? machineStateItemId(configPath)
+          : `configs:${configPath}`,
+      ),
+    [onNavigateToItem, machineStatePaths],
   );
 
   // A config entry whose path is also carried by Service Drop-ins is
@@ -419,6 +481,31 @@ export function MainContent({
       new Set(viewData.generated_timers.map((g) => g.name)),
     );
   }, [viewData, retainGeneratedFailures]);
+  // Machine-state include and exclude, keyed `machine-state:<path>` for
+  // both, with their failures kept here for the same reason as the users'
+  // (process-docs/skills/web-ui-direct-request-guard.md). A reset or any
+  // Undo or Redo can replace a row's state, so either ends every failure;
+  // a row that leaves the view ends its own.
+  const machineStateGuard = usePendingGuard();
+  const machineStateFailures = useItemFailures<MachineStateFailure>();
+  const {
+    begin: beginMachineStateAttempt,
+    clear: clearMachineStateFailure,
+    clearAll: clearMachineStateFailures,
+    retain: retainMachineStateFailures,
+  } = machineStateFailures;
+  useEffect(() => {
+    clearMachineStateFailures();
+  }, [resetCounter, clearMachineStateFailures]);
+  useEffect(() => {
+    if (historyChange) clearMachineStateFailures();
+  }, [historyChange, clearMachineStateFailures]);
+  useEffect(() => {
+    if (!viewData) return;
+    retainMachineStateFailures(
+      new Set((viewData.machine_state ?? []).map((r) => machineStateItemId(r.path))),
+    );
+  }, [viewData, retainMachineStateFailures]);
   const runPackage = packageGuard.runGuarded;
   const runRepo = repoGuard.runGuarded;
   const runGroup = groupGuard.runGuarded;
@@ -471,6 +558,32 @@ export function MainContent({
       );
     },
     [runPackage, onViewUpdate, onMutationError],
+  );
+
+  // Machine-state include or exclude: the ordinary config op, with the
+  // row's item_id passed back verbatim. A row without one is never sent.
+  const runMachineState = machineStateGuard.runGuarded;
+  const handleMachineStateSetInclude = useCallback(
+    (row: MachineStateRowDto, include: boolean) => {
+      const itemId = row.item_id;
+      if (itemId === undefined) return;
+      const key = machineStateItemId(row.path);
+      runMachineState(key, () => {
+        const recordFailure = beginMachineStateAttempt(key);
+        return applyOp({
+          op: "SetInclude",
+          target: { item_id: itemId, include },
+        })
+          .then((updatedView) => onViewUpdate(updatedView))
+          .catch((err: unknown) => {
+            recordFailure(machineStateFailure(err));
+            onMutationError(
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          });
+      });
+    },
+    [runMachineState, beginMachineStateAttempt, onViewUpdate, onMutationError],
   );
 
   // Repo toggle: build SetInclude op for repos
@@ -721,11 +834,19 @@ export function MainContent({
 
   if (activeSection === "configs" || activeSection === "config") {
     const hasFilter = filterText.trim().length > 0;
-    const noResults = hasFilter && filteredConfigItems.length === 0;
+    const machineStateRows = viewData?.machine_state ?? [];
+    const machineStateMatches = hasFilter
+      ? filterMachineStateRows(machineStateRows, filterText).length
+      : machineStateRows.length;
+    // The block's matches count with the decision list's, and "no
+    // results" means neither has one.
+    const noResults =
+      hasFilter && filteredConfigItems.length === 0 && machineStateMatches === 0;
     // "All excluded" is a statement about decisions the user made, so only
     // actionable entries can produce it. Advisories are not excluded — they
     // were never candidates — and a host whose only config findings are
-    // advisories must still see them.
+    // advisories must still see them. Machine-state rows are not in
+    // `config_files`, so they never count toward it.
     const anyConfigIncluded = configItems.some((item) =>
       isIncluded(item.data.entry.disposition),
     );
@@ -734,17 +855,36 @@ export function MainContent({
     );
     const allConfigsExcluded =
       configItems.length > 0 && !anyConfigIncluded && !anyAdvisoryOrInventory;
+    // The block is at the foot of the section whatever the list shows: an
+    // empty state renders above it, never in place of it.
+    const machineStateBlock = (
+      <MachineStateGroup
+        rows={machineStateRows}
+        stepCount={viewData?.machine_state_steps.length ?? 0}
+        filterText={filterText}
+        onSetInclude={handleMachineStateSetInclude}
+        pendingKeys={machineStateGuard.pendingKeys}
+        failures={machineStateFailures.failures}
+        onDismissFailure={clearMachineStateFailure}
+        revealItemId={revealItemId}
+        reveal={revealMachineState}
+        onRevealed={onMachineStateRevealed}
+      />
+    );
     if (allConfigsExcluded) {
       return (
-        <EmptyState
-          titleText="All configuration files excluded"
-          headingLevel="h3"
-          data-testid="config-all-excluded"
-        >
-          <EmptyStateBody>
-            Use undo or re-include individual config files to restore them.
-          </EmptyStateBody>
-        </EmptyState>
+        <>
+          <EmptyState
+            titleText="All configuration files excluded"
+            headingLevel="h3"
+            data-testid="config-all-excluded"
+          >
+            <EmptyStateBody>
+              Use undo or re-include individual config files to restore them.
+            </EmptyStateBody>
+          </EmptyState>
+          {machineStateBlock}
+        </>
       );
     }
     return (
@@ -758,7 +898,9 @@ export function MainContent({
             onChange={setFilterText}
             onClose={handleSearchClose}
             onArrowDown={handleArrowDown}
-            resultCount={filteredConfigItems.length}
+            resultCount={
+              filteredConfigItems.length + (hasFilter ? machineStateMatches : 0)
+            }
           />
         )}
         {noResults ? (
@@ -770,17 +912,22 @@ export function MainContent({
             </EmptyStateBody>
           </EmptyState>
         ) : (
-          <DecisionList
-            items={filteredConfigItems}
-            sectionLabel="Config Files"
-            filterText={filterText}
-            revealItemId={revealItemId}
-            shadowOwners={shadowOwners}
-            onViewUpdate={onViewUpdate}
-            onMutationError={onMutationError}
-            onNavigateToOwner={onNavigateToItem}
-          />
+          // With only block rows to show, the list's own "No items"
+          // empty state would contradict the block under it.
+          (filteredConfigItems.length > 0 || machineStateMatches === 0) && (
+            <DecisionList
+              items={filteredConfigItems}
+              sectionLabel="Config Files"
+              filterText={filterText}
+              revealItemId={revealItemId}
+              shadowOwners={shadowOwners}
+              onViewUpdate={onViewUpdate}
+              onMutationError={onMutationError}
+              onNavigateToOwner={onNavigateToItem}
+            />
+          )
         )}
+        {machineStateBlock}
       </>
     );
   }
@@ -835,9 +982,7 @@ export function MainContent({
           manualLinks={manualLinks}
           undeterminedInstalls={undeterminedInstalls}
           defaultTarget={viewData?.default_target}
-          onNavigateToConfig={(configPath) =>
-            onNavigateToItem?.("config", `configs:${configPath}`)
-          }
+          onNavigateToConfig={navigateToConfig}
           revealItemId={revealItemId}
           onNavigateToItem={onNavigateToItem}
           filterText={filterText}
@@ -868,9 +1013,7 @@ export function MainContent({
           tuned={viewData.tuned}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
-          onNavigateToConfig={(configPath) =>
-            onNavigateToItem?.("config", `configs:${configPath}`)
-          }
+          onNavigateToConfig={navigateToConfig}
           tunedGuard={tunedGuard}
         />
       </>

@@ -87,6 +87,9 @@ const mockAggregateView: AggregateViewResponse = {
   ],
   repo_groups: [],
   repo_conflict_count: 0,
+  machine_state: [],
+  machine_state_steps: [],
+  machine_state_notices: [],
   sysctl: { state: "aggregate" },
 };
 

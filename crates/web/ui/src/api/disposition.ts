@@ -10,10 +10,16 @@ import type { AdvisoryType, Disposition } from "./types";
 
 /** True when this finding is baked into the exported image. */
 export function isIncluded(disposition: Disposition): boolean {
-  return disposition.kind === "actionable" && disposition.include;
+  return (
+    (disposition.kind === "actionable" || disposition.kind === "machine_state") &&
+    disposition.include
+  );
 }
 
-/** True when the user can change the finding's include state. */
+/**
+ * True when the user can change the finding's include state from the
+ * decision list. A machine-state row is decided through its own list.
+ */
 export function isToggleable(disposition: Disposition): boolean {
   return disposition.kind === "actionable";
 }

@@ -240,3 +240,31 @@ describe("System Tuning navigation, aggregate", () => {
     await waitFor(() => expect(entry).toHaveAttribute("aria-current", "page"));
   });
 });
+
+/**
+ * The fleet carries every class path as a withheld row (spec § 6.4), so
+ * the same block shows it with no control.
+ */
+describe("Machine state, aggregate", () => {
+  it("shows the merged row in Configuration with no control", async () => {
+    serveLayout("aggregate");
+    render(<App />);
+    const nav = await screen.findByRole("navigation", {
+      name: "Aggregate sections",
+    });
+    await activateFromKeyboard(
+      await within(nav).findByRole("link", { name: /^Configuration Files/ }),
+    );
+    const block = await screen.findByTestId("machine-state-group");
+    const toggle = within(block).getByRole("button", { name: /^Machine state/ });
+    expect(toggle).toHaveTextContent(/^Machine state \(1\)$/);
+    await userEvent.click(toggle);
+    const row = within(block).getByTestId("machine-state-row-/etc/hostname");
+    expect(within(row).queryByRole("button")).toBeNull();
+    expect(row).toHaveTextContent("Not carried");
+    expect(row).toHaveTextContent(
+      "mode unknown · size unknown · contents not captured",
+    );
+    expect(mutatingRequests).toEqual([]);
+  });
+});

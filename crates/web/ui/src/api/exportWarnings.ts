@@ -75,20 +75,21 @@ export function parseExportWarnings(raw: string | null): ExportWarning[] {
 }
 
 /**
- * Drop the header entry the operator already saw before download.
+ * Drop the header entries the operator already saw before download.
  *
- * `shown` is the view's `not_carried_notice`, which the server builds with
- * the same function and list as the header's notice entry, so an exact
- * match on `kind` and `text` is the whole test. Never match on a text
- * pattern: a header notice that differs from the one shown (the view and
- * the export drifted) has not been seen and must stay in the list.
+ * `shown` holds the view's `not_carried_notice` and its
+ * `machine_state_notices`, which the server builds with the same functions
+ * and lists as the header's entries, so an exact match on `kind` and
+ * `text` is the whole test. Never match on a text pattern: a header notice
+ * that differs from every one shown (the view and the export drifted) has
+ * not been seen and must stay in the list.
  */
 export function withoutShownNotice(
   warnings: ExportWarning[],
-  shown: ExportWarning | null,
+  shown: readonly ExportWarning[],
 ): ExportWarning[] {
-  if (shown === null) return warnings;
+  if (shown.length === 0) return warnings;
   return warnings.filter(
-    (w) => !(w.kind === shown.kind && w.text === shown.text),
+    (w) => !shown.some((s) => w.kind === s.kind && w.text === s.text),
   );
 }

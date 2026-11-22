@@ -86,6 +86,9 @@ function makeView(
     session_is_sensitive: false,
     not_carried_packages: rows,
     not_carried_notice: null,
+    machine_state: [],
+    machine_state_steps: [],
+    machine_state_notices: [],
   };
 }
 

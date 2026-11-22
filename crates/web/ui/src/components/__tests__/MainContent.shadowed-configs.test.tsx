@@ -65,6 +65,9 @@ function view(overrides: Partial<ViewResponse> = {}): ViewResponse {
     session_is_sensitive: false,
     not_carried_packages: [],
     not_carried_notice: null,
+    machine_state: [],
+    machine_state_steps: [],
+    machine_state_notices: [],
     ...overrides,
   };
 }

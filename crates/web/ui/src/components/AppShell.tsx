@@ -20,6 +20,8 @@ import type {
   UnmanagedFileGroup,
   SectionGroupMeta,
   NotCarriedRow,
+  MachineStateRowDto,
+  ProvisioningStepDto,
 } from "../api/types";
 import type { ExportWarning } from "../api/exportWarnings";
 import type { DecisionItemKind } from "./DecisionItem";
@@ -101,6 +103,14 @@ export interface AppShellProps {
   searchLanguagePackageEnvs?: LanguagePackageEnv[];
   /** Unmanaged file groups for GlobalSearch. */
   searchUnmanagedFileGroups?: UnmanagedFileGroup[];
+  /** Machine-state rows for GlobalSearch and the Export dialog. */
+  machineStateRows?: MachineStateRowDto[];
+  /** The view's owed provisioning steps, for the Export dialog. */
+  machineStateSteps?: ProvisioningStepDto[];
+  /** The view's machine-state export notices, for the Export dialog. */
+  machineStateNotices?: ExportWarning[];
+  /** Shows the machine-state block (the Export dialog's review link). */
+  onReviewMachineState?: () => void;
   /** GlobalSearch result navigation. */
   onSearchNavigate: (sectionId: string, itemId: string) => void;
   /** Extra shortcuts appended to the overlay. */
@@ -172,6 +182,10 @@ export function AppShell({
   searchUndeterminedInstalls,
   searchLanguagePackageEnvs,
   searchUnmanagedFileGroups,
+  machineStateRows,
+  machineStateSteps,
+  machineStateNotices,
+  onReviewMachineState,
   onSearchNavigate,
   extraShortcuts,
   toolbarExtra,
@@ -268,6 +282,7 @@ export function AppShell({
       mountFindings={searchMountFindings}
       manualLinks={searchManualLinks}
       undeterminedInstalls={searchUndeterminedInstalls}
+      machineStateRows={machineStateRows}
       onNavigate={handleSearchNavigate}
     />
   );
@@ -322,6 +337,10 @@ export function AppShell({
         notCarriedPackages={notCarriedPackages}
         notCarriedNotice={notCarriedNotice}
         onReviewNotCarried={onReviewNotCarried}
+        machineStateRows={machineStateRows}
+        machineStateSteps={machineStateSteps}
+        machineStateNotices={machineStateNotices}
+        onReviewMachineState={onReviewMachineState}
       />
     </Page>
   );
