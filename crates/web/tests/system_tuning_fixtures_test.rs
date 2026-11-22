@@ -454,10 +454,9 @@ async fn repos_host_with_repos_excluded() {
     record("repos-excluded", session, &[("view", "/api/view")]).await;
 }
 
-/// Two fleet hosts, `custom.repo` and its key on one only: the aggregate
-/// narrows both out, so `custom`'s row is kept with nothing carried.
-#[tokio::test]
-async fn repos_aggregate_of_two_hosts() {
+/// Two fleet hosts, `custom.repo` and its key on one only, merged and
+/// reloaded as `inspectah aggregate` writes them.
+fn repos_aggregate_session() -> RefineSession {
     let repo = "[custom]\nname=custom\nbaseurl=https://custom.example/repo\nenabled=1\n\
                 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-custom\n";
     let host = |name: &str, with_custom: bool| {
@@ -479,11 +478,46 @@ async fn repos_aggregate_of_two_hosts() {
         .as_mut()
         .expect("a merge records aggregate meta")
         .merged_at = FIXED_MERGED_AT.into();
-    let merged = unit_hosts::reload(&merged);
+    unit_hosts::session(&unit_hosts::reload(&merged))
+}
+
+/// Two fleet hosts, `custom.repo` and its key on one only: the aggregate
+/// narrows both out, so `custom`'s row is kept with nothing carried.
+#[tokio::test]
+async fn repos_aggregate_of_two_hosts() {
     record(
         "repos-aggregate",
-        unit_hosts::session(&merged),
+        repos_aggregate_session(),
         &[("aggregate-view", "/api/aggregate/view")],
     )
     .await;
+}
+
+/// The fleet view's Configuration rows for the repo file and its key say
+/// the repo toggle decides them, `shadowed_by: "repositories"`, as the
+/// single-host view's rows do, so the client offers no control the
+/// server refuses; no other row carries a shadow.
+#[tokio::test]
+async fn the_fleet_view_marks_repo_owned_configuration_rows() {
+    let app = app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(repos_aggregate_session())),
+    }));
+    let view = get_json(&app, "/api/aggregate/view").await;
+    let mut shadows = std::collections::BTreeMap::new();
+    for section in view["sections"].as_array().expect("sections") {
+        for item in section["items"].as_array().into_iter().flatten() {
+            let path = item["item_id"]["key"]["path"].as_str().unwrap_or_default();
+            if let Some(shadow) = item.get("shadowed_by") {
+                shadows.insert(path.to_owned(), shadow.clone());
+            }
+        }
+    }
+    let expected: std::collections::BTreeMap<String, serde_json::Value> = [
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom",
+        "/etc/yum.repos.d/custom.repo",
+    ]
+    .into_iter()
+    .map(|p| (p.to_owned(), serde_json::json!("repositories")))
+    .collect();
+    assert_eq!(shadows, expected, "{view}");
 }

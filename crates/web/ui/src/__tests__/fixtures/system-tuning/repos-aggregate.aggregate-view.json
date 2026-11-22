@@ -67,6 +67,7 @@
             "count": 1,
             "total": 2
           },
+          "shadowed_by": "repositories",
           "source_repo": "",
           "triage": {
             "bucket": "site",
@@ -88,6 +89,7 @@
             "count": 1,
             "total": 2
           },
+          "shadowed_by": "repositories",
           "source_repo": "",
           "triage": {
             "bucket": "site",

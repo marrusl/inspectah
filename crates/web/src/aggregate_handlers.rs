@@ -116,6 +116,14 @@ pub struct AggregateItem {
     /// Track C (T12) reads this field to render variant diff views.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variant_payload: Option<serde_json::Value>,
+    /// A Configuration row's shadow, as the single-host view's config row
+    /// carries it: `"repositories"` when the repo toggle decides the file
+    /// (an entry of `rpm.repo_files` or `rpm.gpg_keys` is at its
+    /// destination), so the row is read-only inventory and offers no
+    /// include, variant or edit control, which the server refuses.
+    /// Absent on every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadowed_by: Option<inspectah_core::types::config::ConfigShadow>,
 }
 
 #[derive(Clone, Serialize)]
@@ -604,6 +612,7 @@ fn build_aggregate_sections(
                     repo_conflict,
                     section_metadata: None,
                     variant_payload: None,
+                    shadowed_by: None,
                 }
             })
             .collect();
@@ -680,6 +689,13 @@ fn build_aggregate_sections(
                     repo_conflict: None,
                     section_metadata: None,
                     variant_payload: None,
+                    // Every variant at a repo-owned destination is shadowed
+                    // alike (`settle_repo_ownership`), so the row's is any
+                    // variant's.
+                    shadowed_by: path_entries
+                        .into_iter()
+                        .flatten()
+                        .find_map(|e| e.shadowed_by.clone()),
                 }
             })
             .collect();
@@ -716,6 +732,7 @@ fn build_aggregate_sections(
                     repo_conflict: None,
                     section_metadata: None,
                     variant_payload: None,
+                    shadowed_by: None,
                 }
             })
             .collect();
@@ -775,6 +792,7 @@ fn build_aggregate_sections(
                     repo_conflict: None,
                     section_metadata: None,
                     variant_payload: None,
+                    shadowed_by: None,
                 });
             }
         }
@@ -845,6 +863,7 @@ fn build_aggregate_sections(
                     repo_conflict: None,
                     section_metadata: None,
                     variant_payload: None,
+                    shadowed_by: None,
                 });
             }
         }
@@ -869,6 +888,7 @@ fn build_aggregate_sections(
                 repo_conflict: None,
                 section_metadata: None,
                 variant_payload: None,
+                shadowed_by: None,
             });
         }
 
@@ -916,6 +936,7 @@ fn build_aggregate_sections(
                     repo_conflict: None,
                     section_metadata: None,
                     variant_payload: None,
+                    shadowed_by: None,
                 }
             })
             .collect();
@@ -1052,6 +1073,7 @@ fn build_reference_sections(
                     repo_conflict: None,
                     section_metadata: None,
                     variant_payload: None,
+                    shadowed_by: None,
                 });
             }
         }
@@ -1087,6 +1109,7 @@ fn build_reference_sections(
                 repo_conflict: None,
                 section_metadata: None,
                 variant_payload: None,
+                shadowed_by: None,
             });
         }
         for zone in &net.firewall_zones {
@@ -1106,6 +1129,7 @@ fn build_reference_sections(
                 repo_conflict: None,
                 section_metadata: None,
                 variant_payload: None,
+                shadowed_by: None,
             });
         }
         if !items.is_empty() {
@@ -1135,6 +1159,7 @@ fn build_reference_sections(
                     repo_conflict: None,
                     section_metadata: None,
                     variant_payload: None,
+                    shadowed_by: None,
                 }
             })
             .collect();
@@ -1163,6 +1188,7 @@ fn build_reference_sections(
                 repo_conflict: None,
                 section_metadata: None,
                 variant_payload: None,
+                shadowed_by: None,
             });
         }
         if !items.is_empty() {
@@ -1198,6 +1224,7 @@ fn build_reference_sections(
                     repo_conflict: None,
                     section_metadata: None,
                     variant_payload: None,
+                    shadowed_by: None,
                 }
             })
             .collect();
@@ -1232,6 +1259,7 @@ fn build_reference_sections(
                     repo_conflict: None,
                     section_metadata: None,
                     variant_payload: None,
+                    shadowed_by: None,
                 }
             })
             .collect();
@@ -1288,6 +1316,7 @@ fn build_reference_sections(
                         repo_conflict: None,
                         section_metadata: build_language_package_metadata(entry),
                         variant_payload,
+                        shadowed_by: None,
                     }
                 })
                 .collect();
@@ -1349,6 +1378,7 @@ fn build_reference_sections(
                     repo_conflict: None,
                     section_metadata: build_unmanaged_file_metadata(f),
                     variant_payload,
+                    shadowed_by: None,
                 }
             })
             .collect();
