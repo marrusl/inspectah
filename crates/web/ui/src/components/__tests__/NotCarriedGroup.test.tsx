@@ -137,11 +137,17 @@ describe("NotCarriedGroup", () => {
     ).toBeDisabled();
   });
 
-  it("explains that an included package's own dependencies stay listed", async () => {
+  // Since beta.7 an enabled-unit owner is carried by default and only an
+  // excluded or held one is listed; including a package also takes the
+  // packages it needs off the list. The help must not describe the old rules.
+  it("explains which unit owners are listed and what including does", async () => {
     await renderExpanded(ROWS);
-    expect(screen.getByTestId("not-carried-known-limit")).toHaveTextContent(
-      /dependencies.*stay listed/i,
-    );
+    const help = screen.getByTestId("not-carried-help");
+    expect(help).toHaveTextContent(/enabled unit .* carried by default/i);
+    expect(help).toHaveTextContent(/repo disabled on the host/i);
+    expect(help).toHaveTextContent(/gives each held package's reason/i);
+    expect(help).toHaveTextContent(/and the packages it needs/i);
+    expect(screen.queryByText(/stay listed/i)).toBeNull();
   });
 
   it("expands on reveal and reports it was revealed", async () => {

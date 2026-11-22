@@ -81,18 +81,19 @@ export function NotCarriedGroup({
         isExpanded={expanded}
         onToggle={(_e, isExpanded) => setExpanded(isExpanded)}
       >
-        <p className="inspectah-not-carried__help">
-          Auto-installed packages that nothing carried in the image needs. The
-          export leaves them out and lists them in the Containerfile's{" "}
-          <code># Not carried</code> block. Including one adds it to the install
-          list and restores its enabled units.
-        </p>
         <p
           className="inspectah-not-carried__help"
-          data-testid="not-carried-known-limit"
+          data-testid="not-carried-help"
         >
-          Including a package does not clear its own dependencies from this
-          list: they stay listed, although dnf installs them with it.
+          Auto-installed packages the export leaves out, listed in the
+          Containerfile's <code># Not carried</code> block. Most are packages
+          nothing carried in the image needs. A package that owns an enabled
+          unit on the source host is carried by default, so it is listed here
+          only if you excluded it or it is held back: it may need a package the
+          image cannot install, such as one from a repo disabled on the host.
+          The Containerfile gives each held package's reason. Including a
+          package adds it and the packages it needs to the image and restores
+          its enabled units.
         </p>
         <ul className="inspectah-not-carried__list">
           {rows.map((row) => {
