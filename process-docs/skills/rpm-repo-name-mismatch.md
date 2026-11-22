@@ -94,9 +94,16 @@ once per export from `staged_writes`), by the same exact-first spelling
 rule (`section_spelling`, which is what `normalize_source_repos` already
 rewrote `source_repo` by), returns the id as that section spells it,
 and accepts only a section that is disabled, defines a source, and whose
-keys dnf needs (`RepoSectionDef::required_keys`: every local key it
-names while `gpgcheck`, `pkg_gpgcheck` or `repo_gpgcheck` is on, an unset
-`gpgcheck` counting as on, and none when the host turned checking off)
+keys the build's dnf needs (`RepoSectionDef::required_keys(dnf)`, with
+`InstallRepos::dnf`: every local key it names while that dnf checks
+signatures, and none when the host turned checking off). Read the three
+options apart: dnf 4 (RHEL 9 and 10) checks packages by `gpgcheck` and
+has no `pkg_gpgcheck`; dnf 5 (Fedora) binds both names to one option, the
+later assignment winning; both read `repo_gpgcheck`; an unset package
+check counts as on. One slot for `gpgcheck` and `pkg_gpgcheck` let a
+dnf 5 setting switch off a check RHEL's dnf 4 still makes. The dnf is
+`BuildDnf::for_host`, from the host's `os_release.id`; unknown means a
+key counts when either would check)
 are in the image when it installs (`keys_included`, shared with the
 repo-enabling proof and the route-loss decision): a key the base
 image ships, or one the GPG Keys section copies, which is an included

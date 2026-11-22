@@ -150,6 +150,8 @@ pub struct UnitHost {
     enabled_repos: Option<Vec<String>>,
     /// `(name, repo)` lines `dnf repoquery --available` prints.
     available: Vec<(String, String)>,
+    /// The host's `/etc/os-release`, when not RHEL 9.4.
+    os_release: Option<OsRelease>,
 }
 
 /// An installed package of an architecture other than `x86_64`
@@ -278,6 +280,17 @@ impl UnitHost {
     /// repo-less pass can tell a package's repo from a disabled one.
     pub fn enabled_repos(mut self, ids: &[&str]) -> Self {
         self.enabled_repos = Some(ids.iter().map(|i| (*i).to_owned()).collect());
+        self
+    }
+
+    /// The host runs distro `id` at `version_id` (`/etc/os-release`'s
+    /// `ID` and `VERSION_ID`), not RHEL 9.4.
+    pub fn os(mut self, id: &str, version_id: &str) -> Self {
+        self.os_release = Some(OsRelease {
+            id: id.into(),
+            version_id: version_id.into(),
+            ..Default::default()
+        });
         self
     }
 
@@ -897,14 +910,15 @@ fn ok(stdout: &str) -> ExecResult {
     }
 }
 
-fn pkg_source() -> SourceSystem {
+/// A package-based source running `os`, RHEL 9.4 when `None`.
+fn pkg_source(os: Option<OsRelease>) -> SourceSystem {
     SourceSystem::PackageBased {
-        os_release: OsRelease {
+        os_release: os.unwrap_or_else(|| OsRelease {
             name: "Red Hat Enterprise Linux".into(),
             version_id: "9.4".into(),
             id: "rhel".into(),
             ..Default::default()
-        },
+        }),
     }
 }
 
@@ -919,6 +933,7 @@ pub fn scan_unredacted(host: UnitHost) -> InspectionSnapshot {
 /// test that runs the scan's later passes.
 fn scan_collected(host: UnitHost) -> (InspectionSnapshot, MockExecutor) {
     let baseline = host.baseline();
+    let source = pkg_source(host.os_release.clone());
     let exec = host.build();
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
@@ -927,7 +942,7 @@ fn scan_collected(host: UnitHost) -> (InspectionSnapshot, MockExecutor) {
         Box::new(ScheduledTasksInspector::new()),
     ];
     let collected = collect(
-        &pkg_source(),
+        &source,
         &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         baseline.as_ref(),
@@ -966,6 +981,7 @@ pub fn scan_finished(host: UnitHost) -> InspectionSnapshot {
 /// `orchestrate::run_pipeline` over `host`, the scan sequence in one call:
 /// the same inspectors, no baseline, its export rendered into a tempdir.
 pub fn run_pipeline(host: UnitHost) -> InspectionSnapshot {
+    let source = pkg_source(host.os_release.clone());
     let exec = host.build();
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
@@ -977,7 +993,7 @@ pub fn run_pipeline(host: UnitHost) -> InspectionSnapshot {
     let dir = out.path().join("export");
     std::fs::create_dir_all(&dir).expect("the export directory");
     inspectah_pipeline::orchestrate::run_pipeline(
-        &pkg_source(),
+        &source,
         &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
         &inspectors,
         &dir,

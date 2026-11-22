@@ -219,12 +219,13 @@ fn first_restoring(
 /// source to fetch from (`baseurl`, `metalink` or `mirrorlist` left
 /// defined), and every key dnf needs for it in the image
 /// ([`RepoSectionDef::required_keys`]: every key it names, unless the
-/// host turned signature checking off for it, and then none). An enabled
+/// host turned signature checking off for it in the options the build's
+/// dnf reads, [`InstallRepos::dnf`], and then none). An enabled
 /// copy of the section with no source cannot supply the package,
 /// whichever file it sits in. The repo-enabling proof and the route-loss
 /// decision (`repoless::route_lost`) both read it.
 pub(crate) fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDef) -> bool {
-    sec.enabled && sec.has_source && keys_included(rpm, repos, sec.required_keys())
+    sec.enabled && sec.has_source && keys_included(rpm, repos, sec.required_keys(repos.dnf()))
 }
 
 /// The switch refine gives `repo` that can bring back what it owns, if

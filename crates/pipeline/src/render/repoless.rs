@@ -4,8 +4,8 @@ use inspectah_core::rpm_filename::StagedName;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::repo::{
-    RepoAttribution, RepoId, RepoSectionDef, SectionId, effective_definition, effective_section_in,
-    parse_repo_sections, section_spelling,
+    BuildDnf, RepoAttribution, RepoId, RepoSectionDef, SectionId, effective_definition,
+    effective_section_in, parse_repo_sections, section_spelling,
 };
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
@@ -171,7 +171,8 @@ pub fn write_cached_rpms(
 /// ([`RepoAttribution::Pseudo`]: `@System`, `anaconda`), the definition dnf
 /// would use among the repo files the build has when it installs
 /// ([`InstallRepos::effective`]) is disabled and defines a source, every
-/// key dnf needs for that section ([`RepoSectionDef::required_keys`]) is
+/// key the build's dnf needs for that section
+/// ([`RepoSectionDef::required_keys`], read for [`InstallRepos::dnf`]) is
 /// in the image (dnf cannot verify the package without it), and the id
 /// and the package's name and arch pass `sanitize_shell_value`. The id
 /// is returned as the `.repo` file spells it, since `--enablerepo` takes
@@ -203,7 +204,7 @@ fn disabled_repo_install(
         .filter(|sec| {
             !sec.enabled
                 && sec.has_source
-                && keys_included(rpm, repos, sec.required_keys())
+                && keys_included(rpm, repos, sec.required_keys(repos.dnf()))
                 && sanitize_shell_value(sec.id.as_str()).is_some()
         })
         .map(|sec| RepoId::new(sec.id.as_str()))
@@ -253,6 +254,9 @@ pub struct InstallRepos {
     /// installed by name from cannot be installed from in this export
     /// ([`route_lost`]).
     lost: BTreeSet<SectionId>,
+    /// The dnf the build runs, which decides which signature options a
+    /// section's keys depend on ([`BuildDnf::for_host`]).
+    dnf: BuildDnf,
 }
 
 impl InstallRepos {
@@ -304,6 +308,7 @@ impl InstallRepos {
             keys,
             spellings,
             lost: BTreeSet::new(),
+            dnf: BuildDnf::for_host(snap.os_release.as_ref()),
         };
         if let Some(rpm) = snap.rpm.as_ref() {
             let mut candidates: BTreeSet<SectionId> =
@@ -373,6 +378,13 @@ impl InstallRepos {
         }
         self.route_section(pkg)
             .filter(|section| self.lost.contains(section))
+    }
+
+    /// The dnf the build runs, from the source host's distro
+    /// ([`BuildDnf::for_host`]): which signature options decide whether a
+    /// section's keys are needed ([`RepoSectionDef::required_keys`]).
+    pub(crate) fn dnf(&self) -> BuildDnf {
+        self.dnf
     }
 
     /// Whether the GPG Keys section copies the captured key at `path`
@@ -1704,11 +1716,11 @@ mod tests {
                 false,
             ),
             case(
-                "key never captured, dnf 5's pkg_gpgcheck=0",
+                "key never captured, dnf 5's pkg_gpgcheck=0, the build's dnf unknown",
                 vec![file("site.repo", &site("pkg_gpgcheck=0\n"), true)],
                 None,
                 Base::Unknown,
-                false,
+                true,
             ),
             case(
                 "key never captured, gpgcheck=0 but repo_gpgcheck=1",

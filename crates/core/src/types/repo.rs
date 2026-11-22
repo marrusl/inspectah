@@ -332,15 +332,88 @@ pub struct RepoSectionDef {
     /// Every reference in the final `gpgkey=` value, split on whitespace
     /// and commas, in order.
     pub gpg_keys: Vec<KeyRef>,
-    /// Whether dnf checks signatures for this section, so the keys it
+    /// The signature options the section sets, each kept apart: dnf 4 and
+    /// dnf 5 read them differently ([`SignatureOptions::checks`]).
+    pub signatures: SignatureOptions,
+}
+
+/// Which dnf the image build runs, which decides how a section's signature
+/// options read ([`SignatureOptions::checks`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BuildDnf {
+    /// dnf 4 (libdnf): RHEL 9 and 10, CentOS Stream 9 and 10.
+    Dnf4,
+    /// dnf 5 (libdnf5): Fedora 41 and later.
+    Dnf5,
+    /// Not known: a key counts as needed when either would check.
+    #[default]
+    Unknown,
+}
+
+impl BuildDnf {
+    /// The dnf of the base image the export builds on, from the source
+    /// host's distro: the evidence base-image resolution maps from
+    /// (`resolve_from_os_release`). A RHEL or CentOS host gets that
+    /// distro's bootc image, whose dnf is dnf 4 (an EL8 host maps to EL9);
+    /// a Fedora host gets `fedora-bootc` at
+    /// [`crate::baseline::FEDORA_BOOTC_MIN`] (41) or later, and Fedora's
+    /// dnf is dnf 5 from 41 on. Any other distro, or none recorded, is
+    /// [`BuildDnf::Unknown`].
+    pub fn for_host(os: Option<&crate::types::os::OsRelease>) -> BuildDnf {
+        match os.map(|os| os.id.as_str()) {
+            Some("rhel" | "centos") => BuildDnf::Dnf4,
+            Some("fedora") => BuildDnf::Dnf5,
+            _ => BuildDnf::Unknown,
+        }
+    }
+}
+
+/// A section's signature options, each its final value as the host wrote
+/// it: `None` when unset or empty, else whether it reads as on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SignatureOptions {
+    /// `gpgcheck=`: dnf 4's package check; to dnf 5 an alias of
+    /// `pkg_gpgcheck`.
+    pub gpgcheck: Option<bool>,
+    /// `pkg_gpgcheck=`: dnf 5's package check. dnf 4 has no such option
+    /// and ignores it.
+    pub pkg_gpgcheck: Option<bool>,
+    /// `repo_gpgcheck=`: the repo metadata check, in both.
+    pub repo_gpgcheck: Option<bool>,
+    /// Whether `pkg_gpgcheck=` was assigned after the section's last
+    /// `gpgcheck=`. dnf 5 binds the two names to one option, so the later
+    /// assignment in the file is the one it reads.
+    pub pkg_gpgcheck_last: bool,
+}
+
+impl SignatureOptions {
+    /// Whether `dnf` checks signatures for the section, so the keys it
     /// names must be in the image before it installs from it
-    /// ([`Self::required_keys`]): its final `gpgcheck=` (or dnf 5's
-    /// `pkg_gpgcheck=`) or `repo_gpgcheck=` is true. An unset `gpgcheck`
-    /// is read as true, the `[main]` value the stock `dnf.conf` of Fedora,
-    /// CentOS Stream and RHEL sets, which is the one the build's dnf reads:
-    /// the export copies the host's `/etc/dnf` after the packages install.
-    /// An unset `repo_gpgcheck` is read as dnf's own default, false.
-    pub verifies_signatures: bool,
+    /// ([`RepoSectionDef::required_keys`]).
+    ///
+    /// - dnf 4 checks packages by `gpgcheck` (libdnf's `ConfigRepo` binds
+    ///   no `pkg_gpgcheck`), and metadata by `repo_gpgcheck`.
+    /// - dnf 5 checks packages by whichever of `gpgcheck` and
+    ///   `pkg_gpgcheck` was assigned last, and metadata by
+    ///   `repo_gpgcheck`.
+    /// - Not knowing which, a key is needed when either would check.
+    ///
+    /// An unset package check reads as on, the `[main]` value the stock
+    /// `dnf.conf` of Fedora, CentOS Stream and RHEL sets, which is the one
+    /// the build's dnf reads: the export copies the host's `/etc/dnf` after
+    /// the packages install. An unset `repo_gpgcheck` reads as dnf's own
+    /// default, off.
+    pub fn checks(&self, dnf: BuildDnf) -> bool {
+        let packages = match dnf {
+            BuildDnf::Dnf4 => self.gpgcheck,
+            BuildDnf::Dnf5 if self.pkg_gpgcheck_last => self.pkg_gpgcheck,
+            BuildDnf::Dnf5 => self.gpgcheck.or(self.pkg_gpgcheck),
+            BuildDnf::Unknown => {
+                return self.checks(BuildDnf::Dnf4) || self.checks(BuildDnf::Dnf5);
+            }
+        };
+        packages.unwrap_or(true) || self.repo_gpgcheck.unwrap_or(false)
+    }
 }
 
 impl RepoSectionDef {
@@ -360,13 +433,15 @@ impl RepoSectionDef {
         })
     }
 
-    /// The local keys dnf needs in the image to install from this section:
-    /// every [`Self::local_keys`] when it checks signatures
-    /// ([`Self::verifies_signatures`]), and none when the host turned
-    /// signature checking off for it. A key such a section names but dnf
-    /// never reads is no prerequisite of its packages.
-    pub fn required_keys(&self) -> impl Iterator<Item = &str> {
-        self.local_keys().filter(|_| self.verifies_signatures)
+    /// The local keys the build's `dnf` needs in the image to install from
+    /// this section: every [`Self::local_keys`] when it checks signatures
+    /// ([`SignatureOptions::checks`]), and none when the host turned
+    /// signature checking off for it in the options that dnf reads. A key
+    /// such a section names but dnf never reads is no prerequisite of its
+    /// packages.
+    pub fn required_keys(&self, dnf: BuildDnf) -> impl Iterator<Item = &str> {
+        let checks = self.signatures.checks(dnf);
+        self.local_keys().filter(move |_| checks)
     }
 }
 
@@ -395,8 +470,8 @@ enum RepoOption {
     Metalink,
     Mirrorlist,
     Gpgkey,
-    /// `gpgcheck=`, or `pkg_gpgcheck=`, dnf 5's name for it: one option.
     Gpgcheck,
+    PkgGpgcheck,
     RepoGpgcheck,
 }
 
@@ -408,7 +483,8 @@ impl RepoOption {
             "metalink" => RepoOption::Metalink,
             "mirrorlist" => RepoOption::Mirrorlist,
             "gpgkey" => RepoOption::Gpgkey,
-            "gpgcheck" | "pkg_gpgcheck" => RepoOption::Gpgcheck,
+            "gpgcheck" => RepoOption::Gpgcheck,
+            "pkg_gpgcheck" => RepoOption::PkgGpgcheck,
             "repo_gpgcheck" => RepoOption::RepoGpgcheck,
             _ => return None,
         })
@@ -427,7 +503,10 @@ struct SectionValues<'c> {
     mirrorlist: Option<Vec<&'c str>>,
     gpgkey: Option<Vec<&'c str>>,
     gpgcheck: Option<Vec<&'c str>>,
+    pkg_gpgcheck: Option<Vec<&'c str>>,
     repo_gpgcheck: Option<Vec<&'c str>>,
+    /// Whether `pkg_gpgcheck=` was assigned after the last `gpgcheck=`.
+    pkg_gpgcheck_last: bool,
 }
 
 /// An option's value, its lines joined as dnf joins a continued value.
@@ -444,6 +523,7 @@ impl<'c> SectionValues<'c> {
             RepoOption::Mirrorlist => &mut self.mirrorlist,
             RepoOption::Gpgkey => &mut self.gpgkey,
             RepoOption::Gpgcheck => &mut self.gpgcheck,
+            RepoOption::PkgGpgcheck => &mut self.pkg_gpgcheck,
             RepoOption::RepoGpgcheck => &mut self.repo_gpgcheck,
         }
     }
@@ -464,17 +544,21 @@ impl<'c> SectionValues<'c> {
         let baseurl = joined(&self.baseurl);
         let metalink = joined(&self.metalink);
         let mirrorlist = joined(&self.mirrorlist);
-        let gpgcheck = joined(&self.gpgcheck);
-        let repo_gpgcheck = joined(&self.repo_gpgcheck);
         let defined = |v: &Option<String>| v.as_deref().is_some_and(|v| !v.trim().is_empty());
-        let flag = |v: &Option<String>, unset: bool| {
-            v.as_deref()
+        let flag = |v: &Option<Vec<&str>>| {
+            joined(v)
+                .as_deref()
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
-                .map_or(unset, is_enabled_value)
+                .map(is_enabled_value)
         };
         RepoSectionDef {
-            verifies_signatures: flag(&gpgcheck, true) || flag(&repo_gpgcheck, false),
+            signatures: SignatureOptions {
+                gpgcheck: flag(&self.gpgcheck),
+                pkg_gpgcheck: flag(&self.pkg_gpgcheck),
+                repo_gpgcheck: flag(&self.repo_gpgcheck),
+                pkg_gpgcheck_last: self.pkg_gpgcheck_last,
+            },
             id,
             enabled: enabled
                 .as_deref()
@@ -576,7 +660,13 @@ pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
         in_item = Some(option);
         if let Some(option) = option {
             let value = strip_trailing_comment(value).trim();
-            *sections[idx].1.slot(option) = Some(vec![value]);
+            let values = &mut sections[idx].1;
+            match option {
+                RepoOption::Gpgcheck => values.pkg_gpgcheck_last = false,
+                RepoOption::PkgGpgcheck => values.pkg_gpgcheck_last = true,
+                _ => {}
+            }
+            *values.slot(option) = Some(vec![value]);
         }
     }
 
@@ -1167,6 +1257,78 @@ enabled=1
             ("$releasever", false),
         ] {
             assert_eq!(is_repo_id(id), ok, "{id:?}");
+        }
+    }
+
+    /// Every combination of `gpgcheck`, `pkg_gpgcheck` and
+    /// `repo_gpgcheck` (unset, off, on), with the first two in both
+    /// orders, read for the build's dnf on RHEL 9, RHEL 10 and Fedora, and
+    /// with the distro unknown. dnf 4 reads `gpgcheck` and ignores
+    /// `pkg_gpgcheck`; dnf 5 reads whichever of the two the file assigns
+    /// last; both read `repo_gpgcheck`; an unset package check is on.
+    #[test]
+    fn signature_checks_follow_the_build_dnfs_options() {
+        use crate::types::os::OsRelease;
+        let host = |id: &str, version: &str| OsRelease {
+            id: id.into(),
+            version_id: version.into(),
+            ..Default::default()
+        };
+        let distros = [
+            ("RHEL 9", Some(host("rhel", "9.6")), BuildDnf::Dnf4),
+            ("RHEL 10", Some(host("rhel", "10.0")), BuildDnf::Dnf4),
+            (
+                "CentOS Stream 10",
+                Some(host("centos", "10")),
+                BuildDnf::Dnf4,
+            ),
+            ("Fedora", Some(host("fedora", "43")), BuildDnf::Dnf5),
+            ("unknown distro", Some(host("arch", "")), BuildDnf::Unknown),
+            ("no os-release", None, BuildDnf::Unknown),
+        ];
+        let values = [None, Some(false), Some(true)];
+        let line = |key: &str, v: Option<bool>| match v {
+            None => String::new(),
+            Some(on) => format!("{key}={}\n", if on { "1" } else { "0" }),
+        };
+        for (what, os, dnf) in &distros {
+            assert_eq!(BuildDnf::for_host(os.as_ref()), *dnf, "{what}");
+            for gpg in values {
+                for pkg in values {
+                    for repo in values {
+                        for pkg_first in [true, false] {
+                            let (first, second) = if pkg_first {
+                                (line("pkg_gpgcheck", pkg), line("gpgcheck", gpg))
+                            } else {
+                                (line("gpgcheck", gpg), line("pkg_gpgcheck", pkg))
+                            };
+                            let content = format!(
+                                "[r]\nbaseurl=https://r.example/\ngpgkey=file:///k\n\
+                                 {first}{second}{}",
+                                line("repo_gpgcheck", repo)
+                            );
+                            let dnf4 = gpg != Some(false) || repo == Some(true);
+                            // The later of the two names that is set.
+                            let dnf5_pkg = match (gpg, pkg) {
+                                (Some(g), Some(p)) => Some(if pkg_first { g } else { p }),
+                                (g, p) => g.or(p),
+                            };
+                            let dnf5 = dnf5_pkg != Some(false) || repo == Some(true);
+                            let want = match dnf {
+                                BuildDnf::Dnf4 => dnf4,
+                                BuildDnf::Dnf5 => dnf5,
+                                BuildDnf::Unknown => dnf4 || dnf5,
+                            };
+                            let sec = &parse_repo_sections(&content)[0];
+                            assert_eq!(
+                                sec.required_keys(*dnf).count(),
+                                usize::from(want),
+                                "{what}: {content:?}"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -1800,6 +1800,60 @@ fn t5_a_missing_key_costs_a_route_only_when_dnf_checks_signatures() {
     }
 }
 
+/// Which signature options decide a key's need depends on the build's
+/// dnf, which follows the source host's distro: RHEL 9 and RHEL 10 build
+/// with dnf 4, which reads `gpgcheck` and has no `pkg_gpgcheck`; Fedora
+/// builds with dnf 5, which reads `pkg_gpgcheck` and takes `gpgcheck` as
+/// its alias, the later assignment winning. Over the contrasting
+/// settings, a missing key costs `site-tool` its route exactly when that
+/// dnf checks signatures, on both exports.
+#[test]
+fn t5_a_missing_key_costs_a_route_by_the_build_dnfs_signature_options() {
+    const SITE: &str = "/etc/yum.repos.d/site.repo";
+    let content = |check: &str| {
+        format!(
+            "[site]\nname=Site\nbaseurl=https://site.example/rpm/\nenabled=1\n{check}\
+             gpgkey=file:///etc/pki/rpm-gpg/retired-key\n"
+        )
+    };
+    // `(options, lost on RHEL's dnf 4, lost on Fedora's dnf 5)`.
+    let cases = [
+        ("gpgcheck=1\npkg_gpgcheck=0\nrepo_gpgcheck=0\n", true, false),
+        ("gpgcheck=0\npkg_gpgcheck=1\nrepo_gpgcheck=0\n", false, true),
+        ("pkg_gpgcheck=1\ngpgcheck=0\n", false, false),
+        ("pkg_gpgcheck=0\n", true, false),
+        ("gpgcheck=0\n", false, false),
+        ("pkg_gpgcheck=0\nrepo_gpgcheck=1\n", true, true),
+    ];
+    let distros = [
+        ("RHEL 9", "rhel", "9.6"),
+        ("RHEL 10", "rhel", "10.0"),
+        ("Fedora", "fedora", "43"),
+    ];
+    for (check, dnf4_lost, dnf5_lost) in cases {
+        for (what, id, version) in distros {
+            let lost = if id == "fedora" { dnf5_lost } else { dnf4_lost };
+            let host = UnitHost::new()
+                .os(id, version)
+                .base_package("bash")
+                .file(SITE, &content(check))
+                .package_from("site-tool", "site")
+                .enabled_repos(&["site"]);
+            let snap = reload(&scan_finished(host));
+            for (via, file) in both_containerfiles(&snap) {
+                let ctx = format!("{what}, {check:?}, {via}");
+                assert_eq!(!installs(&file, "site-tool"), lost, "{ctx}:\n{file}");
+                assert_eq!(
+                    file.lines()
+                        .any(|l| l == unrestorable_fixme("site-tool", "site")),
+                    lost,
+                    "{ctx}:\n{file}"
+                );
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------
 // T6. CLI export.
 // ---------------------------------------------------------------------
