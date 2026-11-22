@@ -68,6 +68,13 @@ host recorded on the directory, whichever way the owner is proved:
   package creates with it, which has the account's name. It proves no
   other group: `apache:homeowners` with only `httpd` carried.
 
+A `KNOWN_PACKAGE_ACCOUNTS` row must be an account the package creates on
+every install. An account its scriptlet creates only under some condition
+proves nothing: `nfs-utils` creates the legacy `nfsnobody` only when uid
+65534 is free, and every bootc base has `nobody` there, so a carried
+`nfs-utils` never gives the image `nfsnobody`. Read the package's spec
+before adding a row; leave out any account created inside an `if`.
+
 Name a group in a tmpfiles.d line only when it is that same-named package
 group or `ContainerfileUserPlan::guaranteed_gid` returns the host's gid for
 it; otherwise write the host's numeric gid, which the group-identity rule

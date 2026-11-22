@@ -520,11 +520,17 @@ const DNF_SOURCE_REPO: &str = "dnf repoquery --installed --queryformat";
 
 /// The RPM section the collector records on a host with `httpd` installed.
 fn collect_rpm_with_httpd() -> RpmSection {
+    collect_rpm_with("httpd", "2.4.62-1.el9", "/usr/sbin/httpd")
+}
+
+/// The RPM section the collector records on a host with the one package
+/// `name` installed at `version_release`, owning `file`.
+fn collect_rpm_with(name: &str, version_release: &str, file: &str) -> RpmSection {
     let exec = MockExecutor::new()
-        .with_command(RPM_QA, ok("0:httpd-2.4.62-1.el9.x86_64\n"))
+        .with_command(RPM_QA, ok(&format!("0:{name}-{version_release}.x86_64\n")))
         .with_command("rpm -Va", ok(""))
-        .with_command(RPM_FILE_OWNERSHIP, ok("@@httpd\n/usr/sbin/httpd\n"))
-        .with_command_prefix(DNF_SOURCE_REPO, ok("httpd x86_64 appstream\n"));
+        .with_command(RPM_FILE_OWNERSHIP, ok(&format!("@@{name}\n{file}\n")))
+        .with_command_prefix(DNF_SOURCE_REPO, ok(&format!("{name} x86_64 baseos\n")));
     match run(&RpmInspector::new(), &exec).section {
         SectionData::Rpm(section) => section,
         other => panic!("expected the rpm section, got {other:?}"),
@@ -595,6 +601,56 @@ fn u5c_package_account_group_by_name_only_when_established() {
             "{stat:?} {accepted:?}: {var_conf}"
         );
     }
+}
+
+/// `nfs-utils` creates the legacy `nfsnobody` account only when uid 65534
+/// is free, and every bootc base already has `nobody` there, so carrying
+/// the package does not prove the account. A directory a legacy host left
+/// owned by `nfsnobody` is written by number, never by a name tmpfiles
+/// would reject.
+#[test]
+fn nfsnobody_owned_dir_is_numeric_with_nfs_utils_carried() {
+    let exec = with_var_lib(
+        MockExecutor::new()
+            .with_file(
+                "/etc/passwd",
+                "nfsnobody:x:65534:65534:Anonymous NFS User:/var/lib/nfs:/sbin/nologin\n",
+            )
+            .with_file("/etc/group", "nfsnobody:x:65534:\n"),
+        &[("/var/lib/exports", "0755 65534 65534 nfsnobody nfsnobody\n")],
+    );
+    let mut snap = useradd(collect_users(&exec, false), &[]);
+    snap.storage = Some(collect_storage(&exec));
+    snap.rpm = Some(collect_rpm_with(
+        "nfs-utils",
+        "2.5.4-27.el9",
+        "/usr/sbin/rpc.nfsd",
+    ));
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    inspectah_pipeline::render::render_all(&snap, &RenderContext { target: None }, dir.path())
+        .expect("render");
+    let var_conf = std::fs::read_to_string(
+        dir.path()
+            .join("config/usr/lib/tmpfiles.d/inspectah-var.conf"),
+    )
+    .expect("the /var fragment");
+    assert!(
+        var_conf
+            .lines()
+            .any(|l| l == "d /var/lib/exports 0755 65534 65534 -"),
+        "{var_conf}"
+    );
+    assert!(
+        !var_conf.contains("created by package: nfs-utils"),
+        "{var_conf}"
+    );
+    assert!(
+        !var_conf
+            .lines()
+            .any(|l| !l.starts_with('#') && l.contains("nfsnobody")),
+        "{var_conf}"
+    );
 }
 
 /// U6: the keys comment.

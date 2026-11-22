@@ -2452,6 +2452,11 @@ fn secrets_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
 /// The table is intentionally conservative — only widely-deployed packages with
 /// stable account names are listed. Unknown packages fall through to the numeric
 /// path safely.
+///
+/// A row means the package creates the account on every install. An account a
+/// scriptlet creates only under some condition is not listed: `nfs-utils`
+/// creates the legacy `nfsnobody` only when uid 65534 is free, and every bootc
+/// base already has `nobody` there, so carrying it proves nothing.
 const KNOWN_PACKAGE_ACCOUNTS: &[(&str, &[&str])] = &[
     ("postgresql-server", &["postgres"]),
     ("bind", &["named"]),
@@ -2471,7 +2476,6 @@ const KNOWN_PACKAGE_ACCOUNTS: &[(&str, &[&str])] = &[
     ("chrony", &["chrony"]),
     ("openssh-server", &["sshd"]),
     ("rpcbind", &["rpc"]),
-    ("nfs-utils", &["nfsnobody"]),
     ("haproxy", &["haproxy"]),
     ("squid", &["squid"]),
     ("memcached", &["memcached"]),
