@@ -2296,6 +2296,32 @@ RHEL 9 measurement above, the directory ignored, is consistent with no
 downstream backport. Advice text about an `UpheldBy=` unit therefore names
 systemd 254 rather than claiming `enable` makes the link everywhere.
 
+### Measured, 2026-11-21: authselect in the base images
+
+No inspectah build was involved. On `rhel9` and `rhel10`, in throwaway
+containers and `podman build` from `rhel-bootc:9.8` and `:10.2`
+(`--pull=never --network=host --layers=false`, proxy variables unset),
+nothing changed on the hosts. The full table, the custom-profile builds
+and the bytes the tests use are in
+[ghost-config-files](ghost-config-files.md#measured-in-rhel-bootc-98-and-102-2026-11-21).
+What a later run needs to know:
+
+- **authselect 1.5.2 (RHEL 10) passes a content edit.** A line appended
+  to `/etc/authselect/system-auth`, mode kept, leaves `authselect check`
+  at exit 0; 1.2.6 (RHEL 9) exits 3 and names the file. Compare with
+  `authselect test --<file> <profile> <features>` instead.
+- **`RUN authselect select sssd with-faillock with-mkhomedir --force`
+  builds on both**, `authselect check` passes afterwards, and `bootc
+  container lint` ends with one warning, `var-tmpfiles`. Adding
+  `--nobackup` breaks RHEL 9 (`Directory [/var/lib/authselect] does not
+  exist`).
+- **`sed -i` through `/etc/nsswitch.conf` replaces the link** with a
+  regular file, so it tests a replaced link, not a content edit. Append
+  with `printf ... >>` to keep the file and its mode.
+- **The ghost query's full output** (`rpm -qa` with `%{FILENAMES:shescape}`)
+  was 118,684 records on RHEL 9.8 and 124,732 on RHEL 10.2, with no
+  quote or control character in any path.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a

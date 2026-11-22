@@ -3,13 +3,19 @@
 ## Why a branch of their own
 
 A package lists a `%ghost` file without shipping its content. rpm has
-nothing to compare it with, so `rpm -V` never reports it, and the
-unowned walk skips it because a package owns it. Without the ghost
-branch, an admin's edit to one reaches no collector. Measured on RHEL
-9.8 and 10.2 (and Fedora 44 for grub): `/etc/sssd/sssd.conf` (`cng`),
+nothing to compare it with: `rpm -V` checks a ghost file's mode, owner
+and group, never its digest or size, and the unowned walk skips it
+because a package owns it. Without the ghost branch, an admin's edit to
+one reaches no collector. Measured on RHEL 9.8 and 10.2 (and Fedora 44
+for grub): `/etc/sssd/sssd.conf` (`cng`),
 `/etc/authselect/authselect.conf` and `nsswitch.conf` (`g`, no config
 flag), `/etc/default/grub` (`cng`), `/etc/machine-id` and
 `/etc/hostname` (`cng`).
+
+A `chmod` of a ghost file does reach `rpm -Va`, as `.M.......  g
+<path>` (measured on both releases, 2026-11-21). The `rpm -Va` branch
+drops that row as metadata-only, so the ghost branch must not skip a
+path just because `rpm -Va` named it.
 
 ## The rule
 
@@ -17,28 +23,42 @@ flag), `/etc/default/grub` (`cng`), `/etc/machine-id` and
 `collect_ghost_configs` in `config/mod.rs`:
 
 - **Found by one query:** `rpm -qa --queryformat
-  '[%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES}\n]'`. `%{=NAME}` repeats
-  the scalar on each array iteration. The path is last and the line is
-  split at its first two spaces, so a path with a space survives; an
-  empty `fflags` leaves two spaces. A flags field with a byte outside
-  `dcsmnglra` is not trusted.
+  '[%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES:shescape}\n]'`. `%{=NAME}`
+  repeats the scalar on each array iteration. A path can hold a newline,
+  and rpm's queryformat cannot print a NUL (`\0` prints a literal `0` on
+  rpm 4.16.1.3 and 4.19.1.1), so the path is shell-quoted and the
+  output is read as a stream of `<package> <flags> '<path>'\n` records:
+  a quote inside the path is `'\''`, everything else is literal. Every
+  record must parse or the section is degraded. A decoded path holding a
+  control character is a scan warning and is never read. The full query
+  output of both test hosts (118,684 and 124,732 records) parses with no
+  error and no refused path.
 - **Every ghost file under `/etc`, not only `%config`:** authselect's
   files carry `g` alone. Requiring `c` loses them.
+- **Read only a regular file**, by `Executor::file_kind` (`lstat`): not
+  a symlink, not a directory (`%ghost %dir`), and never a FIFO, socket
+  or device, since opening a FIFO with no writer blocks and the
+  subprocess timeout does not cover file reads. `MockExecutor`'s
+  `with_special_file` registers such a path and panics if it is read.
 - **Collected** as `RpmOwnedModified`, `rpm_va_flags: None`, with its
-  package and content (redaction applies), when it exists as a regular
-  file: not a symlink, not a directory (`%ghost %dir`).
-- **Skipped:** paths `rpm -Va` reported; every skip the unowned walk
-  applies (`is_excluded_unowned`, dev artifacts, DHCP, SELinux fcontext
-  store); machine-state members (`is_machine_state_member`, the § 5.2
+  package and content (redaction applies).
+- **Skipped:** a path an earlier branch already collected (an `rpm -Va`
+  row with a content flag); every skip the unowned walk applies
+  (`is_excluded_unowned`, dev artifacts, DHCP, SELinux fcontext store);
+  machine-state members by path (`is_machine_state_member`, the § 5.2
   list of the machine-state class spec); `is_ghost_skip` (locale and
   keymap files, which an open locale item owns; the `sscg` certificate;
-  `crypto-policies/state/`; authselect's generated files).
+  `crypto-policies/state/`; authselect's generated files); and, after
+  the read, a file whose content is a keytab (first bytes `05 01` or
+  `05 02`) or a whole-file private key (§ 5.3), dropped before its
+  content is kept (`is_credential_content`). A key embedded in a larger
+  configuration file is configuration and stays with redaction.
 - **Not run** when `owned_paths` is empty; a failed query degrades the
   section. Mocks that run the config inspector with owned paths must
   register the query (an empty answer is fine), or the section reads
   degraded.
 
-When the machine-state class lands, the member skip goes and the push
+When the machine-state class lands, the member skips go and the push
 becomes `ConfigCollector::admit` with the same fields.
 
 ## authselect
@@ -50,18 +70,77 @@ becomes `ConfigCollector::admit` with the same fields.
   in place. Every word is a `BareWord`; a refusal renders a FIXME.
 - The generated files (`nsswitch.conf`, the PAM stacks, `dconf-*`) are
   not collected: `authselect select` writes them again.
-  `user-nsswitch.conf` is admin input and is carried as a file.
-- `authselect check` runs when the selection is collected. Each file it
-  names in brackets becomes a `Modernization` advisory (an existing
-  entry at that path is turned into one, so it is not copied over what
-  `select` writes). A failure naming no file is a scan warning.
+  `user-nsswitch.conf` is admin input and is carried as a file (a ghost
+  of `authselect-libs` on RHEL 9, unowned on RHEL 10).
+- **Hand edits to the generated files** become `Modernization`
+  advisories (an existing entry at that path is turned into one, so it
+  is not copied over what `select` writes). Two sources, because
+  `authselect check` is not enough on RHEL 10:
+  - `authselect check`. It names a changed mode or a replaced link on
+    both releases, and a content edit only on 1.2.6. A check that exits
+    non-zero without naming a file or saying "not valid" is
+    `AuthselectCheck::Failed`, never a clean result.
+  - Each generated file under `/etc/authselect/` that is a regular file
+    against `authselect test --<file> <profile> <features>`. `test`
+    prints `File <path>:` and then the content; the file on disk has a
+    header (`# Generated by authselect on <date>` and one more line on
+    1.2.6, four lines on 1.5.2) up to the first blank line. With the
+    header and trailing line breaks set aside the two are byte-equal on
+    an untouched configuration from both releases.
+  - A check or comparison that could not run is one scan warning naming
+    why. A check that reports a change but no file is found is another.
+- **Custom profiles.** `authselect create-profile <name> -b <base>
+  --symlink-meta --symlink-pam` links `README`, `REQUIREMENTS` and the
+  PAM templates into `/usr/share/authselect/vendor/<base>/` (RHEL 10
+  adds `switchable-auth`). The walk collects such a link
+  (`is_authselect_profile_link`) as a file with what it resolves to,
+  instead of a cross-tree advisory. The renderer selects `custom/<name>`
+  only when every config entry under `/etc/authselect/custom/<name>/`
+  and its `README` are staged; otherwise the section is a FIXME naming
+  the missing files and the command to run.
+
+### Measured in rhel-bootc 9.8 and 10.2, 2026-11-21
+
+On `rhel9` and `rhel10`, in throwaway containers and `podman build`
+from `registry.redhat.io/rhel9/rhel-bootc:9.8` and
+`registry.redhat.io/rhel10/rhel-bootc:10.2`, no host files changed.
+The bytes the tests use are in `testdata/fixtures/config/authselect/`.
+
+| | RHEL 9.8, authselect 1.2.6 | RHEL 10.2, authselect 1.5.2 |
+|---|---|---|
+| base image before any select | `No existing configuration detected.`, exit 2; `/etc/pam.d/system-auth` and `/etc/nsswitch.conf` regular files | profile `local`, no features; files are links into `/etc/authselect/` |
+| `COPY` of `user-nsswitch.conf`, then `RUN authselect select sssd with-faillock with-mkhomedir --force` | exit 0 | exit 0 |
+| what `--force` overwrote (its backup under `/var/lib/authselect/backups/`) | the base's own `fingerprint-auth`, `nsswitch.conf`, `password-auth`, `postlogin`, `smartcard-auth`, `system-auth`, replaced by links into `/etc/authselect/` | the `local` profile's output: `authselect.conf`, `dconf-db`, `dconf-locks`, the PAM files, `nsswitch.conf`, `switchable-auth` |
+| carried `user-nsswitch.conf` line `hosts: files dns myhostname` | in the generated `nsswitch.conf` | in it, as `hosts:      files  dns myhostname` |
+| `authselect check` afterwards | `Current configuration is valid.`, exit 0 | the same |
+| `bootc container lint` | 12 passed, 1 skipped, 1 warning: `var-tmpfiles` for the select backup under `/var/lib/authselect/backups` | the same |
+| `--nobackup` added | fails: `Directory [/var/lib/authselect] does not exist`, exit 5 | builds, check valid; lint still warns `var-tmpfiles`, for other files in `/var` |
+| a line appended to `/etc/authselect/system-auth`, mode kept: `authselect check` | exit 3, `[error] [/etc/authselect/system-auth] has unexpected content!` | exit 0, `Current configuration is valid.` |
+| `chmod 0600 password-auth`: `authselect check` | names it, `has wrong mode [0600], expected [0644]!` | the same |
+| `sed -i` through `/etc/nsswitch.conf` (replaces the link) | `is not a symbolic link!`, `was not created by authselect!` | the same |
+| `rpm -V authselect-libs` after the content edit | nothing for the file | the same |
+| `rpm -V` after `chmod` of a ghost file | `.M.......  g /etc/authselect/password-auth` | the same |
+| `authselect create-profile corp -b sssd --symlink-meta --symlink-pam` | 7 links into `/usr/share/authselect/vendor/sssd/`, 3 copied files | 8 links (adds `switchable-auth`) |
+| select of that profile with `README` removed | `Unable to find profile [custom/noreadme]`, exit 1; the build fails the same way | the same |
+| select with the `system-auth` template removed | exit 0, check valid, `system-auth` holds only its header (91 bytes): an empty PAM stack | the same (255 bytes) |
+| custom profile staged as the export did before: links dropped | build fails at the select line | the same |
+| links staged as files holding what they resolve to (what the export does now) | builds; `custom/corp with-faillock` selected; check valid; lint as above | the same |
+| links staged as links | builds, same results | the same |
+
+So `--force` is needed on RHEL 9 (the base has files authselect did not
+write) and harmless on RHEL 10; `--nobackup` is not usable on RHEL 9.
+The select adds its backup directory to a `var-tmpfiles` warning the
+image raises without it, and adds no warning of its own.
 
 ## Other files the branch reaches
 
 - `sssd.conf` and `conf.d/*.conf`: carried; the Containerfile adds
   `RUN chmod 0600` after the `COPY`, because SSSD refuses any other mode
-  and `COPY` gives the build context's. `*_authtok` is a credential key
-  in the redaction patterns.
+  and `COPY` gives the build context's. A `*_authtok` value is redacted
+  whole: SSSD's INI value is the rest of the line, spaces, tabs and
+  quotes included, and a password spelled like an NSS word (`files`) is
+  still a password. The SSSD pattern sets `filter_nss_pam_tokens:
+  false`, which the generic `password=` patterns set to true.
 - `/etc/default/grub`: the `grub_defaults` modernization rule makes it an
   advisory on any branch; it is never copied. Translating its
   `GRUB_CMDLINE_LINUX` into kargs.d is not done.
