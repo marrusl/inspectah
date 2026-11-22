@@ -5291,6 +5291,42 @@ fn the_local_timers_comment_says_which_are_carried() {
     }
 }
 
+/// The audit's Unit State Changes table says what the image does about
+/// each row, beside what the host did: the `systemctl` command the
+/// Containerfile writes, the marker of the line that declines it, or that
+/// the row is excluded. Built on [`t37_host`]'s enabled `report.timer`.
+#[test]
+fn the_audit_unit_table_says_what_the_image_does() {
+    let snap = scan(t37_host(""));
+    let row = |ops: &[(ItemId, bool)]| {
+        let tree = exported_after(&snap, ops);
+        let audit =
+            std::fs::read_to_string(tree.path().join("audit-report.md")).expect("audit-report.md");
+        assert!(
+            audit.contains("| Unit | Current | Default | Host change | In the image |"),
+            "{audit}"
+        );
+        audit
+            .lines()
+            .find(|l| l.starts_with("| report.timer |"))
+            .map(str::to_owned)
+            .unwrap_or_else(|| panic!("a report.timer row:\n{audit}"))
+    };
+
+    assert_eq!(
+        row(&[]),
+        "| report.timer | enabled | disable | enable | `systemctl enable` |"
+    );
+    assert_eq!(
+        row(&[(config_item(&etc_path("report.service")), false)]),
+        "| report.timer | enabled | disable | enable | not carried, see its `# Omitted:` line |"
+    );
+    assert_eq!(
+        row(&[(unit_item("report.timer"), false)]),
+        "| report.timer | enabled | disable | enable | not carried, excluded |"
+    );
+}
+
 /// An enabled local timer whose unit row is excluded keeps its files (the
 /// config rows own them) and loses its enable, so the comment names it as
 /// carried but not enabled, never as carried. Control: unchanged, the

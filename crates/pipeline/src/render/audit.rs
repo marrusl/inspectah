@@ -1047,6 +1047,42 @@ fn guarded_unit_commands(snap: &InspectionSnapshot) -> Vec<String> {
     target.chain(units).collect()
 }
 
+/// What the image does about one state-change row, for the audit's
+/// "In the image" column: the command the plan writes, or why it writes
+/// none. The row's own state change is what the host did; this says
+/// whether the Containerfile repeats it.
+fn image_outcome(
+    plan: &super::unit_plan::UnitPlan,
+    sc: &inspectah_core::types::units::UnitStateChange,
+) -> String {
+    use super::unit_plan::{DeclinedMarker, declined_line};
+    let name = sc.unit().name();
+    if !sc.disposition.is_included() {
+        return "not carried, excluded".into();
+    }
+    if let Some(unit) = plan.planned.iter().find(|u| u.name() == name) {
+        return if unit.guard().is_empty() {
+            format!("`systemctl {}`", unit.action())
+        } else {
+            format!(
+                "`systemctl {}`, if its unit files are in the image",
+                unit.action()
+            )
+        };
+    }
+    match plan
+        .declined
+        .iter()
+        .find(|(declined, _, _)| declined == name)
+        .map(|(declined, action, reason)| declined_line(declined, *action, reason).marker)
+    {
+        Some(DeclinedMarker::Omitted) => "not carried, see its `# Omitted:` line".into(),
+        Some(DeclinedMarker::Fixme) => "not carried, see its `# FIXME:` line".into(),
+        Some(DeclinedMarker::Advisory) => "not carried, see its `# Advisory:` line".into(),
+        None => "not carried".into(),
+    }
+}
+
 /// Render Services sections (services, scheduled_tasks).
 fn render_services_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
     // Unit State Changes
@@ -1055,8 +1091,9 @@ fn render_services_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) 
     {
         lines.push("### Unit State Changes".into());
         lines.push(String::new());
-        lines.push("| Unit | Current | Default | Action |".into());
-        lines.push("|------|---------|---------|--------|".into());
+        let plan = super::unit_plan::plan_units(snap, &super::configtree::staged_writes(snap));
+        lines.push("| Unit | Current | Default | Host change | In the image |".into());
+        lines.push("|------|---------|---------|-------------|--------------|".into());
         for sc in &services.state_changes {
             let state_str = match sc.current_state() {
                 inspectah_core::types::units::UnitState::Enabled => "enabled",
@@ -1074,11 +1111,12 @@ fn render_services_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) 
                 inspectah_core::types::units::UnitAction::Mask => "mask",
             };
             lines.push(format!(
-                "| {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} |",
                 sc.unit().name().as_str(),
                 state_str,
                 default_str,
-                action_str
+                action_str,
+                image_outcome(&plan, sc)
             ));
         }
         lines.push(String::new());
