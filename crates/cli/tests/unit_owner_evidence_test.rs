@@ -7,17 +7,17 @@
 //! the scan tarball and an unchanged refine export.
 //!
 //! - An enabled template instance credits its template's owner.
-//! - A carried owner's dependency from a disabled repo is installed from
-//!   that repo, and a carried owner's dependency keeps its recorded
-//!   `systemctl disable`.
+//! - An owner that needs a repo the image does not enable, its own, a
+//!   dependency's, or none, is not carried by default and is listed with
+//!   the reason; included, it installs as released. A carried owner's
+//!   dependency keeps its recorded `systemctl disable`.
 //! - An auto package the operator includes brings its dependencies: their
-//!   unit commands survive, guarded, and one a disabled repo serves
-//!   installs from it.
-//! - A package that may need one only a disabled repo serves installs in
-//!   the transaction that enables that repo, which names no provider dnf
-//!   may skip: competing providers, the dnf fallback's, and one the image
-//!   cannot install. A requirement the collector cannot read reaches
-//!   every disabled repo.
+//!   unit commands survive, guarded. It installs as released.
+//! - The transaction that enables a disabled repo names what the leaf
+//!   tree, what held on the host, says installed leaves pulled in, as
+//!   released: competing providers and the dnf fallback's dependency, but
+//!   never a provider only the image might pick, and nothing for a
+//!   requirement the collector cannot read.
 //! - An owner is carried when the collector could not tell leaves from
 //!   dependencies and fell back to the dependency graph, and that fallback
 //!   keeps the roots the host had: a dependency cycle nothing installs,
@@ -289,25 +289,135 @@ fn an_instance_file_of_its_own_outranks_the_template() {
 const PARTNER_REPO: &str = "[partner]\nname=Partner\nbaseurl=https://example.invalid/partner\n\
      enabled=0\ngpgcheck=0\n";
 
-/// `agent` owns the user-enabled `agent.service` and needs `agent-helper`,
-/// which only the host's disabled `partner` repo serves. Both paths
-/// carry `agent` and install `agent-helper` from that repo, in the
-/// transaction that enables it; without it, the image build cannot
-/// resolve `agent`.
-#[test]
-fn a_carried_owners_dependency_installs_from_its_disabled_repo() {
-    let host = base_host()
-        .package("agent")
-        .package_from("agent-helper", "partner")
-        .requires("agent", &["agent-helper"])
-        .file("/etc/yum.repos.d/partner.repo", PARTNER_REPO)
-        .unit("agent.service", "enabled")
-        .vendor_unit("agent.service", WANTED_UNIT, Some("agent"))
-        .preset("disable *");
-    let run = exports(host);
+/// The reason a unit owner that needs a disabled repo is not carried by
+/// default.
+const DISABLED_REPO_HOLD: &str = "needs a repo disabled on the host";
 
-    let helper = run
-        .snapshot
+/// The reason a unit owner that needs a package no enabled repo serves is
+/// not carried by default.
+const NO_REPO_HOLD: &str = "needs a package no enabled repo serves";
+
+/// A host where the auto package `agent` owns the user-enabled
+/// `agent.service`, with `edit` deciding where it and what it needs come
+/// from.
+fn agent_host(edit: impl FnOnce(UnitHost) -> UnitHost) -> UnitHost {
+    edit(
+        base_host()
+            .file("/etc/yum.repos.d/partner.repo", PARTNER_REPO)
+            .unit("agent.service", "enabled")
+            .vendor_unit("agent.service", WANTED_UNIT, Some("agent"))
+            .preset("disable *"),
+    )
+}
+
+/// The `# Not carried` line, the notice entry and the table reason of a
+/// held `agent`.
+fn held_agent_surfaces(reason: &str) -> (String, String, String) {
+    (
+        format!("#   agent (agent.service was enabled; {reason})"),
+        format!("agent ({reason})"),
+        format!("nothing this image installs needs it; {reason} |"),
+    )
+}
+
+/// An owner the plain install line cannot install is not carried by
+/// default, on both paths: no install line names it, and the notice, the
+/// `# Not carried` block and the audit table name it with the reason.
+/// `agent` comes from the host's disabled `partner` repo itself; or needs
+/// `agent-helper`, which only `partner` serves; or needs `agent-runtime`,
+/// installed from a local RPM path the export carries nothing for.
+#[test]
+fn an_owner_needing_a_repo_the_image_does_not_enable_is_not_carried_by_default() {
+    let cases: [(&str, UnitHost, &str); 3] = [
+        (
+            "agent from partner",
+            agent_host(|h| h.package_from("agent", "partner")),
+            DISABLED_REPO_HOLD,
+        ),
+        (
+            "agent-helper from partner",
+            agent_host(|h| {
+                h.package("agent")
+                    .package_from("agent-helper", "partner")
+                    .requires("agent", &["agent-helper"])
+            }),
+            DISABLED_REPO_HOLD,
+        ),
+        (
+            "agent-runtime from a local RPM",
+            agent_host(|h| {
+                h.package("agent")
+                    .package_from("agent-runtime", "@commandline")
+                    .requires("agent", &["agent-runtime"])
+            }),
+            NO_REPO_HOLD,
+        ),
+    ];
+    for (case, host, reason) in cases {
+        let run = exports(host);
+        let (block_line, notice_entry, table_reason) = held_agent_surfaces(reason);
+
+        let mut scanned = run.snapshot.clone();
+        apply_scan_package_defaults(&mut scanned);
+        let notice = not_carried_notice(&scanned).expect("the scan notices agent");
+        assert!(
+            notice.text().contains(&notice_entry),
+            "{case}: {}",
+            notice.text()
+        );
+        let warnings = export_warnings(&RefineSession::new(run.snapshot.clone()));
+        assert_eq!(warnings, vec![notice], "{case}: refine notices agent alike");
+
+        for (label, surfaces) in &run.paths {
+            let ctx = format!("{case}, {label}");
+            assert!(
+                !surfaces
+                    .install_names()
+                    .iter()
+                    .any(|n| n.starts_with("agent")),
+                "{ctx}: agent is not installed:\n{}",
+                surfaces.containerfile
+            );
+            assert_eq!(
+                partner_install(&surfaces.containerfile),
+                None,
+                "{ctx}:\n{}",
+                surfaces.containerfile
+            );
+            assert!(
+                surfaces.not_carried_block().contains(&block_line.as_str()),
+                "{ctx}: {block_line:?}:\n{}",
+                surfaces.containerfile
+            );
+            assert!(
+                surfaces
+                    .not_carried_table()
+                    .iter()
+                    .any(|row| row.starts_with("| agent |") && row.ends_with(&table_reason)),
+                "{ctx}: {:?}",
+                surfaces.not_carried_table()
+            );
+        }
+    }
+}
+
+/// `agent` owns the user-enabled `agent.service` and needs `agent-helper`,
+/// which only the host's disabled `partner` repo serves. Once the operator
+/// includes `agent` in refine, it installs as any auto package an operator
+/// includes does, as released: named on the plain install line, with
+/// `agent-helper` left to dnf there, and its unit's `enable` guarded.
+/// Nothing routes an auto package's dependency into the transaction that
+/// enables `partner`, so that build cannot resolve `agent`: the known
+/// limitation the default avoids.
+#[test]
+fn including_an_owner_that_needs_a_disabled_repo_installs_it_as_released() {
+    let host = agent_host(|h| {
+        h.package("agent")
+            .package_from("agent-helper", "partner")
+            .requires("agent", &["agent-helper"])
+    });
+    let snapshot = collected(host);
+    let helper = snapshot
         .rpm
         .as_ref()
         .and_then(|rpm| rpm.packages_added.iter().find(|p| p.name == "agent-helper"))
@@ -318,35 +428,43 @@ fn a_carried_owners_dependency_installs_from_its_disabled_repo() {
         "the dnf cache pass marked it: {helper:?}"
     );
 
-    for (label, surfaces) in &run.paths {
-        let install = surfaces
-            .containerfile
-            .split("\n\n")
-            .find(|block| block.contains("--enablerepo=partner"))
-            .unwrap_or_else(|| {
-                panic!(
-                    "{label}: a transaction enables partner:\n{}",
-                    surfaces.containerfile
-                )
-            });
-        assert!(
-            install
-                .lines()
-                .any(|l| l.trim().trim_end_matches('\\').trim() == "agent-helper"),
-            "{label}: agent-helper installs from partner:\n{}",
-            surfaces.containerfile
-        );
-        assert!(
-            surfaces.install_names().iter().any(|n| n == "agent"),
-            "{label}:\n{}",
-            surfaces.containerfile
-        );
-        assert!(
-            surfaces.not_carried_block().is_empty(),
-            "{label}: nothing is left out:\n{}",
-            surfaces.containerfile
-        );
-    }
+    let mut session = RefineSession::new(snapshot);
+    assert!(
+        projected_not_carried(&session).contains(&"agent".to_string()),
+        "{:?}",
+        projected_not_carried(&session)
+    );
+    set_package(&mut session, "agent", "x86_64", true);
+    let surfaces = surfaces_of(&session);
+    assert!(
+        surfaces.install_names().iter().any(|n| n == "agent"),
+        "{}",
+        surfaces.containerfile
+    );
+    assert!(
+        !surfaces.install_names().iter().any(|n| n == "agent-helper"),
+        "{}",
+        surfaces.containerfile
+    );
+    assert_eq!(
+        partner_install(&surfaces.containerfile),
+        None,
+        "{}",
+        surfaces.containerfile
+    );
+    // The unit plan does not see which packages an operator included by
+    // hand, so the enable runs only if the unit file is in the image.
+    assert!(
+        guards(&surfaces.containerfile, "enable", "agent.service"),
+        "{}",
+        surfaces.containerfile
+    );
+    assert!(
+        !surfaces.not_carried_block_names().contains(&"agent"),
+        "{}",
+        surfaces.containerfile
+    );
+    assert_eq!(export_warnings(&session), Vec::new());
 }
 
 /// `daemon` owns the user-enabled `daemon.service` and needs `helper`,
@@ -405,9 +523,10 @@ fn partner_install(containerfile: &str) -> Option<Vec<String>> {
 
 /// `app` requires `transport`, which two added packages provide and only
 /// the host's disabled `partner` repo serves. Neither is certain to
-/// install, but one has to, and dnf can take it only with `partner`
-/// enabled: both paths install `app` in the transaction that enables
-/// `partner` and leave the choice to dnf, naming neither provider.
+/// install, but both were installed on the host, so the leaf tree, which
+/// the routing reads, holds both: both paths name both providers in the
+/// transaction that enables `partner`, as released, and install `app` on
+/// the plain line.
 #[test]
 fn competing_providers_from_a_disabled_repo_install_from_it() {
     let host = base_host()
@@ -425,6 +544,10 @@ fn competing_providers_from_a_disabled_repo_install_from_it() {
         Vec::<String>::new(),
         "two providers: neither is certain"
     );
+    assert_eq!(
+        rpm.leaf_dep_tree,
+        serde_json::json!({"app.x86_64": ["provider-a.x86_64", "provider-b.x86_64"]})
+    );
 
     for (label, surfaces) in &run.paths {
         let install = partner_install(&surfaces.containerfile).unwrap_or_else(|| {
@@ -433,22 +556,25 @@ fn competing_providers_from_a_disabled_repo_install_from_it() {
                 surfaces.containerfile
             )
         });
-        assert_eq!(install, ["app"], "{label}:\n{}", surfaces.containerfile);
-        for provider in ["provider-a", "provider-b"] {
-            assert!(
-                !surfaces.install_names().iter().any(|n| n == provider),
-                "{label}: {provider} is not named:\n{}",
-                surfaces.containerfile
-            );
-        }
+        assert_eq!(
+            install,
+            ["provider-a", "provider-b"],
+            "{label}:\n{}",
+            surfaces.containerfile
+        );
+        assert!(
+            surfaces.install_names().iter().any(|n| n == "app"),
+            "{label}:\n{}",
+            surfaces.containerfile
+        );
     }
 }
 
 /// The collector's dnf fallback cannot tell one provider from several, so
-/// it records every dependency as one dnf may pick. `helper`, which only
-/// the disabled `partner` repo serves, is still the one `app` needs: both
-/// paths install `app` in the transaction that enables `partner`, where
-/// dnf pulls `helper` in.
+/// it records every dependency as one dnf may pick. Its graph is what
+/// held on the host, though, so the leaf tree holds `helper`, which only
+/// the disabled `partner` repo serves: both paths name `helper` in the
+/// transaction that enables `partner`, as released.
 #[test]
 fn the_dnf_fallbacks_disabled_repo_dependency_installs_from_it() {
     let host = base_host()
@@ -471,13 +597,12 @@ fn the_dnf_fallbacks_disabled_repo_dependency_installs_from_it() {
     );
 
     for (label, surfaces) in &run.paths {
-        let install = partner_install(&surfaces.containerfile).unwrap_or_else(|| {
-            panic!(
-                "{label}: a transaction enables partner:\n{}",
-                surfaces.containerfile
-            )
-        });
-        assert_eq!(install, ["app"], "{label}:\n{}", surfaces.containerfile);
+        assert_eq!(
+            partner_install(&surfaces.containerfile),
+            Some(vec!["helper".to_owned()]),
+            "{label}:\n{}",
+            surfaces.containerfile
+        );
     }
 }
 
@@ -485,11 +610,12 @@ fn the_dnf_fallbacks_disabled_repo_dependency_installs_from_it() {
 /// requires `vendor-runtime`, installed from a local RPM path the export
 /// carries nothing for, so the image can never install `helper`. `app`
 /// requires `(primary or helper)`, or `(bash or helper)` with `bash` in
-/// the base image, so the image needs no `helper`. Naming `helper` in an
-/// install would fail the build on its missing requirement. No install
-/// line names it, by default or once the operator excludes it: `app`
-/// installs alone in the transaction that enables `partner`, where dnf
-/// picks the provider it can install.
+/// the base image, so the image needs no `helper`. On the host the first
+/// operand satisfied it, so the leaf tree holds no `helper`: no install
+/// line names it, by default or once the operator excludes it, and as
+/// released no transaction enables `partner`. `app` stays on the plain
+/// install line, never moved into a transaction that would expose it to
+/// another version `partner` serves.
 #[test]
 fn a_provider_the_image_may_skip_is_never_named() {
     for requirement in ["(primary or helper)", "(bash or helper)"] {
@@ -522,8 +648,13 @@ fn a_provider_the_image_may_skip_is_never_named() {
             }
             assert_eq!(
                 partner_install(&surfaces.containerfile),
-                Some(vec!["app".to_owned()]),
-                "{ctx}: app installs with partner enabled:\n{}",
+                None,
+                "{ctx}: nothing enables partner:\n{}",
+                surfaces.containerfile
+            );
+            assert!(
+                surfaces.install_names().iter().any(|n| n == "app"),
+                "{ctx}: app installs on the plain line:\n{}",
                 surfaces.containerfile
             );
         }
@@ -534,11 +665,13 @@ fn a_provider_the_image_may_skip_is_never_named() {
 /// but past the 16 the collector reads, and `helper` comes only from the
 /// host's disabled `partner` repo. `helper.service` was disabled against a
 /// preset that enables it. The collector cannot say what `app` needs, so
-/// it takes `app` to possibly need anything: both paths install `app` in
-/// the transaction that enables `partner`, keep `helper` off the
-/// not-carried list, and keep its recorded `disable`, guarded.
+/// it takes `app` to possibly need anything: both paths keep `helper` off
+/// the not-carried list and keep its recorded `disable`, guarded. The
+/// routing reads the leaf tree, which records no `helper`, so as released
+/// no transaction enables `partner` and that build cannot resolve `app`:
+/// a known limitation.
 #[test]
-fn a_requirement_too_deep_to_read_keeps_every_disabled_repo_in_reach() {
+fn a_requirement_too_deep_to_read_keeps_its_disable_guarded() {
     let nested = format!("{}helper{}", "(bash and ".repeat(17), ")".repeat(17));
     let host = base_host()
         .package_from("helper", "partner")
@@ -551,15 +684,10 @@ fn a_requirement_too_deep_to_read_keeps_every_disabled_repo_in_reach() {
     let run = exports(host);
 
     for (label, surfaces) in &run.paths {
-        let install = partner_install(&surfaces.containerfile).unwrap_or_else(|| {
-            panic!(
-                "{label}: a transaction enables partner:\n{}",
-                surfaces.containerfile
-            )
-        });
-        assert!(
-            install.iter().any(|n| n == "app"),
-            "{label}: app installs with partner enabled: {install:?}\n{}",
+        assert_eq!(
+            partner_install(&surfaces.containerfile),
+            None,
+            "{label}: routed as released:\n{}",
             surfaces.containerfile
         );
         assert!(
@@ -570,6 +698,44 @@ fn a_requirement_too_deep_to_read_keeps_every_disabled_repo_in_reach() {
         assert!(
             guards(&surfaces.containerfile, "disable", "helper.service"),
             "{label}: the recorded disable is kept, guarded:\n{}",
+            surfaces.containerfile
+        );
+    }
+}
+
+/// The same unread requirement, which needs only `bash`, beside two
+/// unrelated auto packages from the host's disabled `partner` repo:
+/// `helper` requires `support`, which requires `vendor-runtime`, installed
+/// from a local RPM path the export carries nothing for. The unread
+/// requirement keeps both included by default, as packages `app` may
+/// pull in, but neither is a leaf and nothing names them: both paths
+/// install `app` alone on the plain line, as released, and no
+/// transaction enables `partner`.
+#[test]
+fn an_unread_requirement_names_no_optional_package() {
+    let nested = format!("{}bash{}", "(bash and ".repeat(17), ")".repeat(17));
+    let host = base_host()
+        .package_from("helper", "partner")
+        .package_from("support", "partner")
+        .package_from("vendor-runtime", "@commandline")
+        .requires("app", &[&nested])
+        .requires("helper", &["support"])
+        .requires("support", &["vendor-runtime"])
+        .file("/etc/yum.repos.d/partner.repo", PARTNER_REPO)
+        .preset("disable *");
+    let run = exports(host);
+
+    for (label, surfaces) in &run.paths {
+        assert_eq!(
+            surfaces.install_names(),
+            ["app"],
+            "{label}:\n{}",
+            surfaces.containerfile
+        );
+        assert_eq!(
+            partner_install(&surfaces.containerfile),
+            None,
+            "{label}:\n{}",
             surfaces.containerfile
         );
     }
@@ -929,11 +1095,13 @@ fn including_an_auto_package_by_hand_carries_its_dependencies() {
 }
 
 /// `tool` needs `helper`, which only the host's disabled `partner` repo
-/// serves. Once the operator includes `tool`, the export installs
-/// `helper` from that repo, in the transaction that enables it; without
-/// it, the image build cannot resolve `tool`.
+/// serves. Once the operator includes `tool`, it installs as released:
+/// named on the plain install line, with `helper` left to dnf there.
+/// Nothing routes the dependency of an auto package an operator includes
+/// into the transaction that enables `partner`, so that build cannot
+/// resolve `tool`: a known limitation.
 #[test]
-fn including_an_auto_package_by_hand_installs_its_disabled_repo_dependency() {
+fn including_an_auto_package_by_hand_routes_as_released() {
     let host = base_host()
         .package("tool")
         .package_from("helper", "partner")
@@ -943,20 +1111,14 @@ fn including_an_auto_package_by_hand_installs_its_disabled_repo_dependency() {
     let mut session = RefineSession::new(collected(host));
     set_package(&mut session, "tool", "x86_64", true);
     let surfaces = surfaces_of(&session);
-    let install = surfaces
-        .containerfile
-        .split("\n\n")
-        .find(|block| block.contains("--enablerepo=partner"))
-        .unwrap_or_else(|| panic!("a transaction enables partner:\n{}", surfaces.containerfile));
-    assert!(
-        install
-            .lines()
-            .any(|l| l.trim().trim_end_matches('\\').trim() == "helper"),
-        "helper installs from partner:\n{}",
-        surfaces.containerfile
-    );
     assert!(
         surfaces.install_names().iter().any(|n| n == "tool"),
+        "{}",
+        surfaces.containerfile
+    );
+    assert_eq!(
+        partner_install(&surfaces.containerfile),
+        None,
         "{}",
         surfaces.containerfile
     );

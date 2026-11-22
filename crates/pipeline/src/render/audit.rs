@@ -15,7 +15,7 @@ use inspectah_core::types::users::UserGroupDecision;
 
 use super::baseline_fmt;
 use super::md_literal::{md_code, md_code_cell};
-use super::not_carried::{NOT_CARRIED_REASON, NotCarriedPackage, export_not_carried_packages};
+use super::not_carried::{NotCarriedPackage, export_not_carried_packages};
 use super::selinux;
 use super::sysctl_report::{
     AGGREGATE_LINE, AS_WRITTEN_GLOB_ASSIGN_LINE, AS_WRITTEN_GLOB_EXCLUDE_LINE, AS_WRITTEN_LABEL,
@@ -441,8 +441,9 @@ fn render_packages_section(
                 p.source_repo.as_str()
             };
             lines.push(format!(
-                "| {} | {repo} | {units} | {NOT_CARRIED_REASON} |",
+                "| {} | {repo} | {units} | {} |",
                 p.display_name(),
+                p.reason(),
             ));
         }
         lines.push(String::new());

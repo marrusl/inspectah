@@ -30,12 +30,24 @@
 //! unit enabled on the source host is in [`default_carried_unit_owners`],
 //! whether or not something pulls it in and whether or not the tree can
 //! support the class: the scan and refine both keep it included, and the
-//! Containerfile installs it although it is not a leaf. Its own recorded
-//! closure (`dep_closures`) then counts as pulled in, as a leaf's does.
-//! In the class it is [`AutoCarriage::UnitOwner`]; only
-//! [`AutoCarriage::Unneeded`] packages are excluded by default. Either
-//! kind, once excluded (by the default or by an operator), is listed as
-//! not carried.
+//! Containerfile names it on the plain install line although it is not a
+//! leaf. Its own recorded closure (`dep_closures`) then counts as pulled
+//! in, as a leaf's does. In the class it is [`AutoCarriage::UnitOwner`].
+//!
+//! **Except one that needs a repo the image does not enable.** The plain
+//! install line enables no disabled repo, and nothing routes an auto
+//! package's dependencies into the transaction that does
+//! (`unit_plan::leaf_tree_pulled_in`). So an owner that comes from a repo
+//! the host has disabled, or that may pull in a package only such a repo
+//! or no repo at all serves, is not carried by default ([`owner_hold`]):
+//! it is [`AutoCarriage::HeldOwner`], excluded by default like an
+//! [`AutoCarriage::Unneeded`] package, and listed with its reason. The
+//! operator can include it in refine; it then installs as any auto package
+//! the operator includes does. "May pull in" is its whole recorded
+//! closure, every provider and branch included, and a requirement the
+//! collector could not read counts as pulling in every added package.
+//! Each of the three kinds, once excluded (by the default or by an
+//! operator), is listed as not carried.
 //!
 //! **A fleet keeps only leaves.** The aggregate merge drops every package
 //! that is not a leaf on every host, so the fleet export cannot carry an
@@ -76,8 +88,8 @@ use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::repoless::{InstallRepos, PackageRoute, route_for};
 use super::unit_plan::{
-    every_installed_package_has_a_closure, possibly_pulled_in_by_included,
-    pulled_in_by_default_roots,
+    every_installed_package_has_a_closure, is_package_installable, possible_closure,
+    possibly_pulled_in_by_included, pulled_in_by_default_roots,
 };
 use crate::export_warning::{ExportWarning, sanitize_bounded};
 
@@ -105,6 +117,10 @@ pub enum AutoCarriage {
     /// on the source host. Carried by default: a firewall or cron daemon
     /// missing from the image surfaces long after the migration.
     UnitOwner,
+    /// A [`Self::UnitOwner`] that needs a repo the image does not enable
+    /// ([`owner_hold`]). Excluded by default: naming it on the plain
+    /// install line would fail the build.
+    HeldOwner(OwnerHold),
     /// An auto package nothing included pulls in and that owns no enabled
     /// unit. Excluded by default.
     Unneeded,
@@ -147,7 +163,7 @@ pub fn classify_auto_carriage(snap: &InspectionSnapshot) -> Option<HashMap<Strin
     let repos = InstallRepos::of(snap);
     let pulled_in = pulled_in_by_default_roots(snap, &repos);
     let existing = ExistingHandling::of(rpm, &repos);
-    let unit_owners = default_carried_unit_owners(snap);
+    let unit_owners = unit_owner_holds(snap);
 
     let classes = rpm
         .packages_added
@@ -160,8 +176,8 @@ pub fn classify_auto_carriage(snap: &InspectionSnapshot) -> Option<HashMap<Strin
                 AutoCarriage::PulledIn
             } else if existing.keeps(pkg) {
                 AutoCarriage::NotAuto
-            } else if unit_owners.contains(&id) {
-                AutoCarriage::UnitOwner
+            } else if let Some(hold) = unit_owners.get(&id) {
+                hold.map_or(AutoCarriage::UnitOwner, AutoCarriage::HeldOwner)
             } else {
                 AutoCarriage::Unneeded
             };
@@ -206,13 +222,14 @@ impl<'a> ExistingHandling<'a> {
     }
 }
 
-/// Exclude every [`AutoCarriage::Unneeded`] package from a scan snapshot.
+/// Exclude every [`AutoCarriage::Unneeded`] and
+/// [`AutoCarriage::HeldOwner`] package from a scan snapshot.
 ///
 /// This is the scan's default disposition for the class; every other
 /// package, an [`AutoCarriage::UnitOwner`] included, is left as it is,
 /// and under the fallback nothing changes.
 /// Idempotent: only leaves and carried unit owners contribute to
-/// `pulled_in_by_default_roots`, and an `Unneeded` package is neither, so
+/// `pulled_in_by_default_roots`, and an excluded package is neither, so
 /// excluding one cannot change the class.
 pub fn apply_scan_package_defaults(snap: &mut InspectionSnapshot) {
     let Some(classes) = classify_auto_carriage(snap) else {
@@ -223,15 +240,18 @@ pub fn apply_scan_package_defaults(snap: &mut InspectionSnapshot) {
     };
     for pkg in &mut rpm.packages_added {
         let id = format!("{}.{}", pkg.name, pkg.arch);
-        if classes.get(&id) == Some(&AutoCarriage::Unneeded) {
+        if matches!(
+            classes.get(&id),
+            Some(AutoCarriage::Unneeded | AutoCarriage::HeldOwner(_))
+        ) {
             pkg.disposition = FindingKind::excluded();
         }
     }
 }
 
-/// An excluded [`AutoCarriage::Unneeded`] or [`AutoCarriage::UnitOwner`]
-/// package, or a package a fleet drops ([`fleet_not_carried_packages`]),
-/// as every surface shows it.
+/// An excluded [`AutoCarriage::Unneeded`], [`AutoCarriage::UnitOwner`] or
+/// [`AutoCarriage::HeldOwner`] package, or a package a fleet drops
+/// ([`fleet_not_carried_packages`]), as every surface shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotCarriedPackage {
     /// Package name.
@@ -244,6 +264,9 @@ pub struct NotCarriedPackage {
     pub source_repo: String,
     /// Enabled units this package owns (`enabled_units_by_owner`).
     pub enabled_units: Vec<String>,
+    /// Why this unit owner is not carried by default
+    /// ([`AutoCarriage::HeldOwner`]); `None` for every other entry.
+    pub hold: Option<OwnerHold>,
     /// Another arch of this name is in the same list.
     arch_qualified: bool,
 }
@@ -264,6 +287,38 @@ impl NotCarriedPackage {
     /// [`not_carried_notice`].
     pub fn owns_enabled_unit(&self) -> bool {
         !self.enabled_units.is_empty()
+    }
+
+    /// The reason every surface gives for this entry: [`NOT_CARRIED_REASON`],
+    /// followed by the [`OwnerHold`] reason for a held unit owner.
+    pub fn reason(&self) -> String {
+        match self.hold {
+            Some(hold) => format!("{NOT_CARRIED_REASON}; {}", hold.reason()),
+            None => NOT_CARRIED_REASON.to_string(),
+        }
+    }
+}
+
+/// Why an auto package that owns a unit enabled on the source host is not
+/// carried by default ([`owner_hold`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerHold {
+    /// It, or a package installing it may pull in, comes from a repo the
+    /// host has disabled. The plain install line does not enable it.
+    DisabledRepo,
+    /// A package installing it may pull in has no repo the image enables
+    /// to install it from by name: a local RPM, or one from a repo the
+    /// export does not carry.
+    NoRepo,
+}
+
+impl OwnerHold {
+    /// The short reason every surface gives.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::DisabledRepo => "needs a repo disabled on the host",
+            Self::NoRepo => "needs a package no enabled repo serves",
+        }
     }
 }
 
@@ -306,7 +361,11 @@ pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage>
             pkg.disposition == FindingKind::excluded()
                 && matches!(
                     classes.get(&id),
-                    Some(AutoCarriage::Unneeded | AutoCarriage::UnitOwner)
+                    Some(
+                        AutoCarriage::Unneeded
+                            | AutoCarriage::UnitOwner
+                            | AutoCarriage::HeldOwner(_)
+                    )
                 )
                 && !may_pull.contains(&id)
         })
@@ -318,6 +377,10 @@ pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage>
                 .get(pkg.name.as_str())
                 .map(|units| units.iter().map(|u| (*u).to_string()).collect())
                 .unwrap_or_default(),
+            hold: match classes.get(&format!("{}.{}", pkg.name, pkg.arch)) {
+                Some(AutoCarriage::HeldOwner(hold)) => Some(*hold),
+                _ => None,
+            },
             arch_qualified: false,
         })
         .collect();
@@ -347,42 +410,112 @@ fn sort_for_display(list: &mut [NotCarriedPackage]) {
 }
 
 /// The `name.arch` ids of the auto packages carried by default because
-/// they own a unit enabled on the source host.
+/// they own a unit enabled on the source host: the [`unit_owner_holds`]
+/// entries with no [`OwnerHold`].
 ///
-/// Membership is fixed by the snapshot alone: an auto package, not a leaf,
-/// outside the existing handling, that owns an enabled unit. It does not
-/// depend on whether something the export installs pulls the package in,
-/// so excluding the leaf that does never takes the owner out with it, and
-/// it does not depend on the tree fallback, which decides only whether
-/// other auto packages can safely be left out. Empty for an aggregate, or
-/// when the collector had no leaf data.
+/// Membership is fixed by the snapshot alone. It does not depend on
+/// whether something the export installs pulls the package in, so
+/// excluding the leaf that does never takes the owner out with it, and it
+/// does not depend on the tree fallback, which decides only whether other
+/// auto packages can safely be left out. Empty for an aggregate, or when
+/// the collector had no leaf data.
 ///
 /// Refine includes one by default and shows it in its package list; the
-/// Containerfile installs an included one that no installed leaf pulls in,
-/// and its recorded closure counts as pulled in
+/// Containerfile names an included one that no installed leaf pulls in on
+/// the plain install line, and its recorded closure counts as pulled in
 /// (`unit_plan::export_installs`, `pulled_in_by_default_roots`).
 pub fn default_carried_unit_owners(snap: &InspectionSnapshot) -> HashSet<String> {
+    unit_owner_holds(snap)
+        .into_iter()
+        .filter(|(_, hold)| hold.is_none())
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// Every auto package that owns a unit enabled on the source host, by
+/// `name.arch` id, with the [`owner_hold`] that keeps it from being
+/// carried by default, if any: an auto package, not a leaf, outside the
+/// existing handling, that owns an enabled unit. Empty for an aggregate,
+/// or when the collector had no leaf data.
+fn unit_owner_holds(snap: &InspectionSnapshot) -> HashMap<String, Option<OwnerHold>> {
     if snap.aggregate_meta.is_some() {
-        return HashSet::new();
+        return HashMap::new();
     }
     let Some(rpm) = snap.rpm.as_ref() else {
-        return HashSet::new();
+        return HashMap::new();
     };
     let (Some(leaves), Some(auto)) = (rpm.leaf_packages.as_ref(), rpm.auto_packages.as_ref())
     else {
-        return HashSet::new();
+        return HashMap::new();
     };
     let leaves: HashSet<&str> = leaves.iter().map(String::as_str).collect();
     let auto: HashSet<&str> = auto.iter().map(String::as_str).collect();
     let repos = InstallRepos::of(snap);
     let existing = ExistingHandling::of(rpm, &repos);
     let owners = enabled_units_by_owner(snap);
+    let added: HashMap<String, &PackageEntry> = rpm
+        .packages_added
+        .iter()
+        .map(|pkg| (format!("{}.{}", pkg.name, pkg.arch), pkg))
+        .collect();
     rpm.packages_added
         .iter()
         .filter(|pkg| owners.contains_key(pkg.name.as_str()) && !existing.keeps(pkg))
-        .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
-        .filter(|id| auto.contains(id.as_str()) && !leaves.contains(id.as_str()))
+        .map(|pkg| (format!("{}.{}", pkg.name, pkg.arch), pkg))
+        .filter(|(id, _)| auto.contains(id.as_str()) && !leaves.contains(id.as_str()))
+        .map(|(id, pkg)| {
+            let hold = owner_hold(rpm, &repos, &existing.baseline, &added, pkg, &id);
+            (id, hold)
+        })
         .collect()
+}
+
+/// Why the unit owner `pkg` (`id`) cannot be named on the plain install
+/// line, or `None` when it can (Mark Russell, 2026-11-21).
+///
+/// That line enables no disabled repo, so the owner must install by name
+/// from a repo the image enables, and so must every package installing it
+/// may pull in ([`possible_closure`]): every provider dnf may pick and
+/// every branch the image may take, since dnf fails the transaction when a
+/// requirement it settles on cannot be fetched. A requirement the
+/// collector could not read already counts as pulling in every added
+/// package. A package named in the base image is there whatever the
+/// export does. [`OwnerHold::DisabledRepo`] wins over
+/// [`OwnerHold::NoRepo`]: it is the one the operator can act on by
+/// including the owner in refine.
+///
+/// A snapshot with no recorded closure for the owner, a hand-built one,
+/// is checked on the owner alone.
+fn owner_hold(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+    baseline: &HashSet<&str>,
+    added: &HashMap<String, &PackageEntry>,
+    pkg: &PackageEntry,
+    id: &str,
+) -> Option<OwnerHold> {
+    let no_uploads = VerifiedUploads::new();
+    if matches!(
+        route_for(rpm, repos, pkg, &no_uploads),
+        PackageRoute::DisabledRepo(_)
+    ) {
+        return Some(OwnerHold::DisabledRepo);
+    }
+    let mut hold = None;
+    for dep in possible_closure(rpm, id) {
+        let Some(entry) = added.get(&dep) else {
+            continue;
+        };
+        if baseline.contains(entry.name.as_str()) {
+            continue;
+        }
+        match route_for(rpm, repos, entry, &no_uploads) {
+            PackageRoute::DisabledRepo(_) => return Some(OwnerHold::DisabledRepo),
+            PackageRoute::ByName if is_package_installable(entry) => {}
+            _ => hold = Some(OwnerHold::NoRepo),
+        }
+    }
+    hold
 }
 
 /// Which packages a fleet merge provably left out of the image, by name.
@@ -460,6 +593,7 @@ pub fn fleet_not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPa
             arch: String::new(),
             source_repo: String::new(),
             enabled_units: units.into_iter().map(str::to_string).collect(),
+            hold: None,
             arch_qualified: false,
         })
         .collect();
@@ -570,19 +704,27 @@ const NOT_CARRIED_NOTICE_NAME_MAX: usize = 64;
 /// The not-carried notice for these unit owners, or `None` when there
 /// are none: [`not_carried_notice`] with the owners already chosen.
 ///
-/// `owners` are those packages' display names, in the `# Not carried`
-/// block's order, which puts unit owners first. The first
-/// [`NOT_CARRIED_NOTICE_NAMES`] are named and the rest counted. Each name
-/// is sanitized like a package id in any other export warning, then
-/// bounded, so the whole entry is printable ASCII of bounded size.
-fn not_carried_notice_for_owners(owners: &[String]) -> Option<ExportWarning> {
+/// `owners` are those packages' display names, each with its
+/// [`OwnerHold`] if it has one, in the `# Not carried` block's order,
+/// which puts unit owners first. The first [`NOT_CARRIED_NOTICE_NAMES`]
+/// are named, a held one with its reason in parentheses, and the rest
+/// counted. Each name is sanitized like a package id in any other export
+/// warning, then bounded, so the whole entry is printable ASCII of
+/// bounded size.
+fn not_carried_notice_for_owners(owners: &[(String, Option<OwnerHold>)]) -> Option<ExportWarning> {
     if owners.is_empty() {
         return None;
     }
     let shown: Vec<String> = owners
         .iter()
         .take(NOT_CARRIED_NOTICE_NAMES)
-        .map(|name| sanitize_bounded(name, NOT_CARRIED_NOTICE_NAME_MAX))
+        .map(|(name, hold)| {
+            let name = sanitize_bounded(name, NOT_CARRIED_NOTICE_NAME_MAX);
+            match hold {
+                Some(hold) => format!("{name} ({})", hold.reason()),
+                None => name,
+            }
+        })
         .collect();
     let rest = owners.len() - shown.len();
     let names = if rest > 0 {
@@ -616,10 +758,10 @@ pub fn not_carried_notice(snap: &InspectionSnapshot) -> Option<ExportWarning> {
 /// built, so a caller that shows the list and the notice derives both
 /// from one list and they cannot name different packages.
 pub fn not_carried_notice_for(list: &[NotCarriedPackage]) -> Option<ExportWarning> {
-    let owners: Vec<String> = list
+    let owners: Vec<(String, Option<OwnerHold>)> = list
         .iter()
         .filter(|p| p.owns_enabled_unit())
-        .map(NotCarriedPackage::display_name)
+        .map(|p| (p.display_name(), p.hold))
         .collect();
     not_carried_notice_for_owners(&owners)
 }
@@ -1498,7 +1640,7 @@ mod tests {
         use crate::export_warning::ExportWarningKind;
         const TAIL: &str = ". See the Not carried table in audit-report.md \
                             and the # Not carried block in the Containerfile.";
-        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let names = |v: &[&str]| v.iter().map(|s| (s.to_string(), None)).collect::<Vec<_>>();
 
         assert_eq!(not_carried_notice_for_owners(&[]), None);
 
@@ -1525,9 +1667,30 @@ mod tests {
             assert_eq!(notice.text(), format!("{lead}{TAIL}"), "{owners:?}");
         }
 
+        // A held owner carries its reason after its name.
+        let notice = not_carried_notice_for_owners(&[
+            ("agent".to_string(), Some(OwnerHold::DisabledRepo)),
+            ("cronie".to_string(), None),
+            ("tool".to_string(), Some(OwnerHold::NoRepo)),
+        ])
+        .expect("owners give a notice");
+        assert_eq!(
+            notice.text(),
+            format!(
+                "3 packages that own a unit enabled on the source host are not carried: \
+                 agent (needs a repo disabled on the host), cronie, \
+                 tool (needs a package no enabled repo serves){TAIL}"
+            )
+        );
+
         let hostile = format!("evil\r\nX-Evil: 1\u{7f}\u{20ac}{}", "a".repeat(10_000));
-        let notice =
-            not_carried_notice_for_owners(&[hostile.clone(), hostile.clone(), hostile]).unwrap();
+        let held = |name: String| (name, Some(OwnerHold::DisabledRepo));
+        let notice = not_carried_notice_for_owners(&[
+            held(hostile.clone()),
+            held(hostile.clone()),
+            held(hostile),
+        ])
+        .unwrap();
         let text = notice.text();
         assert!(text.contains("evil__X-Evil__1__aaa"), "{text}");
         assert!(text.len() < 512, "{} bytes", text.len());

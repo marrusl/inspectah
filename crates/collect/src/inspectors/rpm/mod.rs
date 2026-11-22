@@ -799,10 +799,11 @@ struct RpmDepGraph {
     depends_on: HashMap<String, HashSet<String>>,
     /// The edges that held on the source host (`DepExpr::pulled`): each
     /// conditional evaluated against what was installed there and each
-    /// `or` by its first operand present. Only the leaf fallback reads it
+    /// `or` by its first operand present. The leaf fallback reads it
     /// (`graph_based_split`), to tell the host's installation roots from
     /// their dependencies: an edge that only the broader `depends_on`
-    /// draws would make a root look like a dependency.
+    /// draws would make a root look like a dependency. `leaf_dep_tree` is
+    /// built on it too, as it was before `depends_on` widened.
     held: HashMap<String, HashSet<String>>,
     /// The edges of `depends_on` that installing `a` certainly installs:
     /// `b` is the only installed provider of something `a` requires
@@ -1441,16 +1442,18 @@ fn classify_leaf_auto(
         );
         dep_closures.insert(id.to_string(), installs.into_iter().collect());
     }
-    // The leaf tree keeps its meaning: every auto package installing the
-    // leaf may install. Refine reads a leaf in it as a dependency of
-    // another leaf.
+    // The leaf tree keeps its released meaning: every auto package the
+    // leaf pulled in on the source host, along the edges that held there
+    // (`DepGraphResult::held`). The Containerfile routes a package from a
+    // host-disabled repo into the transaction that enables it on this
+    // tree alone, so a provider the image may only pick is never named
+    // there. Refine reads it for the leaf default.
     let auto_set: HashSet<&str> = auto.iter().map(|s| s.as_str()).collect();
     let dep_tree: serde_json::Map<String, serde_json::Value> = leaf
         .iter()
         .map(|lf| {
-            let auto_deps: BTreeSet<&String> = dep_closures[lf]
-                .iter()
-                .chain(&dep_alternatives[lf])
+            let auto_deps: BTreeSet<String> = closure(lf, &graph.held, &graph.joint)
+                .into_iter()
                 .filter(|d| auto_set.contains(d.as_str()))
                 .collect();
             (lf.clone(), serde_json::json!(auto_deps))
@@ -3587,6 +3590,76 @@ R\thelper
                 "alternate.x86_64": [],
                 "app.x86_64": ["helper.x86_64", "postfix.x86_64", "sendmail.x86_64", "sole.x86_64"],
             })
+        );
+    }
+
+    /// The leaf tree records what the leaf pulled in on the host, as it
+    /// did before the possible closures existed: `app` requires
+    /// `(primary or helper)`, and on the host the first operand present
+    /// satisfied it, so only `primary` is in the tree. Its other
+    /// requirement nests deeper than the parser reads, so `app` may pull in
+    /// every added package (`dep_alternatives`); the tree records none of
+    /// that. The Containerfile routes a disabled-repo package on the tree
+    /// alone, so it never names `helper` or `support` for `app`.
+    #[test]
+    fn classify_leaf_auto_builds_the_leaf_tree_on_what_held() {
+        let nested = format!("{}support{}", "(bash and ".repeat(17), ")".repeat(17));
+        let sentinel_output =
+            format!("@@app\nR\t(primary or helper)\nR\t{nested}\n@@helper\n@@primary\n@@support\n");
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "app.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!(
+                    "rpm -q --queryformat {} app helper primary support",
+                    RPM_DEPS_FORMAT
+                ),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: sentinel_output,
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "bash.x86_64\t0\t\tbash\n\
+                             primary.x86_64\t0\t\tprimary\n\
+                             helper.x86_64\t0\t\thelper\n\
+                             support.x86_64\t0\t\tsupport\n"
+                        .into(),
+                    stderr: String::new(),
+                },
+            );
+        let added: Vec<PackageEntry> = ["app", "helper", "primary", "support"]
+            .iter()
+            .map(|name| make_test_entry(name, "x86_64"))
+            .collect();
+
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
+
+        assert_eq!(
+            classification.leaf_dep_tree,
+            serde_json::json!({"app.x86_64": ["primary.x86_64"]})
+        );
+        assert_eq!(
+            classification
+                .dep_alternatives
+                .as_ref()
+                .and_then(|alts| alts.get("app.x86_64"))
+                .cloned(),
+            Some(vec![
+                "helper.x86_64".to_owned(),
+                "primary.x86_64".to_owned(),
+                "support.x86_64".to_owned(),
+            ])
         );
     }
 

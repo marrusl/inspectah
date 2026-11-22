@@ -916,7 +916,7 @@ fn packages_section_lines(
 
     let no_uploads = inspectah_core::types::verified_upload::VerifiedUploads::new();
     let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
-    let surely_pulled = super::unit_plan::pulled_in_by_included(snap, &install_repos);
+    let pulled_in = super::unit_plan::leaf_tree_pulled_in(rpm, &install_repos);
     let leaf_pulled_in = super::unit_plan::pulled_in_by_installed_leaves(rpm, &install_repos);
     let unit_owners = default_carried_unit_owners(snap);
 
@@ -928,19 +928,14 @@ fn packages_section_lines(
             !baseline_suppressed_set.contains(&canonical_package_id(&pkg.name, &pkg.arch))
         })
         .filter(|pkg| {
-            // A package from a disabled repo that an installed package
-            // certainly needs is named in the combined install, whatever
-            // its own disposition and leaf status: a plain or group
-            // transaction does not enable that repo, so dnf cannot pull
-            // it in there. One dnf only may install, such as one of
-            // several providers, is never named: that would make it
-            // mandatory, and a provider dnf cannot install would fail the
-            // build. The package that may need it installs in the combined
-            // install instead, which enables its repo
-            // (`disabled_repos_reached`).
+            // A package from a disabled repo that an included package
+            // depends on is named in the combined install, whatever its
+            // own disposition and leaf status. A plain or group
+            // transaction does not enable that repo, so dnf cannot pull it
+            // in there.
             // The disposition is left as it is: refine's non-leaf default
             // and an operator's exclusion both still read as excluded.
-            if surely_pulled.contains(&canonical_package_id(&pkg.name, &pkg.arch))
+            if pulled_in.contains(&canonical_package_id(&pkg.name, &pkg.arch))
                 && matches!(
                     super::repoless::route_for(rpm, &install_repos, pkg, verified),
                     PackageRoute::DisabledRepo(_)
@@ -966,7 +961,9 @@ fn packages_section_lines(
             // is carried by default, so it is named although it is no leaf,
             // unless an installed leaf already brings it. A leaf is always
             // named, so this cannot leave out two owners that need each
-            // other, as asking every root would.
+            // other, as asking every root would. Every package such an
+            // owner may pull in comes from a repo the image enables
+            // (`not_carried::owner_hold`), so it needs no disabled repo.
             if unit_owners.contains(&id) && !leaf_pulled_in.contains(&id) {
                 return true;
             }
@@ -1009,54 +1006,13 @@ fn packages_section_lines(
     // transaction enabling only one of them.
     let mut disabled_repo_installs: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
-    let disabled_named: std::collections::HashSet<String> = installable_packages
-        .iter()
-        .filter(|pkg| {
-            matches!(
-                super::repoless::route_for(rpm, &install_repos, pkg, verified),
-                PackageRoute::DisabledRepo(_)
-            )
-        })
-        .map(|pkg| canonical_package_id(&pkg.name, &pkg.arch))
-        .collect();
-    let added_by_id: std::collections::HashMap<String, &PackageEntry> = rpm
-        .packages_added
-        .iter()
-        .map(|pkg| (canonical_package_id(&pkg.name, &pkg.arch), pkg))
-        .collect();
-    // The host-disabled repos serving a package that installing `pkg` may
-    // pull in (`unit_plan::possible_closure`) and that the combined
-    // install does not name itself. dnf can take such a package only in a
-    // transaction that enables its repo, so `pkg` installs in that one.
-    // A package whose requirements the collector could not read may pull
-    // in any added package, so it reaches every disabled repo one of them
-    // comes from.
-    let disabled_repos_reached = |pkg: &PackageEntry| -> std::collections::BTreeSet<String> {
-        super::unit_plan::possible_closure(rpm, &canonical_package_id(&pkg.name, &pkg.arch))
-            .iter()
-            .filter(|dep| !disabled_named.contains(*dep))
-            .filter_map(|dep| added_by_id.get(dep))
-            .filter_map(|dep| {
-                match super::repoless::route_for(rpm, &install_repos, dep, verified) {
-                    PackageRoute::DisabledRepo(id) => Some(id.as_str().to_owned()),
-                    _ => None,
-                }
-            })
-            .collect()
-    };
 
     for pkg in &installable_packages {
         let route = super::repoless::route_for(rpm, &install_repos, pkg, verified);
-        let reached = disabled_repos_reached(pkg);
-        for id in &reached {
-            disabled_repo_installs.entry(id.clone()).or_default();
-        }
         // Suppress packages whose name is covered by a renderable group,
-        // except one from a disabled repo or one that may need a package
-        // a disabled repo serves: the group transaction does not enable
-        // that repo, so it cannot install the member.
+        // except one from a disabled repo: the group transaction does not
+        // enable that repo, so it cannot install the member.
         if !matches!(route, PackageRoute::DisabledRepo(_))
-            && reached.is_empty()
             && group_member_suppressed.contains(&pkg.name)
         {
             continue;
@@ -1075,13 +1031,7 @@ fn packages_section_lines(
         // re-include.
         match super::repo_enabling::repo_enabling_export(rpm, &install_repos, pkg) {
             super::repo_enabling::RepoEnablingExport::NotEnabling => match route {
-                PackageRoute::ByName => match reached.first() {
-                    Some(id) => disabled_repo_installs
-                        .entry(id.clone())
-                        .or_default()
-                        .push(install_name),
-                    None => install_names.push(install_name),
-                },
+                PackageRoute::ByName => install_names.push(install_name),
                 PackageRoute::DisabledRepo(id) => disabled_repo_installs
                     .entry(id.as_str().to_owned())
                     .or_default()
@@ -1139,16 +1089,13 @@ fn packages_section_lines(
     // one of the disabled repos and names both sets, so dnf resolves them
     // together whichever depends on which, across several hops and
     // through cycles; separate steps had to guess an order and could
-    // guess wrong in either direction. A package a repo the host enables
-    // serves installs here too when it may need one only a disabled repo
-    // serves (`disabled_repos_reached`), which dnf picks or skips here.
-    // Only these packages are named, and no other transaction carries
-    // the disabled-repo flags, so enabling those repos cannot change what
-    // a group or a plain-list package resolves to. It runs after the
-    // repo-enabling block, whose repos it may resolve against, and before
-    // the group and plain installs and every service action, any of which
-    // can need it. Installing a package early is harmless when nothing
-    // needs it.
+    // guess wrong in either direction. Only these packages are named, and
+    // no other transaction carries the disabled-repo flags, so enabling
+    // those repos cannot change what a group or a plain-list package
+    // resolves to. It runs after the repo-enabling block, whose repos it
+    // may resolve against, and before the group and plain installs and
+    // every service action, any of which can need it. Installing a
+    // package early is harmless when nothing needs it.
     // A demoted package's FIXME above is its advice; a MANUAL block for it
     // would say the opposite.
     let advised: std::collections::BTreeSet<(&str, &str)> = demoted
@@ -1306,8 +1253,9 @@ fn packages_section_lines(
 
 /// The `# Not carried:` block: a header with the reason and count, then
 /// one line per [`export_not_carried_packages`] entry, in its order, naming any
-/// units the package had enabled. Comments only, so nothing in it is
-/// installed. Empty, with no header, when the list is.
+/// units the package had enabled and, for a unit owner not carried by
+/// default, why ([`super::not_carried::OwnerHold`]). Comments only, so
+/// nothing in it is installed. Empty, with no header, when the list is.
 ///
 /// The name and the units come from the snapshot, which an imported one
 /// can fill with anything, so each is sanitized: a newline in either
@@ -1330,10 +1278,17 @@ fn not_carried_lines(snap: &InspectionSnapshot) -> Vec<String> {
             .iter()
             .map(|unit| language_packages::sanitize_for_comment(unit))
             .collect();
-        lines.push(match units.as_slice() {
-            [] => format!("#   {name}"),
-            [unit] => format!("#   {name} ({unit} was enabled)"),
-            units => format!("#   {name} ({} were enabled)", units.join(", ")),
+        let enabled = match units.as_slice() {
+            [] => None,
+            [unit] => Some(format!("{unit} was enabled")),
+            units => Some(format!("{} were enabled", units.join(", "))),
+        };
+        let hold = pkg.hold.map(|hold| hold.reason().to_string());
+        let notes: Vec<String> = enabled.into_iter().chain(hold).collect();
+        lines.push(if notes.is_empty() {
+            format!("#   {name}")
+        } else {
+            format!("#   {name} ({})", notes.join("; "))
         });
     }
     lines.push(String::new());
@@ -4024,6 +3979,57 @@ mod tests {
         assert!(output.contains("    openh264.i686 \\"), "{output}");
         assert!(output.contains("    openh264.x86_64 \\"), "{output}");
         assert!(!output.contains("    openh264 \\"), "{output}");
+    }
+
+    /// A cached local RPM routes its leaf tree like any installed leaf, as
+    /// released: `local-app` came from `@commandline` with its RPM cached,
+    /// and on the host it pulled in both providers of a capability it
+    /// requires, `provider-a` and `provider-b`, which only a disabled repo
+    /// serves. Both are excluded, and both are named in the transaction
+    /// that enables that repo, beside the cached RPM, so dnf can resolve
+    /// `local-app` there.
+    #[test]
+    fn a_cached_local_rpm_routes_its_leaf_tree_as_released() {
+        let mut snap = snapshot_with_packages(&["local-app", "provider-a", "provider-b"]);
+        {
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            let app = &mut rpm.packages_added[0];
+            app.source_repo = "@commandline".into();
+            app.version = "1.0".into();
+            app.release = "1".into();
+            app.repoless_cached = true;
+            app.repoless_annotation = "No repo source \u{2014} cached RPM bundled".into();
+            for provider in &mut rpm.packages_added[1..] {
+                provider.disposition = FindingKind::excluded();
+            }
+            rpm.repo_files
+                .push(repo_file(DISABLED_REPO_PATH, DISABLED_REPO_CONTENT, true));
+            rpm.leaf_packages = Some(vec!["local-app.x86_64".into()]);
+            rpm.auto_packages = Some(vec!["provider-a.x86_64".into(), "provider-b.x86_64".into()]);
+            rpm.leaf_dep_tree = serde_json::json!({
+                "local-app.x86_64": ["provider-a.x86_64", "provider-b.x86_64"],
+            });
+        }
+        make_disabled_repo_package(&mut snap, "provider-a", DISABLED_REPO_ID);
+        make_disabled_repo_package(&mut snap, "provider-b", DISABLED_REPO_ID);
+
+        let output = render_containerfile(&snap, None, None);
+        let run = format!("RUN dnf install -y --enablerepo={DISABLED_REPO_ID} \\");
+        let start = output
+            .find(&run)
+            .unwrap_or_else(|| panic!("a transaction enables the repo:\n{output}"));
+        let body = &output[start..];
+        let body = &body[..body.find("&& dnf clean all").expect("the tail")];
+        for operand in [
+            "    provider-a \\",
+            "    provider-b \\",
+            "    /tmp/local-app-1.0-1.x86_64.rpm \\",
+        ] {
+            assert!(
+                body.lines().any(|l| l == operand),
+                "{operand:?} in the combined transaction:\n{output}"
+            );
+        }
     }
 
     /// An operator's upload wins over the disabled repo: the package renders

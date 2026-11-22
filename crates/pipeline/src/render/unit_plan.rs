@@ -179,9 +179,9 @@ enum Reach {
 /// recorded `dep_closures` hold real requirements only, and this answer
 /// reads nothing else (`Reach::Certain`). The `/var` evidence asks it.
 /// The unit plan asks [`export_installs`], which counts only the roots the
-/// Containerfile names. The disabled-repo install names each package this
-/// holds that a host-disabled repo serves; the not-carried list and a
-/// fleet's drops ask [`possibly_pulled_in_by_included`].
+/// Containerfile names; the disabled-repo install asks
+/// [`leaf_tree_pulled_in`]; the not-carried list and a fleet's drops ask
+/// [`possibly_pulled_in_by_included`].
 ///
 /// The roots are every entry [`installs_on_its_own_route`] holds for: a
 /// leaf, an auto package carried because it owns an enabled unit, and an
@@ -212,10 +212,9 @@ pub fn pulled_in_by_included(
 /// plus every provider dnf may pick among several and what it brings
 /// (`Reach::Possible`). A package outside it is not in the image unless
 /// the export installs it itself, so every absence claim asks this: a
-/// fleet's drops and the not-carried list. The disabled-repo install
-/// names none of these for being here: naming a provider dnf may skip
-/// makes it mandatory, and fails the build when it cannot be installed.
-/// It reads [`possible_closure`] only to choose the repos it enables.
+/// fleet's drops and the not-carried list. Nothing is installed for being
+/// here: naming a provider dnf may skip makes it mandatory, and fails the
+/// build when it cannot be installed.
 pub(crate) fn possibly_pulled_in_by_included(
     snap: &InspectionSnapshot,
     repos: &InstallRepos,
@@ -298,12 +297,52 @@ fn pulled_in_by_installed_leaves_reaching(
         .collect()
 }
 
+/// The canonical `name.arch` ids of `packages_added` entries that a leaf
+/// the export installs pulled in on the source host: the `leaf_dep_tree`
+/// entries of every leaf [`installs_on_its_own_route`] holds for.
+///
+/// This is the released routing input, and the only one: the
+/// Containerfile names a package from a host-disabled repo in the
+/// transaction that enables that repo when this holds it, whatever its
+/// own disposition, since a plain or group transaction cannot fetch it.
+/// The tree records what held on the host, every installed provider of a
+/// capability and each `or` by its first operand present, so a provider
+/// only the image might pick is never named.
+///
+/// Two limits follow from what the tree records. With no dependency data
+/// the set is empty. And it lists only the auto dependencies of leaves: a
+/// dependency of an auto package carried on its own, a unit owner or one
+/// an operator included, is not in it, so nothing routes it. A unit owner
+/// that may need such a package is not carried by default for that
+/// reason (`not_carried::owner_hold`).
+pub(crate) fn leaf_tree_pulled_in(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+) -> std::collections::HashSet<String> {
+    let Some(tree) = rpm.leaf_dep_tree.as_object() else {
+        return std::collections::HashSet::new();
+    };
+    let installed: std::collections::HashSet<String> = rpm
+        .packages_added
+        .iter()
+        .filter(|pkg| installs_on_its_own_route(rpm, repos, pkg))
+        .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
+        .collect();
+    tree.iter()
+        .filter(|(leaf, _)| installed.contains(leaf.as_str()))
+        .filter_map(|(_, deps)| deps.as_array())
+        .flatten()
+        .filter_map(|dep| dep.as_str())
+        .map(str::to_string)
+        .collect()
+}
+
 /// What installing the added package `id` may install, as recorded: its
 /// `dep_closures` and `dep_alternatives` entries (`Reach::Possible`).
 ///
-/// The Containerfile reads it to choose the host-disabled repos the
-/// transaction installing `id` enables, so dnf can pick a provider one of
-/// them serves without the export naming that provider.
+/// An auto package that owns an enabled unit is carried by default only
+/// when everything in this is served by a repo the image enables
+/// (`not_carried::owner_hold`).
 pub(crate) fn possible_closure(rpm: &RpmSection, id: &str) -> Vec<String> {
     closure_of(rpm, id, Reach::Possible)
 }
@@ -388,12 +427,14 @@ pub(crate) fn export_installs(snap: &InspectionSnapshot, repos: &InstallRepos) -
     };
     let id_of = |pkg: &PackageEntry| format!("{}.{}", pkg.name, pkg.arch);
     let mut possible = possibly_pulled_in_by_included(snap, repos);
-    let surely_pulled = pulled_in_by_included(snap, repos);
+    // What the disabled-repo transaction names beyond the selection:
+    // `packages_section_lines` reads the same tree.
+    let leaf_pulled = leaf_tree_pulled_in(rpm, repos);
     let from_disabled_repo: std::collections::HashSet<String> = rpm
         .packages_added
         .iter()
         .filter(|pkg| {
-            surely_pulled.contains(&id_of(pkg))
+            leaf_pulled.contains(&id_of(pkg))
                 && is_package_installable(pkg)
                 && matches!(
                     route_for(rpm, repos, pkg, &VerifiedUploads::new()),

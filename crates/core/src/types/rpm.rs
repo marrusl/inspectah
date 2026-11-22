@@ -293,8 +293,10 @@ pub struct RpmSection {
     /// packages. This must be `None` whenever `leaf_packages` is `None`.
     pub auto_packages: Option<Vec<String>>,
     /// Maps authoritative leaf `name.arch` identities to their auto dependency
-    /// `name.arch` identities. When classification is unavailable or degraded,
-    /// this must serialize as an empty object.
+    /// `name.arch` identities: what the leaf pulled in on the source host,
+    /// each conditional evaluated there and each `or` by its first operand
+    /// present. When classification is unavailable or degraded, this must
+    /// serialize as an empty object.
     #[serde(default)]
     pub leaf_dep_tree: serde_json::Value,
     /// Maps every authoritative leaf and auto `name.arch` identity to the
@@ -322,8 +324,10 @@ pub struct RpmSection {
     /// A package in neither entry is never installed by it, which is what
     /// lets an absence claim rest on the two together.
     ///
-    /// `leaf_dep_tree` is the auto part of a leaf's two entries joined.
-    /// Unlike it, these keep a dependency the operator also installed.
+    /// A leaf's `leaf_dep_tree` entry is within the auto part of its two
+    /// entries joined, which also count what the image may install beyond
+    /// what held on the host. Unlike it, these keep a dependency the
+    /// operator also installed.
     ///
     /// `None` whenever `dep_closures` is. For an aggregate, each kept
     /// package's two entries joined across hosts, less its merged
