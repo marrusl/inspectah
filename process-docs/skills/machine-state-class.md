@@ -213,36 +213,51 @@ nothing ships that the key check did not read; there is no `fs::copy`.
 Under `--no-redaction` (`redaction_state` `Raw`) the file streams
 through as read. Otherwise:
 
-- Binary ships byte for byte. Binary is a NUL byte and no UTF-16 or
-  UTF-32 byte-order mark (`is_binary`); everything else is text, so a
-  file on that boundary is withheld, never shipped as read.
-- Text that is not UTF-8, or over `PAYLOAD_REDACTION_LIMIT` (8 MiB), is
+- A payload is classified by encoding, never by a NUL byte alone. UTF-8
+  is text whatever bytes it holds, NUL included. Binary is not UTF-8,
+  holds a NUL, and opens with no UTF-16 or UTF-32 byte-order mark
+  (`is_binary`); it ships byte for byte. ELF, gzip and image files fail
+  UTF-8 within their first bytes. An oversized file is classified while
+  it streams (`Utf8Stream` in `TeeReader`, which carries a character
+  split between chunks).
+- Text that is neither, or over `PAYLOAD_REDACTION_LIMIT` (8 MiB), is
   not written: the item records `PayloadRedaction::Withheld`
   (`UncheckedPayload`), an `Excluded` finding names it in
   `secrets-review.md`, and `unmanaged_file_withheld` (configtree) is the
   one decision the Containerfile, `staged_writes`, refine's extraction
   and its row (`WithheldWhy::UncheckedPayload`) ask. An oversized file is
-  streamed, screened, then removed once it reads as text.
+  streamed, screened, then removed unless it is binary.
+- A file the snapshot also holds (an `.env` in `env-files`, a compose
+  file's `raw_content`; `twins_by_key`) ships that copy, the text
+  `redact` already made, and its findings stand. `is_redacted_copy_of`
+  first runs `redact`'s own pass for that field (`redact_snapshot_text`,
+  which `redact` itself calls) over the bytes read and compares,
+  placeholder numbers aside; a file that changed since the scan is
+  withheld (`ChangedSinceScan`), and one that is not UTF-8 is withheld,
+  never shipped as binary. Never redact a twin afresh and write it back:
+  a second pass with another order can recover what the first removed.
 - Other text goes through `redaction::engine::redact_payload` with its
-  path: compose files by name (`COMPOSE_FILE_PATTERNS`) take both
-  compose passes, anything else the URL credential maskers and the
-  patterns. `PayloadRules::Payload` leaves certificates out and narrows a
-  private-key block to the text between its markers, dropped only when
-  that holds under `CLOSED_KEY_MATERIAL_MIN` base64 characters counted
-  anywhere; a `BEGIN` marker nothing closes has its following body
-  replaced too. Left-out patterns are dropped before overlaps resolve,
-  and findings and replacements come from that one match set
-  (`payload_matches`), so markers never hide a credential between them.
+  path. Every match is found in the original text before anything is
+  replaced: the patterns (`payload_matches`) and, outside compose files,
+  the URL credential maskers, read off each original line as an edit
+  (`line_edit`). `apply_payload_edits` applies them once; overlapping
+  edits become one edit over all their bytes, replaced by the pattern
+  token. A compose file by name then takes `scrub_compose_secrets` over
+  that result. Never mask first and match after: a masker that replaces
+  `-----BEGIN` hides the key body from every key matcher.
+  `payload_matches` leaves certificates out and narrows a private-key
+  block to the text between its markers, dropped only when that holds
+  under `CLOSED_KEY_MATERIAL_MIN` base64 characters counted anywhere; a
+  `BEGIN` marker nothing closes has its following body replaced too.
+  Left-out patterns are dropped before overlaps resolve, and findings and
+  replacements come from that one match set, so markers never hide a
+  credential between them.
 
-A file the snapshot also holds (an `.env` in `env-files`, a compose
-file's `raw_content`) is redacted with `PayloadRules::SnapshotCopy`, the
-rules `redact` used for that copy (keys and certificates whole), then
-that copy takes the shipped text. The bundle's findings replace that
-copy's inline findings kind for kind, so a key finding is never dropped.
 Refine's `is_sensitive` reads `payload_redaction`. Tokens in a payload
-are numbered per file. Test the routes with
-`unmanaged_credentials_ship_redacted_on_both_export_paths` and
-`unmanaged_reproducers_never_ship_a_credential`.
+only the bundle holds are numbered per file. Test the routes with
+`unmanaged_credentials_ship_redacted_on_both_export_paths`,
+`unmanaged_reproducers_never_ship_a_credential` and
+`nul_bytes_and_masked_key_markers_never_ship_a_credential`.
 
 Not covered, and caught only by review: a file-opening route not on the
 lint list (a new dependency, a `libc` call) and a command whose output is a

@@ -205,6 +205,9 @@ pub enum UncheckedPayload {
     NotUtf8,
     /// Text larger than the bundler reads whole to redact.
     TooLarge,
+    /// A file the snapshot also holds whose text changed after the scan
+    /// read it, so the snapshot's redacted copy is not its text.
+    ChangedSinceScan,
 }
 
 impl UncheckedPayload {
@@ -214,6 +217,7 @@ impl UncheckedPayload {
         match self {
             Self::NotUtf8 => "it is text that is not UTF-8",
             Self::TooLarge => "it is text too large to check",
+            Self::ChangedSinceScan => "it changed after the scan read it",
         }
     }
 }

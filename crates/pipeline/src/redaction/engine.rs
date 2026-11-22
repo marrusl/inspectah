@@ -1441,12 +1441,11 @@ fn scan_and_redact_field(
 /// report on a line it rewrote. Assigning only when the marker count
 /// rises keeps a secret-free compose file byte-identical, because
 /// `scrub_compose_secrets` normalizes trailing whitespace and appends a
-/// final newline regardless. `generic` is the pass-2 field redactor.
+/// final newline regardless.
 fn redact_compose_content(
     raw: &mut String,
     path: &str,
     registry: &mut CounterRegistry,
-    generic: impl Fn(&mut String, &str, &mut CounterRegistry) -> Vec<RedactionFinding>,
 ) -> Vec<RedactionFinding> {
     let scrubbed = scrub_compose_secrets(raw);
     let compose_pass_fired = scrubbed.matches(COMPOSE_REDACTED_MARKER).count()
@@ -1455,47 +1454,75 @@ fn redact_compose_content(
         *raw = scrubbed;
     }
 
-    let mut findings = generic(raw, path, registry);
+    let mut findings = scan_and_redact_field(raw, path, registry);
     let generic_pass_fired = !findings.is_empty();
 
     // Only when pass 1 found something pass 2 did not report, so one
     // secret does not produce two findings. A file with both kinds is
     // reported once rather than twice; it is never reported as clean.
     if compose_pass_fired && !generic_pass_fired {
-        findings.push(RedactionFinding {
-            path: path.to_owned(),
-            source: "compose_env".into(),
-            kind: RedactionKind::Inline,
-            pattern: "compose_secret_value".into(),
-            remediation: "Move the secret out of the compose file: use a compose secret, an \
-                 env_file outside the image, or a systemd credential"
-                .to_string(),
-            line: None,
-            replacement: None,
-            detection_method: DetectionMethod::Pattern,
-            confidence: Some(Confidence::High),
-            finding_kind: Some(FindingKind::Password),
-        });
+        findings.push(compose_secret_finding(path));
     }
     findings
 }
 
-/// Which rules an unmanaged payload is redacted by.
+/// The finding for a compose file whose credentials only the compose
+/// pass (`scrub_compose_secrets`) replaced.
+fn compose_secret_finding(path: &str) -> RedactionFinding {
+    RedactionFinding {
+        path: path.to_owned(),
+        source: "compose_env".into(),
+        kind: RedactionKind::Inline,
+        pattern: "compose_secret_value".into(),
+        remediation: "Move the secret out of the compose file: use a compose secret, an \
+             env_file outside the image, or a systemd credential"
+            .to_string(),
+        line: None,
+        replacement: None,
+        detection_method: DetectionMethod::Pattern,
+        confidence: Some(Confidence::High),
+        finding_kind: Some(FindingKind::Password),
+    }
+}
+
+/// A snapshot field that holds a whole file's text, which `redact`
+/// redacts by that field's pass ([`redact_snapshot_text`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PayloadRules {
-    /// A file only the bundle holds. A certificate is public and left in
-    /// place: a CA bundle or a server certificate breaks with a
-    /// placeholder in it. A private-key block keeps its markers and has
-    /// the text between them replaced, unless that text holds fewer
-    /// base64 characters than the smallest whole key
-    /// ([`CLOSED_KEY_MATERIAL_MIN`]): then the markers are delimiters in
-    /// code or data, and the match is left out.
-    Payload,
-    /// A file the snapshot also holds, such as an `.env` file or a compose
-    /// file: every pattern, private keys and certificates replaced whole,
-    /// as `redact` redacts the snapshot's copy. The shipped text is then
-    /// never less redacted than that copy of the same bytes.
-    SnapshotCopy,
+pub enum SnapshotText {
+    /// An `.env` file's `content` in `non_rpm_software.env_files`.
+    EnvFile,
+    /// A compose file's `raw_content` in `containers.compose_files`.
+    ComposeFile,
+}
+
+/// The pass `redact` runs on a `kind` field holding the text of the file
+/// at `path`: the one function both `redact` and
+/// [`is_redacted_copy_of`] call, so the two cannot drift apart.
+fn redact_snapshot_text(
+    kind: SnapshotText,
+    content: &mut String,
+    path: &str,
+    registry: &mut CounterRegistry,
+) -> Vec<RedactionFinding> {
+    match kind {
+        SnapshotText::EnvFile => scan_and_redact_field(content, path, registry),
+        SnapshotText::ComposeFile => redact_compose_content(content, path, registry),
+    }
+}
+
+/// A placeholder's number, which depends on what else the snapshot holds.
+static TOKEN_NUMBER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(REDACTED_[A-Z0-9]+)_[0-9]+").expect("the token number pattern compiles")
+});
+
+/// Whether `copy`, a `kind` field `redact` redacted for the file at
+/// `path`, is `original` as that pass redacts it: the snapshot read the
+/// same text the caller holds. Placeholder numbers are not compared,
+/// since `redact` numbers them across the whole snapshot.
+pub fn is_redacted_copy_of(kind: SnapshotText, path: &str, copy: &str, original: &str) -> bool {
+    let mut redacted = original.to_owned();
+    redact_snapshot_text(kind, &mut redacted, path, &mut CounterRegistry::default());
+    TOKEN_NUMBER.replace_all(&redacted, "$1") == TOKEN_NUMBER.replace_all(copy, "$1")
 }
 
 /// The index in [`PATTERNS`] of the PEM private-key block pattern.
@@ -1632,20 +1659,25 @@ fn unclosed_private_key_bodies(content: &str) -> Vec<EligibleMatch> {
     found
 }
 
-/// Every match a payload pass replaces in `content` under `rules`, with
-/// overlaps resolved: the one set both its findings and its replacements
-/// come from. A pattern a rule leaves out is left out before overlaps are
-/// resolved, so a certificate or a delimiter pair around a credential
-/// never takes that credential's place and hides it.
-fn payload_matches(content: &str, path: &str, rules: PayloadRules) -> Vec<(usize, EligibleMatch)> {
-    let narrowed = rules == PayloadRules::Payload;
+/// Every match a payload pass replaces in `content`, with overlaps
+/// resolved: the one set both its findings and its replacements come
+/// from. A certificate is public and left in place: a CA bundle or a
+/// server certificate breaks with a placeholder in it. A private-key
+/// block keeps its markers and has the text between them replaced,
+/// unless that text holds fewer base64 characters than the smallest
+/// whole key ([`CLOSED_KEY_MATERIAL_MIN`]): then the markers are
+/// delimiters in code or data, and the match is left out. A pattern left
+/// out is left out before overlaps are resolved, so a certificate or a
+/// delimiter pair around a credential never takes that credential's place
+/// and hides it.
+fn payload_matches(content: &str, path: &str) -> Vec<(usize, EligibleMatch)> {
     let mut all: Vec<(usize, EligibleMatch)> = Vec::new();
     for (idx, pat) in PATTERNS.iter().enumerate() {
-        if narrowed && pat.finding_kind == FindingKind::Certificate {
+        if pat.finding_kind == FindingKind::Certificate {
             continue;
         }
         for em in collect_eligible_matches(pat, content, Some(path)) {
-            if narrowed && idx == *PRIVATE_KEY_PATTERN {
+            if idx == *PRIVATE_KEY_PATTERN {
                 all.extend(private_key_body(content, em).map(|em| (idx, em)));
             } else {
                 all.push((idx, em));
@@ -1678,83 +1710,167 @@ fn pattern_finding(pat: &SecretPattern, line_num: usize, path: &str) -> Redactio
     }
 }
 
-/// The pattern pass over a payload's text, in place, under `rules`: one
-/// finding per match [`payload_matches`] keeps, and each of those
-/// matches replaced with its token.
-fn redact_payload_field(
-    content: &mut String,
-    source_path: &str,
-    registry: &mut CounterRegistry,
-    rules: PayloadRules,
-) -> Vec<RedactionFinding> {
-    let mut matches = payload_matches(content, source_path, rules);
-    let findings = matches
-        .iter()
-        .map(|(idx, em)| pattern_finding(&PATTERNS[*idx], em.line_num, source_path))
-        .collect();
-    matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-    for (pat_idx, em) in matches {
-        let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-        let replacement = build_replacement(&em, content, registry, &kind_label);
-        content.replace_range(em.start..em.end, &replacement);
+/// One replacement in a payload's original text.
+struct PayloadEdit {
+    /// The bytes replaced, in the original text.
+    range: Range<usize>,
+    /// What replaces them.
+    text: String,
+    /// Whether `text` is a placeholder token from the pattern pass, rather
+    /// than a masker's rewrite of the span, which keeps the bytes around
+    /// the credential it masked.
+    token: bool,
+}
+
+/// `content` with every edit applied once. Edits that overlap become one
+/// edit over all their bytes, replaced by a pattern token: a masker's
+/// rewrite keeps text the pattern edit removes, so it never stands for
+/// the merged span. Every byte any edit replaces is replaced.
+fn apply_payload_edits(content: &str, mut edits: Vec<PayloadEdit>) -> String {
+    edits.sort_by_key(|e| (e.range.start, std::cmp::Reverse(e.range.end)));
+    let mut merged: Vec<PayloadEdit> = Vec::new();
+    for edit in edits {
+        match merged.last_mut() {
+            Some(last) if edit.range.start < last.range.end => {
+                last.range.end = last.range.end.max(edit.range.end);
+                if edit.token && !last.token {
+                    last.text = edit.text;
+                    last.token = true;
+                }
+            }
+            _ => merged.push(edit),
+        }
     }
-    findings
+    let mut out = String::with_capacity(content.len());
+    let mut at = 0;
+    for edit in merged {
+        out.push_str(&content[at..edit.range.start]);
+        out.push_str(&edit.text);
+        at = edit.range.end;
+    }
+    out.push_str(&content[at..]);
+    out
 }
 
-/// Redact one file's text the way `redact` treats a file at `path`, under
-/// `rules`: a compose file by name takes both compose passes, every other
-/// file the URL credential maskers and the pattern pass with `path`, so
-/// the path-scoped format rules apply as they do to a config file.
-/// Returns the redacted text and its findings, or `None` when nothing in
-/// it changed.
-///
-/// For a file the bundle ships, such as an unmanaged payload. Its tokens
-/// are numbered from 1 for this file alone, so the same secret elsewhere
-/// in the snapshot can carry another number.
-pub fn redact_payload(
-    content: &str,
-    path: &str,
-    rules: PayloadRules,
-) -> Option<(String, Vec<RedactionFinding>)> {
-    let mut registry = CounterRegistry::default();
-    let mut text = content.to_owned();
-    let is_compose = std::path::Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(is_compose_file_name);
-    let generic =
-        |c: &mut String, p: &str, r: &mut CounterRegistry| redact_payload_field(c, p, r, rules);
-    let findings = if is_compose {
-        redact_compose_content(&mut text, path, &mut registry, generic)
-    } else {
-        let mut findings = mask_url_credentials(&mut text, path);
-        findings.extend(generic(&mut text, path, &mut registry));
-        findings
-    };
-    (text != content).then_some((text, findings))
+/// The one edit that turns `line` into `masked`: the bytes between their
+/// common prefix and their common suffix, on character boundaries in
+/// both.
+fn line_edit(line: &str, masked: &str) -> (Range<usize>, String) {
+    let mut prefix = line
+        .bytes()
+        .zip(masked.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !(line.is_char_boundary(prefix) && masked.is_char_boundary(prefix)) {
+        prefix -= 1;
+    }
+    let mut suffix = line
+        .bytes()
+        .rev()
+        .zip(masked.bytes().rev())
+        .take(line.len().min(masked.len()) - prefix)
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !(line.is_char_boundary(line.len() - suffix)
+        && masked.is_char_boundary(masked.len() - suffix))
+    {
+        suffix -= 1;
+    }
+    (
+        prefix..line.len() - suffix,
+        masked[prefix..masked.len() - suffix].to_owned(),
+    )
 }
 
-/// Mask a credential in a URL's user information on each line of `text`,
-/// as the git remote pass masks a remote: a password
+/// The edits that mask a credential in a URL's user information on each
+/// line of `content`, as the git remote pass masks a remote: a password
 /// ([`mask_proxy_credentials`]), then a token standing as the user name
 /// ([`mask_token_username`]). The generic patterns cover such a password
-/// for a few schemes only. Returns one finding per masked line.
-fn mask_url_credentials(text: &mut String, path: &str) -> Vec<RedactionFinding> {
+/// for a few schemes only. Each edit is read off the original line, so
+/// it never decides what the pattern pass sees. One finding per masked
+/// line.
+fn url_credential_edits(content: &str, path: &str) -> (Vec<PayloadEdit>, Vec<RedactionFinding>) {
+    let mut edits = Vec::new();
     let mut findings = Vec::new();
-    let mut out = String::with_capacity(text.len());
-    for (number, line) in text.split_inclusive('\n').enumerate() {
+    let mut offset = 0;
+    for (number, line) in content.split_inclusive('\n').enumerate() {
         let (masked, password) = mask_proxy_credentials(line, path);
         let (masked, token) = mask_token_username(&masked, path);
+        if masked != line {
+            let (range, text) = line_edit(line, &masked);
+            edits.push(PayloadEdit {
+                range: offset + range.start..offset + range.end,
+                text,
+                token: false,
+            });
+        }
         for mut finding in password.into_iter().chain(token) {
             finding.line = i32::try_from(number + 1).ok();
             findings.push(finding);
         }
-        out.push_str(&masked);
+        offset += line.len();
     }
-    if !findings.is_empty() {
-        *text = out;
+    (edits, findings)
+}
+
+/// Redact the text of a file only the bundle holds, at `path`. Every
+/// match is found in the original text, before anything is replaced, so
+/// no pass can hide a match from another: the pattern matches
+/// ([`payload_matches`]) and, for any file but a compose file, the URL
+/// credential maskers ([`url_credential_edits`]), all applied once. A
+/// compose file by name then takes the compose pass
+/// (`scrub_compose_secrets`) over that result, which can only replace
+/// more. Path-scoped format rules apply as they do to a config file.
+/// Returns the redacted text and its findings, or `None` when nothing in
+/// it changed.
+///
+/// For an unmanaged payload the snapshot holds no copy of: one it does
+/// hold ships that copy instead ([`is_redacted_copy_of`]). Its tokens are
+/// numbered from 1 for this file alone, so the same secret elsewhere in
+/// the snapshot can carry another number.
+pub fn redact_payload(content: &str, path: &str) -> Option<(String, Vec<RedactionFinding>)> {
+    let mut registry = CounterRegistry::default();
+    let is_compose = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(is_compose_file_name);
+    let mut matches = payload_matches(content, path);
+    let mut findings: Vec<RedactionFinding> = matches
+        .iter()
+        .map(|(idx, em)| pattern_finding(&PATTERNS[*idx], em.line_num, path))
+        .collect();
+    // Tokens are minted last match first, as every pattern pass mints
+    // them.
+    matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+    let mut edits: Vec<PayloadEdit> = matches
+        .iter()
+        .map(|(idx, em)| {
+            let kind_label = format!("{:?}", PATTERNS[*idx].finding_kind).to_lowercase();
+            PayloadEdit {
+                range: em.start..em.end,
+                text: build_replacement(em, content, &mut registry, &kind_label),
+                token: true,
+            }
+        })
+        .collect();
+    if !is_compose {
+        let (url_edits, url_findings) = url_credential_edits(content, path);
+        edits.extend(url_edits);
+        findings.extend(url_findings);
     }
-    findings
+    let mut text = apply_payload_edits(content, edits);
+    if is_compose {
+        let scrubbed = scrub_compose_secrets(&text);
+        if scrubbed.matches(COMPOSE_REDACTED_MARKER).count()
+            > text.matches(COMPOSE_REDACTED_MARKER).count()
+        {
+            text = scrubbed;
+            if findings.is_empty() {
+                findings.push(compose_secret_finding(path));
+            }
+        }
+    }
+    (text != content).then_some((text, findings))
 }
 
 /// Append findings recorded after `redact` ran, such as an unmanaged
@@ -2154,11 +2270,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             let Some(raw) = compose.raw_content.as_mut() else {
                 continue;
             };
-            all_findings.extend(redact_compose_content(
+            all_findings.extend(redact_snapshot_text(
+                SnapshotText::ComposeFile,
                 raw,
                 &compose.path,
                 &mut registry,
-                scan_and_redact_field,
             ));
         }
     }
@@ -2306,25 +2422,12 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     if let Some(ref mut nrs) = snapshot.non_rpm_software {
         // .env file content (reuses ConfigFileEntry with .content field)
         for env_file in &mut nrs.env_files {
-            let findings = scan_content(&env_file.content, &env_file.path);
-            if !findings.is_empty() {
-                let mut content = env_file.content.clone();
-                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-                for (idx, pat) in PATTERNS.iter().enumerate() {
-                    for em in collect_eligible_matches(pat, &content, Some(&env_file.path)) {
-                        all_matches.push((idx, em));
-                    }
-                }
-                dedup_overlapping_matches(&mut all_matches);
-                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-                for (pat_idx, em) in all_matches {
-                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
-                    content.replace_range(em.start..em.end, &replacement);
-                }
-                env_file.content = content;
-                all_findings.extend(findings);
-            }
+            all_findings.extend(redact_snapshot_text(
+                SnapshotText::EnvFile,
+                &mut env_file.content,
+                &env_file.path,
+                &mut registry,
+            ));
         }
 
         // Git remote URLs — scan for embedded credentials (user:pass@host
@@ -7120,14 +7223,13 @@ baseurl = https://cdn.redhat.com
         }
     }
 
-    /// A payload is redacted by its path's rules: a compose file by both
-    /// compose passes, any other text by the URL maskers and the patterns.
-    /// Key delimiters and certificates are left alone, and a file with
-    /// nothing to redact gives `None`.
+    /// A payload is redacted by its path's rules: a compose file by the
+    /// patterns and the compose pass, any other text by the URL maskers
+    /// and the patterns. Key delimiters and certificates are left alone,
+    /// and a file with nothing to redact gives `None`.
     #[test]
     fn redact_payload_follows_the_file_rules() {
-        let payload =
-            |content: &str, path: &str| redact_payload(content, path, PayloadRules::Payload);
+        let payload = redact_payload;
         let compose = "services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: pgsecret99\n";
         let (text, findings) =
             payload(compose, "/opt/app/docker-compose.yml").expect("compose redacts");
@@ -7212,24 +7314,17 @@ baseurl = https://cdn.redhat.com
             ),
         ];
         for (label, content) in cases {
-            for rules in [PayloadRules::Payload, PayloadRules::SnapshotCopy] {
-                let (text, findings) = redact_payload(&content, "/opt/app/app.env", rules)
-                    .unwrap_or_else(|| panic!("{label} {rules:?}: redacted"));
-                assert!(!holds_key(&text), "{label} {rules:?}: {text}");
-                assert!(
-                    !text.contains("supersecretvalue123"),
-                    "{label} {rules:?}: {text}"
-                );
-                assert!(
-                    findings
-                        .iter()
-                        .any(|f| f.finding_kind == Some(FindingKind::PrivateKey)),
-                    "{label} {rules:?}: {findings:?}"
-                );
-                if rules == PayloadRules::Payload {
-                    assert!(text.contains(begin), "{label}: the marker stays: {text}");
-                }
-            }
+            let (text, findings) = redact_payload(&content, "/opt/app/app.env")
+                .unwrap_or_else(|| panic!("{label}: redacted"));
+            assert!(!holds_key(&text), "{label}: {text}");
+            assert!(!text.contains("supersecretvalue123"), "{label}: {text}");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.finding_kind == Some(FindingKind::PrivateKey)),
+                "{label}: {findings:?}"
+            );
+            assert!(text.contains(begin), "{label}: the marker stays: {text}");
         }
         // The line after a key that nothing closes keeps its text.
         let (text, _) = redact_payload(
@@ -7238,7 +7333,6 @@ baseurl = https://cdn.redhat.com
                 split_key(4, " ")
             ),
             "/opt/app/app.env",
-            PayloadRules::Payload,
         )
         .unwrap();
         assert!(text.contains("\nAPI_TOKEN=REDACTED_"), "{text}");
@@ -7257,9 +7351,8 @@ baseurl = https://cdn.redhat.com
             let json = format!(
                 "{{\n  \"begin\": \"{begin}\",\n  \"api_token\": \"supersecretvalue123\",\n  \"end\": \"{end}\"\n}}\n"
             );
-            let (text, findings) =
-                redact_payload(&json, "/opt/app/tmpl.json", PayloadRules::Payload)
-                    .unwrap_or_else(|| panic!("{begin}: redacted"));
+            let (text, findings) = redact_payload(&json, "/opt/app/tmpl.json")
+                .unwrap_or_else(|| panic!("{begin}: redacted"));
             assert!(!text.contains("supersecretvalue123"), "{text}");
             assert!(text.contains(begin) && text.contains(end), "{text}");
             assert!(!findings.is_empty());
@@ -7269,27 +7362,153 @@ baseurl = https://cdn.redhat.com
         let (text, _) = redact_payload(
             &format!("{cert}password=hunter2hunter2\n{cert}"),
             "/opt/app/bundle.pem",
-            PayloadRules::Payload,
         )
         .expect("the password is redacted");
         assert_eq!(text.matches(cert).count(), 2, "{text}");
         assert!(!text.contains("hunter2hunter2"), "{text}");
     }
 
-    /// A file the snapshot also holds is redacted by the rules its copy
-    /// there was: private keys and certificates whole, so the shipped text
-    /// is never less redacted than that copy.
+    /// Every match is found in the original text, so a masker never
+    /// hides a key from the pattern pass. The finding's reproducer: a
+    /// proxy password whose value opens a private key whose body is split
+    /// by spaces; the masker replaces only `-----BEGIN`, which would leave
+    /// the body unrecognized. The key is gone, in a payload and in a
+    /// compose file, and a URL masked after a multi-line key keeps its
+    /// own line number.
     #[test]
-    fn snapshot_copy_rules_match_the_config_pass() {
-        let content = "{\"begin\":\"-----BEGIN PRIVATE KEY-----\",\"end\":\"-----END PRIVATE KEY-----\"}\n\
-             -----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----\n\
-             API_TOKEN=supersecretvalue123\n";
-        let mut twin = content.to_owned();
-        let mut registry = CounterRegistry::default();
-        scan_and_redact_field(&mut twin, "/opt/app/.env", &mut registry);
-        let (text, _) =
-            redact_payload(content, "/opt/app/.env", PayloadRules::SnapshotCopy).expect("redacted");
-        assert_eq!(text, twin);
-        assert!(!text.contains("BEGIN"), "{text}");
+    fn payload_matches_come_from_the_original_text() {
+        let body = split_key(4, " ");
+        let proxy = format!(
+            "proxy_password=-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----\n"
+        );
+        for path in ["/opt/app/dnf.conf", "/opt/app/.env"] {
+            let (text, findings) = redact_payload(&proxy, path).expect("redacted");
+            assert!(!holds_key(&text), "{path}: {text}");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.finding_kind == Some(FindingKind::PrivateKey)),
+                "{path}: {findings:?}"
+            );
+        }
+        let compose = format!(
+            "services:\n  app:\n    environment:\n      DB_PASSWORD: -----BEGIN PRIVATE KEY-----\n        {body}\n        -----END PRIVATE KEY-----\n"
+        );
+        let (text, _) = redact_payload(&compose, "/opt/app/docker-compose.yml").expect("redacted");
+        assert!(!holds_key(&text), "{text}");
+
+        let git = format!(
+            "-----BEGIN PRIVATE KEY-----\n{KEY_LINE}\n-----END PRIVATE KEY-----\n\
+             url = https://deploy:gitsecret77@git.example.com/r.git\n"
+        );
+        let (text, findings) = redact_payload(&git, "/opt/app/repo.cfg").expect("redacted");
+        assert!(!text.contains("gitsecret77") && !holds_key(&text), "{text}");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.source == "proxy_credential" && f.line == Some(4)),
+            "{findings:?}"
+        );
+    }
+
+    /// Edits that overlap are applied as one, over all their bytes, and a
+    /// pattern token stands for the merged span: no byte either edit
+    /// replaces survives, and the masker's kept text does not come back.
+    #[test]
+    fn overlapping_payload_edits_replace_every_byte_once() {
+        let content = "a=0123456789;b";
+        let edit = |range: Range<usize>, text: &str, token: bool| PayloadEdit {
+            range,
+            text: text.into(),
+            token,
+        };
+        assert_eq!(
+            apply_payload_edits(
+                content,
+                vec![edit(2..9, "0[X]", false), edit(5..12, "TOKEN", true)]
+            ),
+            "a=TOKEN;b"
+        );
+        assert_eq!(
+            apply_payload_edits(
+                content,
+                vec![edit(12..13, "", false), edit(2..4, "T", true)]
+            ),
+            "a=T23456789b"
+        );
+        assert_eq!(
+            line_edit("caf\u{e9} x\n", "caf\u{e8} x\n"),
+            (3..5, "\u{e8}".into())
+        );
+        assert_eq!(line_edit("same\n", "same\n"), (5..5, String::new()));
+    }
+
+    /// The check that a payload is what the snapshot's copy was read from
+    /// runs `redact`'s own pass for that copy: it accepts the copy `redact`
+    /// made, whatever numbers the snapshot gave its placeholders, and
+    /// refuses text that changed.
+    #[test]
+    fn redacted_copy_check_runs_the_snapshot_pass() {
+        use inspectah_core::types::containers::{ComposeFile, ContainerSection};
+        let env = "proxy_password=-----BEGIN PRIVATE KEY-----\nMC4C AQAw BQYD K2Vw BCIE IBQh \
+            0WfR 6aXE BHdg fX4i x5qD YmYR BZGZ EmNF dzJ1 Owlp\n-----END PRIVATE KEY-----\n\
+            API_TOKEN=supersecretvalue123\n";
+        let compose = "services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: pgsecret99\n";
+        let mut snap = InspectionSnapshot::new();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            env_files: vec![
+                // Earlier files take the low numbers.
+                ConfigFileEntry {
+                    path: "opt/other/.env".to_string(),
+                    content: "API_TOKEN=anothersecret456\nPASSWORD=hunter2hunter2\n".into(),
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: "opt/app/.env".to_string(),
+                    content: env.into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        snap.containers = Some(ContainerSection {
+            compose_files: vec![ComposeFile {
+                path: "opt/app/docker-compose.yml".into(),
+                raw_content: Some(compose.into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        redact(&mut snap, &RedactOptions::default());
+        let env_copy = &snap.non_rpm_software.as_ref().unwrap().env_files[1].content;
+        assert!(!env_copy.contains("BEGIN"), "{env_copy}");
+        assert!(is_redacted_copy_of(
+            SnapshotText::EnvFile,
+            "opt/app/.env",
+            env_copy,
+            env
+        ));
+        assert!(!is_redacted_copy_of(
+            SnapshotText::EnvFile,
+            "opt/app/.env",
+            env_copy,
+            &env.replace("API_TOKEN", "API_KEY")
+        ));
+        let compose_copy = snap.containers.as_ref().unwrap().compose_files[0]
+            .raw_content
+            .as_deref()
+            .unwrap();
+        assert!(is_redacted_copy_of(
+            SnapshotText::ComposeFile,
+            "opt/app/docker-compose.yml",
+            compose_copy,
+            compose
+        ));
+        assert!(!is_redacted_copy_of(
+            SnapshotText::ComposeFile,
+            "opt/app/docker-compose.yml",
+            compose_copy,
+            &format!("{compose}    ports: [\"80:80\"]\n")
+        ));
     }
 }

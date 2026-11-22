@@ -467,3 +467,110 @@ fn no_redaction_ships_the_reproducers_raw() {
             .all(|f| f.payload_redaction == PayloadRedaction::Unchanged)
     );
 }
+
+const NUL_ENV: &str = "/opt/nul/.env";
+const NUL_LOG: &str = "/opt/logs/nul.log";
+const PROXY_ENV: &str = "/opt/proxy/.env";
+const PROXY_CONF: &str = "/opt/proxy/dnf.conf";
+const ELF_BIN: &str = "/opt/tools/bin/tool";
+const GZIP_DATA: &str = "/opt/tools/share/data.gz";
+
+/// The start of an x86-64 ELF executable: its 64-byte header and its
+/// first instructions.
+const ELF: &[u8] = b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\
+    \x02\x00\x3e\x00\x01\x00\x00\x00\x40\x10\x40\x00\x00\x00\x00\x00\
+    \x40\x00\x00\x00\x00\x00\x00\x00\x98\x3a\x00\x00\x00\x00\x00\x00\
+    \x00\x00\x00\x00\x40\x00\x38\x00\x0d\x00\x40\x00\x1f\x00\x1e\x00\
+    \xf3\x0f\x1e\xfa\x31\xed\x49\x89\xd1";
+
+/// `hello` compressed by gzip.
+const GZIP: &[u8] = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\xcb\x48\xcd\xc9\xc9\x07\x00\
+    \x86\xa6\x10\x36\x05\x00\x00\x00";
+
+/// The round-two reproducers: a NUL byte in a valid UTF-8 `.env` and in
+/// an oversized log, and a proxy password opening a private key whose
+/// body is split by spaces, in an `.env` the snapshot also holds and in
+/// a file only the bundle holds. Controls: a real ELF and gzip header.
+fn nul_and_proxy_reproducers() -> Vec<(&'static str, Vec<u8>)> {
+    let nul_env = format!("#\x00\nAPI_TOKEN={TOKEN}\n");
+    let mut nul_log = format!("password={TOKEN}\n\x00").into_bytes();
+    nul_log.resize(HUGE_LEN, b'x');
+    let proxy = format!(
+        "proxy_password=-----BEGIN PRIVATE KEY-----\n{KEY_BODY}\n-----END PRIVATE KEY-----\n"
+    );
+    vec![
+        (NUL_ENV, nul_env.into_bytes()),
+        (NUL_LOG, nul_log),
+        (PROXY_ENV, proxy.clone().into_bytes()),
+        (PROXY_CONF, proxy.into_bytes()),
+        (ELF_BIN, ELF.to_vec()),
+        (GZIP_DATA, GZIP.to_vec()),
+    ]
+}
+
+/// A NUL byte does not decide "binary", and a masker never hides a key
+/// from the pattern pass: on both export paths no token or key material
+/// is in `unmanaged/`, `env-files/` or the snapshot. The NUL `.env` and
+/// the proxy `.env` ship the snapshot's own redacted copy, the oversized
+/// log is withheld, and the ELF and gzip files ship byte for byte.
+#[test]
+fn nul_bytes_and_masked_key_markers_never_ship_a_credential() {
+    let (exec, root) = host_of(&nul_and_proxy_reproducers());
+    let Exported {
+        snap,
+        scan_tree,
+        session,
+        _packed,
+    } = export(&exec, root.path(), false);
+
+    let items = &snap.unmanaged_files.as_ref().expect("a section").items;
+    let state = |path: &str| {
+        items
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("{path} is an item"))
+            .payload_redaction
+    };
+    for path in [NUL_ENV, PROXY_ENV, PROXY_CONF] {
+        assert_eq!(state(path), PayloadRedaction::Redacted, "{path}");
+    }
+    assert_eq!(
+        state(NUL_LOG),
+        PayloadRedaction::Withheld(UncheckedPayload::TooLarge)
+    );
+    for path in [ELF_BIN, GZIP_DATA] {
+        assert_eq!(state(path), PayloadRedaction::Unchanged, "{path}");
+    }
+
+    let refine_tree = export_session(&session);
+    let mut all = vec![(
+        "snapshot".to_string(),
+        serde_json::to_vec(&snap).expect("the snapshot serializes"),
+    )];
+    all.extend(files(scan_tree.path()));
+    all.extend(files(refine_tree.path()));
+    for (where_, bytes) in &all {
+        let text = String::from_utf8_lossy(bytes);
+        assert!(!text.contains(TOKEN), "{where_} holds the token");
+        let packed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        for run in KEY_RUNS {
+            assert!(!packed.contains(run), "{where_} holds key material");
+        }
+    }
+
+    for (via, tree) in [("scan", scan_tree.path()), ("refine", refine_tree.path())] {
+        crate::copy_source_exists_test::assert_every_copy_source_exists(via, tree);
+        let bundled = |path: &str| tree.join("unmanaged").join(&path[1..]);
+        for path in [NUL_ENV, PROXY_ENV] {
+            assert_eq!(
+                std::fs::read(bundled(path)).unwrap(),
+                std::fs::read(tree.join("env-files").join(&path[1..])).unwrap(),
+                "{via}: {path} ships the snapshot's copy"
+            );
+        }
+        assert!(!bundled(NUL_LOG).exists(), "{via}: the NUL log is bundled");
+        assert_eq!(std::fs::read(bundled(ELF_BIN)).unwrap(), ELF, "{via}");
+        assert_eq!(std::fs::read(bundled(GZIP_DATA)).unwrap(), GZIP, "{via}");
+    }
+    assert!(session.is_sensitive(), "refine asks for the acknowledgment");
+}
