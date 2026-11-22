@@ -2322,6 +2322,34 @@ What a later run needs to know:
   was 118,684 records on RHEL 9.8 and 124,732 on RHEL 10.2, with no
   quote or control character in any path.
 
+### Measured, 2026-11-21: every ghost file, and the ghost branch's scope
+
+On `rhel9` and `rhel10` after a driftify kitchen-sink run, read-only: the
+ghost query, `FILEMODES` and `stat` over every `%ghost` path under
+`/etc`, then a scan as root at `1a4172b1`. Every ghost file is classified
+in [ghost-config-files](ghost-config-files.md#every-ghost-file-on-the-test-hosts-classified).
+What a later run needs to know:
+
+- **`/etc/fstab` and `redhat.repo` are ghosts on both releases**, of
+  `setup` and `subscription-manager`. `redhat.repo` was 272,787 bytes on
+  RHEL 9.8, over the config read limit. Both are now left to their
+  sections; the scans carried neither and the config section was
+  complete on both hosts.
+- **RHEL 10.2 ghosts the files whose defaults moved to `/usr/lib`**
+  (`/etc/systemd/*.conf`, `/etc/udev/udev.conf`, `/etc/containers/*.conf`)
+  and `/etc/chrony.keys`. None existed on the test hosts, so a real
+  withheld key file was not observed; a plant would change the host.
+- **The kitchen-sink profile plants text files at `/etc/krb5.keytab` and
+  `/etc/krb5.keytab.ad`.** They are unowned, so the unowned walk, which
+  applies no machine-state rule yet, collects them and both scans staged
+  them under `config/etc/`. That is the machine-state class's case, not
+  the ghost branch's.
+- **Download an RPM to read its file flags** when the package is not
+  installed: `dnf download <pkg>` under the proxy workaround, then
+  `rpm -qp --queryformat '[%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES}\n]'`.
+  Remove the files by literal path: the agent harness refuses an `rm`
+  whose target is a shell variable.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a

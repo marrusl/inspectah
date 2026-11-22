@@ -40,19 +40,41 @@ path just because `rpm -Va` named it.
   or device, since opening a FIFO with no writer blocks and the
   subprocess timeout does not cover file reads. `MockExecutor`'s
   `with_special_file` registers such a path and panics if it is read.
-- **Collected** as `RpmOwnedModified`, `rpm_va_flags: None`, with its
-  package and content (redaction applies).
-- **Skipped:** a path an earlier branch already collected (an `rpm -Va`
-  row with a content flag); every skip the unowned walk applies
-  (`is_excluded_unowned`, dev artifacts, DHCP, SELinux fcontext store);
-  machine-state members by path (`is_machine_state_member`, the § 5.2
-  list of the machine-state class spec); `is_ghost_skip` (locale and
-  keymap files, which an open locale item owns; the `sscg` certificate;
-  `crypto-policies/state/`; authselect's generated files); and, after
-  the read, a file whose content is a keytab (first bytes `05 01` or
-  `05 02`) or a whole-file private key (§ 5.3), dropped before its
-  content is kept (`is_credential_content`). A key embedded in a larger
-  configuration file is configuration and stays with redaction.
+- **Carries only general configuration no other section owns.**
+  `classify_ghost` decides every path before anything reads it, in this
+  order:
+  - `Credential`: key material by path (`GHOST_CREDENTIAL_EXACT`:
+    `chrony.keys`, bind's `rndc.key` and `rndc.conf`, unbound's control
+    and server keys). Never opened; a scan warning names the path and
+    says the content was withheld.
+  - `MachineState`: the § 5.2 members of the machine-state class spec by
+    path (`is_machine_state_member`). Skipped silently until the class
+    lands.
+  - `OwnedBy(inspector)`: a file another section records. The table
+    (`OWNED_ELSEWHERE`, `OWNED_DIRS_ELSEWHERE`) holds each owner's own
+    constant, the one it reads the file by: storage's `FSTAB_PATH` and
+    `CRYPTTAB_PATH`, the users section's account databases, the SELinux
+    section's `SELINUX_CONFIG_PATH`, kernelboot's `LOCALE_CONF_PATH`, and
+    the repos section's `REPO_DIR`. Add a claim there, in the owner's
+    module, rather than a second list here. Storage claims `crypttab`
+    but does not parse it yet, so an entry in it is recorded nowhere.
+  - `Generated`: written on the host from input the image has or writes
+    again (`GHOST_GENERATED_EXACT`, `GHOST_GENERATED_PREFIX`, authselect's
+    generated files), or on the unowned walk's path lists
+    (`is_excluded_unowned_path`), a dev artifact, or the SELinux
+    fcontext store.
+  - `Deferred`: the keymap files, which the open locale item decides.
+  - `Config`: everything else, collected as `RpmOwnedModified`,
+    `rpm_va_flags: None`, with its package and content (redaction
+    applies).
+- **Skipped before the class:** a path an earlier branch already
+  collected (an `rpm -Va` row with a content flag). **After it:** the
+  unowned walk's checks that need the host (the unit-link test, DHCP
+  connections); and, after the read, a file whose content is a keytab
+  (first bytes `05 01` or `05 02`) or a whole-file private key (§ 5.3),
+  dropped before its content is kept, with the same warning as a
+  credential by path. A key embedded in a larger configuration file is
+  configuration and stays with redaction.
 - **Not run** when `owned_paths` is empty; a failed query degrades the
   section. Mocks that run the config inspector with owned paths must
   register the query (an empty answer is fine), or the section reads
@@ -60,6 +82,74 @@ path just because `rpm -Va` named it.
 
 When the machine-state class lands, the member skips go and the push
 becomes `ConfigCollector::admit` with the same fields.
+
+## Every ghost file on the test hosts, classified
+
+Measured 2026-11-21 on `rhel9` (RHEL 9.8) and `rhel10` (RHEL 10.2),
+both after a driftify kitchen-sink run, with the query above,
+`FILEMODES` and `stat`. The lists are in
+`testdata/fixtures/config/ghost/`, and
+`measured_ghost_files_land_in_known_classes` (`ghost.rs`) pins every
+entry: a ghost path a later measurement adds fails it until it is placed
+in the table there.
+
+What exists under `/etc` as a ghost: on RHEL 9.8, 157 regular files, 2
+empty ones, 258 symlinks and 9 directories; on RHEL 10.2, 155, 2, 497
+and 10. The symlinks (CA trust links under `/etc/pki/ca-trust` on both
+and `/etc/pki/tls` on 10.2, the crypto-policies back-ends, the
+authselect links in `/etc/pam.d` and `nsswitch.conf` on 10.2,
+`localtime`, `mtab`, `motd.d`, `issue.d`) and the directories (the
+`*.target.wants` directories) are never read: lstat says they are not
+regular files.
+
+| Ghost file | Package, flags | 9.8 | 10.2 | Class | Why |
+|---|---|---|---|---|---|
+| `/etc/sssd/sssd.conf` | sssd-common `cng` | yes | yes | Config | SSSD's configuration |
+| `/etc/audit/rules.d/audit.rules` | audit(-rules) `cng` | yes | yes | Config | the rules input `augenrules` reads |
+| `/etc/authselect/authselect.conf` | authselect-libs `g` | yes | yes | Config | rendered as `authselect select` |
+| `/etc/authselect/user-nsswitch.conf` | authselect-libs `g` | yes | unowned | Config | admin input to `nsswitch.conf` |
+| `/etc/cockpit/disallowed-users` | cockpit-ws `g` | yes | yes | Config | `%post` writes `root`; admins edit it |
+| `/etc/crypto-policies/config` | crypto-policies `cmng` | yes | yes | Config | rendered as `update-crypto-policies --set` |
+| `/etc/default/grub` | grub2-tools `cng` | yes | yes | Config | collected as an advisory, never copied |
+| `/etc/systemd/{journald,logind,system,user,coredump,pstore,sleep,resolved}.conf` | systemd, systemd-udev, systemd-resolved `cng` | not ghosts | absent | Config | RHEL 10 moved the defaults to `/usr/lib/systemd/`; a file here is the admin's |
+| `/etc/udev/udev.conf`, `iocost.conf` | systemd-udev `cng` | not ghosts | absent | Config | the same move to `/usr/lib/udev/` |
+| `/etc/containers/containers.conf` | containers-common `g` | absent | absent | Config | admin overrides of the `/usr/share/containers` defaults |
+| `/etc/containers/storage.conf` | containers-common `g` | not a ghost | absent | Config | the same |
+| `/etc/gai.conf`, `/etc/gnupg/gpgconf.conf`, `/etc/npmignore`, `/etc/NetworkManager/VPN` | glibc, gnupg2, npm, NetworkManager | absent | absent | Config | admin-written when present |
+| `/etc/fstab` | setup `cmng` | yes | yes | OwnedBy(Storage) | the storage section reads it |
+| `/etc/crypttab` | systemd-udev `cng` | empty | empty | OwnedBy(Storage) | host block devices; storage does not parse it yet |
+| `/etc/selinux/config` | selinux-policy `cng` | yes | yes | OwnedBy(Selinux) | the SELinux section reads it; no renderer carries the mode |
+| `/etc/locale.conf` | systemd `cng` | yes | yes | OwnedBy(KernelBoot) | kernelboot records the locale; the locale item decides carriage |
+| `/etc/yum.repos.d/redhat.repo` | subscription-manager `g` | 272,787 bytes | 119,378 bytes | OwnedBy(Rpm) | the repos section's; on 9.8 over the 256 KiB read limit, which degraded the config section |
+| `/etc/chrony.keys` | chrony `cg` | `cn`, not a ghost | absent | Credential | NTP authentication keys, `<id> <hash> HEX:<key>` |
+| `/etc/machine-id`, `/etc/hostname` | systemd `cng` | yes | yes | MachineState | § 5.2 members |
+| `/etc/authselect/{nsswitch.conf,system-auth,password-auth,fingerprint-auth,smartcard-auth,postlogin,dconf-db,dconf-locks}` | authselect-libs `g` | yes | yes | Generated | `authselect select` writes them again |
+| `/etc/audit/audit.rules` | audit(-rules) `cng` | yes | yes | Generated | `augenrules --load` writes it from `rules.d` (`auditd.service` `ExecStartPost=` on 9.8, `audit-rules.service` on 10.2) |
+| `/etc/avahi/etc/localtime` | avahi `g` | yes | yes | Generated | avahi's `%post` copies `/etc/localtime` into its chroot |
+| `/etc/crypto-policies/state/*` | crypto-policies `g` | yes | yes | Generated | written from `config` |
+| `/etc/crypto-policies/back-ends/nss.config` | crypto-policies `cmng` | yes | yes | Generated | the walk's back-ends glob |
+| `/etc/foomatic/hashes.d/hashes.new` | cups-filters `g` | empty | empty | Generated | rewritten while the host runs (mtime after install) |
+| `/etc/ld.so.cache` | glibc `cmng` | yes | yes | Generated | ldconfig |
+| `/etc/machine-info` | systemd `cng` | absent | absent | Generated | the walk's exact list |
+| `/etc/pki/ca-trust/extracted/*` | ca-certificates `g` | 124 files | 124 files | Generated | `update-ca-trust` |
+| `/etc/selinux/targeted/contexts/files/*.bin` | selinux-policy-targeted `g` | yes | yes | Generated | compiled policy |
+| `/etc/udev/hwdb.bin` | systemd-udev `g` | yes | yes | Generated | `systemd-hwdb update` |
+| `/etc/lvm/cache/.cache`, `/etc/modprobe.d/kvm.rt.tuned.conf` | lvm2, tuned `g` | absent | absent | Generated | LVM's device cache; written by tuned's profile functions (`/usr/lib/tuned/functions`) |
+| `/etc/cni/net.d/87-podman-bridge.conflist` | podman `g` | absent | not a ghost | Generated | the default network podman's old CNI backend wrote |
+| `/etc/vconsole.conf`, `/etc/X11/xorg.conf.d/00-keyboard.conf` | systemd(-udev) `cng` | yes | yes | Deferred | the locale and keymap item |
+
+Packages not installed on either host, read from their RPMs with `rpm
+-qp` on 2026-11-21, give the rest of the credential list: `bind` lists
+`/etc/rndc.key` and `/etc/rndc.conf` (`cng`), `unbound` lists
+`/etc/unbound/unbound_{control,server}.{key,pem}` (`g`) on both
+releases; the `.pem` certificates are `Generated` beside their keys, as
+`sscg`'s `localhost.crt` is. `libreswan` has no ghost under `/etc`.
+
+**Not covered by this branch:** on RHEL 9.8 `/etc/chrony.keys` is a
+plain `%config(noreplace)` file (`cn`, 540 bytes stock). An admin who
+adds a key makes it an `rpm -Va` content change, and that branch
+collects it with its content. The credential list is applied to the
+ghost branch only.
 
 ## authselect
 
