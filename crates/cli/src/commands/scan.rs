@@ -449,6 +449,12 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     // scan makes goes through the machine-state read gate.
     let real_executor = RealExecutor::new();
     let executor = inspectah_core::machine_state::ScreenedExecutor::new(&real_executor);
+    // A screen that could not list every machine-state file cannot
+    // recognize a hard link or bind mount of one it missed, so the scan
+    // does not run on it.
+    if let Some(gap) = executor.gap() {
+        anyhow::bail!("{gap}");
+    }
 
     // Build effective scan roots from defaults + CLI flags.
     let (effective_roots, home_users, extra_paths) =

@@ -43,6 +43,8 @@ pub struct FileMetadata {
 const S_IFMT: u32 = 0o170_000;
 /// The file type of a regular file in `st_mode`.
 const S_IFREG: u32 = 0o100_000;
+/// The file type of a directory in `st_mode`.
+const S_IFDIR: u32 = 0o040_000;
 /// The permission bits of `st_mode`, setuid, setgid and sticky included.
 const PERMISSION_BITS: u32 = 0o7777;
 
@@ -50,6 +52,11 @@ impl FileMetadata {
     /// Whether the path resolves to a regular file.
     pub fn is_regular(&self) -> bool {
         self.mode & S_IFMT == S_IFREG
+    }
+
+    /// Whether the path resolves to a directory.
+    pub fn is_directory(&self) -> bool {
+        self.mode & S_IFMT == S_IFDIR
     }
 
     /// The permission bits alone, as `chmod` takes them.

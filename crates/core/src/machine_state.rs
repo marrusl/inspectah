@@ -404,8 +404,16 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// How deep the screen walks below a `Prefix` rule's directory.
-const SCREEN_WALK_DEPTH: usize = 8;
+/// How many directories deep the screen follows a withheld rule's tree,
+/// directory links included, before it gives up on establishing the
+/// boundary ([`ScreenGapCause::TooDeep`]). Far deeper than any tool
+/// writes its keys.
+const SCREEN_MAX_DEPTH: usize = 32;
+
+/// How many directory entries one screen build examines before it gives
+/// up ([`ScreenGapCause::TooManyEntries`]): a link from a member
+/// directory to `/` must fail fast, not walk the filesystem.
+const SCREEN_MAX_ENTRIES: usize = 1 << 16;
 
 /// What the gate says of a path, before opening it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -435,66 +443,114 @@ pub enum ScreenBypass {
 #[derive(Debug, Clone, Default)]
 pub struct MachineStateScreen {
     inodes: HashMap<(u64, u64), MachineStateMember>,
+    /// Where the build could not list every matching file, if it could
+    /// not. The gate then withholds everything ([`ScreenedExecutor::screen`]),
+    /// and the scan refuses to run ([`ScreenedExecutor::gap`]).
+    gap: Option<ScreenGap>,
 }
 
+/// Why the screen could not list every file a withheld rule matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenGapCause {
+    /// The tree goes deeper than the screen follows.
+    TooDeep,
+    /// The rules' trees hold more entries than one build examines.
+    TooManyEntries,
+    /// An entry's name is not UTF-8, so it cannot be named to `stat` it.
+    NameNotUtf8,
+    /// The directory could not be listed in full.
+    Unlistable(io::ErrorKind),
+}
+
+impl std::fmt::Display for ScreenGapCause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooDeep => write!(f, "it is more than {SCREEN_MAX_DEPTH} directories deep"),
+            Self::TooManyEntries => write!(f, "it holds more than {SCREEN_MAX_ENTRIES} entries"),
+            Self::NameNotUtf8 => write!(f, "an entry's name is not UTF-8"),
+            Self::Unlistable(kind) => write!(f, "it could not be listed in full ({kind})"),
+        }
+    }
+}
+
+/// A directory below which the screen could not establish which files
+/// are machine-state files: the logical path a withheld rule names, the
+/// rule's member, and why. Its text holds paths and fixed words only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenGap {
+    pub dir: String,
+    pub member: MachineStateMember,
+    pub cause: ScreenGapCause,
+}
+
+impl std::fmt::Display for ScreenGap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cannot tell which files under {} are machine-state files ({}): {}. \
+             Rename or remove the entry, or repair the directory or the link \
+             to it, then re-run the scan",
+            self.dir.escape_debug(),
+            self.member.as_str(),
+            self.cause
+        )
+    }
+}
+
+impl std::error::Error for ScreenGap {}
+
 impl MachineStateScreen {
-    /// Stats every host path a withheld rule matches, listing only those
-    /// rules' own directories. Reads no file content. `BasenameSuffix`
-    /// rules are not enumerated: that would take a walk of `/etc`, and a
-    /// keytab linked under another name is caught by its header.
+    /// Stats every host file a withheld rule matches, reading no file
+    /// content. Each `Glob` and `Prefix` rule's tree is listed from the
+    /// rule's own directory, following directory links (each directory
+    /// once on any one path, so a link back up ends there) and keeping
+    /// the logical spelling the rule matches, and descending only where a
+    /// match is still possible. Where the listing cannot be completed the
+    /// build records a [`ScreenGap`] and stops. `BasenameSuffix` rules are
+    /// not enumerated: that would take a walk of `/etc`, and a keytab
+    /// linked under another name is caught by its header.
     pub fn build(exec: &dyn Executor) -> Self {
         let mut screen = Self::default();
+        let mut budget = SCREEN_MAX_ENTRIES;
         for (rule, target) in RULES {
             let RuleTarget::Withheld(member) = *target else {
                 continue;
             };
-            match *rule {
-                PathMatch::Exact(path) => screen.note(exec, path, member),
-                PathMatch::Glob(pattern) => {
-                    let dir = glob_dir(pattern);
-                    screen.walk(exec, dir, member, SCREEN_WALK_DEPTH, &|p| {
-                        match_glob(pattern, p)
-                    });
+            let root = match *rule {
+                PathMatch::Exact(path) => {
+                    screen.note(exec, Path::new(path), member);
+                    continue;
                 }
-                PathMatch::Prefix(prefix) => {
-                    let dir = prefix.trim_end_matches('/');
-                    screen.walk(exec, dir, member, SCREEN_WALK_DEPTH, &|p| {
-                        p.starts_with(prefix)
-                    });
-                }
-                PathMatch::BasenameSuffix(_) => {}
+                PathMatch::Glob(pattern) => glob_dir(pattern),
+                PathMatch::Prefix(prefix) => prefix.trim_end_matches('/'),
+                PathMatch::BasenameSuffix(_) => continue,
+            };
+            let Ok(meta) = exec.file_metadata(Path::new(root)) else {
+                continue;
+            };
+            let physical = exec
+                .resolve_final_target(Path::new(root))
+                .unwrap_or_else(|_| PathBuf::from(root));
+            let mut walk = RuleWalk {
+                rule: *rule,
+                member,
+                ancestors: vec![(meta.dev, meta.ino)],
+                budget: &mut budget,
+            };
+            if let Err(gap) = walk.walk(&mut screen.inodes, exec, root, &physical, SCREEN_MAX_DEPTH)
+            {
+                screen.gap = Some(gap);
+                break;
             }
         }
         screen
     }
 
-    fn note(&mut self, exec: &dyn Executor, path: &str, member: MachineStateMember) {
-        if let Ok(meta) = exec.file_metadata(Path::new(path))
+    fn note(&mut self, exec: &dyn Executor, path: &Path, member: MachineStateMember) {
+        if let Ok(meta) = exec.file_metadata(path)
             && meta.is_regular()
         {
             self.inodes.entry((meta.dev, meta.ino)).or_insert(member);
-        }
-    }
-
-    fn walk(
-        &mut self,
-        exec: &dyn Executor,
-        dir: &str,
-        member: MachineStateMember,
-        depth: usize,
-        wanted: &dyn Fn(&str) -> bool,
-    ) {
-        let Ok(names) = exec.read_dir(Path::new(dir)) else {
-            return;
-        };
-        for name in names {
-            let path = format!("{dir}/{name}");
-            if wanted(&path) {
-                self.note(exec, &path, member);
-            }
-            if depth > 0 && matches!(exec.file_kind(Path::new(&path)), Ok(FileKind::Directory)) {
-                self.walk(exec, &path, member, depth - 1, wanted);
-            }
         }
     }
 
@@ -502,6 +558,137 @@ impl MachineStateScreen {
     pub fn member_by_inode(&self, meta: &FileMetadata) -> Option<MachineStateMember> {
         self.inodes.get(&(meta.dev, meta.ino)).copied()
     }
+}
+
+/// One withheld rule's tree, being listed.
+struct RuleWalk<'b> {
+    rule: PathMatch,
+    member: MachineStateMember,
+    /// The `(dev, ino)` of each directory on the current path, so a link
+    /// back to one of them is not followed again.
+    ancestors: Vec<(u64, u64)>,
+    budget: &'b mut usize,
+}
+
+impl RuleWalk<'_> {
+    /// Lists `physical`, the directory the logical path `logical` names,
+    /// noting each matching regular file's inode and descending into each
+    /// directory, linked or not, below which a match is still possible.
+    fn walk(
+        &mut self,
+        inodes: &mut HashMap<(u64, u64), MachineStateMember>,
+        exec: &dyn Executor,
+        logical: &str,
+        physical: &Path,
+        depth: usize,
+    ) -> Result<(), ScreenGap> {
+        let member = self.member;
+        let gap = |dir: &str, cause| ScreenGap {
+            dir: dir.to_string(),
+            member,
+            cause,
+        };
+        let names = match exec.read_dir_strict(physical) {
+            Ok(names) => names,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(());
+            }
+            Err(e) => return Err(gap(logical, ScreenGapCause::Unlistable(e.kind()))),
+        };
+        for name in names {
+            // A name read lossily: the part before the first replaced
+            // byte is what the real name starts with.
+            if let Some(cut) = name.find(char::REPLACEMENT_CHARACTER) {
+                if may_match_below(self.rule, &format!("{logical}/{}", &name[..cut])) {
+                    return Err(gap(logical, ScreenGapCause::NameNotUtf8));
+                }
+                continue;
+            }
+            *self.budget = self
+                .budget
+                .checked_sub(1)
+                .ok_or_else(|| gap(logical, ScreenGapCause::TooManyEntries))?;
+            let child = format!("{logical}/{name}");
+            let child_physical = physical.join(&name);
+            // A dangling or looping link names no file to read through it.
+            let Ok(meta) = exec.file_metadata(&child_physical) else {
+                continue;
+            };
+            if meta.is_regular() {
+                if self.rule.matches(&child) {
+                    inodes.entry((meta.dev, meta.ino)).or_insert(self.member);
+                }
+                continue;
+            }
+            let id = (meta.dev, meta.ino);
+            if !meta.is_directory()
+                || !may_match_below(self.rule, &format!("{child}/"))
+                || self.ancestors.contains(&id)
+            {
+                continue;
+            }
+            if depth == 0 {
+                return Err(gap(&child, ScreenGapCause::TooDeep));
+            }
+            let next = exec
+                .resolve_final_target(&child_physical)
+                .unwrap_or(child_physical);
+            self.ancestors.push(id);
+            let listed = self.walk(inodes, exec, &child, &next, depth - 1);
+            self.ancestors.pop();
+            listed?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether some path starting with `start` can match `rule`: the rule's
+/// pattern, read from its left, has not yet failed on `start`.
+fn may_match_below(rule: PathMatch, start: &str) -> bool {
+    match rule {
+        PathMatch::Exact(path) => path.starts_with(start),
+        PathMatch::Prefix(prefix) => start.starts_with(prefix) || prefix.starts_with(start),
+        PathMatch::Glob(pattern) => glob_start_alive(pattern, start),
+        PathMatch::BasenameSuffix(_) => true,
+    }
+}
+
+/// Whether `glob_match_simple(pattern, text)` holds for some `text` that
+/// begins with `start` and is longer than it: the pattern positions
+/// reachable after reading `start`, short of the end, are not empty.
+/// Exact for [`match_glob`], whose other two cases are subsets of the
+/// whole-path match.
+fn glob_start_alive(pattern: &str, start: &str) -> bool {
+    let pat: Vec<char> = pattern.chars().collect();
+    let close = |live: &mut Vec<bool>| {
+        for i in 0..pat.len() {
+            if live[i] && pat[i] == '*' {
+                live[i + 1] = true;
+            }
+        }
+    };
+    let mut live = vec![false; pat.len() + 1];
+    live[0] = true;
+    close(&mut live);
+    for c in start.chars() {
+        let mut next = vec![false; pat.len() + 1];
+        for i in (0..pat.len()).filter(|&i| live[i]) {
+            match pat[i] {
+                '*' => next[i] = true,
+                '?' => next[i + 1] = true,
+                p if p == c => next[i + 1] = true,
+                _ => {}
+            }
+        }
+        close(&mut next);
+        live = next;
+    }
+    live[..pat.len()].iter().any(|&l| l)
 }
 
 /// The directory a glob's fixed stem names: everything before the
@@ -571,9 +758,22 @@ impl<'a> ScreenedExecutor<'a> {
         Self { inner, screen }
     }
 
+    /// Where the screen could not list every file a withheld rule
+    /// matches, if anywhere. The scan checks this before it reads
+    /// anything and refuses to run, since a hard link or bind mount of a
+    /// file it could not list would not be recognized. A gate with a gap
+    /// withholds every path, so no other caller reads past it either.
+    pub fn gap(&self) -> Option<&ScreenGap> {
+        self.screen.gap.as_ref()
+    }
+
     /// Logical path, resolved path, then inode. Opens nothing. Resolution
-    /// and inode add withheld answers only.
+    /// and inode add withheld answers only. With a [`gap`](Self::gap),
+    /// every path is withheld.
     pub fn screen(&self, path: &str) -> Screened {
+        if let Some(gap) = &self.screen.gap {
+            return Screened::Withheld(gap.member);
+        }
         let by_path = classify_path(path);
         if let Some(RuleTarget::Withheld(member)) = by_path {
             return Screened::Withheld(member);
@@ -993,6 +1193,57 @@ mod tests {
         assert_eq!(normal_path("/etc/x\ny"), None);
         assert_eq!(normal_path("/etc/x\u{2028}"), None);
         assert_eq!(normal_path("//"), None);
+    }
+
+    /// The inventory descends only where a rule can still match, judged
+    /// as `match_glob` judges a whole path.
+    #[test]
+    fn may_match_below_prunes_only_dead_branches() {
+        let cases: &[(PathMatch, &str, bool)] = &[
+            (Glob("/etc/krb5.keytab.*"), "/etc/krb5.keytab.d/", true),
+            (Glob("/etc/krb5.keytab.*"), "/etc/ssh/", false),
+            (Glob("/etc/krb5.keytab.*"), "/etc/krb5.keytab", true),
+            (
+                Glob("/etc/cockpit/ws-certs.d/*.key"),
+                "/etc/cockpit/ws-certs.d/sub/",
+                true,
+            ),
+            (
+                Glob("/etc/ssh/ssh_host_*"),
+                "/etc/ssh/sshd_config.d/",
+                false,
+            ),
+            (Glob("/etc/ssh/ssh_host_*"), "/etc/ssh/ssh_host_keys/", true),
+            (
+                Glob("/etc/insights-client/.*"),
+                "/etc/insights-client/.state/",
+                true,
+            ),
+            (
+                Glob("/etc/insights-client/.*"),
+                "/etc/insights-client/tags/",
+                false,
+            ),
+            (
+                Prefix("/etc/pki/tls/private/"),
+                "/etc/pki/tls/private/x/",
+                true,
+            ),
+            (Prefix("/etc/pki/tls/private/"), "/etc/pki/", true),
+            (
+                Prefix("/etc/pki/tls/private/"),
+                "/etc/pki/tls/certs/",
+                false,
+            ),
+        ];
+        for (rule, start, want) in cases {
+            assert_eq!(may_match_below(*rule, start), *want, "{rule:?} {start}");
+        }
+        // Agrees with match_glob on what it lets through.
+        assert!(match_glob(
+            "/etc/cockpit/ws-certs.d/*.key",
+            "/etc/cockpit/ws-certs.d/sub/a.key"
+        ));
     }
 
     #[test]

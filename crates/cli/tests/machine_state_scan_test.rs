@@ -1576,3 +1576,48 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
         "{warnings:?}"
     );
 }
+
+/// The inventory reaches members below directory links and below the
+/// old depth limit, through a full scan: a certificate-only consumer file
+/// in a directory `/etc/pki/consumer/linked` links to, registration JSON
+/// in a directory `/etc/insights-client/.state` links to, and a hard link
+/// to an entitlement file eleven directories down. None is PEM key
+/// content, so only the inventory can withhold them. Each physical path
+/// is a withheld row, never opened, and its content is in no artifact.
+#[test]
+fn members_below_directory_links_and_deep_trees_are_withheld() {
+    let deep = "/etc/pki/entitlement/a/b/c/d/e/f/g/h/i/j";
+    let cert = format!("-----BEGIN CERTIFICATE-----\nMIIB{MARKER}\n-----END CERTIFICATE-----\n");
+    let exec = SysctlHost::new()
+        .file("/etc/myapp/consumer/cert.pem", &cert)
+        .link("/etc/pki/consumer/linked", "/etc/myapp/consumer")
+        .file(
+            "/etc/myapp/state/registration.json",
+            &format!("{{\"machine_id\": \"{MARKER}\"}}\n"),
+        )
+        .link("/etc/insights-client/.state", "/etc/myapp/state")
+        .file(
+            &format!("{deep}/ent.json"),
+            &format!("{{\"pool\": \"{MARKER}\"}}\n"),
+        )
+        .hard_link("/etc/myapp/ent.json", &format!("{deep}/ent.json"))
+        .build();
+    let snap = reload(&scan_exec(&exec, std_inspectors()));
+    for (path, member) in [
+        (
+            "/etc/myapp/consumer/cert.pem",
+            MachineStateMember::RhsmConsumer,
+        ),
+        (
+            "/etc/myapp/state/registration.json",
+            MachineStateMember::InsightsState,
+        ),
+        ("/etc/myapp/ent.json", MachineStateMember::RhsmEntitlement),
+    ] {
+        let row = withheld(&snap, path).unwrap_or_else(|| panic!("{path} is withheld"));
+        assert_eq!(row.member, member, "{path}");
+        assert!(!has_entry(&snap, path), "{path}");
+        assert_never_opened(&exec, path);
+    }
+    assert_marker_nowhere(&snap);
+}

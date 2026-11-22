@@ -306,3 +306,116 @@ fn assert_snapshot_validates(config: ConfigSection) {
     };
     validate(&snap).expect("a collector-produced snapshot validates");
 }
+
+const CERT: &str = "-----BEGIN CERTIFICATE-----\nMIIBcertmarker\n-----END CERTIFICATE-----\n";
+
+/// The inventory follows directory links below a rule's directory and
+/// keeps the rule's spelling: a certificate-only file in a directory that
+/// `/etc/pki/consumer/linked` links to is a consumer member by inode, and
+/// registration JSON reached through `/etc/insights-client/.state` is
+/// Insights state. A link back up the tree ends the walk there. A tree
+/// deeper than eight directories is listed to its bottom, so a hard link
+/// to its deepest file is withheld. Neither physical file is opened.
+#[test]
+fn the_inventory_follows_directory_links_and_deep_trees() {
+    let deep = "/etc/pki/entitlement/a/b/c/d/e/f/g/h/i/j";
+    let mut exec = MockExecutor::new()
+        .with_dir("/etc", vec!["pki", "insights-client", "myapp"])
+        .with_dir("/etc/pki", vec!["consumer", "entitlement"])
+        .with_dir("/etc/pki/consumer", vec!["linked"])
+        .with_link("/etc/pki/consumer/linked", "/etc/myapp/consumer")
+        .with_dir("/etc/myapp", vec!["consumer", "state", "ent.json"])
+        .with_dir("/etc/myapp/consumer", vec!["cert.pem", "up"])
+        .with_file("/etc/myapp/consumer/cert.pem", CERT)
+        .with_link("/etc/myapp/consumer/up", "/etc/pki/consumer")
+        .with_dir("/etc/insights-client", vec![".state"])
+        .with_link("/etc/insights-client/.state", "/etc/myapp/state")
+        .with_dir("/etc/myapp/state", vec!["registration.json"])
+        .with_file(
+            "/etc/myapp/state/registration.json",
+            "{\"machine_id\": \"abc\"}\n",
+        )
+        .with_hard_link("/etc/myapp/ent.json", &format!("{deep}/ent.json"));
+    let mut parent = "/etc/pki/entitlement".to_string();
+    for name in ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"] {
+        exec = exec.with_dir(&parent, vec![name]);
+        parent = format!("{parent}/{name}");
+    }
+    let exec = exec
+        .with_dir(deep, vec!["ent.json"])
+        .with_file(&format!("{deep}/ent.json"), "{\"entitlement\": 1}\n");
+    let gate = ScreenedExecutor::new(&exec);
+    assert_eq!(gate.gap(), None);
+    for (path, member) in [
+        (
+            "/etc/myapp/consumer/cert.pem",
+            MachineStateMember::RhsmConsumer,
+        ),
+        (
+            "/etc/myapp/state/registration.json",
+            MachineStateMember::InsightsState,
+        ),
+        ("/etc/myapp/ent.json", MachineStateMember::RhsmEntitlement),
+    ] {
+        assert_eq!(gate.screen(path), Screened::Withheld(member), "{path}");
+        let err = gate.read_file(Path::new(path)).expect_err("refused");
+        assert_eq!(refusal(&err), Some(member), "{path}");
+        assert!(!exec.was_read(path), "{path} was opened");
+    }
+}
+
+/// Where the inventory cannot be completed, the gate fails closed: a tree
+/// deeper than the screen follows, a name that is not UTF-8 where a rule
+/// could match it, and a directory that cannot be listed in full each
+/// leave a gap naming the directory, and the gate then withholds every
+/// path. A name that is not UTF-8 where no rule can match leaves none.
+#[test]
+fn an_incomplete_inventory_leaves_a_gap_and_withholds_everything() {
+    let too_deep = || {
+        let mut exec = MockExecutor::new().with_dir("/etc/pki/tls/private", vec!["d0"]);
+        let mut parent = "/etc/pki/tls/private".to_string();
+        for depth in 0..40 {
+            let dir = format!("{parent}/d{depth}");
+            let next = format!("d{}", depth + 1);
+            exec = exec.with_dir(&dir, vec![next.as_str()]);
+            parent = dir;
+        }
+        exec
+    };
+    let not_utf8 = || MockExecutor::new().with_dir("/etc/pki/tls/private", vec!["key\u{FFFD}.pem"]);
+    let unlistable = || {
+        MockExecutor::new()
+            .with_dir("/etc/pki/entitlement", vec!["1.pem"])
+            .with_dir_iteration_error("/etc/pki/entitlement", std::io::ErrorKind::PermissionDenied)
+    };
+    let cases: [(&str, &dyn Fn() -> MockExecutor, &str); 3] = [
+        ("too deep", &too_deep, "/etc/pki/tls/private/d0/d1"),
+        ("not UTF-8", &not_utf8, "/etc/pki/tls/private"),
+        ("unlistable", &unlistable, "/etc/pki/entitlement"),
+    ];
+    for (name, host, dir) in cases {
+        let exec = host().with_file("/etc/myapp/app.conf", "a = 1\n");
+        let gate = ScreenedExecutor::new(&exec);
+        let gap = gate.gap().unwrap_or_else(|| panic!("{name}: a gap"));
+        assert!(gap.dir.starts_with(dir), "{name}: {gap}");
+        assert!(gap.to_string().contains("re-run the scan"), "{name}: {gap}");
+        assert!(
+            matches!(gate.screen("/etc/myapp/app.conf"), Screened::Withheld(_)),
+            "{name}"
+        );
+        assert!(
+            gate.read_file(Path::new("/etc/myapp/app.conf")).is_err(),
+            "{name}"
+        );
+        assert!(!exec.was_read("/etc/myapp/app.conf"), "{name}");
+    }
+
+    let unrelated = MockExecutor::new()
+        .with_dir("/etc", vec!["backup\u{FFFD}.conf", "krb5.keytab.d"])
+        .with_dir("/etc/krb5.keytab.d", vec!["k\u{FFFD}"]);
+    let gate = ScreenedExecutor::new(&unrelated);
+    let gap = gate.gap().expect("the name under krb5.keytab.d can match");
+    assert_eq!(gap.dir, "/etc/krb5.keytab.d");
+    let only_unrelated = MockExecutor::new().with_dir("/etc", vec!["backup\u{FFFD}.conf"]);
+    assert_eq!(ScreenedExecutor::new(&only_unrelated).gap(), None);
+}
