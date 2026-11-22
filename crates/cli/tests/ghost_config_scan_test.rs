@@ -568,3 +568,127 @@ fn sssd_bind_passwords_are_redacted_whole_on_both_export_paths() {
         );
     }
 }
+
+/// The files `authselect create-profile corp -b sssd --symlink-meta
+/// --symlink-pam` links into the shipped profile, as listed on RHEL 9.8
+/// (RHEL 10.2 adds `switchable-auth`).
+const LINKED_PROFILE_FILES: [&str; 7] = [
+    "README",
+    "REQUIREMENTS",
+    "fingerprint-auth",
+    "password-auth",
+    "postlogin",
+    "smartcard-auth",
+    "system-auth",
+];
+
+/// The files the same command copies into the custom profile.
+const COPIED_PROFILE_FILES: [&str; 3] = ["dconf-db", "dconf-locks", "nsswitch.conf"];
+
+/// A host that selected `custom/corp` with `with-faillock`, made as
+/// above: links into `/usr/share/authselect/vendor/sssd/` and copied
+/// files, each holding a line that names it.
+fn custom_profile_host() -> SysctlHost {
+    let mut host = sssd_host()
+        .ghost("authselect-libs", "g", "/etc/authselect/authselect.conf")
+        .file(
+            "/etc/authselect/authselect.conf",
+            "custom/corp\nwith-faillock\n",
+        )
+        .command(
+            "authselect check",
+            CHECK_VALID.0,
+            CHECK_VALID.1,
+            CHECK_VALID.2,
+        );
+    for name in LINKED_PROFILE_FILES {
+        let shipped = format!("/usr/share/authselect/vendor/sssd/{name}");
+        host = host
+            .file(&shipped, &format!("# shipped {name}\n"))
+            .link(&format!("/etc/authselect/custom/corp/{name}"), &shipped);
+    }
+    for name in COPIED_PROFILE_FILES {
+        host = host.file(
+            &format!("/etc/authselect/custom/corp/{name}"),
+            &format!("# copied {name}\n"),
+        );
+    }
+    host
+}
+
+/// A custom profile made with `--symlink-meta --symlink-pam` is carried
+/// whole: each link into the shipped profiles is collected as a file
+/// with what it resolves to, both exports stage every file of the
+/// profile, and `authselect select custom/corp` runs after the COPY. A
+/// build from such a context selected the profile and passed `authselect
+/// check` in rhel-bootc 9.8 and 10.2.
+#[test]
+fn a_custom_profile_with_shipped_links_is_carried_whole_on_both_export_paths() {
+    let snap = scan(custom_profile_host());
+
+    for name in LINKED_PROFILE_FILES {
+        let path = format!("/etc/authselect/custom/corp/{name}");
+        let file = entry(&snap, &path).unwrap_or_else(|| panic!("{path} is collected"));
+        assert!(
+            file.disposition.is_included(),
+            "{path}: {:?}",
+            file.disposition
+        );
+        assert_eq!(file.content, format!("# shipped {name}\n"), "{path}");
+    }
+    for (path, tree) in both_exports(&snap) {
+        for name in LINKED_PROFILE_FILES.iter().chain(&COPIED_PROFILE_FILES) {
+            let staged = tree
+                .path()
+                .join("config/etc/authselect/custom/corp")
+                .join(name);
+            assert!(
+                std::fs::symlink_metadata(&staged).is_ok_and(|m| m.is_file()),
+                "{path}: {name} is staged as a file"
+            );
+        }
+        let cf = containerfile(tree.path());
+        let copy = cf
+            .find("COPY config/etc/ /etc/")
+            .unwrap_or_else(|| panic!("{path}: the config tree is copied:\n{cf}"));
+        let select = cf
+            .find("RUN authselect select custom/corp with-faillock --force\n")
+            .unwrap_or_else(|| panic!("{path}: the custom profile is selected:\n{cf}"));
+        assert!(copy < select, "{path}");
+        assert!(!cf.contains("FIXME: authselect"), "{path}:\n{cf}");
+    }
+}
+
+/// With a file of the custom profile left out of the export, here the
+/// `README` excluded in refine, `authselect select` would fail the build
+/// (README) or write an empty PAM stack (a template). The export names
+/// the missing file in a FIXME and renders no select line.
+#[test]
+fn a_custom_profile_missing_a_file_is_a_fixme_not_a_select_line() {
+    use inspectah_refine::types::{ItemId, RefinementOp};
+
+    let snap = scan(custom_profile_host());
+    let mut refine = session(&snap);
+    refine
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: "/etc/authselect/custom/corp/README".into(),
+            },
+            include: false,
+        })
+        .expect("the exclude applies");
+    let cf = containerfile(export_session(&refine).path());
+    assert!(!cf.contains("RUN authselect select"), "{cf}");
+    let fixme = cf
+        .lines()
+        .find(|l| l.starts_with("# FIXME: authselect profile custom/corp not selected"))
+        .unwrap_or_else(|| panic!("a FIXME names the profile:\n{cf}"));
+    assert!(
+        fixme.contains("/etc/authselect/custom/corp/README"),
+        "{fixme}"
+    );
+    assert!(
+        fixme.contains("authselect select custom/corp with-faillock --force"),
+        "{fixme}"
+    );
+}

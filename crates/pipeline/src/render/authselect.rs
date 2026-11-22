@@ -13,16 +13,29 @@
 //! The line runs after the Configuration Files `COPY`, so a custom
 //! profile under `/etc/authselect/custom/` and `user-nsswitch.conf`,
 //! which the config tree carries as ordinary files, are in place when it
-//! runs.
+//! runs. A custom profile is selected only when the export carries every
+//! file of it the scan found, `README` included
+//! ([`missing_profile_files`]); otherwise the section is a FIXME.
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::AUTHSELECT_CONF_PATH;
 
+use super::comment::escape_comment_text;
+use super::configtree::{StagedWrites, is_staged, staged_writes};
 use super::containerfile::section;
 use super::safety::{BareWord, BareWordError};
 
 /// The directory part of a custom profile's id (`custom/<name>`).
 const CUSTOM_PROFILE_PREFIX: &str = "custom/";
+
+/// Where a custom profile `custom/<name>` lives on the host and in the
+/// image: this, then `<name>/`.
+const CUSTOM_PROFILE_DIR: &str = "/etc/authselect/custom/";
+
+/// The one file `authselect select` cannot do without: with no `README`
+/// it fails with "Unable to find profile" (measured in rhel-bootc 9.8 and
+/// 10.2), which fails the build.
+const PROFILE_README: &str = "README";
 
 /// The Containerfile section the line is written under.
 const SECTION_HEADER: &str = "Authentication Profile (authselect)";
@@ -82,6 +95,12 @@ impl Selection {
         })
     }
 
+    /// The name of a custom profile (`corp` for `custom/corp`), `None`
+    /// for one authselect ships.
+    pub fn custom_name(&self) -> Option<&str> {
+        self.profile.strip_prefix(CUSTOM_PROFILE_PREFIX)
+    }
+
     /// The `RUN authselect select` line.
     pub fn run_line(&self) -> String {
         let mut line = format!("RUN authselect select {}", self.profile);
@@ -95,9 +114,38 @@ impl Selection {
     }
 }
 
+/// The files of the custom profile `name` that the export does not carry,
+/// sorted: every config entry the scan found in the profile's directory
+/// that `staged` does not write (excluded in refine, or not captured),
+/// and its `README` if that is not written. `authselect select` fails
+/// without the `README` and writes an empty PAM stack for a missing
+/// template (measured in rhel-bootc 9.8 and 10.2), so the profile is not
+/// selected while anything is missing.
+fn missing_profile_files(
+    snap: &InspectionSnapshot,
+    staged: &StagedWrites<'_>,
+    name: &str,
+) -> Vec<String> {
+    let dir = format!("{CUSTOM_PROFILE_DIR}{name}/");
+    let readme = format!("{dir}{PROFILE_README}");
+    let mut paths: Vec<String> = snap
+        .config
+        .iter()
+        .flat_map(|config| config.files.iter())
+        .map(|f| f.path.clone())
+        .filter(|path| path.starts_with(&dir))
+        .chain(std::iter::once(readme))
+        .filter(|path| !is_staged(staged, path))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
 /// The authselect section of the Containerfile: the `authselect select`
 /// line when an included config entry records the selection, a FIXME
-/// when that entry cannot be read as one, nothing otherwise.
+/// when that entry cannot be read as one or names a custom profile the
+/// export does not carry whole, nothing otherwise.
 pub(crate) fn authselect_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let Some(entry) = snap.config.as_ref().and_then(|config| {
         config
@@ -108,7 +156,24 @@ pub(crate) fn authselect_lines(snap: &InspectionSnapshot) -> Vec<String> {
         return Vec::new();
     };
     let body = match Selection::parse(&entry.content) {
-        Ok(selection) => vec![SELECT_COMMENT.to_string(), selection.run_line()],
+        Ok(selection) => {
+            let missing = selection
+                .custom_name()
+                .map(|name| missing_profile_files(snap, &staged_writes(snap), name))
+                .unwrap_or_default();
+            if missing.is_empty() {
+                vec![SELECT_COMMENT.to_string(), selection.run_line()]
+            } else {
+                vec![format!(
+                    "# FIXME: authselect profile {} not selected: the export does not carry {}; \
+                     authselect select fails without the profile's README and writes an empty \
+                     PAM stack for a missing template. Put the profile in place and run: {}",
+                    selection.profile,
+                    escape_comment_text(&missing.join(", ")),
+                    selection.run_line().trim_start_matches("RUN "),
+                )]
+            }
+        }
         Err(refusal) => vec![format!(
             "# FIXME: authselect profile not selected: {refusal}; run authselect select by hand"
         )],

@@ -252,10 +252,12 @@ impl Inspector for ConfigInspector {
                             }
                             Ok(resolved) => {
                                 let resolved_str = resolved.to_string_lossy();
-                                if is_allowlisted(&abs_path, &resolved_str) {
+                                if is_authselect_profile_link(&abs_path, &resolved_str) {
+                                    // Collected below with the content
+                                    // it resolves to.
+                                } else if is_allowlisted(&abs_path, &resolved_str) {
                                     continue;
-                                }
-                                if let Some(rationale) =
+                                } else if let Some(rationale) =
                                     crosses_tree_boundary(&abs_path, &resolved_str)
                                 {
                                     section.files.push(ConfigFileEntry {
@@ -747,6 +749,37 @@ fn is_authselect_pam_link(exec: &dyn Executor, path: &str, flags: &str) -> bool 
     }
 }
 
+/// Where `authselect create-profile` puts a custom profile.
+const AUTHSELECT_CUSTOM_PREFIX: &str = "/etc/authselect/custom/";
+
+/// Where authselect's shipped profiles live, which a custom profile's
+/// links point into.
+const AUTHSELECT_SHIPPED_PREFIX: &str = "/usr/share/authselect/";
+
+/// A file of a custom authselect profile that is a link into the shipped
+/// profiles, as `authselect create-profile <name> -b <base>
+/// --symlink-meta --symlink-pam` makes them (`README`, `REQUIREMENTS`
+/// and the PAM templates link to `/usr/share/authselect/vendor/<base>/`,
+/// measured on RHEL 9.8 and 10.2).
+///
+/// The walk would make such a link a cross-tree advisory and carry
+/// nothing, but the export selects the profile, and `authselect select`
+/// refuses a profile with no `README` ("Unable to find profile"), and
+/// writes an empty PAM stack for a missing template: both measured in
+/// rhel-bootc 9.8 and 10.2. So the link is collected as a file holding
+/// what it resolves to, and the image's profile is complete. A build from
+/// such a context selected the profile and passed `authselect check` on
+/// both releases. The profile's files are then copies of the host's
+/// shipped templates; they no longer follow the image's own.
+fn is_authselect_profile_link(path: &str, resolved: &str) -> bool {
+    path.strip_prefix(AUTHSELECT_CUSTOM_PREFIX)
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(profile, file)| {
+            !profile.is_empty() && !file.is_empty() && !file.contains('/')
+        })
+        && resolved.starts_with(AUTHSELECT_SHIPPED_PREFIX)
+}
+
 /// Where an admin points a package symlink to mask the file it names.
 const DEV_NULL: &str = "/dev/null";
 
@@ -1189,6 +1222,48 @@ mod tests {
             verification_results: va_entries,
             path_to_package,
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn authselect_profile_links() {
+        for (path, resolved, carried) in [
+            (
+                "/etc/authselect/custom/corp/README",
+                "/usr/share/authselect/vendor/sssd/README",
+                true,
+            ),
+            (
+                "/etc/authselect/custom/corp/system-auth",
+                "/usr/share/authselect/default/sssd/system-auth",
+                true,
+            ),
+            (
+                "/etc/authselect/custom/corp/README",
+                "/usr/share/doc/README",
+                false,
+            ),
+            (
+                "/etc/authselect/custom/README",
+                "/usr/share/authselect/vendor/sssd/README",
+                false,
+            ),
+            (
+                "/etc/authselect/custom/corp/sub/README",
+                "/usr/share/authselect/vendor/sssd/README",
+                false,
+            ),
+            (
+                "/etc/pam.d/system-auth",
+                "/usr/share/authselect/vendor/sssd/system-auth",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                is_authselect_profile_link(path, resolved),
+                carried,
+                "{path} -> {resolved}"
+            );
         }
     }
 
