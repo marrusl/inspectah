@@ -2475,7 +2475,9 @@ fn collect_rpm_provided_accounts(
 ///    when the users plan guarantees that group, else the numeric gid
 /// 3. Account created by a replicated RPM -> name + package comment
 ///    (uses KNOWN_PACKAGE_ACCOUNTS mapping for package!=account cases,
-///    plus direct package-name==account-name match as fallback)
+///    plus direct package-name==account-name match as fallback); its
+///    group by name only when it is the account's own same-named group
+///    or the users plan guarantees it, else the numeric gid
 /// 4. Name available but not guaranteed -> numeric UID:GID + warning comment
 /// 5. Name unavailable -> numeric UID:GID
 fn resolve_tmpfiles_ownership(
@@ -2505,17 +2507,21 @@ fn resolve_tmpfiles_ownership(
     let owner_name = proved_account_name(d.owner_name.as_deref());
     let group_name = proved_account_name(d.group_name.as_deref());
 
+    // tmpfiles rejects a line naming a group the image lacks, so a group
+    // is named only when the image is sure to have it with the host's
+    // gid: a group line guarantees both or stops the build.
+    let plan_guarantees_group = !group_name.is_empty()
+        && users_plan
+            .guaranteed_gid(group_name)
+            .is_some_and(|image| d.owner_gid.is_none_or(|host| host == image));
+
     // Case 2: materialized user (being created by useradd in this Containerfile)
     if !owner_name.is_empty() && users_plan.creates_user(owner_name) {
         // The user exists because the plan creates it; its group exists
-        // only when a group line guarantees it. tmpfiles rejects a line
-        // naming a group the image lacks, so any other group, and one
-        // whose guaranteed gid differs from the host's, is written as
-        // the host's gid.
-        let guaranteed = users_plan
-            .guaranteed_gid(group_name)
-            .is_some_and(|image| d.owner_gid.is_none_or(|host| host == image));
-        let group = if !group_name.is_empty() && guaranteed {
+        // only when a group line guarantees it. Any other group, and one
+        // whose guaranteed gid differs from the host's, is written as the
+        // host's gid.
+        let group = if plan_guarantees_group {
             known_token(group_name)
         } else {
             numeric_token(gid)
@@ -2539,10 +2545,16 @@ fn resolve_tmpfiles_ownership(
             });
 
         if let Some(pkg) = providing_package {
-            let group = if !group_name.is_empty() {
+            // The package proves the account and the group it creates with
+            // it, the account's own name; both are written by name and get
+            // the ids the image's package gives them. Any other group the
+            // host recorded is one the package is not known to create, so
+            // it is named only when a group line guarantees it, else
+            // written as the host's gid.
+            let group = if group_name == owner_name || plan_guarantees_group {
                 known_token(group_name)
             } else {
-                known_token(owner_name)
+                numeric_token(gid)
             };
             return (
                 known_token(owner_name),

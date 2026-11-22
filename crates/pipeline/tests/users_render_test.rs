@@ -14,6 +14,7 @@
 use std::path::Path;
 
 use inspectah_collect::executor::mock::MockExecutor;
+use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_collect::inspectors::users::{UserGroupOptions, UsersGroupsInspector};
 use inspectah_core::aggregate::merge::merge_usersgroups_sections;
@@ -26,6 +27,7 @@ use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::os::OsRelease;
+use inspectah_core::types::rpm::RpmSection;
 use inspectah_core::types::storage::StorageSection;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::users::UserGroupSection;
@@ -505,6 +507,92 @@ fn u5b_var_home_group_by_name_only_when_guaranteed() {
         assert!(
             !containerfile.contains("# svc's home"),
             "members {members:?}: the fragment creates the home:\n{containerfile}"
+        );
+    }
+}
+
+/// The `rpm -qa` query the RPM inspector lists packages with.
+const RPM_QA: &str = "rpm -qa --queryformat %{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n";
+/// The `rpm -qa` query the RPM inspector lists owned paths with.
+const RPM_FILE_OWNERSHIP: &str = "rpm -qa --queryformat @@%{NAME}\\n[%{FILENAMES}\\n]";
+/// The query the RPM inspector reads each package's source repo with.
+const DNF_SOURCE_REPO: &str = "dnf repoquery --installed --queryformat";
+
+/// The RPM section the collector records on a host with `httpd` installed.
+fn collect_rpm_with_httpd() -> RpmSection {
+    let exec = MockExecutor::new()
+        .with_command(RPM_QA, ok("0:httpd-2.4.62-1.el9.x86_64\n"))
+        .with_command("rpm -Va", ok(""))
+        .with_command(RPM_FILE_OWNERSHIP, ok("@@httpd\n/usr/sbin/httpd\n"))
+        .with_command_prefix(DNF_SOURCE_REPO, ok("httpd x86_64 appstream\n"));
+    match run(&RpmInspector::new(), &exec).section {
+        SectionData::Rpm(section) => section,
+        other => panic!("expected the rpm section, got {other:?}"),
+    }
+}
+
+/// U5c: a directory owned by an account a replicated package creates
+/// names its group only when the image is sure to have it: the account's
+/// own group, which the package creates with the account, or a group a
+/// group line guarantees with the host's gid. Any other group the host
+/// recorded is written as the host's gid, because tmpfiles rejects a line
+/// naming a group the image lacks. Rows: (`/var/lib/web` stat, accepted
+/// useradd users, expected fragment line).
+#[test]
+fn u5c_package_account_group_by_name_only_when_established() {
+    let rows = [
+        // Only `apache` is created: `homeowners` is not.
+        (
+            "0750 48 45001 apache homeowners\n",
+            &[][..],
+            "d /var/lib/web 0750 apache 45001 -",
+        ),
+        // httpd creates `apache`'s own group with the account.
+        (
+            "0750 48 48 apache apache\n",
+            &[][..],
+            "d /var/lib/web 0750 apache apache -",
+        ),
+        // `svc` is in `homeowners`: its group line guarantees name and gid.
+        (
+            "0750 48 45001 apache homeowners\n",
+            &["svc"][..],
+            "d /var/lib/web 0750 apache homeowners -",
+        ),
+    ];
+    for (stat, accepted, expected) in rows {
+        let exec = with_var_lib(
+            MockExecutor::new()
+                .with_file(
+                    "/etc/passwd",
+                    "apache:x:48:48::/usr/share/httpd:/sbin/nologin\n\
+                     svc:x:1007:1007::/var/lib/svc:/sbin/nologin\n",
+                )
+                .with_file(
+                    "/etc/group",
+                    "apache:x:48:\nsvc:x:1007:\nhomeowners:x:45001:svc\n",
+                ),
+            &[("/var/lib/web", stat)],
+        );
+        let mut snap = useradd(collect_users(&exec, false), accepted);
+        snap.storage = Some(collect_storage(&exec));
+        snap.rpm = Some(collect_rpm_with_httpd());
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        inspectah_pipeline::render::render_all(&snap, &RenderContext { target: None }, dir.path())
+            .expect("render");
+        let var_conf = std::fs::read_to_string(
+            dir.path()
+                .join("config/usr/lib/tmpfiles.d/inspectah-var.conf"),
+        )
+        .expect("the /var fragment");
+        assert!(
+            var_conf.lines().any(|l| l == expected),
+            "{stat:?} {accepted:?}: {var_conf}"
+        );
+        assert!(
+            var_conf.contains("# created by package: httpd"),
+            "{stat:?} {accepted:?}: {var_conf}"
         );
     }
 }
