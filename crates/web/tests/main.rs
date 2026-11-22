@@ -12,6 +12,8 @@ mod test_files_declared;
 // below that build sessions from collector output.
 #[path = "../../cli/tests/support/sysctl_hosts.rs"]
 mod sysctl_hosts;
+#[path = "../../cli/tests/support/unit_hosts.rs"]
+mod unit_hosts;
 
 mod aggregate_api_test;
 mod api_test;

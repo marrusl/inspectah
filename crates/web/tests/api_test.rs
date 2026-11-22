@@ -1,5 +1,4 @@
-#[path = "../../cli/tests/support/unit_hosts.rs"]
-mod unit_hosts;
+use crate::unit_hosts;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};

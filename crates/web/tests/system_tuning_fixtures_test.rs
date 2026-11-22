@@ -24,6 +24,7 @@ use inspectah_web::handlers::AppState;
 use tower::ServiceExt;
 
 use crate::sysctl_hosts::{SysctlHost, reload, scan, session};
+use crate::unit_hosts;
 
 /// Set to write the fixtures instead of comparing against them.
 const UPDATE_VAR: &str = "UPDATE_SYSTEM_TUNING_FIXTURES";
@@ -285,6 +286,43 @@ async fn machine_state_host_with_configs_excluded() {
     record(
         "machine-state-configs-excluded",
         session,
+        &[("view", "/api/view")],
+    )
+    .await;
+}
+
+/// A local template whose instance runs only when its private key is
+/// there: `tls-proxy@web.service`, enabled by its link, names
+/// `/etc/pki/tls/private/web.key` as its configuration, and that path is
+/// a machine-state row (a host credential), not a config row. The units
+/// section links the path to that row.
+#[tokio::test]
+async fn machine_state_unit_host() {
+    use unit_hosts::UnitHost;
+    const TEMPLATE: &str = "tls-proxy@.service";
+    let host = UnitHost::new()
+        .base_package("glibc")
+        .unit(TEMPLATE, "indirect")
+        .preset("disable *")
+        .etc_unit(
+            TEMPLATE,
+            "[Unit]\nDescription=TLS proxy for %i\n\
+             ConditionPathExists=/etc/pki/tls/private/%i.key\n\n\
+             [Service]\nExecStart=/usr/local/bin/tls-proxy %i\n\n\
+             [Install]\nWantedBy=multi-user.target\n",
+        )
+        .link(
+            "/etc/systemd/system/multi-user.target.wants/tls-proxy@web.service",
+            "/etc/systemd/system/tls-proxy@.service",
+        )
+        .file(
+            "/etc/pki/tls/private/web.key",
+            "-----BEGIN PRIVATE KEY-----\nnot a real key\n-----END PRIVATE KEY-----\n",
+        );
+    let snap = unit_hosts::scan(host);
+    record(
+        "machine-state-unit",
+        unit_hosts::session(&snap),
         &[("view", "/api/view")],
     )
     .await;

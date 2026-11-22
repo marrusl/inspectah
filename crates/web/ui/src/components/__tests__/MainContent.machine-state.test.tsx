@@ -13,8 +13,6 @@ import userEvent from "@testing-library/user-event";
 import { MainContent } from "../MainContent";
 import { filterMachineStateRows } from "../MachineStateGroup";
 import type { ViewResponse } from "../../api/types";
-import { emptyView } from "../../test-utils/emptyView";
-import { loadUnitFields } from "../../__tests__/fixtures/systemd-units/load";
 
 const FIXTURES = import.meta.glob<{ default: ViewResponse }>(
   "../../__tests__/fixtures/system-tuning/machine-state*.view.json",
@@ -31,6 +29,7 @@ function recorded(name: string): ViewResponse {
 const VIEW = recorded("machine-state");
 const INCLUDED = recorded("machine-state-included");
 const CONFIGS_EXCLUDED = recorded("machine-state-configs-excluded");
+const UNIT = recorded("machine-state-unit");
 
 const HOSTNAME = "/etc/hostname";
 const IQN = "/etc/iscsi/initiatorname.iscsi";
@@ -283,19 +282,18 @@ describe("MainContent: the machine-state block", () => {
   });
 
   it("links a unit's required_config path to the row that explains it", async () => {
-    // The planted wg-quick@demo-a.service reads this path; here it is a
-    // machine-state row, not a config row.
-    const DEMO_A = "/etc/wireguard/demo-a.conf";
-    const row = { ...VIEW.machine_state[0], path: DEMO_A };
+    // The recorded tls-proxy@web.service runs only when its private key
+    // is there, and the scan made that key a machine-state row, not a
+    // config row.
+    const KEY = "/etc/pki/tls/private/web.key";
+    expect(UNIT.machine_state.map((r) => r.path)).toEqual([KEY]);
+    expect(UNIT.config_files.map((c) => c.entry.path)).not.toContain(KEY);
     const onNavigateToItem = vi.fn();
     render(
       <MainContent
         activeSection="units"
         loading={false}
-        viewData={emptyView({
-          ...loadUnitFields("planted"),
-          machine_state: [row],
-        })}
+        viewData={UNIT}
         sections={null}
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}
@@ -305,13 +303,14 @@ describe("MainContent: the machine-state block", () => {
       />,
     );
     const link = within(
-      screen.getByTestId("required-config-wg-quick@demo-a.service"),
+      screen.getByTestId("required-config-tls-proxy@web.service"),
     ).getByTestId("required-config-path");
     expect(link.tagName).toBe("A");
+    expect(link).toHaveTextContent(KEY);
     await userEvent.click(link);
     expect(onNavigateToItem).toHaveBeenCalledWith(
       "config",
-      `machine-state:${DEMO_A}`,
+      `machine-state:${KEY}`,
     );
   });
 });
