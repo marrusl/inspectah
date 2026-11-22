@@ -9,8 +9,8 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::AdvisoryType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::storage::{
-    CredentialRef, FstabEntry, LvmVolume, MountPoint, StorageSection, UnbackedVarAdvisory,
-    VarDirBacking,
+    CredentialRef, FstabEntry, LvmVolume, MountPoint, StorageSection, TmpfilesEntry,
+    UnbackedVarAdvisory, VarDirBacking,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use serde::Deserialize;
@@ -489,24 +489,18 @@ fn load_tmpfiles_index(exec: &dyn Executor) -> TmpfilesIndex {
 /// Index one fragment's directory-creating entries into `index`.
 fn index_tmpfiles_fragment(conf: &str, content: &str, index: &mut TmpfilesIndex) {
     for raw in content.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let mut fields = line.split_whitespace();
-        let (Some(type_token), Some(path)) = (fields.next(), fields.next()) else {
+        let Some(TmpfilesEntry {
+            entry_type, path, ..
+        }) = TmpfilesEntry::parse(raw)
+        else {
             continue;
         };
+        let line = raw.trim();
         // A `%` specifier is expanded by systemd at runtime against state
         // this parser does not have, so such an entry matches no path.
         if path.contains('%') {
             continue;
         }
-        // The first character is the entry type; the `+ ! - = ~ ^`
-        // modifiers that may follow it do not change which kind it is.
-        let Some(entry_type) = type_token.chars().next() else {
-            continue;
-        };
         if !DIRECTORY_CREATING_TYPES.contains(&entry_type) {
             continue;
         }

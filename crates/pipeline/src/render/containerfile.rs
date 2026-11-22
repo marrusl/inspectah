@@ -1732,6 +1732,7 @@ fn config_section_lines(
             }
         }
         cfg_body.extend(sssd_mode_lines(&staged_writes(snap)));
+        cfg_body.extend(super::tmpfiles_accounts::containerfile_lines(snap));
         lines.extend(section("Configuration Files", cfg_body));
     }
 
@@ -2539,7 +2540,7 @@ enum PackageAccounts {
 /// - `replicated_rpms`: set of package names (for direct-match fallback),
 ///   leaving out every `PackageAccounts::Unproved` package so that match
 ///   cannot name an account the package does not prove
-fn collect_rpm_provided_accounts(
+pub(crate) fn collect_rpm_provided_accounts(
     snap: &InspectionSnapshot,
 ) -> (
     std::collections::HashMap<String, String>,

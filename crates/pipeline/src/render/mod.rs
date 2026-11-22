@@ -27,6 +27,7 @@ pub mod secrets;
 pub mod selinux;
 pub mod sysctl_report;
 pub mod tarball;
+pub mod tmpfiles_accounts;
 pub mod var_dirs;
 
 pub mod users;

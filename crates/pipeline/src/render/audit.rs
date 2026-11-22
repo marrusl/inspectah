@@ -619,14 +619,16 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
 
     // Machine state: every class row, carriable and withheld, and every
     // withheld unmanaged file, whether or not any file is carried.
+    let no_config_heading = snap.config.as_ref().is_none_or(|c| c.files.is_empty());
     let machine_state = super::machine_state::audit_table(snap);
-    if !machine_state.is_empty() {
-        if snap.config.as_ref().is_none_or(|c| c.files.is_empty()) {
-            lines.push("### Configuration Files".into());
-            lines.push(String::new());
-        }
-        lines.extend(machine_state);
+    let tmpfiles_accounts = super::tmpfiles_accounts::audit_lines(snap);
+    if no_config_heading && !(machine_state.is_empty() && tmpfiles_accounts.is_empty()) {
+        lines.push("### Configuration Files".into());
+        lines.push(String::new());
     }
+    lines.extend(machine_state);
+    // Carried tmpfiles.d lines naming an account the image lacks.
+    lines.extend(tmpfiles_accounts);
 
     // Kernel & Boot: always present, because the sysctl explanation says
     // why it is missing when it is.

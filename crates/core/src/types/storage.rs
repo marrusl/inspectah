@@ -63,6 +63,46 @@ pub const ETC_TMPFILES_PREFIX: &str = "/etc/tmpfiles.d/";
 pub const RUN_TMPFILES_PREFIX: &str = "/run/tmpfiles.d/";
 pub const USR_TMPFILES_PREFIX: &str = "/usr/lib/tmpfiles.d/";
 
+/// The leading fields of one tmpfiles.d entry, split as
+/// `tmpfiles.d(5)` splits them on whitespace. Fields past the group are
+/// not read.
+///
+/// This is the one tmpfiles.d line parser: the collector's `/var`
+/// backing index and the export's account checks both read lines through
+/// it. Quoted fields are not unquoted, which only matters for a path
+/// holding whitespace; neither caller matches such a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TmpfilesEntry<'a> {
+    /// The first character of the type field. The `+ ! - = ~ ^`
+    /// modifiers that may follow it do not change which kind it is.
+    pub entry_type: char,
+    pub path: &'a str,
+    pub mode: Option<&'a str>,
+    pub user: Option<&'a str>,
+    pub group: Option<&'a str>,
+}
+
+impl<'a> TmpfilesEntry<'a> {
+    /// Parse one line, or `None` for a blank line, a comment, or a line
+    /// with no path field.
+    pub fn parse(line: &'a str) -> Option<Self> {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let mut fields = line.split_whitespace();
+        let entry_type = fields.next()?.chars().next()?;
+        let path = fields.next()?;
+        Some(Self {
+            entry_type,
+            path,
+            mode: fields.next(),
+            user: fields.next(),
+            group: fields.next(),
+        })
+    }
+}
+
 /// What created a `/var` directory on the source host.
 ///
 /// Each backed variant carries the provenance the export needs to decide

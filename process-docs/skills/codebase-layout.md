@@ -144,6 +144,7 @@ Artifact generators invoked after triage decisions finalized:
 - `advisory.rs`, `repo_enabling.rs`: advisory rendering and repository enablement
 - `selinux.rs` — SELinux file context rule rendering and the build-time equivalence table (`selinux_equivalences`)
 - `var_dirs.rs` — Effective `/var` directory backing at export time (`VarDirOutcome`, `EffectiveBacking`)
+- `tmpfiles_accounts.rs`: carried `tmpfiles.d` lines naming a local account the image does not create, for the Containerfile's Configuration Files notice and the audit report; lines are parsed by `TmpfilesEntry` in `crates/core/src/types/storage.rs`, the one `tmpfiles.d` line parser, which the collector's `/var` backing index also uses
 
 **Section grouping:** `crates/pipeline/src/section_group.rs` — groups findings into report sections
 
