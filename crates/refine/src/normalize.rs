@@ -198,11 +198,15 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         // a package the classifier excluded, a non-leaf dependency among
         // them, stays excluded.
         //
+        // A package whose repo the export no longer carries, such as one
+        // whose key an aggregate narrowed out, is not of unknown origin
+        // either: it keeps its default and renders the demotion FIXME.
+        //
         // Normalization runs before any upload exists, so the route is
         // asked with none.
         if !matches!(
             route_for(rpm, &repos, &rpm.packages_added[i], &VerifiedUploads::new()),
-            PackageRoute::ByName | PackageRoute::DisabledRepo(_)
+            PackageRoute::ByName | PackageRoute::DisabledRepo(_) | PackageRoute::LostRepo(_)
         ) {
             rpm.packages_added[i].disposition = FindingKind::excluded();
         }

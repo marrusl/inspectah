@@ -28,7 +28,8 @@ It is never in the class, and keeps its existing handling, when it is:
 - `pkg.uploaded` (refine sets it when it stages an upload);
 - routed `PackageRoute::Repoless` by `render::repoless::route_for`.
 
-A package routed `DisabledRepo` is not exempt: it can be in the class.
+A package routed `DisabledRepo` or `LostRepo` is not exempt: it can be in
+the class.
 
 ## Defaults and presence count different roots
 
@@ -295,7 +296,7 @@ it. The aggregate guard lives only in `classify_auto_carriage`.
 
 The scan path calls `apply_scan_package_defaults` right after the dnf-cache
 repo-less pass (on the scan path the only writer of `repoless_annotation`,
-which the classifier reads; refine's `demote_unserved_repo_enabling` also
+which the classifier reads; refine's `demote_lost_routes` also
 writes it, but runs later, in a session) and before the `--inspect-only` branch, so the JSON
 snapshot and the tarball carry the same dispositions. Nothing after that
 point may write the annotation.

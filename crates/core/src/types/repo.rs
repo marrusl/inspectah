@@ -547,21 +547,32 @@ pub fn effective_definition<'a>(
     files: impl IntoIterator<Item = (&'a str, &'a str)>,
     id: &RepoId,
 ) -> Option<RepoSectionDef> {
-    let defs: Vec<(Vec<&str>, &str, RepoSectionDef)> = files
+    effective_definition_in(files, id).map(|(_, sec)| sec)
+}
+
+/// [`effective_definition`], with the path of the file that holds it.
+pub fn effective_definition_in<'a>(
+    files: impl IntoIterator<Item = (&'a str, &'a str)>,
+    id: &RepoId,
+) -> Option<(&'a str, RepoSectionDef)> {
+    let defs: Vec<(Vec<&str>, &str, &str, RepoSectionDef)> = files
         .into_iter()
         .flat_map(|(path, content)| {
             parse_repo_sections(content)
                 .into_iter()
                 .filter(|sec| RepoId::new(sec.id.as_str()) == *id)
-                .map(move |sec| (dnf_read_order(path), content, sec))
+                .map(move |sec| (dnf_read_order(path), content, path, sec))
         })
         .collect();
-    let spelling =
-        section_spelling(defs.iter().map(|(_, _, sec)| sec.id.as_str()), id.as_str())?.to_owned();
+    let spelling = section_spelling(
+        defs.iter().map(|(_, _, _, sec)| sec.id.as_str()),
+        id.as_str(),
+    )?
+    .to_owned();
     defs.into_iter()
-        .filter(|(_, _, sec)| sec.id.as_str() == spelling)
+        .filter(|(_, _, _, sec)| sec.id.as_str() == spelling)
         .min_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)))
-        .map(|(_, _, sec)| sec)
+        .map(|(_, _, path, sec)| (path, sec))
 }
 
 /// Whether refine's repo toggle cascades to `repo`'s members: not a

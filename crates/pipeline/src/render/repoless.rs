@@ -1,15 +1,18 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use inspectah_core::rpm_filename::StagedName;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::group_render::RenderContext;
-use inspectah_core::types::repo::{RepoAttribution, RepoId, RepoSectionDef, effective_definition};
+use inspectah_core::types::repo::{
+    RepoAttribution, RepoId, RepoSectionDef, effective_definition, effective_definition_in,
+    parse_repo_sections,
+};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 
 use super::configtree::{StagedWrites, is_staged, staged_writes};
 use super::language_packages::sanitize_for_comment;
-use super::repo_enabling::keys_included;
+use super::repo_enabling::{keys_included, serves};
 use super::safety::sanitize_shell_value;
 use super::unit_plan::is_package_installable;
 
@@ -34,6 +37,13 @@ pub enum PackageRoute<'a> {
     /// phase's combined install, which carries `--enablerepo=<id>` for
     /// every such repo. Nothing is staged for it.
     DisabledRepo(RepoId),
+    /// Not repo-less on the host, but the repo it installed from there is
+    /// one this export carried and no longer can ([`InstallRepos::lost_route`]):
+    /// the export drops its `.repo` file, the file's definition is not the
+    /// one dnf reads, or a key it names is not in the image. It renders the
+    /// demotion FIXME naming what restores it, and takes an upload, until
+    /// the repo's files and keys are back.
+    LostRepo(RepoId),
     /// Repo-less, installed from the operator's upload, which the export
     /// proved and writes, by path in the same combined install. An upload is a decision the operator made, so it
     /// wins over a disabled repo the export could install from.
@@ -49,11 +59,15 @@ pub enum PackageRoute<'a> {
 /// also installs by path in the combined install, and the advice-only
 /// outcomes; [`repoless_plan`] tells them apart.
 ///
-/// In order: no repo-less annotation is [`PackageRoute::ByName`]; a
-/// verified upload is [`PackageRoute::Upload`]; a disabled repo the export
-/// can install from ([`disabled_repo_install`]) is
+/// In order: no repo-less annotation and a route the export still carries
+/// is [`PackageRoute::ByName`]; a verified upload is
+/// [`PackageRoute::Upload`]; a route the export no longer carries
+/// ([`InstallRepos::lost_route`]) is [`PackageRoute::LostRepo`]; a disabled
+/// repo the export can install from ([`disabled_repo_install`]) is
 /// [`PackageRoute::DisabledRepo`]; anything else is
-/// [`PackageRoute::Repoless`]. A cached RPM is not an operator decision, so
+/// [`PackageRoute::Repoless`]. The lost route is read from the snapshot's
+/// repo files and this export's staging, never from the annotation, so
+/// refine's demotion annotation does not change it. A cached RPM is not an operator decision, so
 /// it does not outrank the disabled repo. A path with no uploads, the scan
 /// tarball or refine before any upload, passes an empty map. `repos` is
 /// the export's [`InstallRepos`], built once from the same snapshot.
@@ -63,11 +77,15 @@ pub fn route_for<'a>(
     pkg: &PackageEntry,
     verified: &'a VerifiedUploads,
 ) -> PackageRoute<'a> {
-    if pkg.repoless_annotation.is_empty() {
+    let lost = repos.lost_route(pkg);
+    if pkg.repoless_annotation.is_empty() && lost.is_none() {
         return PackageRoute::ByName;
     }
     if let Some(upload) = verified.get(&format!("{}.{}", pkg.name, pkg.arch)) {
         return PackageRoute::Upload(upload);
+    }
+    if let Some(id) = lost {
+        return PackageRoute::LostRepo(id.clone());
     }
     match disabled_repo_install(rpm, repos, pkg) {
         Some(id) => PackageRoute::DisabledRepo(id),
@@ -225,6 +243,10 @@ pub struct InstallRepos {
     files: Vec<(String, String)>,
     /// The paths of the `gpg_keys` entries the GPG Keys section copies.
     keys: BTreeSet<String>,
+    /// The repos an ordinary package installed from on the source host
+    /// that this export cannot install from ([`routes_lost`]), keyed as
+    /// [`RepoId`] folds them, each spelled as its section is.
+    lost: BTreeMap<RepoId, RepoId>,
 }
 
 impl InstallRepos {
@@ -263,11 +285,42 @@ impl InstallRepos {
                 .map(|k| k.path.clone())
                 .collect()
         });
-        Self {
+        let mut repos = Self {
             custom,
             files,
             keys,
+            lost: BTreeMap::new(),
+        };
+        if let Some(rpm) = snap.rpm.as_ref() {
+            repos.lost = routes_lost(rpm, &repos);
         }
+        repos
+    }
+
+    /// Every repo whose route this export lost ([`routes_lost`]), spelled
+    /// as its section is.
+    pub(crate) fn lost_repos(&self) -> impl Iterator<Item = &RepoId> {
+        self.lost.values()
+    }
+
+    /// The repo `pkg` installed from on the source host, when this export
+    /// carried that repo and no longer can: [`PackageRoute::LostRepo`].
+    ///
+    /// Only for a package installed by name from a repo the host enabled
+    /// (installable, not repo-enabling, which has its own proof, and not
+    /// attributed to a pseudo repo), and only for a repo the host's dnf
+    /// read from a `.repo` file the scan captured that is not a default
+    /// repo file ([`routes_lost`]). The package's disposition plays no
+    /// part, as for every route.
+    pub fn lost_route(&self, pkg: &PackageEntry) -> Option<&RepoId> {
+        if self.lost.is_empty()
+            || !pkg.repo_enabling_from.is_empty()
+            || !is_package_installable(pkg)
+            || matches!(pkg.repo_attribution, RepoAttribution::Pseudo { .. })
+        {
+            return None;
+        }
+        self.lost.get(&RepoId::new(pkg.source_repo.as_str()))
     }
 
     /// Whether the GPG Keys section copies the captured key at `path`
@@ -296,6 +349,54 @@ impl InstallRepos {
             id,
         )
     }
+}
+
+/// The repos whose route an ordinary package can lose in this export: each
+/// section whose definition the source host's dnf used, among every
+/// `.repo` file the snapshot holds ([`effective_definition_in`]), is
+/// enabled with a source and sits in a file other than a default repo
+/// file, and whose definition among the files the build has when it
+/// installs ([`InstallRepos::effective`]) does not serve
+/// ([`serves`](super::repo_enabling::serves): missing, disabled, without a
+/// source, or naming a key the image lacks).
+///
+/// A section whose host definition is in a default repo file is the base
+/// image's to provide, as `redhat.repo`'s are. A distro-named section in a
+/// captured file is not: a `company.repo` defining `[baseos]` for an
+/// internal mirror is what the host installed from, and the base image's
+/// own `baseos`, where it has one, need not serve the same packages.
+fn routes_lost(rpm: &RpmSection, repos: &InstallRepos) -> BTreeMap<RepoId, RepoId> {
+    let host_files = || {
+        rpm.repo_files
+            .iter()
+            .map(|f| (f.path.as_str(), f.content.as_str()))
+    };
+    let mut lost = BTreeMap::new();
+    for file in rpm.repo_files.iter().filter(|f| !f.is_default_repo) {
+        for sec in parse_repo_sections(&file.content) {
+            let id = RepoId::new(sec.id.as_str());
+            if lost.contains_key(&id) {
+                continue;
+            }
+            let Some((path, host)) = effective_definition_in(host_files(), &id) else {
+                continue;
+            };
+            let captured = rpm
+                .repo_files
+                .iter()
+                .any(|f| f.path == path && !f.is_default_repo);
+            if !(captured && host.enabled && host.has_source) {
+                continue;
+            }
+            if !repos
+                .effective(&id)
+                .is_some_and(|export| serves(rpm, repos, &export))
+            {
+                lost.insert(id, RepoId::new(host.id.as_str()));
+            }
+        }
+    }
+    lost
 }
 
 /// The commented `COPY`/`RUN` pair a pre-excluded cached RPM offers.
@@ -401,7 +502,9 @@ pub(crate) fn repoless_plan(
         match route_for(rpm_section, &repos, pkg, verified) {
             PackageRoute::Upload(upload) => plan.local.push(uploaded_rpm(pkg, upload)),
             PackageRoute::Repoless => plan_repoless(pkg, advised, &mut plan),
-            PackageRoute::ByName | PackageRoute::DisabledRepo(_) => {}
+            // A lost route's FIXME is printed by the packages section, for
+            // a package it would have named.
+            PackageRoute::ByName | PackageRoute::DisabledRepo(_) | PackageRoute::LostRepo(_) => {}
         }
     }
     plan

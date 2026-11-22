@@ -21,7 +21,7 @@ use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::group_render::{OperatorIncludes, RenderContext};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
-use inspectah_core::types::repo::parse_repo_sections;
+use inspectah_core::types::repo::{RepoId, parse_repo_sections};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::selinux::{ModuleOrigin, is_boolean_name, is_module_name};
 use inspectah_core::types::units::UnitAction;
@@ -527,11 +527,14 @@ fn repo_enabling_narration(
 }
 
 /// § 3.3's demotion line, printed in place of the active install when no
-/// serving repo definition survives the export.
+/// serving repo definition survives the export: for a repo-enabling
+/// package that lost its proof, and for any other package whose repo the
+/// export no longer carries ([`PackageRoute::LostRepo`]).
 ///
 /// Every action it names is one refine offers for this package: the repo
-/// toggle that [`serving_loss`] found serves it again, which also
-/// re-includes that repo's packages, and the RPM upload. It never tells
+/// switch that [`serving_loss`] or `lost_route_loss` found serves it
+/// again, and the RPM upload. Only a full switch is said to re-include the
+/// repo's packages; a carriage-only one brings back its files and keys. It never tells
 /// the operator to include a repo file under Configuration Files: refine
 /// has no row for an owned, unmodified `.repo` file, and a row that does
 /// exist does not bring back the repo-file decision the install reads.
@@ -545,13 +548,15 @@ fn demotion_fixme(pkg: &PackageEntry, loss: &super::repo_enabling::ServingLoss) 
     let id = super::language_packages::sanitize_for_comment(loss.id.as_str());
     let tail =
         format!("{name} installs from repo {id}, whose definition this export does not carry");
-    match &loss.repo {
-        Some(repo) => {
-            let repo = super::language_packages::sanitize_for_comment(repo);
-            format!(
-                "# FIXME: re-include repo {repo}, which also re-includes its packages, or \
-                 upload the RPM; {tail}"
-            )
+    match &loss.restore {
+        Some(restore) => {
+            let repo = super::language_packages::sanitize_for_comment(&restore.repo);
+            let reach = if restore.cascades {
+                "which also re-includes its packages"
+            } else {
+                "which brings back its repo files and keys"
+            };
+            format!("# FIXME: re-include repo {repo}, {reach}, or upload the RPM; {tail}")
         }
         // No repo the toggle accepts restores it, so the advice that
         // would name one is dropped, not invented.
@@ -1017,6 +1022,9 @@ fn packages_section_lines(
     // served as an active install *and* as a MANUAL block.
     let mut repo_enabling: Vec<(&PackageEntry, String)> = Vec::new();
     let mut demoted: Vec<(&PackageEntry, super::repo_enabling::ServingLoss)> = Vec::new();
+    // Packages whose repo the export no longer carries, by that repo: one
+    // FIXME each, in the repo-less advice below.
+    let mut lost_routes: Vec<(&PackageEntry, RepoId)> = Vec::new();
     // Packages installed from a repo the source host has disabled, by repo.
     // They come from the same selection as the plain list, so a non-leaf
     // dependency is left to dnf here as it is there, and naming and
@@ -1046,7 +1054,7 @@ fn packages_section_lines(
             continue;
         }
         // The repo-enabling match comes first: a package that lost its
-        // proof carries the repo-less annotation `demote_unserved_repo_enabling`
+        // proof carries the repo-less annotation `demote_lost_routes`
         // gave it, and still owes the operator the FIXME naming what to
         // re-include.
         match super::repo_enabling::repo_enabling_export(rpm, &install_repos, pkg) {
@@ -1056,6 +1064,9 @@ fn packages_section_lines(
                     .entry(id.as_str().to_owned())
                     .or_default()
                     .push(install_name),
+                // Installing it by name would need a repo the export no
+                // longer carries; it gets the demotion FIXME instead.
+                PackageRoute::LostRepo(id) => lost_routes.push((pkg, id)),
                 // No enabled repo on the source host serves a repo-less
                 // package, so a plain `dnf install` of it fails with
                 // `Unable to find a match`. It renders in the repo-less
@@ -1165,13 +1176,25 @@ fn packages_section_lines(
         lines.extend(section(&header, body));
     }
 
-    // Advice for the repo-less packages the export cannot install: the
-    // MANUAL block, the FIXMEs, and a pre-excluded cached RPM's commented
-    // block, kept together beside the install above.
-    if !repoless.advice.is_empty() {
+    // Advice for the repo-less packages the export cannot install: a lost
+    // route's demotion FIXME, the MANUAL block, the FIXMEs, and a
+    // pre-excluded cached RPM's commented block, kept together beside the
+    // install above. A lost route's answer depends on its repo alone, so
+    // it is worked out once per repo.
+    let mut losses: std::collections::BTreeMap<RepoId, super::repo_enabling::ServingLoss> =
+        std::collections::BTreeMap::new();
+    let mut advice: Vec<String> = Vec::new();
+    for (pkg, id) in &lost_routes {
+        let loss = losses
+            .entry(id.clone())
+            .or_insert_with(|| super::repo_enabling::lost_route_loss(snap, id));
+        advice.push(demotion_fixme(pkg, loss));
+    }
+    advice.extend(repoless.advice);
+    if !advice.is_empty() {
         lines.push(String::new());
         lines.push("# === Repo-less RPM packages ===".into());
-        lines.extend(repoless.advice);
+        lines.extend(advice);
     }
 
     if !refused_groups.is_empty() {
@@ -3001,7 +3024,7 @@ mod tests {
         let mut snap = snapshot_with_packages(&["epel-release", "htop"]);
         make_epel_repo_enabling(&mut snap, "epel-release");
         repo_file_mut(&mut snap, EPEL_REPO_PATH).disposition = FindingKind::excluded();
-        super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+        super::super::repo_enabling::demote_lost_routes(&mut snap);
         assert!(
             !snap
                 .rpm
@@ -3092,7 +3115,7 @@ mod tests {
         // so the exclude kept it carried.
         repo_file_mut(&mut snap, EPEL_REPO_PATH).disposition = FindingKind::excluded();
         let mut projected = snap.clone();
-        super::super::repo_enabling::demote_unserved_repo_enabling(&mut projected);
+        super::super::repo_enabling::demote_lost_routes(&mut projected);
 
         let output = render_containerfile(&projected, None, None);
 
@@ -3119,7 +3142,7 @@ mod tests {
 
         // Following the advice serves the package by name again.
         reinclude_repo_as_refine_does(&mut snap, "epel");
-        super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+        super::super::repo_enabling::demote_lost_routes(&mut snap);
         let followed = render_containerfile(&snap, None, None);
         assert!(
             followed.contains("    epel-release \\") && !followed.contains("# FIXME: re-include"),
@@ -3147,7 +3170,7 @@ mod tests {
                 repo_file(&format!("/etc/yum.repos.d/{name}"), content, *included)
             })
             .collect();
-        super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+        super::super::repo_enabling::demote_lost_routes(&mut snap);
         snap
     }
 
@@ -3333,7 +3356,7 @@ mod tests {
                     ..Default::default()
                 }],
             });
-            super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+            super::super::repo_enabling::demote_lost_routes(&mut snap);
             assert_eq!(epel_release_verdict(&snap).is_ok(), served, "{what}");
         }
     }
@@ -3409,7 +3432,7 @@ mod tests {
         ];
         for (what, files, stray, fixme) in cases {
             let mut snap = build(&files, stray);
-            super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+            super::super::repo_enabling::demote_lost_routes(&mut snap);
             assert_eq!(epel_release_verdict(&snap), Err(fixme.clone()), "{what}");
 
             // Follow the advice: re-include the repo it names, from the
@@ -3419,7 +3442,7 @@ mod tests {
             }
             let mut snap = build(&files, stray);
             reinclude_repo_as_refine_does(&mut snap, "epel");
-            super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+            super::super::repo_enabling::demote_lost_routes(&mut snap);
             assert_eq!(
                 epel_release_verdict(&snap),
                 Ok(()),
@@ -3456,7 +3479,7 @@ mod tests {
                     serde_json::json!({ "epel-release.x86_64": ["openh264.x86_64"] });
             }
             make_disabled_repo_package(&mut snap, "openh264", DISABLED_REPO_ID);
-            super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+            super::super::repo_enabling::demote_lost_routes(&mut snap);
             snap.units = Some(inspectah_core::types::units::UnitSection {
                 state_changes: vec![
                     inspectah_core::types::units::UnitStateChange::new(
@@ -4566,7 +4589,7 @@ RUN dnf install -y \
 
             // The projection half: the annotation is what returns the
             // upload control, and what makes the repo-less block render.
-            super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+            super::super::repo_enabling::demote_lost_routes(&mut snap);
             let demoted = snap
                 .rpm
                 .as_ref()

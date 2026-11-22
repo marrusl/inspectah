@@ -45,16 +45,27 @@ const REPO_CONFIG_DIRS: [&str; 2] = [YUM_REPOS_DIR, "/etc/pki/rpm-gpg/"];
 /// What a `.repo` file is named.
 const REPO_FILE_SUFFIX: &str = ".repo";
 
-/// What the Containerfile and the projection name when a repo-enabling
-/// package loses its proof ([`serving_loss`]).
+/// What the Containerfile and the projection name when a package loses
+/// the route it installed by on the source host: a repo-enabling package
+/// its proof ([`serving_loss`]), or any other package its repo
+/// ([`lost_route_loss`]).
 pub(crate) struct ServingLoss {
     /// The serving section the export no longer provides.
     pub id: RepoId,
-    /// The repo, spelled as its section is, whose re-inclusion in refine
-    /// serves the package again ([`toggle_restores`]). `None` when no repo
-    /// the refine toggle accepts would: the advice that names one is
-    /// dropped rather than invented.
-    pub repo: Option<String>,
+    /// The repo whose re-inclusion in refine serves the package again
+    /// ([`toggle_restores`]). `None` when no repo switch refine offers
+    /// would: the advice that names one is dropped rather than invented.
+    pub restore: Option<Restore>,
+}
+
+/// A repo switch that restores a package's route.
+pub(crate) struct Restore {
+    /// The repo, spelled as its section is.
+    pub repo: String,
+    /// Its switch is a full one, which also re-includes its packages; a
+    /// carriage-only switch brings back its files and keys alone
+    /// ([`control`]).
+    pub cascades: bool,
 }
 
 /// The export-time status of one package's repo-enabling proof.
@@ -121,8 +132,10 @@ pub(crate) fn repo_enabling_export(
 /// 2. the sections the package's own repo files define, sorted: a dropped
 ///    `vendor.repo` comes back only with a repo it defines.
 ///
-/// Each must be a repo refine can toggle ([`toggleable`]). `None` only for
-/// a package that is not repo-enabling or a snapshot with no RPM section,
+/// Each must be a repo whose switch can bring back what it owns
+/// ([`control`]): a full switch, or a carriage-only one, which a distro
+/// repo such as a `company.repo`'s `[baseos]` has. `None` only for a
+/// package that is not repo-enabling or a snapshot with no RPM section,
 /// neither of which can lose a proof.
 ///
 /// Separate from the verdict because answering it re-stages the export
@@ -152,16 +165,53 @@ pub(crate) fn serving_loss(snap: &InspectionSnapshot, pkg: &PackageEntry) -> Opt
         .flat_map(|f| parse_repo_sections(&f.content))
         .map(|s| s.id.as_str().to_owned())
         .collect();
-    let mut tried: BTreeSet<String> = BTreeSet::new();
-    let repo = serving
-        .chain(owned)
-        .filter(|repo| tried.insert(repo.clone()))
-        .filter(|repo| toggleable(rpm, repo))
-        .find(|repo| toggle_restores(snap, pkg, repo));
+    let restore = first_restoring(snap, serving.chain(owned), |proposed| {
+        let repos = InstallRepos::of(proposed);
+        proposed.rpm.as_ref().is_some_and(|rpm| {
+            matches!(
+                repo_enabling_export(rpm, &repos, pkg),
+                RepoEnablingExport::Served
+            )
+        })
+    });
     Some(ServingLoss {
         id: first_id.clone(),
-        repo,
+        restore,
     })
+}
+
+/// What to name for a package whose route is `id`, a repo this export no
+/// longer carries ([`InstallRepos::lost_route`]): that repo, when its
+/// switch brings the route back. A route's loss depends on the repo alone,
+/// so every package on it gets the same answer, and a caller asks once per
+/// repo.
+pub(crate) fn lost_route_loss(snap: &InspectionSnapshot, id: &RepoId) -> ServingLoss {
+    let restore = first_restoring(snap, [id.as_str().to_owned()], |proposed| {
+        InstallRepos::of(proposed)
+            .lost_repos()
+            .all(|lost| lost != id)
+    });
+    ServingLoss {
+        id: id.clone(),
+        restore,
+    }
+}
+
+/// The first of `candidates`, without repeats, whose switch refine offers
+/// ([`control`]) and whose re-inclusion makes `restored` true of the
+/// export ([`toggle_restores`]).
+fn first_restoring(
+    snap: &InspectionSnapshot,
+    candidates: impl IntoIterator<Item = String>,
+    restored: impl Fn(&InspectionSnapshot) -> bool,
+) -> Option<Restore> {
+    let rpm = snap.rpm.as_ref()?;
+    let mut tried: BTreeSet<String> = BTreeSet::new();
+    candidates
+        .into_iter()
+        .filter(|repo| tried.insert(repo.clone()))
+        .filter_map(|repo| control(rpm, &repo).map(|cascades| Restore { repo, cascades }))
+        .find(|restore| toggle_restores(snap, &restore.repo, &restored))
 }
 
 /// Whether dnf can install a repo-enabling package from `sec`, the
@@ -169,28 +219,60 @@ pub(crate) fn serving_loss(snap: &InspectionSnapshot, pkg: &PackageEntry) -> Opt
 /// from (`baseurl`, `metalink` or `mirrorlist` left defined), and every
 /// key it names in the image. An enabled copy of the section with no
 /// source cannot supply the package, whichever file it sits in.
-fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDef) -> bool {
+pub(crate) fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDef) -> bool {
     sec.enabled && sec.has_source && keys_included(rpm, repos, sec.local_keys())
 }
 
-/// Whether refine's repo toggle cascades to `repo`: core's
-/// [`repo::toggleable`] over the snapshot's repo files. The advice names
-/// only a repo whose op the server accepts and whose switch reaches its
-/// packages.
-fn toggleable(rpm: &RpmSection, repo: &str) -> bool {
-    repo::toggleable(
+/// The switch refine gives `repo` that can bring back what it owns, if
+/// any: `Some(true)` for a full switch, which also cascades to its
+/// packages (core's [`repo::toggleable`] over the snapshot's repo files),
+/// `Some(false)` for a carriage-only one.
+///
+/// A repo that is not toggleable has a carriage-only switch when it owns
+/// a carriable entry and the host enabled it in a file that defines it,
+/// or a package is attributed to it: the first clause of the repo
+/// ownership spec's § 5.2, which refine's `RepoState` computes too. Its
+/// second clause, an entry no controlled repo owns, is left out, so the
+/// advice may omit a switch refine has, but never names one it lacks.
+fn control(rpm: &RpmSection, repo: &str) -> Option<bool> {
+    if repo::toggleable(
         rpm.repo_files
             .iter()
             .map(|f| (f.path.as_str(), f.content.as_str())),
         repo,
-    )
+    ) {
+        return Some(true);
+    }
+    let ownership = repo_ownership(rpm);
+    let section = SectionId::new(repo);
+    let owned: Vec<&Destination> = ownership.owned_by(&section);
+    let owns_carriable = [
+        (OwnedKind::RepoFile, &rpm.repo_files),
+        (OwnedKind::GpgKey, &rpm.gpg_keys),
+    ]
+    .into_iter()
+    .flat_map(|(kind, list)| list.iter().map(move |entry| (kind, entry)))
+    .any(|(kind, entry)| {
+        Destination::new(&entry.path).is_ok_and(|d| owned.contains(&&d))
+            && ownership.carriable(kind, entry)
+    });
+    let enabled = ownership
+        .entries()
+        .flat_map(|(_, e)| &e.owners)
+        .any(|o| o.section == section && o.enabled);
+    let attributed = rpm
+        .packages_added
+        .iter()
+        .any(|p| RepoId::new(p.source_repo.as_str()) == RepoId::new(repo));
+    (owns_carriable && (enabled || attributed)).then_some(false)
 }
 
-/// Whether re-including `repo` in refine serves `pkg` again, judged by
-/// [`repo_enabling_export`] on the export re-staged as the toggle leaves
-/// it: every carriable repo file and key that exact section owns
-/// included (`RepoOwnership::carriable`: owned, not locked, not a
-/// default repo file, a rejected key or a key the base image ships).
+/// Whether re-including `repo` in refine makes `restored` true of the
+/// export re-staged as the toggle leaves it: every carriable repo file and
+/// key that exact section owns included (`RepoOwnership::carriable`:
+/// owned, not locked, not a default repo file, a rejected key or a key the
+/// base image ships). The caller says what restored means: a repo-enabling
+/// package's proof served again, or a lost route carried again.
 ///
 /// Re-staging, rather than adding files to the current set, is what keeps
 /// the advice honest: a repo whose file is disabled, shadowed by one dnf
@@ -199,7 +281,11 @@ fn toggleable(rpm: &RpmSection, repo: &str) -> bool {
 /// file the package owns dropped, would not recover the proof, and advice
 /// naming it would send the operator in a circle. The packages the toggle
 /// also re-includes play no part in the proof.
-fn toggle_restores(snap: &InspectionSnapshot, pkg: &PackageEntry, repo: &str) -> bool {
+fn toggle_restores(
+    snap: &InspectionSnapshot,
+    repo: &str,
+    restored: impl Fn(&InspectionSnapshot) -> bool,
+) -> bool {
     let mut proposed = snap.clone();
     let Some(rpm) = proposed.rpm.as_mut() else {
         return false;
@@ -222,13 +308,7 @@ fn toggle_restores(snap: &InspectionSnapshot, pkg: &PackageEntry, repo: &str) ->
             }
         }
     }
-    let repos = InstallRepos::of(&proposed);
-    proposed.rpm.as_ref().is_some_and(|rpm| {
-        matches!(
-            repo_enabling_export(rpm, &repos, pkg),
-            RepoEnablingExport::Served
-        )
-    })
+    restored(&proposed)
 }
 
 /// Whether every `gpgkey=file://` path a section names is a key the image
@@ -294,14 +374,19 @@ pub(crate) fn owned_repo_file_name<'a>(rpm: &'a RpmSection, pkg: &PackageEntry) 
         .and_then(|path| path.rsplit('/').next())
 }
 
-/// Annotate every included repo-enabling package whose serving definition
-/// this export no longer carries.
+/// Annotate every included package whose route this export lost: a
+/// repo-enabling package whose serving definition it no longer carries,
+/// and any other package whose repo it no longer carries
+/// ([`InstallRepos::lost_route`]).
 ///
 /// The annotation is what the refine view keys the upload control off, so
 /// the demotion has to land on the projection rather than only in the
 /// rendered Containerfile. Excluded packages are left alone: a package the
-/// export is not installing has no proof to lose.
-pub fn demote_unserved_repo_enabling(snap: &mut InspectionSnapshot) {
+/// export is not installing has no route to lose. The route itself never
+/// reads the annotation back ([`route_for`](super::repoless::route_for)),
+/// so a demoted package renders the same FIXME as on a path that never
+/// annotates it.
+pub fn demote_lost_routes(snap: &mut InspectionSnapshot) {
     let repos = InstallRepos::of(snap);
     let demoted: Vec<(usize, String)> = {
         let read: &InspectionSnapshot = snap;
@@ -312,22 +397,19 @@ pub fn demote_unserved_repo_enabling(snap: &mut InspectionSnapshot) {
             .iter()
             .enumerate()
             .filter(|(_, pkg)| pkg.disposition.is_included())
-            .filter(|(_, pkg)| {
-                matches!(
-                    repo_enabling_export(rpm, &repos, pkg),
-                    RepoEnablingExport::Lost
-                )
-            })
             .filter_map(|(i, pkg)| {
-                serving_loss(read, pkg).map(|loss| {
-                    (
-                        i,
-                        format!(
-                            "No repo source: the repo that served {} ({}) is not carried by this export",
-                            pkg.name, loss.id
-                        ),
-                    )
-                })
+                let id = match repo_enabling_export(rpm, &repos, pkg) {
+                    RepoEnablingExport::Lost => serving_loss(read, pkg)?.id,
+                    RepoEnablingExport::Served => return None,
+                    RepoEnablingExport::NotEnabling => repos.lost_route(pkg)?.clone(),
+                };
+                Some((
+                    i,
+                    format!(
+                        "No repo source: the repo that served {} ({id}) is not carried by this export",
+                        pkg.name
+                    ),
+                ))
             })
             .collect()
     };

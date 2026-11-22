@@ -144,6 +144,8 @@ pub(crate) fn installs_on_its_own_route(
             PackageRoute::ByName => is_package_installable(pkg),
             PackageRoute::DisabledRepo(_) => true,
             PackageRoute::Upload(_) | PackageRoute::Repoless => pkg.uploaded || pkg.repoless_cached,
+            // Demoted to a FIXME, and installed only from an upload.
+            PackageRoute::LostRepo(_) => pkg.uploaded,
         }
         && (pkg.uploaded
             || !matches!(
@@ -508,7 +510,7 @@ fn named_on_install_line(
     selection: &InstallLineSelection,
 ) -> bool {
     match route_for(rpm, repos, pkg, &VerifiedUploads::new()) {
-        PackageRoute::Upload(_) | PackageRoute::Repoless => true,
+        PackageRoute::Upload(_) | PackageRoute::Repoless | PackageRoute::LostRepo(_) => true,
         PackageRoute::ByName | PackageRoute::DisabledRepo(_) => {
             pkg.locked
                 || pkg.source_repo == "anaconda"

@@ -992,6 +992,163 @@ fn t5_a_disabled_repo_with_an_enablerepo_install_keeps_a_shared_key() {
     assert!(staged(export_session(&s).path(), "/etc/yum.repos.d/d.repo").is_none());
 }
 
+/// Whether `containerfile` names `name` on an install line: an
+/// instruction line, not a comment, that is the name alone.
+fn installs(containerfile: &str, name: &str) -> bool {
+    containerfile
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .any(|l| l.trim().trim_end_matches('\\').trim() == name)
+}
+
+const COMPANY_REPO: &str = "/etc/yum.repos.d/company.repo";
+const COMPANY_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-company";
+
+/// A host whose `[baseos]` is an internal mirror in an unowned
+/// `company.repo`, with its key: `baseos` gets a carriage-only switch.
+fn company_host(key: &str) -> UnitHost {
+    UnitHost::new()
+        .base_package("bash")
+        .file(
+            COMPANY_REPO,
+            &format!(
+                "[baseos]\nname=BaseOS mirror\nbaseurl=https://mirror.corp.example/baseos/\n\
+                 enabled=1\ngpgkey=file://{COMPANY_KEY}\n"
+            ),
+        )
+        .file(COMPANY_KEY, key)
+        .enabled_repos(&["baseos"])
+}
+
+/// The FIXME a package gets when a repo whose switch restores it is
+/// named, `reach` saying what that switch brings back.
+fn lost_route_fixme(name: &str, repo: &str, reach: &str) -> String {
+    format!(
+        "# FIXME: re-include repo {repo}, {reach}, or upload the RPM; {name} installs from repo \
+         {repo}, whose definition this export does not carry"
+    )
+}
+
+/// A package installed by name from a repo whose files the export drops
+/// is not installed by name: its carriage-only switch keeps the package
+/// included, and the package renders the demotion FIXME naming that
+/// switch until its file and key are back. On the scan path, a repo whose
+/// key the scan refused loses the route the same way, with no switch to
+/// name.
+#[test]
+fn t5_a_package_whose_repo_the_export_drops_renders_the_fixme() {
+    let snap = reload(&scan_finished(
+        company_host(PGP).package_from("site-tool", "baseos"),
+    ));
+    let file = containerfile(render_export(&snap).path());
+    assert!(
+        installs(&file, "site-tool"),
+        "the scan carries baseos:\n{file}"
+    );
+
+    let mut s = session(&snap);
+    assert_eq!(s.repo_state("baseos").control, RepoControl::CarriageOnly);
+    let file = containerfile(export_session(&s).path());
+    assert!(installs(&file, "site-tool"), "{file}");
+    s.apply(set_repo("baseos", false)).unwrap();
+    let tree = export_session(&s);
+    assert!(staged(tree.path(), COMPANY_REPO).is_none());
+    assert!(staged(tree.path(), COMPANY_KEY).is_none());
+    let projected = s.snapshot_projected();
+    let site_tool = rpm(&projected)
+        .packages_added
+        .iter()
+        .find(|p| p.name == "site-tool")
+        .unwrap();
+    assert!(
+        site_tool.disposition.is_included(),
+        "a carriage-only switch keeps the member"
+    );
+    assert!(
+        !site_tool.repoless_annotation.is_empty(),
+        "the view offers the upload"
+    );
+    let file = containerfile(tree.path());
+    assert!(!installs(&file, "site-tool"), "{file}");
+    let fixme = lost_route_fixme(
+        "site-tool",
+        "baseos",
+        "which brings back its repo files and keys",
+    );
+    assert!(file.lines().any(|l| l == fixme), "{file}");
+
+    s.apply(set_repo("baseos", true)).unwrap();
+    let file = containerfile(export_session(&s).path());
+    assert!(installs(&file, "site-tool"), "the route is back:\n{file}");
+    assert!(!file.contains("site-tool installs from repo"), "{file}");
+
+    // Scan path: the key is refused, so dnf in the image could not verify
+    // baseos's packages, and no switch brings a refused key back.
+    let refused = reload(&scan_finished(
+        company_host("plain text, not a key\n").package_from("site-tool", "baseos"),
+    ));
+    for (via, file) in [
+        ("scan", containerfile(render_export(&refused).path())),
+        (
+            "refine",
+            containerfile(export_session(&session(&refused)).path()),
+        ),
+    ] {
+        assert!(!installs(&file, "site-tool"), "{via}:\n{file}");
+        assert!(
+            file.contains(
+                "# FIXME: upload the RPM; site-tool installs from repo baseos, whose \
+                 definition this export does not carry, and re-including no repo in refine \
+                 restores it"
+            ),
+            "{via}:\n{file}"
+        );
+    }
+}
+
+/// A repo-enabling package served by a distro repo whose switch is
+/// carriage-only: excluding that repo demotes it, and the FIXME names the
+/// switch, which restores it, as one that brings back files and keys.
+#[test]
+fn t5_a_carriage_only_switch_that_restores_a_package_is_named() {
+    // `vendor-release`, from `@commandline`, owns `company.repo` and its
+    // key, and the enabled `baseos` serves it.
+    let host = UnitHost::new()
+        .base_package("bash")
+        .owned_file(
+            COMPANY_REPO,
+            &format!(
+                "[baseos]\nname=BaseOS mirror\nbaseurl=https://mirror.corp.example/baseos/\n\
+                 enabled=1\ngpgkey=file://{COMPANY_KEY}\n"
+            ),
+            "vendor-release",
+        )
+        .owned_file(COMPANY_KEY, PGP, "vendor-release")
+        .package_from("vendor-release", "@commandline")
+        .enabled_repos(&["baseos"])
+        .available("vendor-release", "baseos");
+    let snap = reload(&scan_finished(host));
+    let mut s = session(&snap);
+    assert_eq!(s.repo_state("baseos").control, RepoControl::CarriageOnly);
+    s.apply(set_package("vendor-release", true)).unwrap();
+    let file = containerfile(export_session(&s).path());
+    assert!(installs(&file, "vendor-release"), "{file}");
+    s.apply(set_repo("baseos", false)).unwrap();
+    let file = containerfile(export_session(&s).path());
+    assert!(!installs(&file, "vendor-release"), "{file}");
+    let fixme = lost_route_fixme(
+        "vendor-release",
+        "baseos",
+        "which brings back its repo files and keys",
+    );
+    assert!(file.lines().any(|l| l == fixme), "{file}");
+    s.apply(set_repo("baseos", true)).unwrap();
+    assert!(installs(
+        &containerfile(export_session(&s).path()),
+        "vendor-release"
+    ));
+}
+
 // ---------------------------------------------------------------------
 // T6. CLI export.
 // ---------------------------------------------------------------------
@@ -1295,6 +1452,66 @@ fn t7_a_key_no_copied_version_names_is_left_out_and_named() {
             )),
         "{warnings:?}"
     );
+}
+
+/// Two hosts' `vendor.repo` name different keys: the representative names
+/// the first host's, which only that host has, so the aggregate narrows it
+/// out while the repo file ships. A package from that repo is not
+/// installed by name, on the aggregate tarball and the refine export,
+/// until re-including the repo brings the key back.
+#[test]
+fn t7_a_package_whose_key_an_aggregate_narrowed_out_renders_the_fixme() {
+    const VENDOR_REPO: &str = "/etc/yum.repos.d/vendor.repo";
+    let host = |key: &str| {
+        UnitHost::new()
+            .base_package("bash")
+            .file(
+                VENDOR_REPO,
+                &format!(
+                    "[vendor]\nbaseurl=https://vendor.example/\nenabled=1\ngpgkey=file://{key}\n"
+                ),
+            )
+            .file(key, PGP)
+            .package_from("vend-tool", "vendor")
+            .enabled_repos(&["vendor"])
+    };
+    let (k1, k2) = ("/etc/pki/rpm-gpg/K1", "/etc/pki/rpm-gpg/K2");
+    let (merged, _) = merge_snapshots(
+        vec![named(host(k1), "h1"), named(host(k2), "h2")],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_fleet_invariants(&merged);
+    let repo_file = rpm(&merged)
+        .repo_files
+        .iter()
+        .find(|f| f.path == VENDOR_REPO)
+        .unwrap();
+    assert!(repo_file.disposition.is_included());
+    assert!(repo_file.content.contains(k1));
+    let key = rpm(&merged).gpg_keys.iter().find(|k| k.path == k1).unwrap();
+    assert!(!key.disposition.is_included(), "narrowed out");
+
+    let fixme = lost_route_fixme("vend-tool", "vendor", "which also re-includes its packages");
+    let file = containerfile(render_export(&merged).path());
+    assert!(!installs(&file, "vend-tool"), "aggregate tarball:\n{file}");
+    assert!(
+        file.lines().any(|l| l == fixme),
+        "aggregate tarball:\n{file}"
+    );
+
+    // Refine opens an aggregate's packages excluded here; the operator
+    // includes this one, and its repo's switch is kept.
+    let mut s = session(&reload(&merged));
+    s.apply(set_package("vend-tool", true)).unwrap();
+    let file = containerfile(export_session(&s).path());
+    assert!(!installs(&file, "vend-tool"), "refine:\n{file}");
+    assert!(file.lines().any(|l| l == fixme), "refine:\n{file}");
+    s.apply(set_repo("vendor", true)).unwrap();
+    let tree = export_session(&s);
+    assert!(staged(tree.path(), k1).is_some());
+    assert!(installs(&containerfile(tree.path()), "vend-tool"));
 }
 
 /// A key one host's repo owns and another host records as a plain config

@@ -3384,7 +3384,7 @@ impl RefineSession {
         // rendering. It runs here because the include decisions it reads
         // are the projection's, and because the view keys the upload
         // control off the annotation it sets.
-        inspectah_pipeline::render::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+        inspectah_pipeline::render::repo_enabling::demote_lost_routes(&mut snap);
 
         // A unit owner carried by default that may pull in a package from
         // a repo this projection excludes is held on it, and carried again

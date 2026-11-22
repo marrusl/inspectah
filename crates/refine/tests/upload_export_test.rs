@@ -1822,12 +1822,12 @@ fn distro_repo_enabling_snapshot(included: bool) -> InspectionSnapshot {
 }
 
 /// A distro repo's switch is carriage-only: it never re-includes packages,
-/// so the demotion FIXME, whose advice says the repo's packages come back
-/// too, never names one. The switch still brings the file back.
+/// so the demotion FIXME names it as a switch that brings back its repo
+/// files and keys, never as one that re-includes its packages. Following
+/// the advice restores the package's install.
 #[test]
-fn a_distro_repo_that_would_serve_is_not_named_in_the_demotion_fixme() {
-    // The control: with its file carried, `extras` serves the package, so
-    // a simulated toggle of `extras` restores it.
+fn a_distro_repo_that_would_serve_is_named_as_a_carriage_only_switch() {
+    // The control: with its file carried, `extras` serves the package.
     let mut served = Harness::with_snapshot(distro_repo_enabling_snapshot(true));
     served.set_include("vendor-release", "noarch", true);
     let (out, _) = served.export(None);
@@ -1841,8 +1841,22 @@ fn a_distro_repo_that_would_serve_is_not_named_in_the_demotion_fixme() {
     h.set_include("vendor-release", "noarch", true);
     let (demoted, _) = h.export(None);
     let file = containerfile(&demoted);
-    assert!(file.contains(&upload_only_fixme("extras")), "{file}");
-    assert!(!file.contains("re-include repo"), "{file}");
+    assert!(
+        file.contains(
+            "# FIXME: re-include repo extras, which brings back its repo files and keys, or \
+             upload the RPM; vendor-release installs from repo extras, whose definition this \
+             export does not carry"
+        ),
+        "{file}"
+    );
+    assert!(
+        !file.contains("which also re-includes its packages"),
+        "{file}"
+    );
+    assert!(
+        !active_lines(&file).contains(&"    vendor-release \\"),
+        "{file}"
+    );
     h.session
         .apply(RefinementOp::SetInclude {
             item_id: ItemId::Repo {
@@ -1856,6 +1870,12 @@ fn a_distro_repo_that_would_serve_is_not_named_in_the_demotion_fixme() {
         projected.rpm.as_ref().unwrap().repo_files[0]
             .disposition
             .is_included()
+    );
+    let (restored, _) = h.export(None);
+    let file = containerfile(&restored);
+    assert!(
+        active_lines(&file).contains(&"    vendor-release \\"),
+        "the advice restores the install:\n{file}"
     );
 }
 

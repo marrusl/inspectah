@@ -226,10 +226,14 @@ of the two questions that ask it. Never resolve an id by walking
   and a row that does exist changes `config.files`, not the
   `rpm.repo_files` decision the proof and the Custom Repositories `COPY`
   read. So the advice never says "include <path> under Configuration
-  Files"; it names a repo, and says re-including it also re-includes the
-  repo's packages. A repo is named only when the toggle accepts it
-  (`toggleable`: not a distro repo, and the host's effective definition is
-  enabled) and `toggle_restores` says re-including it serves the package:
+  Files"; it names a repo. A repo is named only when it has a switch that
+  can bring back what it owns (`control`: a full switch for a toggleable
+  repo, not distro and enabled where the host's dnf reads it, which the
+  FIXME says also re-includes the repo's packages; or a carriage-only
+  switch, for a distro or host-disabled repo that owns a carriable entry
+  and is enabled in a file that defines it or has an attributed package,
+  which the FIXME says brings back its repo files and keys) and
+  `toggle_restores` says re-including it serves the package:
   it re-stages the whole export as the toggle leaves it (every unlocked
   repo file defining that exact section, every key its sections name that
   the base image does not ship) and asks the verdict again. Candidates, in
@@ -243,6 +247,19 @@ of the two questions that ask it. Never resolve an id by walking
   Adding a file to the staged set by hand is not enough to judge a
   candidate: a config entry at `a.repo/stray` makes the stager withhold
   both it and an included `a.repo`.
+- **A package installed by name loses its route the same way.** When the
+  host's dnf read the package's repo from a captured `.repo` file that is
+  not a default repo file (a `company.repo` defining `[baseos]` for a
+  mirror counts; `redhat.repo` is the base image's), and the export's
+  definition of it does not serve (dropped by a carriage-only switch, or
+  its key narrowed out of an aggregate), `route_for` returns
+  `PackageRoute::LostRepo` (`InstallRepos::lost_route`, computed once per
+  export in `routes_lost`). It is not installed by name: it gets the
+  demotion FIXME in the repo-less advice, from `lost_route_loss`, asked
+  once per repo, and takes an upload. Its disposition never changes; the
+  route is read from the repo files and the staging, never from
+  `repoless_annotation`, which refine's `demote_lost_routes` writes for
+  the upload control.
 
 Both are exact-first and case-aware. dnf keys repos by exact spelling,
 so `[ab]` and `[AB]` are two repos, in one file or in two;
