@@ -653,6 +653,98 @@ fn nfsnobody_owned_dir_is_numeric_with_nfs_utils_carried() {
     );
 }
 
+/// Carrying a package proves its account only when the package creates it
+/// on every install. `tomcat` skips its account when uid 53 is taken,
+/// `grafana`'s vendor RPM lets the name be configured, and no verified RPM
+/// backs `mongodb-server` or `prometheus`: their owners are written by
+/// number, including through the package-name==account-name match.
+/// `httpd` and `elasticsearch` create theirs unconditionally and keep them.
+#[test]
+fn package_account_rows_name_only_proved_accounts() {
+    // (package, version-release, owned file, account, uid, expected line)
+    let rows = [
+        (
+            "tomcat",
+            "9.0.87-1.el9",
+            "/usr/libexec/tomcat/server",
+            "tomcat",
+            53,
+            "d /var/lib/svcdata 0750 53 53 -",
+        ),
+        (
+            "mongodb-server",
+            "6.0.0-1.el9",
+            "/usr/bin/mongod",
+            "mongod",
+            990,
+            "d /var/lib/svcdata 0750 990 990 -",
+        ),
+        (
+            "grafana",
+            "10.2.6-1.el9",
+            "/usr/sbin/grafana-server",
+            "grafana",
+            989,
+            "d /var/lib/svcdata 0750 989 989 -",
+        ),
+        (
+            "prometheus",
+            "2.45.0-1.el9",
+            "/usr/bin/prometheus",
+            "prometheus",
+            988,
+            "d /var/lib/svcdata 0750 988 988 -",
+        ),
+        (
+            "httpd",
+            "2.4.62-1.el9",
+            "/usr/sbin/httpd",
+            "apache",
+            48,
+            "d /var/lib/svcdata 0750 apache apache -",
+        ),
+        (
+            "elasticsearch",
+            "8.15.0-1",
+            "/usr/share/elasticsearch/bin/elasticsearch",
+            "elasticsearch",
+            987,
+            "d /var/lib/svcdata 0750 elasticsearch elasticsearch -",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (package, version_release, file, account, id, expected) in rows {
+        let exec = with_var_lib(
+            MockExecutor::new()
+                .with_file(
+                    "/etc/passwd",
+                    &format!("{account}:x:{id}:{id}::/var/lib/svcdata:/sbin/nologin\n"),
+                )
+                .with_file("/etc/group", &format!("{account}:x:{id}:\n")),
+            &[(
+                "/var/lib/svcdata",
+                &format!("0750 {id} {id} {account} {account}\n"),
+            )],
+        );
+        let mut snap = useradd(collect_users(&exec, false), &[]);
+        snap.storage = Some(collect_storage(&exec));
+        snap.rpm = Some(collect_rpm_with(package, version_release, file));
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        inspectah_pipeline::render::render_all(&snap, &RenderContext { target: None }, dir.path())
+            .expect("render");
+        let var_conf = std::fs::read_to_string(
+            dir.path()
+                .join("config/usr/lib/tmpfiles.d/inspectah-var.conf"),
+        )
+        .expect("the /var fragment");
+        if !var_conf.lines().any(|l| l == expected) {
+            failures.push(format!("{package}: expected `{expected}` in\n{var_conf}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// U6: the keys comment.
 #[test]
 fn u6_keys_comment() {

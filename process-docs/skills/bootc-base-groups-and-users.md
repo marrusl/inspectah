@@ -68,12 +68,21 @@ host recorded on the directory, whichever way the owner is proved:
   package creates with it, which has the account's name. It proves no
   other group: `apache:homeowners` with only `httpd` carried.
 
-A `KNOWN_PACKAGE_ACCOUNTS` row must be an account the package creates on
-every install. An account its scriptlet creates only under some condition
-proves nothing: `nfs-utils` creates the legacy `nfsnobody` only when uid
-65534 is free, and every bootc base has `nobody` there, so a carried
-`nfs-utils` never gives the image `nfsnobody`. Read the package's spec
-before adding a row; leave out any account created inside an `if`.
+A `KNOWN_PACKAGE_ACCOUNTS` `Creates` row must be an account the package
+creates on every install. An account its scriptlet creates only under a
+condition that can leave it absent proves nothing: `nfs-utils` creates the
+legacy `nfsnobody` only when uid 65534 is free, and every bootc base has
+`nobody` there, so a carried `nfs-utils` never gives the image `nfsnobody`.
+`tomcat` likewise skips its account when uid 53 is taken. An ordinary
+"create unless this account already exists" guard is fine. Read the
+package's spec before adding a row; exclude conditions that can leave the
+named account absent after installation.
+
+The same-name match (a carried package named for the account) proves the
+account too, so leaving a row out is not enough for a package whose own
+account is unproved. List it as `PackageAccounts::Unproved`, which removes
+it from that match: `tomcat`, `grafana` (the vendor RPM allows another
+account name), and `mongodb-server` and `prometheus` (no verified RPM).
 
 Name a group in a tmpfiles.d line only when it is that same-named package
 group or `ContainerfileUserPlan::guaranteed_gid` returns the host's gid for

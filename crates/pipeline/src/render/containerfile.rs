@@ -2453,33 +2453,54 @@ fn secrets_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
 /// stable account names are listed. Unknown packages fall through to the numeric
 /// path safely.
 ///
-/// A row means the package creates the account on every install. An account a
-/// scriptlet creates only under some condition is not listed: `nfs-utils`
-/// creates the legacy `nfsnobody` only when uid 65534 is free, and every bootc
-/// base already has `nobody` there, so carrying it proves nothing.
-const KNOWN_PACKAGE_ACCOUNTS: &[(&str, &[&str])] = &[
-    ("postgresql-server", &["postgres"]),
-    ("bind", &["named"]),
-    ("mysql-server", &["mysql"]),
-    ("mariadb-server", &["mysql"]),
-    ("httpd", &["apache"]),
-    ("nginx", &["nginx"]),
-    ("redis", &["redis"]),
-    ("mongodb-server", &["mongod"]),
-    ("rabbitmq-server", &["rabbitmq"]),
-    ("elasticsearch", &["elasticsearch"]),
-    ("grafana", &["grafana"]),
-    ("prometheus", &["prometheus"]),
-    ("tomcat", &["tomcat"]),
-    ("dovecot", &["dovecot"]),
-    ("postfix", &["postfix"]),
-    ("chrony", &["chrony"]),
-    ("openssh-server", &["sshd"]),
-    ("rpcbind", &["rpc"]),
-    ("haproxy", &["haproxy"]),
-    ("squid", &["squid"]),
-    ("memcached", &["memcached"]),
+/// A `Creates` row means the package creates the account on every install.
+/// An account a scriptlet creates only under some condition that can leave
+/// it absent is not listed: `nfs-utils` creates the legacy `nfsnobody` only
+/// when uid 65534 is free, and every bootc base already has `nobody` there,
+/// so carrying it proves nothing. A package whose own same-named account is
+/// not proved by carrying it is listed as `Unproved`, which also stops the
+/// package-name==account-name match from naming it.
+const KNOWN_PACKAGE_ACCOUNTS: &[(&str, PackageAccounts)] = &[
+    ("postgresql-server", PackageAccounts::Creates(&["postgres"])),
+    ("bind", PackageAccounts::Creates(&["named"])),
+    ("mysql-server", PackageAccounts::Creates(&["mysql"])),
+    ("mariadb-server", PackageAccounts::Creates(&["mysql"])),
+    ("httpd", PackageAccounts::Creates(&["apache"])),
+    ("nginx", PackageAccounts::Creates(&["nginx"])),
+    ("redis", PackageAccounts::Creates(&["redis"])),
+    ("rabbitmq-server", PackageAccounts::Creates(&["rabbitmq"])),
+    (
+        "elasticsearch",
+        PackageAccounts::Creates(&["elasticsearch"]),
+    ),
+    ("dovecot", PackageAccounts::Creates(&["dovecot"])),
+    ("postfix", PackageAccounts::Creates(&["postfix"])),
+    ("chrony", PackageAccounts::Creates(&["chrony"])),
+    ("openssh-server", PackageAccounts::Creates(&["sshd"])),
+    ("rpcbind", PackageAccounts::Creates(&["rpc"])),
+    ("haproxy", PackageAccounts::Creates(&["haproxy"])),
+    ("squid", PackageAccounts::Creates(&["squid"])),
+    ("memcached", PackageAccounts::Creates(&["memcached"])),
+    // The tomcat scriptlets skip the account when uid 53 belongs to
+    // another one, and still succeed.
+    ("tomcat", PackageAccounts::Unproved),
+    // No verified RPM that creates `mongod` under this package name.
+    ("mongodb-server", PackageAccounts::Unproved),
+    // The vendor RPM lets the account name be configured.
+    ("grafana", PackageAccounts::Unproved),
+    // No verified RPM provider.
+    ("prometheus", PackageAccounts::Unproved),
 ];
+
+/// What carrying a package proves about the accounts its scriptlets create.
+enum PackageAccounts {
+    /// The package creates these accounts, each with its same-named group,
+    /// on every install.
+    Creates(&'static [&'static str]),
+    /// Carrying the package proves no account, not even one with the
+    /// package's own name: an owner it might create is written by number.
+    Unproved,
+}
 
 /// Collect system account names provided by replicated RPMs.
 ///
@@ -2488,11 +2509,13 @@ const KNOWN_PACKAGE_ACCOUNTS: &[(&str, &[&str])] = &[
 ///    names differ from the package name.
 /// 2. Direct identity — if the package name itself is an account name (e.g.,
 ///    `redis` creates `redis`), the direct match in `resolve_tmpfiles_ownership`
-///    still works via the original `replicated_rpms` set.
+///    still works via the returned `replicated_rpms` set.
 ///
 /// Returns `(rpm_accounts, replicated_rpms)`:
 /// - `rpm_accounts`: account name -> package name (from the static mapping)
-/// - `replicated_rpms`: set of package names (for direct-match fallback)
+/// - `replicated_rpms`: set of package names (for direct-match fallback),
+///   leaving out every `PackageAccounts::Unproved` package so that match
+///   cannot name an account the package does not prove
 fn collect_rpm_provided_accounts(
     snap: &InspectionSnapshot,
 ) -> (
@@ -2511,11 +2534,18 @@ fn collect_rpm_provided_accounts(
         })
         .unwrap_or_default();
 
+    let mut replicated = replicated;
     let mut accounts = std::collections::HashMap::new();
-    for &(pkg, accts) in KNOWN_PACKAGE_ACCOUNTS {
-        if replicated.contains(pkg) {
-            for &acct in accts {
-                accounts.insert(acct.to_string(), pkg.to_string());
+    for (pkg, provides) in KNOWN_PACKAGE_ACCOUNTS {
+        match provides {
+            PackageAccounts::Creates(accts) if replicated.contains(*pkg) => {
+                for &acct in *accts {
+                    accounts.insert(acct.to_string(), pkg.to_string());
+                }
+            }
+            PackageAccounts::Creates(_) => {}
+            PackageAccounts::Unproved => {
+                replicated.remove(*pkg);
             }
         }
     }
