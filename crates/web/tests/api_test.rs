@@ -3508,6 +3508,15 @@ async fn api_view_includes_package_groups() {
                 locked: true,
                 ..Default::default()
             },
+            // An optional member the export installs, so it is counted.
+            PackageEntry {
+                name: "valgrind".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                disposition: FindingKind::included(),
+                locked: false,
+                ..Default::default()
+            },
         ],
         installed_groups: Some(vec![InstalledGroup {
             name: "Development Tools".into(),
@@ -3516,8 +3525,20 @@ async fn api_view_includes_package_groups() {
         }]),
         ..Default::default()
     });
+    // Default triage excludes a package with no recorded repo; include the
+    // optional member so the count has one to find.
+    let mut session = RefineSession::new(snap);
+    session
+        .apply(inspectah_refine::types::RefinementOp::SetInclude {
+            item_id: inspectah_refine::types::ItemId::Package {
+                name: "valgrind".into(),
+                arch: "x86_64".into(),
+            },
+            include: true,
+        })
+        .unwrap();
     let state = Arc::new(AppState {
-        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        session: Arc::new(Mutex::new(session)),
     });
     let app = app(state);
 

@@ -353,6 +353,20 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             // Compute added_count
             let added_count = members.iter().filter(|m| !m.in_base_image).count();
 
+            // Optional members the export still installs: the row reads
+            // "N optional still included", so an installed optional member
+            // the operator excluded, or one not among the added packages,
+            // does not count.
+            let optional_spillover_count = group
+                .optional_installed
+                .iter()
+                .filter(|name| {
+                    projected_pkgs
+                        .iter()
+                        .any(|p| p.name == **name && p.disposition.is_included())
+                })
+                .count();
+
             GroupInfo {
                 name: group.name.clone(),
                 member_count: members.len(),
@@ -360,7 +374,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                 effective_included,
                 added_count,
                 locked_count,
-                optional_spillover_count: group.optional_installed.len(),
+                optional_spillover_count,
                 render_state: state_str,
                 degradation_reason,
                 members,
@@ -2330,7 +2344,9 @@ mod tests {
         assert_eq!(groups.len(), 1, "one group");
         assert_eq!(groups[0]["name"], "Development Tools");
         assert_eq!(groups[0]["member_count"], 2);
-        assert_eq!(groups[0]["optional_spillover_count"], 1);
+        // valgrind is an installed optional member but not an added
+        // package, so the export does not install it.
+        assert_eq!(groups[0]["optional_spillover_count"], 0);
 
         // Render state reflects session classification (members excluded by
         // default triage → degraded). The exact state depends on the
@@ -2346,6 +2362,55 @@ mod tests {
         assert_eq!(members.len(), 2);
         // Verify member overlap_groups is an array
         assert!(members[0]["overlap_groups"].is_array());
+    }
+
+    /// The group row says "N optional still included", so the count is the
+    /// optional members the export still installs: an optional member the
+    /// operator excluded, or one the scan did not record as added, is not
+    /// counted.
+    #[test]
+    fn optional_spillover_counts_only_included_optional_members() {
+        use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
+        use inspectah_refine::types::{ItemId, RefinementOp};
+
+        let pkg = |name: &str| PackageEntry {
+            name: name.into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            disposition: FindingKind::included(),
+            locked: false,
+            source_repo: "appstream".into(),
+            ..Default::default()
+        };
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![pkg("gcc"), pkg("valgrind"), pkg("strace")],
+            installed_groups: Some(vec![InstalledGroup {
+                name: "Development Tools".into(),
+                members: vec!["gcc".into()],
+                optional_installed: vec!["valgrind".into(), "strace".into(), "ltrace".into()],
+            }]),
+            ..Default::default()
+        });
+        let mut session = RefineSession::new(snap);
+        for (name, include) in [("valgrind", true), ("strace", false)] {
+            session
+                .apply(RefinementOp::SetInclude {
+                    item_id: ItemId::Package {
+                        name: name.into(),
+                        arch: "x86_64".into(),
+                    },
+                    include,
+                })
+                .unwrap();
+        }
+
+        let group = build_web_view(&session)
+            .package_groups
+            .into_iter()
+            .find(|g| g.name == "Development Tools")
+            .expect("group present");
+        assert_eq!(group.optional_spillover_count, 1);
     }
 
     #[test]
