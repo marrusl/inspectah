@@ -226,8 +226,8 @@ pub(super) fn readable(exec: &dyn Executor, path: &str) -> Result<Readable, Unre
 }
 
 /// Whether a read that only decides something, and keeps none of the
-/// content, may open `path`: the crypto policy, a DHCP connection, the
-/// anacrontab rule, an empty unit file in `/etc/systemd/system`. The
+/// content, may open `path`: the crypto policy, a DHCP connection, an
+/// empty unit file in `/etc/systemd/system`. The
 /// same admission as a capture ([`locate`], then [`readable`]), so a link
 /// or a linked directory to key material, machine identity, another
 /// section's file or a file outside `/etc` is never opened, and neither

@@ -392,6 +392,48 @@ fn a_content_changed_rpm_config_is_included_at_collect() {
     }
 }
 
+/// An edited `/etc/anacrontab` with a job of its own is an ordinary
+/// modified config, included by default: the image's anacron reads it as
+/// the host's did, so the edit is carried, not held back as an advisory
+/// with no control. Built from raw `rpm -Va` text through the production
+/// parser, on a source whose OS version runs the modernization catalog.
+#[test]
+fn an_edited_anacrontab_is_carried() {
+    const RPM_VA: &str = "S.5....T.  c /etc/anacrontab\n";
+    const ANACRONTAB: &str = "SHELL=/bin/sh\n\
+                              1\t5\tcron.daily\tnice run-parts /etc/cron.daily\n\
+                              1\t10\tcustom-backup\t/usr/local/bin/backup.sh\n";
+    let exec = MockExecutor::new()
+        .with_dir("/etc", vec![])
+        .with_file("/etc/anacrontab", ANACRONTAB);
+    let rpm_state = RpmState {
+        verification_results: Some(parse_rpm_va(RPM_VA)),
+        ..Default::default()
+    };
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+    let SectionData::Config(section) = &output.section else {
+        panic!("expected SectionData::Config, got {:?}", output.section);
+    };
+    let entry = section
+        .files
+        .iter()
+        .find(|f| f.path == "/etc/anacrontab")
+        .unwrap_or_else(|| panic!("/etc/anacrontab is collected: {:?}", section.files));
+    assert_eq!(entry.kind, ConfigFileKind::RpmOwnedModified);
+    assert_eq!(entry.disposition, FindingKind::included());
+    assert_eq!(entry.content, ANACRONTAB);
+}
+
 /// One byte over the inspector's 256 KiB content cap.
 const OVERSIZED_LEN: usize = 256 * 1024 + 1;
 

@@ -271,7 +271,7 @@ It carries a rationale and nothing else. Three advisory types exist, in the
 |---|---|
 | `unbacked_var_dir` | One advisory for the storage section, listing the `/var` directories that no tmpfiles.d entry, `StateDirectory=`, `CacheDirectory=`, `LogsDirectory=`, or package declares. |
 | `cross_tree_symlink` | An unowned symlink under `/etc` that is broken, or that resolves under `/var` or `/usr`, unless it is a known system link (for example `/etc/localtime`, `/etc/alternatives/`, the crypto policy back-ends, `/etc/resolv.conf`). Appears as a Configuration Files row. |
-| `modernization` | A legacy artifact with a modern replacement: a SysVinit script in `/etc/init.d` with no systemd unit of the same name, any file in `/etc/xinetd.d`, or custom entries in `/etc/anacrontab`. Appears as a Configuration Files row. |
+| `modernization` | A legacy artifact with a modern replacement: a SysVinit script in `/etc/init.d` with no systemd unit of the same name, or any file in `/etc/xinetd.d`. Appears as a Configuration Files row. |
 | `content_not_captured` | A config file the scan found but could not read: over 256 KiB, permission denied, or not text. The entry has no content, so neither the scan nor refine copies it into the image, and the rationale says why. A file that also matches a `modernization` pattern stays `content_not_captured`, and its rationale gives both reasons. In an aggregate, a host that could not read the file is its own entry and does not count toward any other host's copy. Add the file by hand if the image needs it. Appears as a Configuration Files row. |
 
 Two related reports are not advisory dispositions:

@@ -33,14 +33,6 @@ pub enum DetectionRule {
         file_glob: &'static str,
         counterpart_pattern: fn(&str) -> String,
     },
-    /// File content check: fire when the file exists and contains
-    /// non-default scheduled entries. Lines starting with a digit or
-    /// `@` are data lines; environment variable lines (`KEY=VALUE`)
-    /// and comments are skipped.
-    FileHasCustomEntries {
-        path: &'static str,
-        default_marker: &'static str,
-    },
     /// The file exists: its mechanism does not apply to an image-mode
     /// host at all, whatever it holds.
     FileExists(&'static str),
@@ -73,17 +65,10 @@ pub const MODERNIZATION_PATTERNS: &[ModernizationPattern] = &[
         rationale: "xinetd is deprecated \u{2014} convert to systemd socket activation",
         min_os_major: None,
     },
-    ModernizationPattern {
-        name: "anacrontab",
-        detection: DetectionRule::FileHasCustomEntries {
-            path: "/etc/anacrontab",
-            // Matches cron.daily, cron.weekly, cron.monthly — all standard entries.
-            default_marker: "cron.",
-        },
-        replacement: "systemd timer",
-        rationale: "anacrontab has custom entries \u{2014} consider systemd timers instead",
-        min_os_major: None,
-    },
+    // `/etc/anacrontab` is not in this catalog: an edit to it is an
+    // ordinary configuration row and is carried, because the image's
+    // anacron reads it just as the host's did. An advisory here would
+    // keep the edit out of the image with no control to bring it back.
     // `/etc/default/grub` is a `%ghost` file of grub2-tools on Fedora and
     // RHEL, so the ghost branch collects an admin's edit to it. Copied
     // into the image it changes nothing: bootc does not run
@@ -171,43 +156,6 @@ pub fn check_modernization_patterns(
                         path.to_string(),
                         FindingKind::advisory(AdvisoryType::Modernization, pattern.rationale),
                     ));
-                }
-            }
-            DetectionRule::FileHasCustomEntries {
-                path,
-                default_marker: _,
-            } => {
-                if !super::config::admit::may_read_to_decide(exec, path) {
-                    continue;
-                }
-                if let Ok(content) = exec.read_file(Path::new(path)) {
-                    // Check if ANY data line has a non-default job identifier.
-                    // anacrontab format: period  delay  job-identifier  command
-                    // Default identifiers: cron.daily, cron.weekly, cron.monthly
-                    let has_custom = content
-                        .lines()
-                        .map(|l| l.trim())
-                        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-                        // Only check anacrontab data lines (period + delay + id + command).
-                        // Skip environment variable lines (KEY=VALUE format).
-                        .filter(|l| {
-                            l.starts_with(|c: char| c.is_ascii_digit()) || l.starts_with('@')
-                        })
-                        .any(|l| {
-                            let fields: Vec<&str> = l.split_whitespace().collect();
-                            if fields.len() >= 3 {
-                                let job_id = fields[2];
-                                !matches!(job_id, "cron.daily" | "cron.weekly" | "cron.monthly")
-                            } else {
-                                false
-                            }
-                        });
-                    if has_custom {
-                        advisories.push((
-                            path.to_string(),
-                            FindingKind::advisory(AdvisoryType::Modernization, pattern.rationale),
-                        ));
-                    }
                 }
             }
         }
@@ -315,76 +263,6 @@ mod tests {
         assert!(
             !advisories.iter().any(|(p, _)| p.contains("xinetd")),
             "empty xinetd.d should produce no advisories"
-        );
-    }
-
-    // -- anacrontab tests ------------------------------------------------------
-
-    #[test]
-    fn test_anacrontab_default_only_suppressed() {
-        // Realistic default anacrontab with env vars and standard cron entries
-        let exec = MockExecutor::new().with_file(
-            "/etc/anacrontab",
-            "# /etc/anacrontab: configuration file for anacron\n\
-             SHELL=/bin/sh\n\
-             PATH=/sbin:/bin:/usr/sbin:/usr/bin\n\
-             MAILTO=root\n\
-             RANDOM_DELAY=45\n\
-             START_HOURS_RANGE=3-22\n\
-             \n\
-             1\t5\tcron.daily\t\tnice run-parts /etc/cron.daily\n\
-             7\t25\tcron.weekly\t\tnice run-parts /etc/cron.weekly\n\
-             @monthly 45\tcron.monthly\tnice run-parts /etc/cron.monthly\n",
-        );
-        let advisories = check_modernization_patterns(&exec, 9);
-        assert!(
-            !advisories.iter().any(|(p, _)| p.contains("anacrontab")),
-            "default anacrontab should NOT fire"
-        );
-    }
-
-    #[test]
-    fn test_anacrontab_custom_entries_fires() {
-        // Default entries plus a custom backup job
-        let exec = MockExecutor::new().with_file(
-            "/etc/anacrontab",
-            "# /etc/anacrontab\n\
-             SHELL=/bin/sh\n\
-             PATH=/sbin:/bin:/usr/sbin:/usr/bin\n\
-             \n\
-             1\t5\tcron.daily\t\tnice run-parts /etc/cron.daily\n\
-             7\t25\tcron.weekly\t\tnice run-parts /etc/cron.weekly\n\
-             1\t5\tcustom-backup\t/usr/local/bin/backup.sh\n",
-        );
-        let advisories = check_modernization_patterns(&exec, 9);
-        assert!(
-            advisories.iter().any(|(p, _)| p.contains("anacrontab")),
-            "anacrontab with custom entries should fire"
-        );
-    }
-
-    #[test]
-    fn test_anacrontab_missing_file_no_advisory() {
-        // No /etc/anacrontab file present
-        let exec = MockExecutor::new();
-        let advisories = check_modernization_patterns(&exec, 9);
-        assert!(
-            !advisories.iter().any(|(p, _)| p.contains("anacrontab")),
-            "missing anacrontab should produce no advisory"
-        );
-    }
-
-    #[test]
-    fn test_anacrontab_custom_entry_with_cron_substring() {
-        // Custom job identifier that contains "cron." as a substring should still fire
-        let exec = MockExecutor::new().with_file(
-            "/etc/anacrontab",
-            "1\t5\tbackup-cron.log\t/usr/local/bin/cleanup.sh\n",
-        );
-        let advisories = check_modernization_patterns(&exec, 9);
-        assert!(
-            advisories.iter().any(|(p, _)| p.contains("anacrontab")),
-            "custom job with 'cron.' in name should still fire"
         );
     }
 

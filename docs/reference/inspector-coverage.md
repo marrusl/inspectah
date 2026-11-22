@@ -562,7 +562,6 @@ The catalog lives in `inspectors/modernization.rs`. It runs when the source OS m
 |:--------|:---------|:------------|
 | SysVinit script | Each file in `/etc/init.d/` with no `/usr/lib/systemd/system/<name>.service` of the same name | A systemd unit |
 | xinetd configuration | Each file in `/etc/xinetd.d/` | systemd socket activation |
-| anacrontab | `/etc/anacrontab`, when it holds entries beyond the stock `cron.daily`, `cron.weekly` and `cron.monthly` lines | A systemd timer |
 
 If the path is already a Configuration Files entry, it becomes an advisory. Otherwise a new advisory entry with no content is added.
 
