@@ -146,7 +146,15 @@ describe("NotCarriedGroup", () => {
     expect(help).toHaveTextContent(/enabled unit .* carried by default/i);
     expect(help).toHaveTextContent(/repo disabled on the host/i);
     expect(help).toHaveTextContent(/gives each held package's reason/i);
-    expect(help).toHaveTextContent(/and the packages it needs/i);
+    expect(help).toHaveTextContent(
+      /adds it to the install list, lets dnf resolve its dependencies/i,
+    );
+    // Including a held package does not clear its hold: a prerequisite only a
+    // disabled repo provides still fails to resolve, so the help says so.
+    expect(help).toHaveTextContent(
+      /for held packages, resolve the reason shown in the Containerfile first/i,
+    );
+    expect(help).not.toHaveTextContent(/packages it needs to the image/i);
     expect(screen.queryByText(/stay listed/i)).toBeNull();
   });
 

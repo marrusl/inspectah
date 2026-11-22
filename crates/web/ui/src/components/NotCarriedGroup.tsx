@@ -92,8 +92,9 @@ export function NotCarriedGroup({
           only if you excluded it or it is held back: it may need a package the
           image cannot install, such as one from a repo disabled on the host.
           The Containerfile gives each held package's reason. Including a
-          package adds it and the packages it needs to the image and restores
-          its enabled units.
+          package adds it to the install list, lets dnf resolve its dependencies
+          and restores its enabled units. For held packages, resolve the reason
+          shown in the Containerfile first.
         </p>
         <ul className="inspectah-not-carried__list">
           {rows.map((row) => {
