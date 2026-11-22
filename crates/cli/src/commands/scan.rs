@@ -1620,6 +1620,16 @@ VARIANT_ID="workstation"
                 "not found",
             ))
         }
+
+        fn open_read(
+            &self,
+            _path: &std::path::Path,
+        ) -> std::io::Result<Box<dyn std::io::Read + '_>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            ))
+        }
     }
 
     // --- Test 1: --scan-home bare flag (no argument) is rejected by clap ---

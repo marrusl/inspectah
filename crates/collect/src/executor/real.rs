@@ -457,6 +457,10 @@ impl HostRead for RealExecutor {
             .read_to_end(&mut head)?;
         Ok(head)
     }
+
+    fn open_read(&self, path: &Path) -> io::Result<Box<dyn io::Read + '_>> {
+        Ok(Box::new(std::fs::File::open(path)?))
+    }
 }
 
 #[cfg(test)]

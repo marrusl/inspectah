@@ -1449,12 +1449,62 @@ fn openssh_key() -> String {
 /// An ordinary binary payload: not UTF-8, no credential.
 const ORDINARY_BINARY: &[u8] = b"\x7fELF\x02\x01\x01\x00\xff\xfe\x80 ordinary";
 
+/// A PEM private-key block carrying [`MARKER`], each line led by
+/// `indent`. Not a real key.
+fn pem_key(label: &str, indent: &str) -> String {
+    let body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7";
+    format!(
+        "{indent}-----BEGIN {label}-----\n{indent}{body}\n{indent}{MARKER}\n\
+         {indent}{body}\n{indent}-----END {label}-----\n"
+    )
+}
+
+/// A synthetic certificate, base64 but no key.
+fn certificate() -> String {
+    let line = "MIIDXTCCAkWgAwIBAgIJAKoK/heBjcOuMA0GCSqGSIb3DQEBBQUAMEUxCzAJBgNV\n";
+    format!(
+        "-----BEGIN CERTIFICATE-----\n{}-----END CERTIFICATE-----\n",
+        line.repeat(16)
+    )
+}
+
+const MIB: usize = 1 << 20;
+
 /// What an unmanaged host holds under `/opt` and `/srv`: credentials with
 /// no link to any class path (an independent binary keytab, a whole-file
 /// encrypted PKCS#8 key and an OpenSSH key), a hard link to a key
 /// (case 31), and next to each, ordinary files, one of them binary, so
-/// every `/opt` directory renders a directory `COPY`.
+/// every `/opt` directory renders a directory `COPY`. Then keys only a
+/// read to the end of the file finds: indented in a YAML block scalar,
+/// after more than a MiB of text, and split across the payload check's
+/// read buffer; and ordinary payloads over a MiB that hold PEM blocks or
+/// lead with indentation, which must ship unchanged.
 fn unmanaged_payloads() -> Vec<(&'static str, Vec<u8>)> {
+    let yaml = format!(
+        "server:\n  port: 8443\ntls:\n  private_key: |\n{}  verify: true\n",
+        pem_key("PRIVATE KEY", "    ")
+    );
+    let late = format!(
+        "{}{}",
+        "worker_threads = 4\n".repeat(MIB / 19 + 1),
+        pem_key("EC PRIVATE KEY", "")
+    );
+    // `-----BEGIN` starts five bytes before the buffer ends.
+    let split = format!(
+        "{}\n{}",
+        "#".repeat(inspectah_core::machine_state::PAYLOAD_READ_CHUNK - 6),
+        pem_key("RSA PRIVATE KEY", "")
+    );
+    let crl = format!(
+        "-----BEGIN X509 CRL-----\n{}-----END X509 CRL-----\n",
+        "MIIBpzCBkAIBATANBgkqhkiG9w0BAQsFADBFMQswCQYDVQQGEwJBVTETMBEGA1UE\n".repeat(MIB / 64 + 1)
+    );
+    let bundle = certificate().repeat(MIB / certificate().len() + 1);
+    let indented = format!(
+        "{{\n{}  \"end\": 0\n}}\n",
+        "  \"item\": [1, 2, 3],\n".repeat(MIB / 21 + 1)
+    );
+    let spaced = format!(" {{\"items\":[{}]}}\n", ["0"; 600_000].join(","));
     vec![
         ("/opt/app/app.conf", b"a = 1\n".to_vec()),
         ("/opt/app/run", ORDINARY_BINARY.to_vec()),
@@ -1462,6 +1512,13 @@ fn unmanaged_payloads() -> Vec<(&'static str, Vec<u8>)> {
         ("/opt/myapp/client.pem", encrypted_key().into_bytes()),
         ("/opt/myapp/app.conf", b"server = example\n".to_vec()),
         ("/opt/myapp/lib.so", ORDINARY_BINARY.to_vec()),
+        ("/opt/myapp/config.yaml", yaml.into_bytes()),
+        ("/opt/myapp/late.conf", late.into_bytes()),
+        ("/opt/myapp/split.txt", split.into_bytes()),
+        ("/opt/trust/revocations.pem", crl.into_bytes()),
+        ("/opt/trust/bundle.pem", bundle.into_bytes()),
+        ("/opt/data/items.json", indented.into_bytes()),
+        ("/opt/data/compact.json", spaced.into_bytes()),
         ("/srv/data/id_ed25519", openssh_key().into_bytes()),
         ("/srv/data/readme.txt", b"data\n".to_vec()),
     ]
@@ -1517,6 +1574,9 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
             ("/opt/app/k", MachineStateMember::PrivateKeyFile),
             ("/opt/myapp/client.kt", MachineStateMember::KerberosKeytab),
             ("/opt/myapp/client.pem", MachineStateMember::PrivateKeyFile),
+            ("/opt/myapp/config.yaml", MachineStateMember::PrivateKeyFile),
+            ("/opt/myapp/late.conf", MachineStateMember::PrivateKeyFile),
+            ("/opt/myapp/split.txt", MachineStateMember::PrivateKeyFile),
             ("/srv/data/id_ed25519", MachineStateMember::PrivateKeyFile),
         ]
     );
@@ -1527,8 +1587,12 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
         vec![
             "/opt/app/app.conf",
             "/opt/app/run",
+            "/opt/data/compact.json",
+            "/opt/data/items.json",
             "/opt/myapp/app.conf",
             "/opt/myapp/lib.so",
+            "/opt/trust/bundle.pem",
+            "/opt/trust/revocations.pem",
             "/srv/data/readme.txt",
         ]
     );
@@ -1570,6 +1634,9 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
             "/opt/app/k",
             "/opt/myapp/client.kt",
             "/opt/myapp/client.pem",
+            "/opt/myapp/config.yaml",
+            "/opt/myapp/late.conf",
+            "/opt/myapp/split.txt",
             "/srv/data/id_ed25519",
         ] {
             let rel = path.trim_start_matches('/');

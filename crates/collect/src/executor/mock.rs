@@ -25,6 +25,9 @@ pub enum ReadKind {
     Full,
     /// `read_head` ([`HostRead`]).
     Head,
+    /// `open_read` ([`HostRead`]); the record's `bytes` is the file's
+    /// length, all of which the reader yields.
+    Stream,
 }
 
 /// One read of file content, as the path was asked for, with the number
@@ -46,7 +49,7 @@ pub struct MockExecutor {
     hard_links: HashMap<String, String>,
     /// Permission and type bits a test set for a file.
     modes: HashMap<String, u32>,
-    /// Every `read_file` and `read_head` call, in order.
+    /// Every `read_file`, `read_head` and `open_read` call, in order.
     read_log: Mutex<Vec<ReadRecord>>,
     dirs: HashMap<String, Vec<String>>,
     links: HashMap<String, String>,
@@ -146,7 +149,7 @@ impl MockExecutor {
         self
     }
 
-    /// Every `read_file` and `read_head` call so far, in order.
+    /// Every `read_file`, `read_head` and `open_read` call so far, in order.
     pub fn read_log(&self) -> Vec<ReadRecord> {
         self.read_log.lock().unwrap().clone()
     }
@@ -518,6 +521,27 @@ impl HostRead for MockExecutor {
         let head = bytes[..n.min(bytes.len())].to_vec();
         self.log_read(path, ReadKind::Head, head.len());
         Ok(head)
+    }
+
+    fn open_read(&self, path: &Path) -> io::Result<Box<dyn io::Read + '_>> {
+        let key = path.to_str().unwrap_or("");
+        assert!(
+            !self.specials.contains(key),
+            "open_read opened the special file {key}, which can block on a real host"
+        );
+        if let Some(&error_kind) = self.file_errors.get(key) {
+            self.log_read(path, ReadKind::Stream, 0);
+            return Err(io::Error::new(error_kind, path.display().to_string()));
+        }
+        let Some((_, bytes)) = self.content_of(path) else {
+            self.log_read(path, ReadKind::Stream, 0);
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                path.display().to_string(),
+            ));
+        };
+        self.log_read(path, ReadKind::Stream, bytes.len());
+        Ok(Box::new(io::Cursor::new(bytes.clone())))
     }
 }
 

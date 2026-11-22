@@ -137,11 +137,16 @@ pub trait Executor: Send + Sync {
 /// A host executor the machine-state read gate can wrap
 /// ([`crate::machine_state::ScreenedExecutor`]). The real and mock
 /// executors implement it; the gate does not, so no inspector holds a
-/// value it can call [`HostRead::read_head`] on. The gate's own reads are
-/// the only prefix reads a scan makes: the two-byte keytab sniff, and the
+/// value it can call these on. The gate's own reads are the only partial
+/// and raw reads a scan makes: the two-byte keytab sniff, and the
 /// unmanaged payload check
-/// ([`crate::machine_state::ScreenedExecutor::screen_payload`]).
+/// ([`crate::machine_state::ScreenedExecutor::screen_payload`]), which
+/// reads a file to its end a buffer at a time.
 pub trait HostRead: Executor {
     /// At most `n` bytes from the start of the file.
     fn read_head(&self, path: &Path, n: usize) -> io::Result<Vec<u8>>;
+
+    /// The file, open for reading from its start. The caller reads it a
+    /// buffer at a time, so a file of any length costs bounded memory.
+    fn open_read(&self, path: &Path) -> io::Result<Box<dyn io::Read + '_>>;
 }

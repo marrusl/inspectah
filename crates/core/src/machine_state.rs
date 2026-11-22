@@ -234,9 +234,8 @@ fn glob_match_simple(pattern: &str, text: &str) -> bool {
     pi == pat.len()
 }
 
-/// How many bytes the keytab header sniff reads. With the unmanaged
-/// payload check ([`ScreenedExecutor::screen_payload`]), the only prefix
-/// reads the scan makes.
+/// How many bytes the keytab header sniff reads: the only prefix read
+/// the scan makes.
 pub const KEYTAB_HEADER_LEN: usize = 2;
 
 /// The first two bytes of a Kerberos keytab: file format version 1 or 2.
@@ -288,24 +287,6 @@ const PEM_DASHES: &str = "-----";
 /// in it is left to redaction. A block that never ends counts as a block
 /// to the end of the file, so a cut-off key is still a key.
 pub fn is_whole_file_private_key(content: &str) -> bool {
-    matches!(scan_key_file(content), KeyFileScan::KeyFile { .. })
-}
-
-/// What [`scan_key_file`] found in the lines it read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum KeyFileScan {
-    /// A line no key file holds: the text is configuration.
-    Other,
-    /// Only key-file lines, and at least one private-key block.
-    KeyFile { open_block: bool },
-    /// Only key-file lines, and no private-key block yet.
-    NoKey { open_block: bool },
-}
-
-/// The line-by-line test behind [`is_whole_file_private_key`], also
-/// telling whether the text ended inside a PEM block, for a caller that
-/// holds only the start of a file ([`payload_credential`]).
-fn scan_key_file(content: &str) -> KeyFileScan {
     let mut open_label: Option<&str> = None;
     let mut has_key = false;
     for line in content.lines() {
@@ -320,70 +301,300 @@ fn scan_key_file(content: &str) -> KeyFileScan {
             if label.ends_with(PRIVATE_KEY_LABEL_SUFFIX) {
                 has_key = true;
             } else if !COMPANION_LABELS.contains(&label) {
-                return KeyFileScan::Other;
+                return false;
             }
             open_label = Some(label);
             continue;
         }
-        if !is_envelope_line(line) {
-            return KeyFileScan::Other;
+        let envelope = line.trim().is_empty()
+            || line.starts_with('#')
+            || line.starts_with([' ', '\t'])
+            || ENVELOPE_PREFIXES.iter().any(|p| line.starts_with(p));
+        if !envelope {
+            return false;
         }
     }
-    let open_block = open_label.is_some();
-    if has_key {
-        KeyFileScan::KeyFile { open_block }
+    has_key
+}
+
+/// How many bytes the unmanaged payload check reads at a time. Its memory
+/// is this buffer and two PEM labels of at most [`PEM_LABEL_MAX`] bytes,
+/// whatever the file's length.
+pub const PAYLOAD_READ_CHUNK: usize = 64 * 1024;
+
+/// The longest PEM label [`PemKeyFinder`] reads. RFC 7468's labels, and
+/// every private-key label, are far shorter.
+const PEM_LABEL_MAX: usize = 64;
+
+/// The most bytes [`PemKeyFinder`] follows between a private-key `BEGIN`
+/// line and its `END` line. A 16384-bit RSA key in PEM is about 13 KiB.
+const KEY_BODY_MAX: usize = 64 * 1024;
+
+/// The fewest base64 characters a body needs to be a key. A body with
+/// none, such as a `BEGIN` line directly followed by its `END` line in a
+/// template, is a placeholder that holds no key material.
+const KEY_BODY_MIN_BASE64: usize = 1;
+
+/// The run of dashes both PEM markers start with.
+const PEM_DASH_RUN: usize = PEM_DASHES.len();
+
+/// The credential member an unmanaged payload is by its bytes, read from
+/// `reader` to its end, binary-safe and in bounded memory
+/// ([`PAYLOAD_READ_CHUNK`]): a keytab by its first two bytes, which wins,
+/// else a private key when a PEM private-key block appears anywhere in it
+/// ([`PemKeyFinder`]). The verdict is reached only from what the file
+/// holds; no part of a file stands in for the whole of it. DER private
+/// keys and PKCS#12 archives are not recognized.
+pub fn payload_credential(reader: &mut dyn io::Read) -> io::Result<Option<MachineStateMember>> {
+    let mut buf = vec![0; PAYLOAD_READ_CHUNK];
+    let mut head = Vec::with_capacity(KEYTAB_HEADER_LEN);
+    let mut finder = PemKeyFinder::default();
+    loop {
+        let n = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        let chunk = &buf[..n];
+        if head.len() < KEYTAB_HEADER_LEN {
+            let take = (KEYTAB_HEADER_LEN - head.len()).min(n);
+            head.extend_from_slice(&chunk[..take]);
+            if is_keytab_header(&head) {
+                return Ok(Some(MachineStateMember::KerberosKeytab));
+            }
+        }
+        if finder.feed(chunk) {
+            return Ok(Some(MachineStateMember::PrivateKeyFile));
+        }
+    }
+    Ok(finder
+        .finish()
+        .then_some(MachineStateMember::PrivateKeyFile))
+}
+
+/// Finds a PEM private-key block anywhere in a byte stream fed to it a
+/// buffer at a time, so a block split across two buffers is still one
+/// block.
+///
+/// A block is a `-----BEGIN <label>-----` marker whose label ends with
+/// `PRIVATE KEY` (plain, encrypted, RSA, EC, DSA and OpenSSH keys alike),
+/// at any position in a line, then a body holding base64
+/// ([`KEY_BODY_MIN_BASE64`]), then the `END` marker with
+/// a private-key label, or the end of the stream: a cut-off key is a key.
+/// The body may hold only bytes a key body holds in a PEM file or
+/// embedded in text ([`is_key_body_byte`]): indentation, as in a YAML
+/// block scalar, `\n` escapes and quotes, as in JSON, and RFC 1421
+/// headers. Any other byte ends the candidate, so a `BEGIN` marker
+/// quoted in source code or prose followed by anything else is not a key.
+/// A certificate, CRL or parameters block is not a candidate at all.
+#[derive(Debug, Default)]
+pub struct PemKeyFinder {
+    state: KeyFind,
+    found: bool,
+}
+
+/// Where [`PemKeyFinder`] is in the stream.
+#[derive(Debug)]
+enum KeyFind {
+    /// Outside any candidate: how many bytes of [`PEM_BEGIN`] match.
+    Seek(usize),
+    /// Reading a `BEGIN` marker's label, and the dashes that close it.
+    BeginLabel(LabelRead),
+    /// Inside a private-key body.
+    Body {
+        len: usize,
+        base64: usize,
+        /// How many bytes of [`PEM_END`] match.
+        end: usize,
+        /// The `END` marker's label, once the marker matched.
+        end_label: Option<LabelRead>,
+    },
+}
+
+impl Default for KeyFind {
+    fn default() -> Self {
+        Self::Seek(0)
+    }
+}
+
+/// A PEM label being read, up to the dashes that close it.
+#[derive(Debug, Default)]
+struct LabelRead {
+    label: Vec<u8>,
+    dashes: usize,
+}
+
+/// What one more byte did to a [`LabelRead`].
+enum LabelStep {
+    More,
+    /// The closing dashes: the label is complete.
+    Closed,
+    /// A byte no label holds.
+    Invalid,
+}
+
+impl LabelRead {
+    fn step(&mut self, b: u8) -> LabelStep {
+        if b == b'-' {
+            self.dashes += 1;
+            return if self.dashes == PEM_DASH_RUN {
+                LabelStep::Closed
+            } else {
+                LabelStep::More
+            };
+        }
+        let label_byte = b.is_ascii_uppercase() || b.is_ascii_digit() || b == b' ';
+        if self.dashes > 0 || !label_byte || self.label.len() == PEM_LABEL_MAX {
+            return LabelStep::Invalid;
+        }
+        self.label.push(b);
+        LabelStep::More
+    }
+
+    fn is_private_key(&self) -> bool {
+        self.label.ends_with(PRIVATE_KEY_LABEL_SUFFIX.as_bytes())
+    }
+}
+
+impl PemKeyFinder {
+    /// Feeds the next bytes of the stream; true once a private-key block
+    /// has been found.
+    pub fn feed(&mut self, bytes: &[u8]) -> bool {
+        let mut rest = bytes;
+        while !self.found && !rest.is_empty() {
+            // Outside a candidate, skip to the next dash at once.
+            if let KeyFind::Seek(0) = self.state {
+                match rest.iter().position(|&b| b == b'-') {
+                    Some(at) => rest = &rest[at..],
+                    None => break,
+                }
+            }
+            self.step(rest[0]);
+            rest = &rest[1..];
+        }
+        self.found
+    }
+
+    /// Whether the stream held a private-key block, the stream having
+    /// ended: a body still open at the end is a cut-off key.
+    pub fn finish(&self) -> bool {
+        self.found
+            || matches!(self.state, KeyFind::Body { base64, .. } if base64 >= KEY_BODY_MIN_BASE64)
+    }
+
+    fn step(&mut self, b: u8) {
+        self.state = match std::mem::take(&mut self.state) {
+            KeyFind::Seek(k) => KeyFind::Seek(marker_step(PEM_BEGIN.as_bytes(), k, b)),
+            KeyFind::BeginLabel(mut read) => match read.step(b) {
+                LabelStep::More => KeyFind::BeginLabel(read),
+                LabelStep::Closed if read.is_private_key() => KeyFind::Body {
+                    len: 0,
+                    base64: 0,
+                    end: 0,
+                    end_label: None,
+                },
+                // The closing dashes may open the next marker.
+                LabelStep::Closed => KeyFind::Seek(PEM_DASH_RUN),
+                LabelStep::Invalid => KeyFind::Seek(marker_step(PEM_BEGIN.as_bytes(), 0, b)),
+            },
+            KeyFind::Body {
+                len,
+                base64,
+                end,
+                end_label,
+            } => self.body_step(b, len + 1, base64, end, end_label),
+        };
+        if let KeyFind::Seek(k) = self.state
+            && k == PEM_BEGIN.len()
+        {
+            self.state = KeyFind::BeginLabel(LabelRead::default());
+        }
+    }
+
+    fn body_step(
+        &mut self,
+        b: u8,
+        len: usize,
+        mut base64: usize,
+        end: usize,
+        end_label: Option<LabelRead>,
+    ) -> KeyFind {
+        if !is_key_body_byte(b) || len > KEY_BODY_MAX {
+            return KeyFind::Seek(marker_step(PEM_BEGIN.as_bytes(), 0, b));
+        }
+        if let Some(mut read) = end_label {
+            return match read.step(b) {
+                LabelStep::More => KeyFind::Body {
+                    len,
+                    base64,
+                    end: 0,
+                    end_label: Some(read),
+                },
+                LabelStep::Closed => {
+                    self.found = read.is_private_key() && base64 >= KEY_BODY_MIN_BASE64;
+                    KeyFind::Seek(PEM_DASH_RUN)
+                }
+                // Not an `END` line after all: still body.
+                LabelStep::Invalid => KeyFind::Body {
+                    len,
+                    base64: base64 + usize::from(is_base64_byte(b)),
+                    end: marker_step(PEM_END.as_bytes(), 0, b),
+                    end_label: None,
+                },
+            };
+        }
+        let end = marker_step(PEM_END.as_bytes(), end, b);
+        if end == PEM_END.len() {
+            return KeyFind::Body {
+                len,
+                base64,
+                end: 0,
+                end_label: Some(LabelRead::default()),
+            };
+        }
+        // A byte that may belong to an `END` marker is not counted.
+        if end == 0 && is_base64_byte(b) {
+            base64 += 1;
+        }
+        KeyFind::Body {
+            len,
+            base64,
+            end,
+            end_label: None,
+        }
+    }
+}
+
+/// How many bytes of `marker` match after `b`, when `k` matched before.
+/// Both markers are a run of dashes then letters, so after a mismatch the
+/// only part that can still match is that run.
+fn marker_step(marker: &[u8], k: usize, b: u8) -> usize {
+    if marker[k] == b {
+        k + 1
+    } else if b == b'-' && k == PEM_DASH_RUN {
+        PEM_DASH_RUN
     } else {
-        KeyFileScan::NoKey { open_block }
+        usize::from(b == b'-')
     }
 }
 
-/// A line a key file may hold outside a PEM block: blank, a `#` comment,
-/// indented `openssl` attribute text, or an envelope line.
-fn is_envelope_line(line: &str) -> bool {
-    line.trim().is_empty()
-        || line.starts_with('#')
-        || line.starts_with([' ', '\t'])
-        || ENVELOPE_PREFIXES.iter().any(|p| line.starts_with(p))
+fn is_base64_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')
 }
 
-/// How many bytes of an unmanaged payload [`payload_credential`] judges.
-/// A whole-file key is a few kilobytes; a file longer than this is judged
-/// by its start.
-pub const PAYLOAD_CHECK_LEN: usize = 1 << 20;
-
-/// The credential member a payload is by its bytes, binary-safe: `head`
-/// is the whole file when `complete`, else its first
-/// [`PAYLOAD_CHECK_LEN`] bytes or more. A keytab header is a keytab in
-/// either case. A complete file is judged by [`credential_content`], so
-/// bytes that are not UTF-8 are never a PEM key. A longer file is a
-/// private key unless its start already rules it out: bytes that are not
-/// UTF-8, or a line, the cut-off last one included, that no key file
-/// holds. So a large binary or a one-line minified file stays ordinary,
-/// and a key file padded past the limit is still refused.
-pub fn payload_credential(head: &[u8], complete: bool) -> Option<MachineStateMember> {
-    if complete || is_keytab_header(head) {
-        return credential_content(head);
-    }
-    let text = match std::str::from_utf8(head) {
-        Ok(text) => text,
-        // The cut fell inside a character: judge the bytes before it.
-        Err(e) if e.error_len().is_none() => std::str::from_utf8(&head[..e.valid_up_to()])
-            .expect("valid_up_to bounds the valid UTF-8 prefix"),
-        Err(_) => return None,
-    };
-    let (lines, cut) = match text.rfind('\n') {
-        Some(end) => (&text[..=end], &text[end + 1..]),
-        None => ("", text),
-    };
-    let open_block = match scan_key_file(lines) {
-        KeyFileScan::Other => return None,
-        KeyFileScan::KeyFile { open_block } | KeyFileScan::NoKey { open_block } => open_block,
-    };
-    let cut_may_belong = open_block
-        || is_envelope_line(cut)
-        || cut.starts_with('-')
-        || ENVELOPE_PREFIXES.iter().any(|p| p.starts_with(cut));
-    cut_may_belong.then_some(MachineStateMember::PrivateKeyFile)
+/// A byte a private-key body holds, in a PEM file or embedded in other
+/// text: base64; whitespace and line ends, so indentation as in a YAML
+/// block scalar; RFC 1421 header text (`Proc-Type: 4,ENCRYPTED`,
+/// `DEK-Info: AES-256-CBC,...`); and the escapes, quotes and comment
+/// marks that carry a key in JSON, YAML, a shell script or source code
+/// (`\n`, `"`, `'`, `#`).
+fn is_key_body_byte(b: u8) -> bool {
+    is_base64_byte(b)
+        || matches!(
+            b,
+            b' ' | b'\t' | b'\r' | b'\n' | b'\\' | b'"' | b'\'' | b',' | b':' | b'-' | b'#'
+        )
 }
 
 /// The label of a `-----BEGIN <label>-----` or `-----END <label>-----`
@@ -796,13 +1007,12 @@ impl<'a> ScreenedExecutor<'a> {
 
     /// The decision for an unmanaged payload, a file the scan copies into
     /// its tarball byte for byte: [`screen`](Self::screen), then, for a
-    /// regular file, the credential detectors over its bytes
-    /// ([`payload_credential`], one read of at most
-    /// [`PAYLOAD_CHECK_LEN`] + 1 bytes). The unmanaged walk asks it before
-    /// recording an item, and the bundler asks it again before copying.
-    /// An error is a file the check could not read; it is not a
-    /// classification, and the caller decides what an unchecked file
-    /// means.
+    /// regular file, the credential detectors over all of its bytes
+    /// ([`payload_credential`], one streaming read to the end, in bounded
+    /// memory). The unmanaged walk asks it before recording an item, and
+    /// the bundler asks it again before copying. An error is a file the
+    /// check could not read to its end; it is not a classification, and
+    /// the caller decides what an unchecked file means.
     pub fn screen_payload(&self, path: &str) -> io::Result<Screened> {
         let screened = self.screen(path);
         if matches!(screened, Screened::Withheld(_)) {
@@ -812,9 +1022,8 @@ impl<'a> ScreenedExecutor<'a> {
         if !self.inner.file_metadata(file)?.is_regular() {
             return Ok(screened);
         }
-        let head = self.inner.read_head(file, PAYLOAD_CHECK_LEN + 1)?;
-        let complete = head.len() <= PAYLOAD_CHECK_LEN;
-        Ok(match payload_credential(&head, complete) {
+        let mut reader = self.inner.open_read(file)?;
+        Ok(match payload_credential(&mut reader)? {
             Some(member) => Screened::Withheld(member),
             None => screened,
         })
@@ -1289,61 +1498,174 @@ mod tests {
         assert_eq!(credential_content(b"plain text"), None);
     }
 
-    /// A payload's start decides a long file: a key file padded past the
-    /// limit and a keytab are refused; a binary, a one-line minified file
-    /// and a configuration file are not. A complete payload is judged as
-    /// `credential_content` judges it, and bytes that are not UTF-8 are
-    /// never a PEM key.
+    /// A reader that yields at most `n` bytes per call, as a pipe or a
+    /// short read can.
+    struct Chunked<'a> {
+        bytes: &'a [u8],
+        n: usize,
+    }
+
+    impl std::io::Read for Chunked<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let take = self.n.min(buf.len()).min(self.bytes.len());
+            buf[..take].copy_from_slice(&self.bytes[..take]);
+            self.bytes = &self.bytes[take..];
+            Ok(take)
+        }
+    }
+
+    fn judge(bytes: &[u8], n: usize) -> Option<MachineStateMember> {
+        payload_credential(&mut Chunked { bytes, n }).expect("an in-memory read")
+    }
+
+    const MIB: usize = 1 << 20;
+
+    /// A synthetic key body: base64 lines, not a real key.
+    fn body() -> String {
+        "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n".repeat(4)
+    }
+
+    /// Every payload is read to its end: a PEM private-key block anywhere
+    /// in it is a key, whether the whole file, embedded in YAML or JSON,
+    /// after more than a MiB of text, after binary bytes, or cut off at
+    /// the end; a keytab header wins. Certificates, CRLs, large indented
+    /// or space-led JSON, binaries, placeholders and quoted markers are
+    /// not keys.
     #[test]
-    fn payload_credential_judges_a_long_file_by_its_start() {
-        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl\n-----END OPENSSH PRIVATE KEY-----\n";
-        let padded = format!("{key}{}", "# padding\n".repeat(PAYLOAD_CHECK_LEN / 8));
-        let head = &padded.as_bytes()[..=PAYLOAD_CHECK_LEN];
-        let cut_in_block = format!("-----BEGIN PRIVATE KEY-----\n{}", "QUJD\n".repeat(1 << 19));
-        let cases: &[(&str, &[u8], bool, Option<MachineStateMember>)] = &[
+    fn payload_credential_reads_the_whole_payload() {
+        let key =
+            |label: &str| format!("-----BEGIN {label}-----\n{}-----END {label}-----\n", body());
+        let yaml = format!(
+            "server:\n  port: 443\ntls:\n  private_key: |\n{}  cert: x\n",
+            key("PRIVATE KEY")
+                .lines()
+                .map(|l| format!("    {l}\n"))
+                .collect::<String>()
+        );
+        let json = format!(
+            "{{\"type\": \"service_account\", \"private_key\": \"{}\", \"client_email\": \"a@b\"}}",
+            key("PRIVATE KEY").replace('\n', "\\n")
+        );
+        let late = format!(
+            "{}{}",
+            "setting = value\n".repeat(MIB / 15),
+            key("EC PRIVATE KEY")
+        );
+        let rsa_encrypted = format!(
+            "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n\
+             DEK-Info: AES-256-CBC,0123456789ABCDEF0123456789ABCDEF\n\n{}\
+             -----END RSA PRIVATE KEY-----\n",
+            body()
+        );
+        let mut in_binary = b"\x7fELF\x02\x01\xff\xfe\x00".to_vec();
+        in_binary.extend_from_slice(key("OPENSSH PRIVATE KEY").as_bytes());
+        in_binary.extend_from_slice(b"\x00\x80\x81");
+        let mut keytab_with_key = vec![0x05, 0x02, 0x00];
+        keytab_with_key.extend_from_slice(key("PRIVATE KEY").as_bytes());
+
+        let cert = format!(
+            "-----BEGIN CERTIFICATE-----\n{}-----END CERTIFICATE-----\n",
+            body()
+        );
+        let big_crl = format!(
+            "-----BEGIN X509 CRL-----\n{}-----END X509 CRL-----\n",
+            "MIIBpzCBkAIBATANBgkqhkiG9w0BAQsFADA\n".repeat(MIB / 30)
+        );
+        let big_bundle = cert.repeat(MIB / cert.len() + 1);
+        let indented_json = format!(
+            "{{\n{}  \"end\": 0\n}}\n",
+            "  \"item\": [1, 2, 3],\n".repeat(MIB / 20)
+        );
+        let spaced_json = format!(" {{\"items\":[{}]}}\n", ["0"; 600_000].join(","));
+        let source_regex = "re = /^-----BEGIN OPENSSH PRIVATE KEY-----(?:\\r\\n|\\n)([\\s\\S]+)\
+                            (?:\\r\\n|\\n)-----END OPENSSH PRIVATE KEY-----$/;\n";
+
+        let cases: Vec<(&str, Vec<u8>, Option<MachineStateMember>)> = vec![
             (
-                "complete key",
-                key.as_bytes(),
-                true,
+                "whole-file key",
+                key("ENCRYPTED PRIVATE KEY").into(),
                 Some(M::PrivateKeyFile),
             ),
-            ("padded key", head, false, Some(M::PrivateKeyFile)),
             (
-                "cut inside a key block",
-                &cut_in_block.as_bytes()[..=PAYLOAD_CHECK_LEN],
-                false,
+                "RSA with headers",
+                rsa_encrypted.into(),
                 Some(M::PrivateKeyFile),
             ),
+            ("YAML block scalar", yaml.into(), Some(M::PrivateKeyFile)),
+            ("JSON string", json.into(), Some(M::PrivateKeyFile)),
+            ("past the first MiB", late.into(), Some(M::PrivateKeyFile)),
+            ("inside a binary", in_binary, Some(M::PrivateKeyFile)),
             (
-                "keytab",
-                &[0x05, 0x01, 0xff],
-                false,
+                "cut off at the end",
+                format!("note\n-----BEGIN PRIVATE KEY-----\n{}", body()).into(),
+                Some(M::PrivateKeyFile),
+            ),
+            ("keytab", vec![0x05, 0x01, 0xff], Some(M::KerberosKeytab)),
+            (
+                "keytab holding PEM text",
+                keytab_with_key,
                 Some(M::KerberosKeytab),
             ),
+            ("certificate", cert.into(), None),
+            ("CRL over a MiB", big_crl.into(), None),
+            ("certificate bundle over a MiB", big_bundle.into(), None),
+            ("indented JSON over a MiB", indented_json.into(), None),
+            ("space-led JSON over a MiB", spaced_json.into(), None),
             (
-                "complete keytab",
-                &[0x05, 0x02],
-                true,
-                Some(M::KerberosKeytab),
-            ),
-            ("complete binary", b"\x7fELF\x02\xff\xfe", true, None),
-            ("long binary", b"\x7fELF\x02\xff\xfe\x00", false, None),
-            ("minified, one line", b"{\"a\":1,\"b\":[1,2,3", false, None),
-            ("configuration", b"listen = 443\nworkers = 4\n", false, None),
-            (
-                "certificate",
-                b"-----BEGIN CERTIFICATE-----\nMII=\n-----END CERTIFICATE-----\nkey = x",
-                false,
+                "binary",
+                b"\x7fELF\x02\x01\x01\x00\xff\xfe\x80 ordinary".to_vec(),
                 None,
             ),
+            (
+                "placeholder",
+                b"key: |\n  -----BEGIN PRIVATE KEY-----\n  -----END PRIVATE KEY-----\n".to_vec(),
+                None,
+            ),
+            ("marker in a regex", source_regex.into(), None),
+            (
+                "marker in prose",
+                format!(
+                    "Paste the -----BEGIN PRIVATE KEY----- block here. {}",
+                    body()
+                )
+                .into(),
+                None,
+            ),
+            ("empty", Vec::new(), None),
         ];
-        for (name, bytes, complete, want) in cases {
-            assert_eq!(payload_credential(bytes, *complete), *want, "{name}");
+        for (name, bytes, want) in &cases {
+            assert_eq!(judge(bytes, PAYLOAD_READ_CHUNK), *want, "{name}");
+            assert_eq!(judge(bytes, 7), *want, "{name}, 7-byte reads");
         }
-        // A cut inside a multi-byte character is judged by the bytes before it.
-        let mut split = key.as_bytes().to_vec();
-        split.extend_from_slice("# é".as_bytes());
-        split.pop();
-        assert_eq!(payload_credential(&split, false), Some(M::PrivateKeyFile));
+    }
+
+    /// A block split between two reads at any byte, the markers and
+    /// labels included, is still one block; a negative control split the
+    /// same way stays ordinary.
+    #[test]
+    fn a_block_split_across_reads_is_found() {
+        let key = format!(
+            "a: 1\nk: |\n  -----BEGIN OPENSSH PRIVATE KEY-----\n  {}  -----END OPENSSH PRIVATE KEY-----\n",
+            body().replace('\n', "\n  ")
+        );
+        let cert = format!(
+            "x = 1\n-----BEGIN CERTIFICATE-----\n{}-----END CERTIFICATE-----\n",
+            body()
+        );
+        for split in 0..=key.len() {
+            let (a, b) = key.as_bytes().split_at(split);
+            let mut finder = PemKeyFinder::default();
+            let found = finder.feed(a) || finder.feed(b) || finder.finish();
+            assert!(found, "split at {split}");
+        }
+        for split in 0..=cert.len() {
+            let (a, b) = cert.as_bytes().split_at(split);
+            let mut finder = PemKeyFinder::default();
+            assert!(
+                !(finder.feed(a) || finder.feed(b) || finder.finish()),
+                "split at {split}"
+            );
+        }
+        assert_eq!(judge(key.as_bytes(), 1), Some(M::PrivateKeyFile));
     }
 }
