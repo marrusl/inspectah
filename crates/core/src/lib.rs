@@ -3,6 +3,7 @@ pub mod baseline;
 pub mod machine_state;
 pub mod pipeline;
 pub mod redaction;
+pub mod repo_ownership;
 pub mod rpm_filename;
 pub mod snapshot;
 pub mod traits;

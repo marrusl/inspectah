@@ -4,6 +4,7 @@ pub mod config;
 pub mod finding;
 pub use finding::{AdvisoryType, FindingKind, ShadowType};
 pub mod containers;
+pub mod destination;
 pub mod group_render;
 pub mod kernelboot;
 pub mod machine_state;

@@ -28,17 +28,7 @@ pub fn sanitize_shell_value(val: &str) -> Option<&str> {
     }
 }
 
-/// Whether `s` holds a character that ends a line for some reader (every
-/// character in [`LINE_TERMINATORS`]) or any other control character,
-/// tab included.
-///
-/// No value the export writes into an instruction, directive or config
-/// key line may hold one: a terminator would start a new line, and the
-/// line it starts is an instruction the snapshot chose.
-pub fn has_line_break_or_control(s: &str) -> bool {
-    s.chars()
-        .any(|c| c.is_control() || LINE_TERMINATORS.contains(&c))
-}
+pub use inspectah_core::types::destination::has_line_break_or_control;
 
 /// [`has_line_break_or_control`] with tab allowed, for a value whose
 /// format separates fields with tabs as well as spaces (an `/etc/hosts`
@@ -197,10 +187,7 @@ pub fn is_valid_tuned_profile(name: &str) -> bool {
     TUNED_PROFILE_RE.is_match(name)
 }
 
-/// Longest path the export will write into a build instruction. Linux's
-/// own `PATH_MAX`, so no path a real filesystem can hold is refused for
-/// length alone.
-pub const MAX_EXPORT_PATH_LEN: usize = 4096;
+pub use inspectah_core::types::destination::MAX_EXPORT_PATH_LEN;
 
 /// A byte allowed anywhere in an exported path: `[A-Za-z0-9._+~^@:,-]`
 /// plus the component separator.

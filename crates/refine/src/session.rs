@@ -3,10 +3,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use inspectah_core::aggregate::classify_zone;
+use inspectah_core::repo_ownership::OwnedKind;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::aggregate::PrevalenceZone;
+use inspectah_core::types::destination::Destination;
 use inspectah_core::types::redaction::RedactionState;
-use inspectah_core::types::repo::RepoId;
+use inspectah_core::types::repo::{RepoId, SectionId};
 use inspectah_pipeline::build::extract::{
     ArchiveViolation, BudgetReader, EntryKind, SeenPaths, confined_rel, create_confined_dir,
     is_single_normal_component,
@@ -30,9 +32,9 @@ use crate::normalize::{
 use crate::repo_index::RepoIndex;
 use crate::types::{
     AggregateContext, AnnotatedOp, AnnotatedTimelineEntry, ChangesSummary, ContentHash, ItemId,
-    RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoEffective, RepoProvenance,
-    SectionChangeSummary, SectionKind, SectionStats, TimelineEntry, TriageBucket, TriageReason,
-    UserPasswordOp, ViewDirective,
+    RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoControl, RepoEffective,
+    RepoState, SectionChangeSummary, SectionKind, SectionStats, TimelineEntry, TriageBucket,
+    TriageReason, UserPasswordOp, ViewDirective,
 };
 use inspectah_core::types::group_render::{OperatorIncludes, RenderContext};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
@@ -285,6 +287,24 @@ fn cascade_repo_packages(rpm: &mut RpmSection, index: &RepoIndex, repo: &str, in
             pkg.disposition = disposition.clone();
         }
     }
+}
+
+/// Every disposition a repo op can move: the packages, repo files and
+/// keys of the RPM section, in order. Two projections with equal values
+/// differ in nothing a repo op decides.
+fn rpm_dispositions(snapshot: &InspectionSnapshot) -> Vec<FindingKind> {
+    snapshot
+        .rpm
+        .iter()
+        .flat_map(|rpm| {
+            rpm.packages_added
+                .iter()
+                .map(|p| &p.disposition)
+                .chain(rpm.repo_files.iter().map(|f| &f.disposition))
+                .chain(rpm.gpg_keys.iter().map(|k| &k.disposition))
+        })
+        .cloned()
+        .collect()
 }
 
 /// Why `item_id` names a withheld machine-state file, when it does: a
@@ -2159,6 +2179,27 @@ impl RefineSession {
         Ok(())
     }
 
+    /// Refuses a variant op on a config row any of whose entries the repo
+    /// section owns (`ConfigShadow::Repositories`): the repo toggle decides
+    /// the file, and the stager writes the repo inventory's payload, so a
+    /// variant op there would be accepted and change nothing (§ 3.7).
+    fn refuse_repositories_shadow(&self, item_id: &ItemId) -> Result<(), RefineError> {
+        let ItemId::Config { path } = item_id else {
+            return Ok(());
+        };
+        let shadowed = self.original.config.as_ref().is_some_and(|c| {
+            c.files.iter().any(|e| {
+                e.path == *path
+                    && e.shadowed_by
+                        == Some(inspectah_core::types::config::ConfigShadow::Repositories)
+            })
+        });
+        if shadowed {
+            return Err(RefineError::InventoryNotToggleable(path.clone()));
+        }
+        Ok(())
+    }
+
     fn validate_target(&self, op: &RefinementOp) -> Result<(), RefineError> {
         match op {
             RefinementOp::SetInclude { item_id, include } => {
@@ -2207,22 +2248,11 @@ impl RefineSession {
                             return Err(RefineError::InventoryNotToggleable(path.clone()));
                         }
                     }
-                    ItemId::Repo { path: section_id } => {
-                        if RepoIndex::is_distro_repo(section_id) {
-                            return Err(RefineError::BadRequest(format!(
-                                "cannot toggle distro repo: {section_id}"
-                            )));
-                        }
-                        let prov = self
-                            .repo_index
-                            .provenance(&RepoId::new(section_id.as_str()));
-                        if !matches!(prov, RepoProvenance::Verified | RepoProvenance::Incomplete) {
-                            let verb = if *include { "include" } else { "exclude" };
-                            return Err(RefineError::BadRequest(format!(
-                                "cannot {verb} repo '{section_id}': provenance is {prov:?}"
-                            )));
-                        }
-                    }
+                    // Whether a repo op can move anything is the no-op
+                    // rule's to say (`check_repo_noop`), from the repo's
+                    // control: a distro or host-disabled repo that owns a
+                    // carriable file or key has a carriage-only switch.
+                    ItemId::Repo { .. } => {}
                     ItemId::Unit { unit } => {
                         let found = self
                             .original
@@ -2410,6 +2440,7 @@ impl RefineSession {
             }
             // Aggregate variant ops: validate using projection state
             RefinementOp::SelectVariant { item_id, target } => {
+                self.refuse_repositories_shadow(item_id)?;
                 let state = self.build_variant_state();
                 variant_ops::validate_select(&self.original, &state, item_id, target)?;
             }
@@ -2418,6 +2449,7 @@ impl RefineSession {
                 content,
                 based_on,
             } => {
+                self.refuse_repositories_shadow(item_id)?;
                 // Checked before the op is recorded, so the timeline, the
                 // autosave and every later projection never hold it.
                 if let Some(member) =
@@ -2493,6 +2525,7 @@ impl RefineSession {
                 }
             }
             RefinementOp::DiscardVariant { item_id, variant } => {
+                self.refuse_repositories_shadow(item_id)?;
                 let state = self.build_variant_state();
                 variant_ops::validate_discard(&self.original, &state, item_id, variant)?;
             }
@@ -2799,51 +2832,120 @@ impl RefineSession {
         Ok(())
     }
 
-    /// Refuses a repo `SetInclude` that would change nothing (§ 3.2),
-    /// mirroring `check_group_noop`'s § 3.7 rule but over `repo_effective`,
-    /// computed once by `recompute_view`, rather than recomputed here --
-    /// this is the one place the no-op rule and `RepoGroupInfo`'s counts
-    /// both read, so they cannot diverge. `excluded_sections_at`'s
-    /// repo-exclusion history plays no part: a history bit cannot say
-    /// whether an op changes a member (position 29).
+    /// Refuses a repo `SetInclude` that changes nothing (§ 5.3 of the
+    /// repo ownership spec). The op is replayed: the timeline up to the
+    /// cursor with the op appended is projected, as `project_snapshot`
+    /// projects the timeline, and compared with the current projection.
+    /// The op is accepted when it moves an effective member, the
+    /// disposition of any `rpm.repo_files` or `rpm.gpg_keys` entry, or the
+    /// decision of a repo whose control is not `None`. Replaying is the
+    /// definition of what an op moves, so no second model of the cascade
+    /// and keeper rules can drift from them; members are read from the
+    /// projection, never from history (position 29).
     fn check_repo_noop(&self, section_id: &str, include: bool) -> Result<(), RefineError> {
-        let effective = self.repo_effective(&RepoId::new(section_id));
         let repo = self.repo_index.repo_identity(section_id);
-
-        if effective.member_count == 0 {
-            let projected = self.project_snapshot();
-            let present_count = projected
-                .rpm
-                .as_ref()
-                .map(|r| {
-                    r.packages_added
-                        .iter()
-                        .filter(|p| package_attributed_to_repo(p, &self.repo_index, repo))
-                        .filter(|p| group_state::is_actionable(p))
-                        .count()
-                })
-                .unwrap_or(0);
-            let reason = if present_count > 0 {
-                format!("all {present_count} members are locked")
-            } else {
-                "no package is attributed to it".to_string()
-            };
+        let state = self.repo_state(repo);
+        if state.control == RepoControl::None {
             return Err(RefineError::NoopTarget(format!(
-                "nothing to decide in '{section_id}': {reason}"
+                "nothing to decide in '{section_id}': no effective member and no file or key \
+                 the export can carry"
             )));
         }
-
-        let all_included = effective.included == effective.member_count;
-        let all_excluded = effective.included == 0;
-        if (include && all_included) || (!include && all_excluded) {
-            let state = if include { "included" } else { "excluded" };
-            return Err(RefineError::NoopTarget(format!(
-                "all {} effective members of '{section_id}' are already {state}",
-                effective.member_count
-            )));
+        if state.kept != include {
+            return Ok(());
         }
+        let op = RefinementOp::SetInclude {
+            item_id: ItemId::Repo {
+                path: section_id.to_owned(),
+            },
+            include,
+        };
+        if rpm_dispositions(&self.project_snapshot())
+            != rpm_dispositions(&self.project_ops(Some(&op)))
+        {
+            return Ok(());
+        }
+        Err(RefineError::NoopTarget(if include {
+            format!(
+                "repo '{section_id}' is already kept, with its files and keys carried and every \
+                 effective member included"
+            )
+        } else {
+            format!(
+                "repo '{section_id}' is already excluded, with no effective member included and \
+                 nothing more to drop"
+            )
+        }))
+    }
 
-        Ok(())
+    /// Apply one repo op to `snap` (§ 6.1): a repo whose switch cascades
+    /// ([`RepoIndex::is_toggleable`]) sets its members; then, on exclude,
+    /// every carriable entry the repo owns that no other section keeps
+    /// ([`RepoIndex::kept_by`], read against `snap` before the op) is
+    /// excluded, and on include every carriable entry it owns is included.
+    /// A default repo file, a rejected key, a base-shipped key, a locked
+    /// entry and one with no owner are never moved.
+    fn apply_repo_op(
+        &self,
+        snap: &mut InspectionSnapshot,
+        repo: &str,
+        include: bool,
+        excluded: &HashSet<String>,
+    ) {
+        let ownership = self.repo_index.ownership();
+        let owned = ownership.owned_by(&SectionId::new(repo));
+        let moving: Vec<Destination> = owned
+            .into_iter()
+            .filter(|dest| include || self.repo_index.kept_by(dest, excluded, snap).is_empty())
+            .cloned()
+            .collect();
+        let Some(rpm) = snap.rpm.as_mut() else {
+            return;
+        };
+        if self.repo_index.is_toggleable(repo) {
+            cascade_repo_packages(rpm, &self.repo_index, repo, include);
+        }
+        for (kind, list) in [
+            (OwnedKind::RepoFile, &mut rpm.repo_files),
+            (OwnedKind::GpgKey, &mut rpm.gpg_keys),
+        ] {
+            for entry in list.iter_mut() {
+                if Destination::new(&entry.path).is_ok_and(|d| moving.contains(&d))
+                    && ownership.carriable(kind, entry)
+                {
+                    entry.disposition = FindingKind::from_bool(include);
+                }
+            }
+        }
+    }
+
+    /// The destination of every entry `repo` owns, carriable or not,
+    /// sorted (§ 7.1).
+    pub fn repo_owns(&self, repo: &str) -> Vec<String> {
+        let repo = self.repo_index.repo_identity(repo);
+        self.repo_index
+            .ownership()
+            .owned_by(&SectionId::new(repo))
+            .into_iter()
+            .map(|d| d.as_str().to_owned())
+            .collect()
+    }
+
+    /// Every repo-owned destination, with its owners and what this export
+    /// does with it (§ 7.1).
+    pub fn repo_owned(&self) -> &[crate::types::RepoOwnedEntry] {
+        &self.view().repo_owned
+    }
+
+    /// A repo's decision, carriage and control (§ 5.1), by
+    /// `RepoIndex::repo_identity`. A repo the view has no state for has no
+    /// control.
+    pub fn repo_state(&self, repo: &str) -> RepoState {
+        self.view()
+            .repo_states
+            .get(self.repo_index.repo_identity(repo))
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Check whether a view directive is already active in the timeline
@@ -2873,16 +2975,30 @@ impl RefineSession {
     }
 
     fn project_snapshot(&self) -> InspectionSnapshot {
+        self.project_ops(None)
+    }
+
+    /// The timeline up to the cursor projected onto the original snapshot,
+    /// with `extra` appended when given: the projection an op would leave,
+    /// which the repo no-op rule compares with the current one (§ 5.3).
+    fn project_ops(&self, extra: Option<&RefinementOp>) -> InspectionSnapshot {
         let mut snap = self.original.clone();
         let mut variant_state = VariantProjectionState::default();
-
-        for entry in &self.timeline[..self.cursor] {
-            let ops: &[RefinementOp] = match entry {
+        // The repos excluded so far in the replay, by
+        // `RepoIndex::repo_identity`: a repo op reads keepers against the
+        // decisions made before it, as every cascade rule reads the
+        // projection at that point (§ 6.1).
+        let mut excluded_repos: HashSet<String> = HashSet::new();
+        let timeline_ops = self.timeline[..self.cursor]
+            .iter()
+            .flat_map(|entry| match entry {
                 TimelineEntry::Op(op) => std::slice::from_ref(op),
                 TimelineEntry::Batch { ops } => ops.as_slice(),
-                TimelineEntry::View(_) => continue,
-            };
-            for op in ops {
+                TimelineEntry::View(_) => &[],
+            });
+
+        {
+            for op in timeline_ops.chain(extra) {
                 match op {
                     RefinementOp::SetInclude { item_id, include } => {
                         // Defense-in-depth: skip stale SetInclude(true) ops
@@ -2925,100 +3041,13 @@ impl RefineSession {
                                 // exact spelling: `[site]` and `[SITE]` are
                                 // two repos, and a toggle reaches only the
                                 // packages, files and keys of its own.
-                                let repo = self.repo_index.repo_identity(section_id);
-                                if !*include {
-                                    // Exclude repo: cascade to packages, repo files, GPG keys
-                                    let excluded_sections = self.excluded_sections_at(&snap);
-
-                                    if let Some(ref mut rpm) = snap.rpm {
-                                        // 1. Exclude all packages from this repo,
-                                        // skipping locked members (§ 3.2).
-                                        cascade_repo_packages(rpm, &self.repo_index, repo, false);
-
-                                        // 2. and 3. The repo files defining this
-                                        // section and the keys it names, each
-                                        // excluded once no host-enabled section
-                                        // keeps it (`RepoIndex::repo_file_carried`,
-                                        // `RepoIndex::gpg_key_carried`).
-                                        if let Some(file_paths) =
-                                            self.repo_index.repo_file_by_section().get(repo)
-                                        {
-                                            for file_path in file_paths {
-                                                if !self.repo_index.repo_file_carried(
-                                                    file_path,
-                                                    &excluded_sections,
-                                                ) && let Some(rf) = rpm
-                                                    .repo_files
-                                                    .iter_mut()
-                                                    .find(|r| r.path == *file_path)
-                                                {
-                                                    rf.disposition = FindingKind::excluded();
-                                                }
-                                            }
-                                        }
-                                        if let Some(key_paths) =
-                                            self.repo_index.gpg_keys_by_section().get(repo)
-                                        {
-                                            for key_path in key_paths {
-                                                if self
-                                                    .repo_index
-                                                    .gpg_key_carried(key_path, &excluded_sections)
-                                                {
-                                                    continue;
-                                                }
-                                                // Every entry at the path: a
-                                                // snapshot from before keys
-                                                // were recorded once per path
-                                                // has one per naming section.
-                                                for k in rpm
-                                                    .gpg_keys
-                                                    .iter_mut()
-                                                    .filter(|g| g.path == *key_path)
-                                                {
-                                                    k.disposition = FindingKind::excluded();
-                                                }
-                                            }
-                                        }
-                                    }
+                                let repo = self.repo_index.repo_identity(section_id).to_owned();
+                                if *include {
+                                    excluded_repos.remove(&repo);
                                 } else {
-                                    // Include repo: re-enable packages, repo files, GPG keys
-                                    if let Some(ref mut rpm) = snap.rpm {
-                                        // 1. Include all packages from this repo,
-                                        // skipping locked members (§ 3.2).
-                                        cascade_repo_packages(rpm, &self.repo_index, repo, true);
-
-                                        // 2. Re-enable repo files for this section
-                                        if let Some(file_paths) =
-                                            self.repo_index.repo_file_by_section().get(repo)
-                                        {
-                                            for file_path in file_paths {
-                                                if let Some(rf) = rpm
-                                                    .repo_files
-                                                    .iter_mut()
-                                                    .find(|r| r.path == *file_path)
-                                                {
-                                                    rf.disposition = FindingKind::included();
-                                                }
-                                            }
-                                        }
-
-                                        // 3. Re-enable GPG keys for this section,
-                                        // except one the base image ships: the
-                                        // repo exclude did not decide that one.
-                                        if let Some(key_paths) =
-                                            self.repo_index.gpg_keys_by_section().get(repo)
-                                        {
-                                            for key_path in key_paths {
-                                                for k in rpm.gpg_keys.iter_mut().filter(|g| {
-                                                    g.path == *key_path
-                                                        && g.shipped_by_base.is_none()
-                                                }) {
-                                                    k.disposition = FindingKind::included();
-                                                }
-                                            }
-                                        }
-                                    }
+                                    excluded_repos.insert(repo.clone());
                                 }
+                                self.apply_repo_op(&mut snap, &repo, *include, &excluded_repos);
                             }
                             ItemId::Unit { unit } => {
                                 if let Some(ref mut services) = snap.units {
@@ -3364,7 +3393,7 @@ impl RefineSession {
         // package, its repo or a group, stands.
         inspectah_pipeline::render::not_carried::hold_owners_losing_a_repo(
             &mut snap,
-            &self.packages_included_explicitly(),
+            &self.packages_included_explicitly_with(extra),
         );
 
         snap
@@ -3376,18 +3405,26 @@ impl RefineSession {
     /// repo it is attributed to, or a group it is a member of. Each op
     /// reaches the packages the projection applies it to.
     fn packages_included_explicitly(&self) -> OperatorIncludes {
+        self.packages_included_explicitly_with(None)
+    }
+
+    /// [`Self::packages_included_explicitly`] with `extra` appended to the
+    /// active op stack, as [`Self::project_ops`] replays it.
+    fn packages_included_explicitly_with(&self, extra: Option<&RefinementOp>) -> OperatorIncludes {
         let mut included = HashSet::new();
         let Some(rpm) = self.original.rpm.as_ref() else {
             return OperatorIncludes::default();
         };
         let id_of = |pkg: &PackageEntry| canonical_package_id(&pkg.name, &pkg.arch);
-        for entry in &self.timeline[..self.cursor] {
-            let ops: &[RefinementOp] = match entry {
+        let timeline_ops = self.timeline[..self.cursor]
+            .iter()
+            .flat_map(|entry| match entry {
                 TimelineEntry::Op(op) => std::slice::from_ref(op),
                 TimelineEntry::Batch { ops } => ops.as_slice(),
-                TimelineEntry::View(_) => continue,
-            };
-            for op in ops {
+                TimelineEntry::View(_) => &[],
+            });
+        {
+            for op in timeline_ops.chain(extra) {
                 let RefinementOp::SetInclude { item_id, include } = op else {
                     continue;
                 };
@@ -3395,6 +3432,9 @@ impl RefineSession {
                     ItemId::Package { name, arch } => vec![canonical_package_id(name, arch)],
                     ItemId::Repo { path: section_id } => {
                         let repo = self.repo_index.repo_identity(section_id);
+                        if !self.repo_index.is_toggleable(repo) {
+                            continue;
+                        }
                         rpm.packages_added
                             .iter()
                             .filter(|p| package_attributed_to_repo(p, &self.repo_index, repo))
@@ -3428,6 +3468,246 @@ impl RefineSession {
             }
         }
         OperatorIncludes::new(included)
+    }
+
+    /// Each repo's decision, carriage and control (§ 5.1, § 5.2), for every
+    /// section a repo file defines and every identity a package is
+    /// attributed to, keyed by `RepoIndex::repo_identity`.
+    ///
+    /// - `Full` for a toggleable repo with an effective member or a
+    ///   carriable entry.
+    /// - `CarriageOnly` for a repo that is not toggleable and owns a
+    ///   carriable entry, when it can keep one (it is enabled in a file
+    ///   that defines it, or host-disabled with an attributed package), or
+    ///   when it owns a carriable entry no `Full` repo or repo of that
+    ///   first kind owns: every carriable entry has a control that can drop
+    ///   it.
+    /// - `None` otherwise.
+    fn compute_repo_states(
+        &self,
+        projected: &InspectionSnapshot,
+        effective: &BTreeMap<String, RepoEffective>,
+    ) -> BTreeMap<String, RepoState> {
+        let index = &self.repo_index;
+        let ownership = index.ownership();
+        let excluded = self.excluded_sections_at(projected);
+        let empty = RpmSection::default();
+        let original = self.original.rpm.as_ref().unwrap_or(&empty);
+        let now = projected.rpm.as_ref().unwrap_or(&empty);
+
+        // Carriable destinations, judged on the original snapshot (owned,
+        // not locked, not default, rejected or base-shipped), with whether
+        // the projection includes every carriable entry there.
+        let mut carriable: BTreeMap<Destination, bool> = BTreeMap::new();
+        for (kind, before, after) in [
+            (OwnedKind::RepoFile, &original.repo_files, &now.repo_files),
+            (OwnedKind::GpgKey, &original.gpg_keys, &now.gpg_keys),
+        ] {
+            for (entry, projected_entry) in before.iter().zip(after) {
+                if !ownership.carriable(kind, entry) {
+                    continue;
+                }
+                let Ok(dest) = Destination::new(&entry.path) else {
+                    continue;
+                };
+                *carriable.entry(dest).or_insert(true) &= projected_entry.disposition.is_included();
+            }
+        }
+
+        let mut ids: BTreeSet<String> = index.sections().map(|s| s.as_str().to_owned()).collect();
+        ids.extend(effective.keys().cloned());
+        let attributed: HashSet<&str> = original
+            .packages_added
+            .iter()
+            .map(|p| index.repo_identity(&p.source_repo))
+            .collect();
+        let enabled_somewhere: HashSet<&str> = ownership
+            .entries()
+            .flat_map(|(_, e)| e.owners.iter())
+            .filter(|o| o.enabled)
+            .map(|o| o.section.as_str())
+            .collect();
+
+        let carriable_owned = |id: &str| -> Vec<&Destination> {
+            ownership
+                .owned_by(&SectionId::new(id))
+                .into_iter()
+                .filter(|d| carriable.contains_key(*d))
+                .collect()
+        };
+        let mut controls: BTreeMap<String, RepoControl> = BTreeMap::new();
+        for id in &ids {
+            let owns_carriable = !carriable_owned(id).is_empty();
+            let members = effective.get(id).map_or(0, |e| e.member_count);
+            let control = if index.is_toggleable(id) {
+                if members > 0 || owns_carriable {
+                    RepoControl::Full
+                } else {
+                    RepoControl::None
+                }
+            } else if owns_carriable
+                && (enabled_somewhere.contains(id.as_str()) || attributed.contains(id.as_str()))
+            {
+                RepoControl::CarriageOnly
+            } else {
+                RepoControl::None
+            };
+            controls.insert(id.clone(), control);
+        }
+        // Second clause: an owner of a carriable entry no controlled repo
+        // owns gets a carriage-only switch for it.
+        let first_pass = controls.clone();
+        for id in &ids {
+            if controls[id] != RepoControl::None {
+                continue;
+            }
+            let orphaned = carriable_owned(id).into_iter().any(|dest| {
+                ownership.get(dest).is_some_and(|e| {
+                    e.owners.iter().all(|o| {
+                        first_pass
+                            .get(o.section.as_str())
+                            .is_none_or(|c| *c == RepoControl::None)
+                    })
+                })
+            });
+            if orphaned {
+                controls.insert(id.clone(), RepoControl::CarriageOnly);
+            }
+        }
+
+        ids.into_iter()
+            .map(|id| {
+                let owned = carriable_owned(&id);
+                let state = RepoState {
+                    control: controls[&id],
+                    kept: !excluded.contains(&id),
+                    carriage_count: owned.len(),
+                    carriage_included: owned.iter().filter(|d| carriable[**d]).count(),
+                };
+                (id, state)
+            })
+            .collect()
+    }
+
+    /// One entry per destination of `rpm.repo_files` and `rpm.gpg_keys`
+    /// (§ 7.1): who owns it, every path spelling the snapshot records at
+    /// it, and what this export does with it, read from the projected
+    /// dispositions and the stager's plan for that snapshot.
+    fn compute_repo_owned(
+        &self,
+        projected: &InspectionSnapshot,
+        states: &BTreeMap<String, RepoState>,
+    ) -> Vec<crate::types::RepoOwnedEntry> {
+        use crate::types::{
+            NoOwnerCause, RepoKeeper, RepoOwnedEntry, RepoOwnedExport, RepoOwnedKind, RepoOwner,
+        };
+        use inspectah_pipeline::render::configtree::{StagedFileKind, staged_writes};
+        let Some(rpm) = projected.rpm.as_ref() else {
+            return Vec::new();
+        };
+        let index = &self.repo_index;
+        let excluded = self.excluded_sections_at(projected);
+        let staged = staged_writes(projected);
+        let redacted = inspectah_pipeline::render::repo_owned::redacted_repo_files(projected);
+        let mut out = Vec::new();
+        for (dest, owned) in index.ownership().entries() {
+            let (kind, list) = match owned.kind {
+                OwnedKind::RepoFile => (RepoOwnedKind::RepoFile, &rpm.repo_files),
+                OwnedKind::GpgKey => (RepoOwnedKind::GpgKey, &rpm.gpg_keys),
+            };
+            let entries: Vec<&inspectah_core::types::rpm::RepoFile> = list
+                .iter()
+                .filter(|e| Destination::new(&e.path).is_ok_and(|d| d == *dest))
+                .collect();
+            let Some(first) = entries.first() else {
+                continue;
+            };
+            let mut recorded_paths: BTreeSet<String> =
+                entries.iter().map(|e| e.path.clone()).collect();
+            recorded_paths.extend(
+                projected
+                    .config
+                    .iter()
+                    .flat_map(|c| &c.files)
+                    .filter(|f| {
+                        f.shadowed_by
+                            == Some(inspectah_core::types::config::ConfigShadow::Repositories)
+                            && Destination::new(&f.path).is_ok_and(|d| d == *dest)
+                    })
+                    .map(|f| f.path.clone()),
+            );
+            let owners: Vec<RepoOwner> = owned
+                .sections()
+                .into_iter()
+                .map(|section| {
+                    let state = states.get(section.as_str()).copied().unwrap_or_default();
+                    RepoOwner {
+                        section_id: section.as_str().to_owned(),
+                        control: state.control,
+                        kept: !excluded.contains(section.as_str()),
+                    }
+                })
+                .collect();
+            let export = if let Some(reason) = first.rejected {
+                RepoOwnedExport::Rejected { reason }
+            } else if first.is_default_repo {
+                RepoOwnedExport::DefaultRepoFile
+            } else if let Some(package) = &first.shipped_by_base {
+                RepoOwnedExport::BaseImage {
+                    package: package.clone(),
+                }
+            } else if owners.is_empty() {
+                RepoOwnedExport::NoOwner {
+                    cause: match &first.aggregate {
+                        Some(prevalence) => NoOwnerCause::Fleet {
+                            hosts: prevalence.hosts.clone(),
+                            redacted_repo_files: redacted.clone(),
+                        },
+                        None => NoOwnerCause::Redacted {
+                            repo_files: redacted.clone(),
+                        },
+                    },
+                }
+            } else if !entries.iter().any(|e| e.disposition.is_included()) {
+                RepoOwnedExport::NotShipped
+            } else if let Some(write) = staged.writes.get(dest)
+                && matches!(
+                    write.source,
+                    StagedFileKind::RepoFile | StagedFileKind::GpgKey
+                )
+            {
+                let any_owner_excluded = owners.iter().any(|o| !o.kept);
+                let kept_by = if any_owner_excluded {
+                    index
+                        .kept_by(dest, &excluded, projected)
+                        .into_iter()
+                        .map(|k| RepoKeeper {
+                            section_id: k.section.as_str().to_owned(),
+                            enablerepo_package: k.enablerepo_package,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                RepoOwnedExport::Ships { kept_by }
+            } else {
+                let reason = staged
+                    .withheld
+                    .iter()
+                    .find(|(d, ..)| d == dest)
+                    .map(|(d, _, why)| why.describe(d))
+                    .unwrap_or_else(|| "the stager does not write it".to_owned());
+                RepoOwnedExport::Withheld { reason }
+            };
+            out.push(RepoOwnedEntry {
+                destination: dest.as_str().to_owned(),
+                recorded_paths: recorded_paths.into_iter().collect(),
+                kind,
+                owners,
+                export,
+            });
+        }
+        out
     }
 
     /// Compute the set of section IDs that are currently excluded based on the
@@ -3788,6 +4068,9 @@ impl RefineSession {
             }
         }
 
+        let repo_states = self.compute_repo_states(&projected, &repo_effective);
+        let repo_owned = self.compute_repo_owned(&projected, &repo_states);
+
         let mut group_states = HashMap::new();
 
         for group in self.installed_groups() {
@@ -3873,6 +4156,7 @@ impl RefineSession {
             group_states,
             verified_uploads: verified_uploads(&proved),
             operator_includes: self.packages_included_explicitly(),
+            excluded_repos: self.excluded_sections_at(&projected).into_iter().collect(),
         });
 
         // Preview must use the SAME root derivation as export to guarantee
@@ -3929,6 +4213,8 @@ impl RefineSession {
             containerfile_preview,
             stats,
             repo_effective,
+            repo_states,
+            repo_owned,
             generation: self.generation,
         });
 
@@ -4705,8 +4991,16 @@ pub fn render_refine_export(
         .iter()
         .position(|w| w.kind() != inspectah_pipeline::export_warning::ExportWarningKind::Notice)
         .unwrap_or(warnings.len());
+    // The repo notices follow those: a shared file kept for another repo,
+    // and an entry no copied repo file names.
+    let no_exclusions = BTreeSet::new();
+    let excluded = render_ctx.map_or(&no_exclusions, |c| &c.excluded_repos);
+    let staged = inspectah_pipeline::render::configtree::staged_writes(snap);
     for (i, notice) in inspectah_pipeline::render::machine_state::export_notices(snap)
         .into_iter()
+        .chain(inspectah_pipeline::render::repo_owned::export_notices(
+            snap, &staged, excluded,
+        ))
         .enumerate()
     {
         warnings.insert(first_failure + i, notice);
@@ -4827,6 +5121,9 @@ pub fn render_refine_export(
         verified_uploads: verified,
         operator_includes: render_ctx
             .map(|c| c.operator_includes.clone())
+            .unwrap_or_default(),
+        excluded_repos: render_ctx
+            .map(|c| c.excluded_repos.clone())
             .unwrap_or_default(),
     };
     let containerfile = if let Some(orig) = original_includes {

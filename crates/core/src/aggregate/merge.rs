@@ -44,6 +44,13 @@ pub trait AggregateMergeable: Clone {
     /// Required, with no default, so every mergeable type answers whether
     /// a machine-state class path can reach it ([`merge_items`]).
     fn destination(&self) -> Option<&str>;
+
+    /// Whether this observation's payload may represent the item. An
+    /// unusable one (a key the scan refused to store) is chosen only when
+    /// no host has a usable payload.
+    fn usable_payload(&self) -> bool {
+        true
+    }
 }
 
 /// Normalized paths that are a machine-state class row on at least one
@@ -128,6 +135,10 @@ impl AggregateMergeable for RepoFile {
 
     fn set_include(&mut self, val: bool) {
         self.disposition = self.disposition.with_include(val);
+    }
+
+    fn usable_payload(&self) -> bool {
+        self.rejected.is_none()
     }
 }
 
@@ -737,21 +748,34 @@ pub fn merge_items<T: AggregateMergeable + serde::Serialize>(
             // Find the most-prevalent payload within same-identity items.
             // Items share identity_key but may differ in non-key fields
             // (e.g., same package name+arch but different versions).
-            let mut payload_counts: Vec<(String, usize, usize)> = Vec::new();
-            for (pos, (_, item)) in group.iter().enumerate() {
+            // `(payload, count, first position, usable, hosts)`.
+            type PayloadCount = (String, usize, usize, bool, Vec<String>);
+            let mut payload_counts: Vec<PayloadCount> = Vec::new();
+            for (pos, (host_idx, item)) in group.iter().enumerate() {
                 let mut normalized = item.clone();
                 *normalized.aggregate_mut() = None;
                 normalized.set_include(true);
                 let key = serde_json::to_string(&normalized).unwrap_or_default();
-                if let Some(entry) = payload_counts.iter_mut().find(|(k, _, _)| k == &key) {
+                let host = hostnames[*host_idx].clone();
+                if let Some(entry) = payload_counts.iter_mut().find(|(k, ..)| k == &key) {
                     entry.1 += 1;
+                    entry.4.push(host);
                 } else {
-                    payload_counts.push((key, 1, pos));
+                    payload_counts.push((key, 1, pos, item.usable_payload(), vec![host]));
                 }
             }
-            // Most prevalent wins; tie-break by first-seen (= first by hostname)
-            payload_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+            // A usable payload first, then the most prevalent; tie-break by
+            // first-seen (= first by hostname).
+            payload_counts.sort_by(|a, b| {
+                b.3.cmp(&a.3)
+                    .then_with(|| b.1.cmp(&a.1))
+                    .then_with(|| a.2.cmp(&b.2))
+            });
             let winner_idx = payload_counts[0].2;
+            let mut winner_hosts = payload_counts[0].4.clone();
+            winner_hosts.sort();
+            winner_hosts.dedup();
+            let payload_hosts = (winner_hosts != hosts).then_some(winner_hosts);
 
             let count = hosts.len() as i32;
             let mut representative = group[winner_idx].1.clone();
@@ -759,6 +783,7 @@ pub fn merge_items<T: AggregateMergeable + serde::Serialize>(
                 count,
                 total: total_hosts as i32,
                 hosts,
+                payload_hosts,
                 ..Default::default()
             });
             representative.set_include(true);
@@ -892,6 +917,7 @@ fn merge_with_variants<T: AggregateMergeable>(
             hosts,
             aggregate_count: Some(aggregate_count),
             aggregate_hosts: Some(aggregate_hosts.clone()),
+            payload_hosts: None,
         });
         item.set_include(true);
         if let Some(vs) = item.variant_selection_mut() {
@@ -1064,6 +1090,7 @@ fn merge_fcontext_rules(
             hosts: rep_hosts,
             aggregate_count: has_disagreement.then_some(key_hosts.len() as i32),
             aggregate_hosts: has_disagreement.then_some(key_hosts),
+            payload_hosts: None,
         };
         match &mut rule {
             FcontextRule::Label {
@@ -1335,7 +1362,7 @@ pub fn merge_rpm_sections(
         hostnames,
         class,
     );
-    let mut gpg_keys = merge_items(
+    let gpg_keys = merge_items(
         keep_base_shipping_where_every_host_agrees(union_gpgkey_references(collect_items(
             &sections,
             |s| &s.gpg_keys,
@@ -1344,11 +1371,10 @@ pub fn merge_rpm_sections(
         hostnames,
         class,
     );
-    // The merge includes every universal item; a key every host left to
-    // the base image stays out.
-    for key in gpg_keys.iter_mut().filter(|k| k.shipped_by_base.is_some()) {
-        key.disposition = FindingKind::excluded();
-    }
+    // The merge includes every universal item. A key every host left to
+    // the base image, a rejected key, a default repo file and an entry no
+    // representative repo file names are excluded by the repo ownership
+    // pass `merge_snapshots` runs once every section is merged.
     let module_streams = merge_items(
         collect_items(&sections, |s| &s.module_streams),
         total_hosts,

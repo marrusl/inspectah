@@ -2185,6 +2185,7 @@ fn partial_prevalence() -> AggregatePrevalence {
         hosts: vec![HOST_A.into()],
         aggregate_count: None,
         aggregate_hosts: None,
+        payload_hosts: None,
     }
 }
 
@@ -2199,6 +2200,7 @@ fn contested_prevalence() -> AggregatePrevalence {
         hosts: vec![HOST_A.into()],
         aggregate_count: Some(2),
         aggregate_hosts: Some(vec![HOST_A.into(), HOST_B.into()]),
+        payload_hosts: None,
     }
 }
 

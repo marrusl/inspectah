@@ -31,11 +31,7 @@
 //! line would reach the file unescaped, and debug builds assert that none
 //! is.
 
-/// Characters that some reader of a rendered file treats as ending a line:
-/// the Unicode mandatory line breaks (UAX #14 classes BK, CR, LF and NL).
-pub const LINE_TERMINATORS: &[char] = &[
-    '\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}',
-];
+pub use inspectah_core::types::destination::LINE_TERMINATORS;
 
 /// Escape every character in comment text that a reader could act on,
 /// leaving all else as is.

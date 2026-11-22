@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::VersionChange;
@@ -513,9 +513,6 @@ fn not_carried_row(pkg: &NotCarriedPackage) -> NotCarriedRow {
 fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroup> {
     let view = session.view();
     let repo_index = session.repo_index();
-    let changes = session.pending_changes();
-    let repos_excluded = changes.repos_excluded();
-    let excluded: BTreeSet<&str> = repos_excluded.iter().map(|s| s.as_str()).collect();
 
     // Count visible packages per source_repo, keeping the package's recorded
     // spelling as-is -- RepoIndex and RepoId fold ASCII case internally, so
@@ -529,6 +526,12 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroup> {
     // Also include repos known to the index but not visible (0-count)
     for section_id in repo_index.packages_by_repo().keys() {
         repo_counts.entry(section_id.to_string()).or_insert(0);
+    }
+    // And every repo with a switch, attributed or not (§ 5.4).
+    for (section_id, state) in &view.repo_states {
+        if state.control != crate::types::RepoControl::None {
+            repo_counts.entry(section_id.clone()).or_insert(0);
+        }
     }
 
     let mut groups: Vec<RepoGroup> = repo_counts
@@ -545,16 +548,21 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroup> {
                 RepoIndex::is_distro_repo(&section_id)
             };
             let tier = RepoIndex::repo_tier(&section_id);
-            // The excluded set holds `RepoIndex::repo_identity`s; a group
-            // spelled as the lone case variant of a section is that repo.
-            let enabled = !excluded.contains(repo_index.repo_identity(&section_id));
+            // Read by `RepoIndex::repo_identity`; a group spelled as the
+            // lone case variant of a section is that repo.
+            let state = session.repo_state(&section_id);
+            let owns = session.repo_owns(&section_id);
             RepoGroup {
                 section_id,
                 provenance,
                 is_distro,
                 tier,
                 package_count,
-                enabled,
+                control: state.control,
+                kept: state.kept,
+                carriage_count: state.carriage_count,
+                carriage_included: state.carriage_included,
+                owns,
             }
         })
         .collect();

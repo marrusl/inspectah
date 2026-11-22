@@ -966,7 +966,22 @@ fn test_exclude_repo_cascades_in_projected_snapshot() {
 
 #[test]
 fn test_exclude_repo_rejects_distro_repo() {
-    let snap = make_snap_with_repos();
+    // A distro repo whose file and key the export never carries (a
+    // default repo file, a key the base image ships) has no switch.
+    let mut snap = make_snap_with_repos();
+    let rpm = snap.rpm.as_mut().unwrap();
+    for f in &mut rpm.repo_files {
+        if f.content.contains("[baseos]") {
+            f.is_default_repo = true;
+            f.disposition = FindingKind::excluded();
+        }
+    }
+    for k in &mut rpm.gpg_keys {
+        if k.path.ends_with("centosofficial") {
+            k.shipped_by_base = Some("centos-gpg-keys".into());
+            k.disposition = FindingKind::excluded();
+        }
+    }
     let mut session = RefineSession::new(snap);
     let result = session.apply(RefinementOp::SetInclude {
         item_id: ItemId::Repo {
@@ -974,7 +989,10 @@ fn test_exclude_repo_rejects_distro_repo() {
         },
         include: false,
     });
-    assert!(result.is_err());
+    assert!(
+        matches!(&result, Err(RefineError::NoopTarget(m)) if m.contains("nothing to decide")),
+        "{result:?}"
+    );
 }
 
 #[test]
@@ -1128,14 +1146,23 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
     );
 
     // "epel" has exactly one effective member (epel-release), now
-    // individually included -- a repo-level include is a genuine no-op
-    // under the § 3.2 member-based rule (position 29), even though the
-    // repo's own exclusion history still says excluded. Before Task 7 this
-    // op read only that history, accepted the op, and recorded a third
-    // timeline entry; the member-based rule refuses it instead, which is
-    // exactly the bug position 29 closes (a history-reading control posting
-    // a direction the members already hold).
+    // individually included. The repo's decision is still excluded, so a
+    // repo-level include moves it (§ 5.3 of the repo ownership spec) and
+    // brings the repo file and key back; the member is unchanged.
     let before = session.timeline_len();
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Repo {
+                path: "epel".into(),
+            },
+            include: true,
+        })
+        .expect("the include moves the repo's decision");
+    assert_eq!(session.timeline_len(), before + 1);
+    assert!(session.repo_state("epel").kept);
+
+    // Now kept, carried and every member included: a second include is
+    // refused.
     assert!(matches!(
         session.apply(RefinementOp::SetInclude {
             item_id: ItemId::Repo {
@@ -1143,26 +1170,10 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
             },
             include: true,
         }),
-        Err(RefineError::NoopTarget(_))
+        Err(RefineError::NoopTarget(m)) if m.contains("already kept")
     ));
-    assert_eq!(
-        session.timeline_len(),
-        before,
-        "a refused op must not record"
-    );
-    assert!(
-        session
-            .view()
-            .packages
-            .iter()
-            .find(|p| p.entry.name == "epel-release")
-            .unwrap()
-            .entry
-            .disposition
-            .is_included(),
-        "the refused op changed nothing"
-    );
 
+    session.undo().unwrap();
     session.undo().unwrap();
     assert!(
         !session
@@ -1174,7 +1185,7 @@ fn test_exclude_repo_then_per_package_then_include_repo() {
             .entry
             .disposition
             .is_included(),
-        "undo reverts the per-package include, the only op that actually ran"
+        "undo reverts the repo include and then the per-package include"
     );
 }
 
@@ -1794,101 +1805,87 @@ fn repo_include_all_records_when_one_member_was_individually_excluded() {
 
 #[test]
 fn history_and_members_disagree_in_both_directions() {
-    // § 8.8, position 29. State (a): enabled history, both members
-    // individually excluded. Pre-task: the history-reading arm saw no repo
-    // op (empty `excluded_sections_at`) and refused BOTH directions as
-    // already-satisfied for `include: true` and accepted-but-recorded-
-    // nothing for `include: false` depending on direction read -- in
-    // particular the `include: false` case below would have returned
-    // `Ok(())` with no timeline growth instead of `NoopTarget`, so this
-    // assertion fails against pre-task code.
+    // § 5.3 of the repo ownership spec: the decision is read apart from
+    // the members, and an op that moves the decision is accepted. State
+    // (a): kept, both members individually excluded. Excluding moves the
+    // decision and drops vendor.repo; including then moves it back and
+    // the cascade includes both members.
     let mut a = verified_repo_session();
     a.apply(set_include_pkg("a.x86_64", false)).unwrap();
     a.apply(set_include_pkg("b.x86_64", false)).unwrap();
-    assert!(matches!(
-        a.apply(set_include_repo("vendor", false)),
-        Err(RefineError::NoopTarget(_))
-    ));
     let n = a.timeline_len();
-    a.apply(set_include_repo("vendor", true)).unwrap();
+    a.apply(set_include_repo("vendor", false)).unwrap();
     assert_eq!(a.timeline_len(), n + 1);
+    assert!(!a.repo_state("vendor").kept);
+    assert!(!export_carries_repo_file(&a, "vendor.repo"));
+    a.apply(set_include_repo("vendor", true)).unwrap();
     assert_eq!(install_list(&a).len(), 2);
+    assert!(export_carries_repo_file(&a, "vendor.repo"));
     a.undo().unwrap();
     assert_eq!(install_list(&a).len(), 0);
     a.redo().unwrap();
     assert_eq!(install_list(&a).len(), 2);
 
-    // State (b): excluded history, both members individually included.
-    // Pre-task: `include: true` here read as "section not in excluded set"
-    // -> false -> not a no-op, so it would have been accepted instead of
-    // refused -- this assertion fails against pre-task code too.
+    // State (b): excluded, both members individually included. Including
+    // moves the decision and brings the file back.
     let mut b = verified_repo_session();
     b.apply(set_include_repo("vendor", false)).unwrap();
     b.apply(set_include_pkg("a.x86_64", true)).unwrap();
     b.apply(set_include_pkg("b.x86_64", true)).unwrap();
+    b.apply(set_include_repo("vendor", true)).unwrap();
+    assert!(export_carries_repo_file(&b, "vendor.repo"));
+    // Kept, carried, every member included: nothing left to include.
     assert!(matches!(
         b.apply(set_include_repo("vendor", true)),
-        Err(RefineError::NoopTarget(_))
+        Err(RefineError::NoopTarget(m)) if m.contains("already kept")
     ));
     b.apply(set_include_repo("vendor", false)).unwrap();
     assert_eq!(install_list(&b).len(), 0);
     assert!(!export_carries_repo_file(&b, "vendor.repo"));
+    // Excluded, no member included, nothing more to drop.
+    assert!(matches!(
+        b.apply(set_include_repo("vendor", false)),
+        Err(RefineError::NoopTarget(m)) if m.contains("already excluded")
+    ));
 }
 
 #[test]
-fn a_repo_with_no_effective_member_is_refused_in_both_directions() {
-    // § 8.8 + position 26. A repo the index KNOWS and accepts, whose
-    // effective set is empty. Pre-task: with no repo-exclude op in the
-    // timeline, `include: true` read as "not excluded" -> no-op -> silent
-    // `Ok(())`; `include: false` read as "not yet excluded" -> not a no-op
-    // -> accepted and recorded, cascading onto a repo file no package
-    // justifies deciding through this control (position 26's bug). Either
-    // branch fails this assertion against pre-task code.
-    //
-    // Review round 1: a single `starts_with("nothing to decide")` shared by
-    // both fixtures cannot tell the two reasons apart -- it passes whether
-    // `present_count` is always 0, always positive, or correct. Each fixture
-    // is paired with its own full expected message and asserted with
-    // `assert_eq!` instead, which would fail if `present_count` collapsed to
-    // either constant.
-    for (mut s, expected) in [
-        (
-            all_members_locked_repo_session(),
-            "nothing to decide in 'vendor': all 2 members are locked",
-        ),
-        (
-            repo_known_to_index_with_no_packages(),
-            "nothing to decide in 'vendor': no package is attributed to it",
-        ),
+fn a_repo_with_no_effective_member_still_decides_its_file() {
+    // Position 26 of the refine-ui-fixup spec, reopened by the repo
+    // ownership spec (Mark Russell, 2026-11-21): a repo whose members are
+    // all locked, or that has none, can still be switched off, which drops
+    // its file, and on again.
+    for mut s in [
+        all_members_locked_repo_session(),
+        repo_known_to_index_with_no_packages(),
     ] {
-        for include in [true, false] {
-            match s.apply(set_include_repo("vendor", include)) {
-                Err(RefineError::NoopTarget(m)) => assert_eq!(m, expected),
-                other => panic!("expected NoopTarget, got {other:?}"),
-            }
-        }
-        assert_eq!(s.timeline_len(), 0);
+        assert!(matches!(
+            s.apply(set_include_repo("vendor", true)),
+            Err(RefineError::NoopTarget(m)) if m == "repo 'vendor' is already kept, with its \
+                files and keys carried and every effective member included"
+        ));
+        s.apply(set_include_repo("vendor", false)).unwrap();
+        assert!(!export_carries_repo_file(&s, "vendor.repo"));
+        s.apply(set_include_repo("vendor", true)).unwrap();
+        assert!(export_carries_repo_file(&s, "vendor.repo"));
+        assert_eq!(install_list(&s).len(), 0, "locked members stay excluded");
+        assert_eq!(s.timeline_len(), 2);
     }
 }
 
 #[test]
-fn a_repo_op_with_no_rpm_section_is_refused_on_provenance() {
-    // Review Focus 3. This is a DIFFERENT refusal from the one above and
-    // must not be folded into it: `RepoIndex::build` on `rpm: None` returns
-    // an empty index, an id absent from it resolves to `Unknown`, and
-    // `apply` runs `validate_target` before the no-op check -- so § 3.2's
-    // provenance refusal fires first and the effective-set arm is never
-    // reached. There is no valid repo in this fixture whose effective set
-    // could be examined. This is unaffected by Task 7's change (it exercises
-    // `validate_target`, not `is_op_noop`/`check_repo_noop`), so it already
-    // passes against pre-task code -- it is here to prove the two refusals
-    // stay distinct, not to prove the member-based rule fires.
+fn a_repo_op_with_no_rpm_section_has_nothing_to_decide() {
+    // An empty index: the id owns nothing and has no member, so its
+    // control is none and both directions are refused.
     let mut s = session_with_no_rpm_section();
     for include in [true, false] {
         match s.apply(set_include_repo("vendor", include)) {
-            // the message names the provenance; `validate_target` formats it with `{prov:?}`
-            Err(RefineError::BadRequest(m)) => assert!(m.to_ascii_lowercase().contains("unknown")),
-            other => panic!("expected BadRequest naming the provenance, got {other:?}"),
+            Err(RefineError::NoopTarget(m)) => assert_eq!(
+                m,
+                "nothing to decide in 'vendor': no effective member and no file or key the \
+                 export can carry"
+            ),
+            other => panic!("expected NoopTarget, got {other:?}"),
         }
     }
     assert_eq!(s.timeline_len(), 0);
@@ -1936,6 +1933,7 @@ fn excluding_the_serving_repo_annotates_the_package_in_the_projection() {
             aggregate: None,
             gpgkey_references: Default::default(),
             shipped_by_base: None,
+            rejected: None,
         }],
         ..Default::default()
     });

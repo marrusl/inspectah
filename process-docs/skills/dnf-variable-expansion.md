@@ -19,7 +19,7 @@ expanded path.
 ## Matching a section to its key
 
 The key's `path` is the expanded path, but every consumer that reads the
-repo file back (`parse_repo_sections`, so `RepoSectionDef.gpg_key_paths`)
+repo file back (`parse_repo_sections`, so `RepoSectionDef::local_keys`)
 sees the literal `RPM-GPG-KEY-EPEL-$releasever_major`. So the collector
 also records that literal in the key's `gpgkey_references` (only when it
 differs from `path`), and **every match of a section's key path to a
@@ -30,10 +30,20 @@ demotes `epel-release` behind a false "not carried" FIXME, the audit says
 
 Routed through it today: `render/repo_enabling.rs` `keys_included` (which
 `section_survives`, `repo_enabling_export`, the audit Carried column,
-`unit_plan` and `repoless::disabled_repo_install` all use), and
-refine's `RepoIndex::build`, which resolves each section's key path to the
-captured key paths so `gpg_keys_by_section`, the carry rule and the
-session's exclude/include cascade work on real key paths. The aggregate
+`unit_plan` and `repoless::disabled_repo_install` all use), and core's
+`repo_ownership`, which `RepoIndex::build`, the ownership pass and the
+load check all read, so the owners, the keeper rule and the session's
+exclude/include cascade work on real key paths. `is_key_named_by` also
+matches by `Destination`, so a reference written `/etc/pki/rpm-gpg//KEY`
+names the key at `/etc/pki/rpm-gpg/KEY`.
+
+**One parser.** `parse_repo_sections` is the only reader of `.repo`
+content. It continues an indented line after a `key=value` line, keeps
+each option's last assignment, drops lines before the first header, and
+reads a value with no `://` as a local path (`GpgKeyRef::Local`).
+`extract_gpg_keys` reads the keys of each section it returns, so a key a
+replaced or headerless `gpgkey=` named is not collected, and
+`collect_repo_files` keeps no file that defines no section. The aggregate
 merge unions `gpgkey_references` per key path before it keeps one host's
 entry. The values themselves are not stored: they differ between an EL9
 and an EL10 host in one aggregate, and storing them would move the
@@ -170,46 +180,44 @@ not `disposition.is_included()`, when the question is whether dnf in the
 image will find the key (`keys_included`, `dropped_owned_path`). The
 refine include cascade skips a `shipped_by_base` key, the aggregate keeps
 the field only when every host that has the key set it, and the one
-wording is `RepoFile::base_image_ships_reason`. Refine has no per-key
-toggle, so the operator sees the decision in the Containerfile comment
-and the audit table but cannot flip it there.
+wording is `RepoFile::base_image_ships_reason`. A key the scan refused
+carries `rejected` and is never offered, counted or re-included. Neither
+kind is carriable: no repo op includes one, and the operator sees the
+decision in the Containerfile comment, the audit table and the view's
+`repo_owned` entry.
 
 ## What a repo exclusion drops
 
-In refine, `RepoIndex::repo_file_carried` and `RepoIndex::gpg_key_carried`
-are the one rule for what an exclusion leaves: a `.repo` file stays carried
-while at least one section the host **enabled** in it is not excluded, and
-a key stays while a host-enabled, not-excluded section names it (resolved
-through `is_key_named_by` when the index is built). Host-disabled sections
-never count, so a key named only by host-disabled sections is dropped once
-the enabled sections that kept it are excluded, even while a carried file
-still lists a disabled section naming it (Mark, 2026-11-12). EPEL's
-`epel.repo` holds `[epel-debuginfo]` and
-`[epel-source]` at `enabled=0`, and counting them kept the file and the
-key after `epel` was excluded. The session's exclude cascade is the only
-place that applies this rule. Load-time normalization
-(`normalize_inspectah_repo_files`) and the locked clamp also set these
-dispositions, for their own reasons. The stager, the Containerfile
-(`Custom Repositories`, `GPG Keys`, `rpm --import`), `repo_enabling` and
-the audit read the projected result, so none of them re-derives the rule.
-The rule is reached only through a repo op the member-based no-op check
-accepts. A repo with no effective member, or whose members are all
-excluded already, cannot be excluded, so the repo's own control cannot
-drop its file and key (Mark, 2026-11-12); a shared file or key can still
-go when another section that names it is excluded. Refine has no file- or
-key-level control yet: an unmodified, RPM-owned `.repo` file is not in
-`config.files`, and a modified or unowned one is, but excluding its
-Configuration row leaves its `rpm.repo_files` entry, and every key, as
-they were.
+The repo section owns every `.repo` file and every key a section names
+(Mark Russell, 2026-11-21; spec
+`2026-11-21-repo-section-owns-repo-files-and-keys.md`). Their
+Configuration rows are inventory shadowed by `Repositories`, so the repo
+switch is the one control, and the stager writes the repo inventory's
+payload.
 
-The rule acts only on an exclusion that reaches a file (Mark,
-2026-11-12). With no repo op the projection keeps the scan's dispositions,
-so a file whose sections are all disabled on the host still ships in the
-scan export and in an unchanged refine export, and so does a key only
-disabled sections name. A `shipped_by_base` key is never
-re-included. A `.repo` file the host modified is also in `config.files`,
-and either inclusion stages it (an open defect), so for a modified file
-the repo exclusion alone does not stop it shipping.
+A section **keeps** an entry it owns while it is kept (no repo op
+excluded it) and live: the host enabled it in the file that defines it,
+or the host disabled it and an included, unlocked package attributed to
+it installs with `--enablerepo`. `RepoIndex::kept_by` is the one rule.
+An exclude drops each carriable entry the repo owns that no other section
+keeps; an include restores every carriable entry it owns. Keepers are
+read at the op, against the projection at that point. EPEL's
+`epel.repo` holds `[epel-debuginfo]` and `[epel-source]` at `enabled=0`,
+and excluding `epel` still drops the file and key.
+
+Every repo with a carriable entry has a control. A toggleable repo (not
+distro, enabled where dnf reads it) has a full switch; a distro or
+host-disabled repo that owns a carriable entry has a carriage-only switch
+that never moves members. A repo whose members are all excluded, or that
+has none, can still be switched (position 26 reopened). The no-op rule
+replays the op and refuses it only when nothing moves.
+
+With no repo op the projection keeps the scan's dispositions, so a file
+whose sections are all disabled on the host still ships in the scan
+export and in an unchanged refine export, and so does a key only disabled
+sections name. A `.repo` file that redaction leaves with no header, or a
+key whose only `gpgkey=` reference redaction rewrote, has no owner after
+`finish_scan`: it is excluded, never staged, and every export names it.
 
 ## Repo file syntax
 

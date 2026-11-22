@@ -61,7 +61,8 @@ Each module defines the data model for a snapshot section:
   - `parse.rs`: the one `sysctl.d(5)` line parser and `sysctl_values_equal`
   - `resolve.rs`: precedence resolution the way systemd-sysctl applies it (`SysctlSection::effective()` gives `Resolved` or `Unknown`), vendor replacements and carriage read from the config entries
 - `aggregate.rs` — Aggregate-specific types (consensus items, variants)
-- `repo.rs` — Repository definitions
+- `repo.rs` — Repository definitions: `parse_repo_sections`, the one `.repo` reader (`RepoSectionDef`, `GpgKeyRef`), `SectionId` (a header's exact spelling, the identity of a repo decision) beside the case-folding `RepoId`, `effective_definition` and `toggleable`
+- `destination.rs`: `Destination`, a normalized image path, and `PathError`, moved from the pipeline's config tree so core's repo ownership pass and the stager compare paths one way
 - `subscription.rs` — RHSM entitlement types
 - `system.rs`, `os.rs` — System metadata
 - `finding.rs` — `FindingKind` enum (Actionable/Advisory/Inventory), `ShadowType`, `AdvisoryType`
@@ -74,6 +75,8 @@ Each module defines the data model for a snapshot section:
 **Core data containers:** `snapshot.rs`, `pipeline.rs`, `baseline.rs` at `crates/core/src/`. `baseline.rs` also holds the named unit lists: `TARGET_NEEDED_UNITS` and `TMP_MOUNT` (units the export never switches off, with `target_needs_unit_text`), `RUNTIME_UPDATERS`, `STOCK_STATE` and `INCOMPATIBLE_SERVICES`
 
 **Machine-state class:** `crates/core/src/machine_state.rs` (the rule table, `classify_path`, `normal_path`, the content sniffs, the `ScreenedExecutor` read gate, `validate`) and `crates/core/src/types/machine_state.rs` (members, notices, `WithheldConfigEntry`, `WithheldUnmanagedEntry`); `crates/pipeline/src/render/machine_state.rs` builds the provisioning surfaces; `crates/collect/clippy.toml` refuses the direct routes around the gate (see `machine-state-class.md`)
+
+**Repo ownership:** `crates/core/src/repo_ownership.rs` (`repo_ownership`, who owns each `.repo` file and key; `settle_repo_ownership`, run by the collector, `finish_scan` and the aggregate merge; `check_repo_ownership`, run at load); `crates/pipeline/src/render/repo_owned.rs` writes the Containerfile lines and export notices about them; refine's `RepoIndex` reads its owner maps from it
 
 **Core helper modules:** `crates/core/src/`
 - `rpm_filename.rs` — RPM filename parsing (`RpmFilename::parse_untrusted`) and the staged-upload filename allowlist (`validate_staged_name`)
@@ -144,7 +147,7 @@ Artifact generators invoked after triage decisions finalized:
 
 **Section grouping:** `crates/pipeline/src/section_group.rs` — groups findings into report sections
 
-**Pipeline orchestration:** `crates/pipeline/src/orchestrate.rs`: `run_pipeline` chains collect, validate, redact, render and tarball. Inspector execution itself is `crates/pipeline/src/collect.rs`.
+**Pipeline orchestration:** `crates/pipeline/src/orchestrate.rs`: `run_pipeline` chains collect, validate, redact, render and tarball. `finish_scan` is the scan's last snapshot change after redaction (repo-less cache annotation, package defaults, repo ownership), called by both `run_pipeline` and the scan command. Inspector execution itself is `crates/pipeline/src/collect.rs`.
 
 **Build execution:** `crates/pipeline/src/build/` — tarball extraction, RHEL pass-through detection, podman command construction
 

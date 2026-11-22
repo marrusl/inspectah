@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::traits::renderer::RenderContext;
@@ -29,6 +30,30 @@ pub enum PipelineError {
     Tarball(#[from] crate::render::tarball::TarballError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// The scan's last snapshot changes, run after redaction (or after
+/// `--no-redaction` marks the snapshot raw) and before anything
+/// serializes or renders it: the repo-less cache annotation, the scan
+/// package defaults, then `settle_repo_ownership`. Nothing after it
+/// writes the snapshot. The scan command and [`run_pipeline`] both call
+/// it, so the two paths cannot drift.
+///
+/// - The dnf cache pass writes `repoless_annotation`, which the defaults
+///   read: without it a repo-less package routes by name and an unneeded
+///   one is excluded instead of keeping its repo-less handling.
+/// - The package defaults exclude auto packages nothing included needs,
+///   and must follow every step that writes `repoless_annotation`.
+/// - Redaction rewrites repo file content after collection, so a
+///   `gpgkey=` reference that matched a credential pattern no longer names
+///   its key. Settling repo ownership again excludes such a key, which no
+///   stored repo file names any more, and keeps every config twin shadowed.
+pub fn finish_scan(snapshot: &mut InspectionSnapshot, executor: &dyn Executor) {
+    if let Some(rpm) = snapshot.rpm.as_mut() {
+        scan_dnf_cache_for_repoless(executor, rpm);
+    }
+    render::not_carried::apply_scan_package_defaults(snapshot);
+    inspectah_core::repo_ownership::settle_repo_ownership(snapshot);
 }
 
 /// Run the full pipeline: collect -> validate -> redact -> render -> tarball.
@@ -57,17 +82,7 @@ pub fn run_pipeline(
     // Redact
     let mut snapshot = validated.state.snapshot;
     redact(&mut snapshot, &RedactOptions::default());
-    // Annotate repo-less RPMs with dnf cache paths, as the scan command
-    // does. This pass writes `repoless_annotation`, which the defaults
-    // below read: without it a repo-less package routes by name and an
-    // unneeded one is excluded instead of keeping its repo-less handling.
-    if let Some(rpm) = snapshot.rpm.as_mut() {
-        scan_dnf_cache_for_repoless(executor, rpm);
-    }
-
-    // Exclude auto packages nothing included needs. Must follow every
-    // step that writes `repoless_annotation`, which the class reads.
-    render::not_carried::apply_scan_package_defaults(&mut snapshot);
+    finish_scan(&mut snapshot, executor);
 
     // Render all artifacts
     let render_context = RenderContext { target: None };

@@ -137,6 +137,14 @@ impl InspectionSnapshot {
     /// keys or IQN are ordinary config entries the export copies into the
     /// image, or were dropped by a silent list with nothing to say so.
     /// Only a re-scan classifies them.
+    ///
+    /// Schema 31 also makes the repo section the one owner of the `.repo`
+    /// files and GPG keys it records: their config rows are inventory
+    /// shadowed by `Repositories`, a key the scan refused carries
+    /// `rejected`, and an aggregate entry merged to one payload records
+    /// `payload_hosts`. An older payload's config twins are live and its
+    /// rejected keys unmarked, so rendering it would ship a repo file or
+    /// key on either of two controls.
     const MIN_SCHEMA: u32 = 31;
 
     /// Loads a snapshot of exactly this schema version.
@@ -145,7 +153,11 @@ impl InspectionSnapshot {
     /// version is refused as one even when its fields no longer
     /// deserialize. A loaded snapshot passes machine-state validation
     /// ([`crate::machine_state::validate`]): one holding a credential, or a
-    /// file row at a machine-state path, is refused.
+    /// file row at a machine-state path, is refused. It also holds the repo
+    /// ownership invariants ([`crate::repo_ownership::check_repo_ownership`]):
+    /// a snapshot that breaks them was edited or written by another
+    /// version, and is refused rather than repaired, since a repair would
+    /// have to guess the decision a shadow overwrote.
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
         #[derive(Deserialize)]
         struct VersionOnly {
@@ -157,6 +169,7 @@ impl InspectionSnapshot {
         }
         let snap: Self = serde_json::from_str(json)?;
         crate::machine_state::validate(&snap)?;
+        crate::repo_ownership::check_repo_ownership(&snap)?;
         Ok(snap)
     }
 
@@ -189,6 +202,13 @@ pub enum SnapshotError {
         section: String,
         why: String,
     },
+    /// The snapshot breaks the repo ownership invariants. Never repaired:
+    /// re-scan, or re-aggregate.
+    #[error(
+        "{0}. inspectah always writes snapshots that hold this; this one was edited or written \
+         by another version. Re-scan the host, or re-aggregate the scans."
+    )]
+    RepoOwnership(#[from] crate::repo_ownership::RepoOwnershipViolation),
 }
 
 #[cfg(test)]

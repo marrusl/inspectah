@@ -608,7 +608,17 @@ fn packages_section_lines(
     let install_repos = super::repoless::InstallRepos::from_staged(snap, &staged);
     let included_repos = install_repos.custom_count();
     if included_repos > 0 {
-        let body = vec!["COPY config/etc/yum.repos.d/ /etc/yum.repos.d/".into()];
+        let mut body = vec!["COPY config/etc/yum.repos.d/ /etc/yum.repos.d/".into()];
+        let no_exclusions = std::collections::BTreeSet::new();
+        let excluded = render_ctx.map_or(&no_exclusions, |c| &c.excluded_repos);
+        body.extend(super::repo_owned::shared_file_lines(
+            snap, &staged, excluded,
+        ));
+        body.extend(super::repo_owned::version_lines(
+            snap,
+            &staged,
+            inspectah_core::repo_ownership::OwnedKind::RepoFile,
+        ));
         lines.extend(section(
             &format!("Custom Repositories ({included_repos})"),
             body,
@@ -748,6 +758,11 @@ fn packages_section_lines(
                 language_packages::sanitize_for_comment(reason)
             ));
         }
+        gpg_body.extend(super::repo_owned::version_lines(
+            snap,
+            &staged,
+            inspectah_core::repo_ownership::OwnedKind::GpgKey,
+        ));
         // Counted from what the stager writes: a key it withholds or
         // refuses is named in a FIXME, not carried.
         let staged_gpg = included_gpg
@@ -2950,6 +2965,7 @@ mod tests {
             aggregate: None,
             gpgkey_references: Default::default(),
             shipped_by_base: None,
+            rejected: None,
         }
     }
 
@@ -3035,7 +3051,11 @@ mod tests {
             if defining.is_empty() {
                 continue;
             }
-            key_paths.extend(defining.into_iter().flat_map(|s| s.gpg_key_paths));
+            key_paths.extend(
+                defining
+                    .iter()
+                    .flat_map(|s| s.local_keys().map(str::to_owned)),
+            );
             if !file.locked {
                 file.disposition = FindingKind::included();
             }

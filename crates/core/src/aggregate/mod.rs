@@ -263,6 +263,13 @@ pub fn merge_snapshots(
     merged.selinux = merge_selinux_sections(selinux_sections, total, &hostnames, &class);
     merged.users_groups = merge_usersgroups_sections(usergroup_sections, total, &hostnames);
 
+    // Repo ownership does not survive the merge on its own: repo files and
+    // keys pick their representatives independently, and the config merge
+    // clones one host's entry per content variant without reconciling its
+    // shadow. Settled once over the merged sections, before anything reads
+    // them.
+    crate::repo_ownership::settle_repo_ownership(&mut merged);
+
     Ok((merged, validation.warnings))
 }
 

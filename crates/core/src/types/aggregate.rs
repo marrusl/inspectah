@@ -24,6 +24,11 @@ pub struct AggregatePrevalence {
     /// Aggregate host list across all content variants of the same item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregate_hosts: Option<Vec<String>>,
+    /// For an item merged to one representative payload, the hosts whose
+    /// payload is the representative's, sorted. Absent when every host in
+    /// `hosts` had the same payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_hosts: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

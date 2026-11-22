@@ -103,7 +103,11 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                 effective_member_count: effective.member_count,
                 effective_included: effective.included,
                 effective_unlisted: effective.unlisted,
-                enabled: rg.enabled,
+                control: rg.control,
+                kept: rg.kept,
+                carriage_count: rg.carriage_count,
+                carriage_included: rg.carriage_included,
+                owns: rg.owns.clone(),
             }
         })
         .collect();
@@ -174,6 +178,11 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             shadow_rationale: d.entry.shadow_rationale.clone(),
             kind: d.kind.clone(),
             withheld: d.withheld.clone(),
+            config_paths: shadowed_config_paths(
+                session.snapshot(),
+                &d.entry.path,
+                inspectah_core::types::config::ConfigShadow::Units,
+            ),
         })
         .collect();
 
@@ -508,6 +517,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         containerfile_preview,
         stats,
         repo_effective: _,
+        repo_states: _,
+        repo_owned,
         generation,
     } = view;
     // `config_withheld` holds one entry per included config row, found by
@@ -542,6 +553,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         stats,
         generation,
         repo_groups,
+        repo_owned,
         baseline_summary: decisions.baseline_summary.clone(),
         version_changes,
         unit_states,
@@ -577,6 +589,29 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
 /// rows every export surface reads ([`inspectah_pipeline::render::machine_state::class_rows`]).
 /// A row whose content the snapshot holds is offered at its member's
 /// level, with its config `item_id`; every other row is `never`, with no
+/// The paths of the config rows at `path`'s destination that `shadow`
+/// shadows, sorted: the spellings a client joins a shadowed config row on,
+/// so it never normalizes a path itself.
+pub(crate) fn shadowed_config_paths(
+    snap: &inspectah_core::snapshot::InspectionSnapshot,
+    path: &str,
+    shadow: inspectah_core::types::config::ConfigShadow,
+) -> Vec<String> {
+    use inspectah_core::types::destination::Destination;
+    let Ok(dest) = Destination::new(path) else {
+        return Vec::new();
+    };
+    let paths: std::collections::BTreeSet<String> = snap
+        .config
+        .iter()
+        .flat_map(|c| &c.files)
+        .filter(|f| f.shadowed_by.as_ref() == Some(&shadow))
+        .filter(|f| Destination::new(&f.path).is_ok_and(|d| d == dest))
+        .map(|f| f.path.clone())
+        .collect();
+    paths.into_iter().collect()
+}
+
 /// `item_id`, so a correct client never posts it.
 pub fn machine_state_rows(snap: &InspectionSnapshot) -> Vec<MachineStateRowDto> {
     use inspectah_core::types::machine_state::OverrideLevel;
@@ -3030,7 +3065,7 @@ mod tests {
             .find(|rg| rg.section_id == "vendor")
             .expect("vendor repo present in view");
         (
-            rg.enabled,
+            rg.kept,
             rg.effective_member_count,
             rg.effective_included,
             rg.effective_unlisted,

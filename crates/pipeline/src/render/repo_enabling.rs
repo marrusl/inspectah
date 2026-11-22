@@ -24,11 +24,12 @@
 
 use std::collections::BTreeSet;
 
+use inspectah_core::repo_ownership::{OwnedKind, repo_ownership};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
+use inspectah_core::types::destination::Destination;
 use inspectah_core::types::repo::{
-    RepoId, RepoSectionDef, RepoTier, effective_definition, parse_repo_sections, repo_tier,
-    section_spelling,
+    self as repo, RepoId, RepoSectionDef, SectionId, parse_repo_sections, section_spelling,
 };
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
@@ -106,12 +107,12 @@ pub(crate) fn repo_enabling_export(
 /// ([`RepoEnablingExport::Lost`]): its first serving id, and the first
 /// repo whose re-inclusion in refine would serve it again.
 ///
-/// **The advice names only a control refine offers.** Refine has no
-/// control for a repo file or a key on its own: an owned, unmodified
-/// `.repo` file has no Configuration Files row, and a row that does exist
-/// does not change the `rpm.repo_files` decision this proof and the
-/// Custom Repositories `COPY` read. What brings a repo file and its keys
-/// back is the repo toggle, which also re-includes the repo's packages.
+/// **The advice names only a control refine offers.** The repo toggle is
+/// the one control for a repo's `.repo` file and the keys it names: their
+/// Configuration Files rows, where the config walk records one, are
+/// read-only inventory decided under Repositories. What brings a repo
+/// file and its keys back is the repo toggle, which also re-includes the
+/// repo's packages.
 /// So the candidates are repos, each judged by doing what the toggle
 /// does ([`toggle_restores`]), in this order:
 ///
@@ -169,29 +170,27 @@ pub(crate) fn serving_loss(snap: &InspectionSnapshot, pkg: &PackageEntry) -> Opt
 /// key it names in the image. An enabled copy of the section with no
 /// source cannot supply the package, whichever file it sits in.
 fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDef) -> bool {
-    sec.enabled && sec.has_source && keys_included(rpm, repos, &sec.gpg_key_paths)
+    sec.enabled && sec.has_source && keys_included(rpm, repos, sec.local_keys())
 }
 
-/// Whether refine's repo toggle accepts `repo`: not a distro repo, and
-/// the definition the source host's dnf uses for it is enabled. The
-/// toggle refuses a host-disabled or undefined repo, so advice naming one
-/// would send the operator to a control that says no.
+/// Whether refine's repo toggle cascades to `repo`: core's
+/// [`repo::toggleable`] over the snapshot's repo files. The advice names
+/// only a repo whose op the server accepts and whose switch reaches its
+/// packages.
 fn toggleable(rpm: &RpmSection, repo: &str) -> bool {
-    !matches!(repo_tier(repo), RepoTier::Distro)
-        && effective_definition(
-            rpm.repo_files
-                .iter()
-                .map(|f| (f.path.as_str(), f.content.as_str())),
-            &RepoId::new(repo),
-        )
-        .is_some_and(|def| def.enabled)
+    repo::toggleable(
+        rpm.repo_files
+            .iter()
+            .map(|f| (f.path.as_str(), f.content.as_str())),
+        repo,
+    )
 }
 
 /// Whether re-including `repo` in refine serves `pkg` again, judged by
 /// [`repo_enabling_export`] on the export re-staged as the toggle leaves
-/// it: every captured repo file defining that exact section included
-/// unless locked, and every key its sections name that the base image
-/// does not ship included.
+/// it: every carriable repo file and key that exact section owns
+/// included (`RepoOwnership::carriable`: owned, not locked, not a
+/// default repo file, a rejected key or a key the base image ships).
 ///
 /// Re-staging, rather than adding files to the current set, is what keeps
 /// the advice honest: a repo whose file is disabled, shadowed by one dnf
@@ -205,24 +204,23 @@ fn toggle_restores(snap: &InspectionSnapshot, pkg: &PackageEntry, repo: &str) ->
     let Some(rpm) = proposed.rpm.as_mut() else {
         return false;
     };
-    let mut key_paths: Vec<String> = Vec::new();
-    for file in rpm.repo_files.iter_mut() {
-        let defining: Vec<RepoSectionDef> = parse_repo_sections(&file.content)
-            .into_iter()
-            .filter(|s| s.id.as_str() == repo)
-            .collect();
-        if defining.is_empty() {
-            continue;
+    // The include arm's rule: every carriable entry the repo owns.
+    let ownership = repo_ownership(rpm);
+    let owned: Vec<Destination> = ownership
+        .owned_by(&SectionId::new(repo))
+        .into_iter()
+        .cloned()
+        .collect();
+    for (kind, list) in [
+        (OwnedKind::RepoFile, &mut rpm.repo_files),
+        (OwnedKind::GpgKey, &mut rpm.gpg_keys),
+    ] {
+        for entry in list.iter_mut() {
+            let at_owned = Destination::new(&entry.path).is_ok_and(|d| owned.contains(&d));
+            if at_owned && ownership.carriable(kind, entry) {
+                entry.disposition = FindingKind::included();
+            }
         }
-        key_paths.extend(defining.into_iter().flat_map(|s| s.gpg_key_paths));
-        if !file.locked {
-            file.disposition = FindingKind::included();
-        }
-    }
-    for key in rpm.gpg_keys.iter_mut().filter(|k| {
-        k.shipped_by_base.is_none() && key_paths.iter().any(|path| k.is_key_named_by(path))
-    }) {
-        key.disposition = FindingKind::included();
     }
     let repos = InstallRepos::of(&proposed);
     proposed.rpm.as_ref().is_some_and(|rpm| {
@@ -247,8 +245,12 @@ fn toggle_restores(snap: &InspectionSnapshot, pkg: &PackageEntry, repo: &str) ->
 ///
 /// [`RepoFile::is_key_named_by`]: inspectah_core::types::rpm::RepoFile::is_key_named_by
 /// [`RepoFile::shipped_by_base`]: inspectah_core::types::rpm::RepoFile::shipped_by_base
-pub(crate) fn keys_included(rpm: &RpmSection, repos: &InstallRepos, paths: &[String]) -> bool {
-    paths.iter().all(|path| {
+pub(crate) fn keys_included<'a>(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+    mut paths: impl Iterator<Item = &'a str>,
+) -> bool {
+    paths.all(|path| {
         rpm.gpg_keys.iter().any(|k| {
             k.is_key_named_by(path) && (k.shipped_by_base.is_some() || repos.copies_key(&k.path))
         })
@@ -373,7 +375,7 @@ mod tests {
             };
             let rpm = snap.rpm.as_ref().expect("an rpm section");
             assert_eq!(
-                keys_included(rpm, &InstallRepos::of(&snap), &[KEY.to_string()]),
+                keys_included(rpm, &InstallRepos::of(&snap), [KEY].into_iter()),
                 present,
                 "{name}"
             );

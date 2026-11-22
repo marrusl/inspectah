@@ -9,9 +9,9 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
 use inspectah_core::traits::progress::ProgressSink;
-use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{Completeness, InspectorId, SectionData};
-use inspectah_core::types::config::{ConfigSection, ConfigShadow};
+use inspectah_core::types::config::{ConfigShadow, shadow_matching_config_entries};
+use inspectah_core::types::destination::Destination;
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::progress::{InspectorOutcome, ProgressEvent};
 use inspectah_core::types::system::SourceSystem;
@@ -338,6 +338,17 @@ fn is_systemd_default_hostname(executor: &dyn Executor, kernel_name: &str) -> bo
 /// would catch.
 pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
     shadow_unit_owned_paths(snapshot);
+    shadow_repo_owned_paths(snapshot);
+}
+
+/// A config file at the destination of an `rpm.repo_files` or
+/// `rpm.gpg_keys` entry is decided by the repo toggle: the repo inventory
+/// is what the stager writes. The pass, with the exclusion of what no repo
+/// op can carry, is core's `settle_repo_ownership`, which the scan runs
+/// again after redaction and an aggregate runs after its merge; its own
+/// missing-section checks are its own returns.
+fn shadow_repo_owned_paths(snapshot: &mut InspectionSnapshot) {
+    inspectah_core::repo_ownership::settle_repo_ownership(snapshot);
 }
 
 /// A config file whose path appears in `units.drop_ins[].path` is
@@ -361,40 +372,15 @@ fn shadow_unit_owned_paths(snapshot: &mut InspectionSnapshot) {
     let Some(services) = snapshot.units.as_ref() else {
         return;
     };
-    let owned: std::collections::HashSet<&str> = services
+    let owned: std::collections::BTreeSet<Destination> = services
         .drop_ins
         .iter()
-        .map(|d| d.path.as_str())
-        .filter(|p| !p.is_empty())
+        .filter_map(|d| Destination::new(&d.path).ok())
         .collect();
     if owned.is_empty() {
         return;
     }
     shadow_matching_config_entries(snapshot.config.as_mut(), &owned, ConfigShadow::Units);
-}
-
-/// Mark every config entry whose path is in `owner_paths` as inventory
-/// shadowed by `shadow`.
-///
-/// An advisory lives in the same field, and shadowing would erase it:
-/// `config_advisories` matches on `FindingKind::Advisory`, so the
-/// operator would lose the warning that the file points outside /etc.
-/// An advisory entry is already never materialized, so the shadow would
-/// buy nothing in exchange.
-fn shadow_matching_config_entries(
-    config: Option<&mut ConfigSection>,
-    owner_paths: &std::collections::HashSet<&str>,
-    shadow: ConfigShadow,
-) {
-    let Some(config) = config else {
-        return;
-    };
-    for entry in &mut config.files {
-        if owner_paths.contains(entry.path.as_str()) && !entry.disposition.is_advisory() {
-            entry.shadowed_by = Some(shadow.clone());
-            entry.disposition = FindingKind::inventory();
-        }
-    }
 }
 
 /// Process a single inspector's join result: route section data, record
@@ -2201,7 +2187,8 @@ mod tests {
 mod finalize_tests {
     use super::*;
     use inspectah_core::types::AdvisoryType;
-    use inspectah_core::types::config::ConfigFileEntry;
+    use inspectah_core::types::FindingKind;
+    use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
     use inspectah_core::types::finding::ShadowType;
     use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 
@@ -2329,6 +2316,51 @@ mod finalize_tests {
             );
             assert!(only_entry(&snap).disposition.is_inventory(), "{unit}");
         }
+    }
+
+    const REPO: &str = "/etc/yum.repos.d/custom.repo";
+
+    /// A host with a repo file and its config twin, and no units section,
+    /// so the units pass returns early.
+    fn repo_owned_snapshot() -> InspectionSnapshot {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(inspectah_core::types::rpm::RpmSection {
+            repo_files: vec![inspectah_core::types::rpm::RepoFile {
+                path: REPO.into(),
+                content: "[custom]\nbaseurl=https://custom.example/\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
+            files: vec![ConfigFileEntry {
+                // An ostree scan's relative spelling of the same file.
+                path: REPO[1..].into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+        });
+        snap
+    }
+
+    #[test]
+    fn the_repo_pass_runs_where_the_units_pass_returns_early() {
+        let mut snap = repo_owned_snapshot();
+        assert!(snap.units.is_none());
+        finalize_cross_inspector(&mut snap);
+        let entry = only_entry(&snap);
+        assert_eq!(entry.shadowed_by, Some(ConfigShadow::Repositories));
+        assert!(entry.disposition.is_inventory());
+    }
+
+    #[test]
+    fn the_units_pass_runs_where_the_repo_pass_returns_early() {
+        let mut snap = service_owned_snapshot(FindingKind::included());
+        assert!(snap.rpm.is_none());
+        finalize_cross_inspector(&mut snap);
+        assert_eq!(only_entry(&snap).shadowed_by, Some(ConfigShadow::Units));
     }
 
     /// An empty `path` is not a match for every config entry that also

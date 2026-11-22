@@ -715,7 +715,7 @@ fn cases() -> Vec<Case> {
                 let repo = repo_group(v, VENDOR_REPO);
                 assert_eq!(repo["effective_member_count"], json!(2));
                 assert_eq!(repo["effective_included"], json!(2));
-                assert_eq!(repo["enabled"], json!(true));
+                assert_eq!(repo["kept"], json!(true));
                 assert_eq!(
                     e.active_install_list(),
                     vec!["alpha".to_string(), "beta".to_string()],
@@ -730,7 +730,7 @@ fn cases() -> Vec<Case> {
                     json!(0),
                     "the exclusion cascades to both members"
                 );
-                assert_eq!(repo["enabled"], json!(false));
+                assert_eq!(repo["kept"], json!(false));
                 assert!(
                     !package_included(v, "beta", "x86_64"),
                     "the view reports the cascade on the other member too"
@@ -767,13 +767,13 @@ fn cases() -> Vec<Case> {
             export: |e| e.installs("alpha"),
             before: false,
             pin_before: |v, e| {
-                assert_eq!(repo_group(v, VENDOR_REPO)["enabled"], json!(false));
+                assert_eq!(repo_group(v, VENDOR_REPO)["kept"], json!(false));
                 assert!(e.active_install_list().is_empty());
             },
             pin_after: |v, e| {
                 let repo = repo_group(v, VENDOR_REPO);
                 assert_eq!(repo["effective_included"], json!(2));
-                assert_eq!(repo["enabled"], json!(true));
+                assert_eq!(repo["kept"], json!(true));
                 assert_eq!(
                     e.active_install_list(),
                     vec!["alpha".to_string(), "beta".to_string()]

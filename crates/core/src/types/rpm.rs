@@ -220,19 +220,57 @@ pub struct RepoFile {
     /// lists, which the baseline does not carry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shipped_by_base: Option<String>,
+    /// Set on a key the scan refused to store. Its `content` is a
+    /// placeholder, and nothing stages it or counts it as a key in the
+    /// image. `None` for a usable key and for a repo file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected: Option<KeyRejection>,
+}
+
+/// Why the scan refused to store a key file a `gpgkey=` named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyRejection {
+    /// No line begins with a PGP public key header.
+    NotPgp,
+    /// PGP private or secret key armor appears in it.
+    PrivateKeyMaterial,
+}
+
+impl KeyRejection {
+    /// What the file is, completing "the scan did not store this file
+    /// because it ...".
+    pub fn because(self) -> &'static str {
+        match self {
+            Self::NotPgp => "is not a PGP public key",
+            Self::PrivateKeyMaterial => "holds private key material",
+        }
+    }
 }
 
 impl RepoFile {
     /// Whether this captured GPG key is the file a `gpgkey=` path names,
-    /// written the way `RepoSectionDef::gpg_key_paths` holds it: its
-    /// expanded path, or a literal path recorded in `gpgkey_references`.
+    /// written the way `RepoSectionDef::local_keys` gives it: its expanded
+    /// path, or a literal path recorded in `gpgkey_references`, compared
+    /// as written or as one [`Destination`](super::destination::Destination).
     ///
     /// The one place a section's key reference is matched to a captured
     /// key. In an aggregate one literal can name several keys (an EL9 and
     /// an EL10 host expand `$releasever_major` differently), and each of
     /// them matches.
     pub fn is_key_named_by(&self, gpgkey_path: &str) -> bool {
-        self.path == gpgkey_path || self.gpgkey_references.contains(gpgkey_path)
+        use super::destination::Destination;
+        if self.path == gpgkey_path || self.gpgkey_references.contains(gpgkey_path) {
+            return true;
+        }
+        let Ok(wanted) = Destination::new(gpgkey_path) else {
+            return false;
+        };
+        Destination::new(&self.path).is_ok_and(|d| d == wanted)
+            || self
+                .gpgkey_references
+                .iter()
+                .any(|r| Destination::new(r).is_ok_and(|d| d == wanted))
     }
 
     /// Why the scan leaves this key out of the export, when the reason is
@@ -246,7 +284,8 @@ impl RepoFile {
     /// Whether the built image has this file at its path: the export
     /// copies it, or the base image already ships it.
     pub fn is_in_image(&self) -> bool {
-        self.disposition.is_included() || self.shipped_by_base.is_some()
+        self.rejected.is_none()
+            && (self.disposition.is_included() || self.shipped_by_base.is_some())
     }
 }
 

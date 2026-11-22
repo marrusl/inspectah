@@ -72,17 +72,22 @@
   "quadlets": [],
   "repo_groups": [
     {
+      "carriage_count": 0,
+      "carriage_included": 0,
+      "control": "none",
       "effective_included": 0,
       "effective_member_count": 0,
       "effective_unlisted": 0,
-      "enabled": true,
       "is_distro": false,
+      "kept": true,
+      "owns": [],
       "package_count": 1,
       "provenance": "unknown",
       "section_id": "",
       "tier": "none"
     }
   ],
+  "repo_owned": [],
   "session_is_sensitive": false,
   "stats": {
     "baseline_available": false,

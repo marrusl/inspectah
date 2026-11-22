@@ -24,7 +24,6 @@ use inspectah_collect::inspectors::nonrpm::{
     NonRpmInspector, default_scan_roots, scan_unmanaged_files,
 };
 use inspectah_collect::inspectors::rpm::RpmInspector;
-use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
 use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
@@ -43,10 +42,11 @@ use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::collect::collect;
+use inspectah_pipeline::orchestrate::finish_scan;
 use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::baseline_fmt;
-use inspectah_pipeline::render::not_carried::{apply_scan_package_defaults, not_carried_notice};
+use inspectah_pipeline::render::not_carried::not_carried_notice;
 use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 use inspectah_pipeline::validate::validate;
 
@@ -824,20 +824,13 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
         ));
     }
 
-    // Annotate repo-less RPMs with dnf cache paths so they can be bundled.
-    if let Some(ref mut rpm) = snapshot.rpm {
-        scan_dnf_cache_for_repoless(&executor, rpm);
-    }
-
-    // Exclude auto packages nothing included needs. Ordering matters on
-    // both sides: after the dnf-cache pass above, which writes
-    // `repoless_annotation` (a package routed `Repoless` is never in the
-    // class, and the class reads the annotation to tell; one routed
-    // `DisabledRepo` can be), and before the
-    // --inspect-only branch, so its JSON and the tarball's snapshot carry
-    // the same dispositions. Nothing after this point may write the
-    // annotation.
-    apply_scan_package_defaults(&mut snapshot);
+    // The scan's last snapshot changes (`finish_scan`): the repo-less
+    // cache annotation, the package defaults that read it, and the repo
+    // ownership pass that redaction made necessary. After the unmanaged
+    // scan, which writes only `unmanaged_files`, and before the
+    // --inspect-only branch, so its JSON and the tarball's snapshot are
+    // one value. Nothing after this point writes the snapshot.
+    finish_scan(&mut snapshot, &executor);
 
     // Prompt for unmanaged file bundling if --include-unmanaged was used.
     // Skip when --inspect-only: metadata is kept for the JSON snapshot,
@@ -983,6 +976,15 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
             }
             // The machine-state notice follows: enum text and a count.
             for notice in inspectah_pipeline::render::machine_state::export_notices(&snapshot) {
+                eprintln!("{notice}");
+            }
+            // The repo notices: an entry no copied repo file names. A scan or an
+            // aggregate has no refine exclusion, so no shared-file notice.
+            for notice in inspectah_pipeline::render::repo_owned::export_notices(
+                &snapshot,
+                &inspectah_pipeline::render::configtree::staged_writes(&snapshot),
+                &Default::default(),
+            ) {
                 eprintln!("{notice}");
             }
             Ok(outcome)

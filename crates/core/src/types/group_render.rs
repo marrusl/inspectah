@@ -49,6 +49,10 @@ pub struct RenderContext {
     /// which is the safe answer: a render outside a refine session has no
     /// operator include to honor.
     pub operator_includes: OperatorIncludes,
+    /// The repos excluded in refine, by exact section spelling. Empty by
+    /// default: a scan has no repo decision, so its Containerfile never
+    /// says a shipped file defines an excluded repo.
+    pub excluded_repos: std::collections::BTreeSet<String>,
 }
 
 /// The `name.arch` ids of the packages the operator included in a refine

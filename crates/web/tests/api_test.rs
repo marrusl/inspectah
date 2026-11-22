@@ -2633,10 +2633,10 @@ async fn ops_len(app: &axum::Router) -> usize {
     json.as_array().expect("/api/ops is an array").len()
 }
 
-/// § 8.8 state (a): enabled history (no repo op), both members individually
-/// excluded. The counts derive `include: true` as the accepted direction;
-/// `include: false`, the direction a history-reading switch would post
-/// (the repo-exclusion history here is empty, i.e. "enabled"), is refused.
+/// § 5.3 of the repo ownership spec, state (a): kept, both members
+/// individually excluded. Excluding moves the decision and drops the file,
+/// so it is accepted; a second exclude, with no member included and
+/// nothing more to drop, is refused with its text and records nothing.
 #[tokio::test]
 async fn set_include_repo_state_a_accepted_and_refused() {
     let app = app(vendor_repo_state());
@@ -2644,25 +2644,27 @@ async fn set_include_repo_state_a_accepted_and_refused() {
     post_set_include_pkg(&app, "b", "x86_64", false).await;
     let before = ops_len(&app).await;
 
-    // Refused direction first: must not record.
+    let (status, _) = post_set_include_repo(&app, "vendor", false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ops_len(&app).await, before + 1);
+
     let (status, json) = post_set_include_repo(&app, "vendor", false).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
         json["error"],
-        "nothing to change: all 2 effective members of 'vendor' are already excluded"
+        "nothing to change: repo 'vendor' is already excluded, with no effective member \
+         included and nothing more to drop"
     );
-    assert_eq!(ops_len(&app).await, before, "a refused op must not record");
-
-    // Accepted direction: one new /api/ops entry.
-    let (status, _) = post_set_include_repo(&app, "vendor", true).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(ops_len(&app).await, before + 1);
+    assert_eq!(
+        ops_len(&app).await,
+        before + 1,
+        "a refused op must not record"
+    );
 }
 
-/// § 8.8 state (b): excluded history (a recorded repo exclude), both members
-/// individually included. The counts derive `include: false` as the
-/// accepted direction; `include: true`, the direction a history-reading
-/// switch would post (the history here is "excluded"), is refused.
+/// State (b): excluded, both members individually included. Including
+/// moves the decision and brings the file back, so it is accepted; a
+/// second include is refused.
 #[tokio::test]
 async fn set_include_repo_state_b_accepted_and_refused() {
     let app = app(vendor_repo_state());
@@ -2671,30 +2673,29 @@ async fn set_include_repo_state_b_accepted_and_refused() {
     post_set_include_pkg(&app, "b", "x86_64", true).await;
     let before = ops_len(&app).await;
 
-    // Refused direction first: must not record.
+    let (status, _) = post_set_include_repo(&app, "vendor", true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ops_len(&app).await, before + 1);
+
     let (status, json) = post_set_include_repo(&app, "vendor", true).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
         json["error"],
-        "nothing to change: all 2 effective members of 'vendor' are already included"
+        "nothing to change: repo 'vendor' is already kept, with its files and keys carried \
+         and every effective member included"
     );
-    assert_eq!(ops_len(&app).await, before, "a refused op must not record");
-
-    // Accepted direction: one new /api/ops entry.
-    let (status, _) = post_set_include_repo(&app, "vendor", false).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(ops_len(&app).await, before + 1);
+    assert_eq!(
+        ops_len(&app).await,
+        before + 1,
+        "a refused op must not record"
+    );
 }
 
-/// § 8.8 + position 26: a repo the index knows and accepts, whose effective
-/// set is empty (both declared members present and locked), is refused in
-/// both directions with the "nothing to decide" reason -- never silently
-/// accepted, and never recorded. The wire `error` is the error.rs prefix
-/// ("nothing to change: ") plus the `NoopTarget` message in full: the brief
-/// describes the client-visible text as starting "nothing to decide", but
-/// `error.rs`'s existing, out-of-scope-for-this-task mapping always adds
-/// that prefix first, so the full string is asserted here rather than a
-/// `starts_with` check that the actual prefix would fail.
+/// Position 26 reopened: a repo whose members are all locked still decides
+/// its file. Including a kept, carried repo is refused; excluding it is
+/// accepted; a repo with no control at all is refused with
+/// `nothing to decide`. The wire `error` is the error.rs prefix
+/// ("nothing to change: ") plus the `NoopTarget` message in full.
 #[tokio::test]
 async fn set_include_repo_with_no_effective_member_returns_422_in_both_directions() {
     let mut snap = InspectionSnapshot::new();
@@ -2733,15 +2734,27 @@ async fn set_include_repo_with_no_effective_member_returns_422_in_both_direction
     let app = app(state);
     let before = ops_len(&app).await;
 
+    let (status, json) = post_set_include_repo(&app, "vendor", true).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json["error"],
+        "nothing to change: repo 'vendor' is already kept, with its files and keys carried \
+         and every effective member included"
+    );
+    assert_eq!(ops_len(&app).await, before, "a refused op must not record");
+
+    let (status, _) = post_set_include_repo(&app, "vendor", false).await;
+    assert_eq!(status, StatusCode::OK);
+
     for include in [true, false] {
-        let (status, json) = post_set_include_repo(&app, "vendor", include).await;
+        let (status, json) = post_set_include_repo(&app, "nosuch", include).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(
             json["error"],
-            "nothing to change: nothing to decide in 'vendor': all 2 members are locked"
+            "nothing to change: nothing to decide in 'nosuch': no effective member and no \
+             file or key the export can carry"
         );
     }
-    assert_eq!(ops_len(&app).await, before, "a refused op must not record");
 }
 
 /// § 8.12's second API line, owned by this task: `SetInclude(Repo)` on an

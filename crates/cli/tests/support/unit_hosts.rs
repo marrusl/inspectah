@@ -146,6 +146,10 @@ pub struct UnitHost {
     classification: Option<Classification>,
     /// Installed packages of an architecture other than `x86_64`.
     other_arches: Vec<OtherArch>,
+    /// What `dnf repolist --enabled -q` lists, when the host answers it.
+    enabled_repos: Option<Vec<String>>,
+    /// `(name, repo)` lines `dnf repoquery --available` prints.
+    available: Vec<(String, String)>,
 }
 
 /// An installed package of an architecture other than `x86_64`
@@ -268,6 +272,19 @@ impl UnitHost {
     pub fn package_from(mut self, name: &str, repo: &str) -> Self {
         self.package_repos.insert(name.into(), repo.into());
         self.package(name)
+    }
+
+    /// `dnf repolist --enabled -q` lists the section ids `ids`, so the
+    /// repo-less pass can tell a package's repo from a disabled one.
+    pub fn enabled_repos(mut self, ids: &[&str]) -> Self {
+        self.enabled_repos = Some(ids.iter().map(|i| (*i).to_owned()).collect());
+        self
+    }
+
+    /// `dnf repoquery --available` lists `name` as served by `repo`.
+    pub fn available(mut self, name: &str, repo: &str) -> Self {
+        self.available.push((name.into(), repo.into()));
+        self
     }
 
     /// `dnf repoquery --userinstalled` lists `names`, so the scan
@@ -530,6 +547,20 @@ impl UnitHost {
             .with_command(RPM_FILE_OWNERSHIP, ok(&ownership))
             .with_command(LIST_UNIT_FILES, ok(&listing))
             .with_command_prefix(DNF_SOURCE_REPO, ok(&source_repos));
+        if let Some(ids) = &this.enabled_repos {
+            let listing: String = std::iter::once("repo id    repo name\n".to_owned())
+                .chain(ids.iter().map(|id| format!("{id}    {id}\n")))
+                .collect();
+            mock = mock.with_command("dnf repolist --enabled -q", ok(&listing));
+        }
+        if !this.available.is_empty() {
+            let lines: String = this
+                .available
+                .iter()
+                .map(|(name, repo)| format!("{name} {repo}\n"))
+                .collect();
+            mock = mock.with_command_prefix("dnf repoquery --available", ok(&lines));
+        }
         if let Some(classification) = &this.classification {
             let userinstalled = match &classification.userinstalled {
                 Some(names) => ok(&names
@@ -881,6 +912,12 @@ fn pkg_source() -> SourceSystem {
 /// the RPM, config, units and scheduled-task inspectors. The snapshot is
 /// not redacted yet.
 pub fn scan_unredacted(host: UnitHost) -> InspectionSnapshot {
+    scan_collected(host).0
+}
+
+/// [`scan_unredacted`], with the executor the inspectors ran over, for a
+/// test that runs the scan's later passes.
+fn scan_collected(host: UnitHost) -> (InspectionSnapshot, MockExecutor) {
     let baseline = host.baseline();
     let exec = host.build();
     let inspectors: Vec<Box<dyn Inspector>> = vec![
@@ -903,14 +940,26 @@ pub fn scan_unredacted(host: UnitHost) -> InspectionSnapshot {
         .snapshot;
     // The scan command records the baseline it collected against.
     snapshot.baseline = baseline;
-    snapshot
+    (snapshot, exec)
 }
 
 /// The scan path: `collect()` then `validate` then `redact`, the three
-/// calls the scan command makes, in its order.
+/// calls the scan command makes, in its order, then the repo ownership
+/// pass `finish_scan` runs after redaction, which a snapshot needs to
+/// load. The rest of `finish_scan` is [`scan_finished`]'s.
 pub fn scan(host: UnitHost) -> InspectionSnapshot {
     let mut snapshot = scan_unredacted(host);
     redact(&mut snapshot, &RedactOptions::default());
+    inspectah_core::repo_ownership::settle_repo_ownership(&mut snapshot);
+    snapshot
+}
+
+/// The whole scan path: `collect()`, `validate`, `redact`, then
+/// `finish_scan` over the same host, as the scan command runs them.
+pub fn scan_finished(host: UnitHost) -> InspectionSnapshot {
+    let (mut snapshot, exec) = scan_collected(host);
+    redact(&mut snapshot, &RedactOptions::default());
+    inspectah_pipeline::orchestrate::finish_scan(&mut snapshot, &exec);
     snapshot
 }
 

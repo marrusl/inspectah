@@ -214,21 +214,93 @@ impl RepoAttribution {
     }
 }
 
+/// A `[section]` header exactly as the host wrote it.
+///
+/// Equality, hashing and ordering are the string's own, case included:
+/// the identity of a repo decision and of an owner. dnf keys repos
+/// case-sensitively, so `[site]` and `[SITE]` in one file are two repos.
+/// [`RepoId`] keeps its case-folding semantics for package attribution;
+/// code that matches a section against a package's recorded value builds
+/// `RepoId::new(id.as_str())` at that comparison. No `From` conversion
+/// joins the two types.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct SectionId(String);
+
+impl SectionId {
+    /// The section id as the header spells it.
+    pub fn new(id: impl Into<String>) -> SectionId {
+        SectionId(id.into())
+    }
+
+    /// The id exactly as the host wrote it.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for SectionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// One reference in a section's final `gpgkey=` value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GpgKeyRef {
+    /// `file:///path`, or a value with no `://`, which the scan reads as a
+    /// path. The path as written, `file://` removed, before dnf variables
+    /// expand.
+    Local(String),
+    /// Any other scheme. dnf fetches it; the scan does not.
+    Remote(String),
+}
+
+impl GpgKeyRef {
+    /// Read one whitespace- or comma-separated reference. `None` for a
+    /// `file://` reference with no path.
+    fn parse(reference: &str) -> Option<GpgKeyRef> {
+        if let Some(path) = reference.strip_prefix("file://") {
+            return (!path.is_empty()).then(|| GpgKeyRef::Local(path.to_owned()));
+        }
+        if reference.contains("://") {
+            Some(GpgKeyRef::Remote(reference.to_owned()))
+        } else {
+            Some(GpgKeyRef::Local(reference.to_owned()))
+        }
+    }
+}
+
 /// One parsed `[section]` of a `.repo` file.
 ///
-/// Shared by collect and refine; replaces `extract_section_ids`
-/// (`source_repos.rs`) and `parse_repo_sections` (`repo_index.rs`), which
-/// parsed the same INI two different ways.
+/// The one reading of `.repo` content: collection, ownership, provenance
+/// and the export all read it, so none can disagree on continuation,
+/// replacement, bare paths or stray lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoSectionDef {
-    pub id: RepoId,
+    pub id: SectionId,
     /// The section's `enabled=` value; `true` when the key is absent,
     /// matching dnf's own default.
     pub enabled: bool,
     /// Whether the section defines `baseurl`, `metalink`, or `mirrorlist`.
     pub has_source: bool,
-    /// Filesystem paths collected from `gpgkey=file://` values.
-    pub gpg_key_paths: Vec<String>,
+    /// Every reference in the final `gpgkey=` value, split on whitespace
+    /// and commas, in order.
+    pub gpg_keys: Vec<GpgKeyRef>,
+}
+
+impl RepoSectionDef {
+    /// The local key paths the section names, as written
+    /// ([`GpgKeyRef::Local`]). Every consumer that asks which keys a
+    /// section names reads this.
+    pub fn local_keys(&self) -> impl Iterator<Item = &str> {
+        self.gpg_keys.iter().filter_map(|r| match r {
+            GpgKeyRef::Local(path) => Some(path.as_str()),
+            GpgKeyRef::Remote(_) => None,
+        })
+    }
 }
 
 /// Trim a trailing `#` or `;` comment from an INI value.
@@ -248,32 +320,69 @@ fn is_enabled_value(value: &str) -> bool {
     )
 }
 
+/// An option a [`RepoSectionDef`] is derived from.
+#[derive(Clone, Copy)]
+enum RepoOption {
+    Enabled,
+    Baseurl,
+    Metalink,
+    Mirrorlist,
+    Gpgkey,
+}
+
+impl RepoOption {
+    fn of(key: &str) -> Option<RepoOption> {
+        Some(match key {
+            "enabled" => RepoOption::Enabled,
+            "baseurl" => RepoOption::Baseurl,
+            "metalink" => RepoOption::Metalink,
+            "mirrorlist" => RepoOption::Mirrorlist,
+            "gpgkey" => RepoOption::Gpgkey,
+            _ => return None,
+        })
+    }
+}
+
 /// The last value each option a [`RepoSectionDef`] is derived from was
 /// assigned, across every block of one section.
 #[derive(Default)]
-struct SectionValues<'a> {
-    enabled: Option<&'a str>,
-    baseurl: Option<&'a str>,
-    metalink: Option<&'a str>,
-    mirrorlist: Option<&'a str>,
-    gpgkey: Option<&'a str>,
+struct SectionValues {
+    enabled: Option<String>,
+    baseurl: Option<String>,
+    metalink: Option<String>,
+    mirrorlist: Option<String>,
+    gpgkey: Option<String>,
 }
 
-impl SectionValues<'_> {
+impl SectionValues {
+    fn slot(&mut self, option: RepoOption) -> &mut Option<String> {
+        match option {
+            RepoOption::Enabled => &mut self.enabled,
+            RepoOption::Baseurl => &mut self.baseurl,
+            RepoOption::Metalink => &mut self.metalink,
+            RepoOption::Mirrorlist => &mut self.mirrorlist,
+            RepoOption::Gpgkey => &mut self.gpgkey,
+        }
+    }
+
     /// Derive the section dnf ends up with from the final option values.
-    fn into_def(self, id: RepoId) -> RepoSectionDef {
-        let defined = |v: Option<&str>| v.is_some_and(|v| !v.is_empty());
+    fn into_def(self, id: SectionId) -> RepoSectionDef {
+        let defined = |v: &Option<String>| v.as_deref().is_some_and(|v| !v.trim().is_empty());
         RepoSectionDef {
             id,
-            enabled: self.enabled.is_none_or(is_enabled_value),
-            has_source: defined(self.baseurl) || defined(self.metalink) || defined(self.mirrorlist),
-            gpg_key_paths: self
+            enabled: self
+                .enabled
+                .as_deref()
+                .is_none_or(|v| is_enabled_value(v.trim())),
+            has_source: defined(&self.baseurl)
+                || defined(&self.metalink)
+                || defined(&self.mirrorlist),
+            gpg_keys: self
                 .gpgkey
                 .unwrap_or_default()
-                .split(|c: char| c == ',' || c.is_ascii_whitespace())
-                .filter_map(|part| part.strip_prefix("file://"))
-                .filter(|path| !path.is_empty())
-                .map(str::to_string)
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|part| !part.is_empty())
+                .filter_map(GpgKeyRef::parse)
                 .collect(),
         }
     }
@@ -282,25 +391,62 @@ impl SectionValues<'_> {
 /// Parse `.repo`-style INI content into one [`RepoSectionDef`] per
 /// `[section]` header.
 ///
-/// Lines before the first section header, and lines without a `key=value`
-/// form, are dropped rather than rejected -- malformed INI should degrade,
-/// not fail the scan.
+/// Read the way dnf's ini reader reads it:
 ///
-/// A header repeated in the same content reopens its section rather than
-/// starting another, as libdnf's `ConfigParser` does, and the section
-/// keeps its first position. Each option keeps the last value assigned to
-/// it in any block, and the section is derived from those final values:
-/// `baseurl`, `metalink` and `mirrorlist` are separate options, so
-/// clearing one leaves the others, and an empty final value is no source;
-/// `gpg_key_paths` comes from the final `gpgkey=` alone. The header match
-/// is on the exact spelling, since dnf keys repos case-sensitively;
-/// [`RepoId`]'s folded equality is not used here.
+/// - **Continuation.** An indented line that follows a `key=value` line
+///   continues that value. A comment line (`#` or `;` in column 0) or an
+///   empty line ends the value; a line of only spaces or tabs stays inside
+///   it. An indented line that follows no `key=value` line is read as a
+///   line of its own.
+/// - **Replacement.** A header repeated in the same content reopens its
+///   section rather than starting another, as libdnf's `ConfigParser`
+///   does, and the section keeps its first position. Each option keeps the
+///   last value assigned to it in any block, and the section is derived
+///   from those final values: `baseurl`, `metalink` and `mirrorlist` are
+///   separate options, so clearing one leaves the others, and an empty
+///   final value is no source; `gpg_keys` comes from the final `gpgkey=`
+///   alone.
+/// - **Stray lines.** Lines before the first section header, and lines
+///   without a `key=value` form, are dropped rather than rejected:
+///   malformed INI should degrade, not fail the scan.
+/// - **Trailing comments.** A `#` or `;` and what follows it is cut from
+///   each line of a value.
+///
+/// The header match is on the exact spelling, since dnf keys repos
+/// case-sensitively; [`RepoId`]'s folded equality is not used here.
 pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
-    let mut sections: Vec<(RepoId, SectionValues<'_>)> = Vec::new();
+    let mut sections: Vec<(SectionId, SectionValues)> = Vec::new();
     let mut current: Option<usize> = None;
+    // The option the previous line assigned, when it is one this parser
+    // keeps, so an indented line continues it. `Some(None)` is a
+    // `key=value` line for an option it does not keep.
+    let mut in_item: Option<Option<RepoOption>> = None;
 
     for line in content.lines() {
         let trimmed = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            in_item = None;
+            continue;
+        }
+        if trimmed.is_empty() {
+            // A blank but not empty line stays inside the value.
+            continue;
+        }
+        let indented = line.starts_with([' ', '\t']);
+        if indented
+            && !trimmed.starts_with('[')
+            && let Some(item) = in_item
+        {
+            if let (Some(option), Some(idx)) = (item, current) {
+                let piece = strip_trailing_comment(trimmed).trim();
+                let slot = sections[idx].1.slot(option);
+                let value = slot.get_or_insert_with(String::new);
+                value.push('\n');
+                value.push_str(piece);
+            }
+            continue;
+        }
+        in_item = None;
 
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             let header = &trimmed[1..trimmed.len() - 1];
@@ -308,7 +454,7 @@ pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
                 match sections.iter().position(|(id, _)| id.as_str() == header) {
                     Some(idx) => idx,
                     None => {
-                        sections.push((RepoId::new(header), SectionValues::default()));
+                        sections.push((SectionId::new(header), SectionValues::default()));
                         sections.len() - 1
                     }
                 },
@@ -316,23 +462,18 @@ pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
             continue;
         }
 
-        let Some(values) = current.map(|idx| &mut sections[idx].1) else {
+        let Some(idx) = current else {
             continue; // line outside any section
         };
         let Some((key, value)) = trimmed.split_once('=') else {
             continue; // malformed: no key=value
         };
-        let value = strip_trailing_comment(value).trim();
-
-        let slot = match key.trim() {
-            "enabled" => &mut values.enabled,
-            "baseurl" => &mut values.baseurl,
-            "metalink" => &mut values.metalink,
-            "mirrorlist" => &mut values.mirrorlist,
-            "gpgkey" => &mut values.gpgkey,
-            _ => continue,
-        };
-        *slot = Some(value);
+        let option = RepoOption::of(key.trim());
+        in_item = Some(option);
+        if let Some(option) = option {
+            let value = strip_trailing_comment(value).trim();
+            *sections[idx].1.slot(option) = Some(value.to_owned());
+        }
     }
 
     sections
@@ -411,7 +552,7 @@ pub fn effective_definition<'a>(
         .flat_map(|(path, content)| {
             parse_repo_sections(content)
                 .into_iter()
-                .filter(|sec| sec.id == *id)
+                .filter(|sec| RepoId::new(sec.id.as_str()) == *id)
                 .map(move |sec| (dnf_read_order(path), content, sec))
         })
         .collect();
@@ -421,6 +562,16 @@ pub fn effective_definition<'a>(
         .filter(|(_, _, sec)| sec.id.as_str() == spelling)
         .min_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)))
         .map(|(_, _, sec)| sec)
+}
+
+/// Whether refine's repo toggle cascades to `repo`'s members: not a
+/// distro repo, and the definition the source host's dnf uses for it
+/// among `files` (`(path, content)`, every `.repo` file the snapshot
+/// holds) is enabled. A repo that is not toggleable can still have a
+/// carriage-only switch for the files and keys it owns.
+pub fn toggleable<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>, repo: &str) -> bool {
+    !matches!(repo_tier(repo), RepoTier::Distro)
+        && effective_definition(files, &RepoId::new(repo)).is_some_and(|def| def.enabled)
 }
 
 #[cfg(test)]
@@ -521,13 +672,13 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-C
 enabled=yes
 ";
         let got = parse_repo_sections(content);
-        let by = |n: &str| got.iter().find(|s| s.id == RepoId::new(n)).unwrap();
+        let by = |n: &str| got.iter().find(|s| s.id.as_str() == n).unwrap();
         assert_eq!(got.len(), 4);
         assert!(by("a").enabled && by("a").has_source); // absent enabled= is true
         assert!(!by("b").enabled && by("b").has_source);
         assert!(by("c").enabled);
         assert_eq!(
-            by("c").gpg_key_paths,
+            by("c").local_keys().collect::<Vec<_>>(),
             vec!["/etc/pki/rpm-gpg/RPM-GPG-KEY-C"]
         );
         assert!(by("d").enabled);
@@ -557,7 +708,7 @@ enabled=1
         assert!(!r.enabled, "the second block's enabled=0 applies");
         assert!(r.has_source, "the first block's baseurl still applies");
         assert_eq!(
-            r.gpg_key_paths,
+            r.local_keys().collect::<Vec<_>>(),
             vec!["/etc/pki/rpm-gpg/KEY-2"],
             "the last gpgkey= replaces the first, as dnf keeps the last value"
         );
@@ -618,7 +769,12 @@ enabled=1
             let r = &got[0];
             assert_eq!(r.enabled, case.enabled, "{}: enabled", case.name);
             assert_eq!(r.has_source, case.has_source, "{}: has_source", case.name);
-            assert_eq!(r.gpg_key_paths, case.keys, "{}: gpg_key_paths", case.name);
+            assert_eq!(
+                r.local_keys().collect::<Vec<_>>(),
+                case.keys,
+                "{}: gpg_keys",
+                case.name
+            );
         }
     }
 
@@ -703,5 +859,95 @@ enabled=1
                 );
             }
         }
+    }
+
+    #[test]
+    fn parse_repo_sections_reads_gpgkey_values_as_dnf_does() {
+        // One parser for collection and ownership (§ 3.1 of the repo
+        // ownership spec): continuation, replacement, bare paths, remote
+        // references and stray lines, each as dnf's ini reader reads them.
+        struct Case {
+            name: &'static str,
+            content: &'static str,
+            keys: &'static [&'static str],
+            remote: &'static [&'static str],
+        }
+        let cases = [
+            Case {
+                name: "an indented line continues the value",
+                content: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/A\n  file:///etc/pki/rpm-gpg/B\n",
+                keys: &["/etc/pki/rpm-gpg/A", "/etc/pki/rpm-gpg/B"],
+                remote: &[],
+            },
+            Case {
+                name: "a line of only spaces stays inside the value",
+                content: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/A\n   \n\tfile:///etc/pki/rpm-gpg/B\n",
+                keys: &["/etc/pki/rpm-gpg/A", "/etc/pki/rpm-gpg/B"],
+                remote: &[],
+            },
+            Case {
+                name: "an empty line ends the value",
+                content: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/A\n\n  file:///etc/pki/rpm-gpg/B\n",
+                keys: &["/etc/pki/rpm-gpg/A"],
+                remote: &[],
+            },
+            Case {
+                name: "a comment line ends the value",
+                content: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/A\n# note\n  file:///etc/pki/rpm-gpg/B\n",
+                keys: &["/etc/pki/rpm-gpg/A"],
+                remote: &[],
+            },
+            Case {
+                name: "a later assignment replaces the earlier one",
+                content: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/OLD\ngpgkey=file:///etc/pki/rpm-gpg/NEW\n",
+                keys: &["/etc/pki/rpm-gpg/NEW"],
+                remote: &[],
+            },
+            Case {
+                name: "a bare path is a local key",
+                content: "[r]\ngpgkey=/etc/pki/rpm-gpg/BARE\n",
+                keys: &["/etc/pki/rpm-gpg/BARE"],
+                remote: &[],
+            },
+            Case {
+                name: "a remote key is kept apart",
+                content: "[r]\ngpgkey=https://example.invalid/KEY, file:///etc/pki/rpm-gpg/L\n",
+                keys: &["/etc/pki/rpm-gpg/L"],
+                remote: &["https://example.invalid/KEY"],
+            },
+            Case {
+                name: "a gpgkey= before the first header names nothing",
+                content: "gpgkey=file:///etc/pki/rpm-gpg/PRE\n[r]\nbaseurl=https://example.invalid/r\n",
+                keys: &[],
+                remote: &[],
+            },
+        ];
+        for case in cases {
+            let got = parse_repo_sections(case.content);
+            assert_eq!(got.len(), 1, "{}", case.name);
+            assert_eq!(
+                got[0].local_keys().collect::<Vec<_>>(),
+                case.keys,
+                "{}",
+                case.name
+            );
+            let remote: Vec<&str> = got[0]
+                .gpg_keys
+                .iter()
+                .filter_map(|r| match r {
+                    GpgKeyRef::Remote(url) => Some(url.as_str()),
+                    GpgKeyRef::Local(_) => None,
+                })
+                .collect();
+            assert_eq!(remote, case.remote, "{}", case.name);
+        }
+        assert!(parse_repo_sections("# comments only\n; and more\n").is_empty());
+    }
+
+    #[test]
+    fn section_ids_keep_their_case() {
+        let got = parse_repo_sections("[site]\n[SITE]\n");
+        let ids: std::collections::BTreeSet<&SectionId> = got.iter().map(|s| &s.id).collect();
+        assert_eq!(ids.len(), 2, "[site] and [SITE] are two repos");
     }
 }

@@ -1024,7 +1024,7 @@ async fn aggregate_exclude_repo_round_trip() {
         .iter()
         .find(|g| g["section_id"] == "epel")
         .unwrap();
-    assert_eq!(epel_group["enabled"], true);
+    assert_eq!(epel_group["kept"], true);
 
     // 2. SetInclude (exclude repo)
     let (status, _) = post_json(
@@ -1058,7 +1058,7 @@ async fn aggregate_exclude_repo_round_trip() {
         .find(|g| g["section_id"] == "epel")
         .unwrap();
     assert_eq!(
-        epel_group["enabled"], false,
+        epel_group["kept"], false,
         "epel repo should be disabled after SetInclude exclude"
     );
 
@@ -1094,7 +1094,7 @@ async fn aggregate_exclude_repo_round_trip() {
         .find(|g| g["section_id"] == "epel")
         .unwrap();
     assert_eq!(
-        epel_group["enabled"], true,
+        epel_group["kept"], true,
         "epel repo should be re-enabled after SetInclude include"
     );
 }

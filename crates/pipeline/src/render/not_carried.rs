@@ -86,7 +86,9 @@ use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::group_render::OperatorIncludes;
-use inspectah_core::types::repo::{RepoTier, effective_definition, parse_repo_sections, repo_tier};
+use inspectah_core::types::repo::{
+    RepoId, RepoTier, effective_definition, parse_repo_sections, repo_tier,
+};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::units::{UnitName, UnitState, UnitStateChange};
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -624,7 +626,7 @@ fn repos_lost_in_export(rpm: &RpmSection, repos: &InstallRepos) -> HashSet<Strin
         .iter()
         .filter(|f| !f.is_default_repo)
         .flat_map(|f| parse_repo_sections(&f.content))
-        .map(|sec| sec.id)
+        .map(|sec| RepoId::new(sec.id.as_str()))
         .filter(|id| {
             !default_ids.contains(id.as_str())
                 && !matches!(repo_tier(id.as_str()), RepoTier::Distro)

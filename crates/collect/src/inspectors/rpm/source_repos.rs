@@ -323,14 +323,14 @@ fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAt
     // An empty recorded value has no substring to look for -- treat it as
     // "no match" rather than letting `str::contains("")` match every
     // enabled section.
-    let substring_matches: Vec<&RepoId> = if recorded.is_empty() {
+    let substring_matches: Vec<RepoId> = if recorded.is_empty() {
         Vec::new()
     } else {
         let lower = recorded.to_lowercase();
         sections
             .iter()
             .filter(|s| s.enabled && s.id.as_str().to_lowercase().contains(&lower))
-            .map(|s| &s.id)
+            .map(|s| RepoId::new(s.id.as_str()))
             .collect()
     };
 
@@ -346,7 +346,7 @@ fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAt
             // case-variant candidates in `read_dir` order relative to
             // each other. This list serializes straight into a
             // byte-pinned contract snapshot.
-            let mut candidates: Vec<RepoId> = substring_matches.into_iter().cloned().collect();
+            let mut candidates: Vec<RepoId> = substring_matches;
             candidates.sort_by(|a, b| a.as_str().cmp(b.as_str()));
             RepoAttribution::Ambiguous {
                 recorded: recorded.to_string(),
@@ -743,6 +743,7 @@ From repo   : @commandline
             aggregate: None,
             gpgkey_references: Default::default(),
             shipped_by_base: None,
+            rejected: None,
         }
     }
 

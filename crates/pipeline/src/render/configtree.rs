@@ -25,17 +25,12 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use super::safety::{BareWord, MAX_EXPORT_PATH_LEN, has_line_break_or_control, operator_kargs};
+use super::safety::{BareWord, has_line_break_or_control, operator_kargs};
 use crate::build::extract::is_single_normal_component;
 
 /// The directory systemd reads the administrator's unit files from. A
 /// zero-length unit file directly in it is a mask.
 pub(crate) const ETC_UNIT_DIR: &str = "/etc/systemd/system";
-
-/// The longest path component a Linux filesystem holds (`NAME_MAX`), in
-/// bytes. A path's whole length is held to [`MAX_EXPORT_PATH_LEN`],
-/// Linux's `PATH_MAX`, the export's existing path-length policy.
-const MAX_PATH_COMPONENT_LEN: usize = 255;
 
 /// The provisioning service inspectah generates for flatpak applications.
 pub(crate) const FLATPAK_SERVICE: &str = "flatpak-provision.service";
@@ -44,85 +39,17 @@ pub(crate) const FLATPAK_SERVICE: &str = "flatpak-provision.service";
 /// host's cmdline (bootc's kargs.d).
 pub(crate) const KARGS_PATH: &str = "/usr/lib/bootc/kargs.d/inspectah-migrated.toml";
 
-/// Where a staged file lands in the image: a normalized absolute path.
-///
-/// The one constructor, [`Destination::new`], drops empty and `.`
-/// components, so `/etc/systemd/./system//x.timer`, a trailing separator
-/// and a path given without its leading `/` are all one destination. It
-/// refuses `..`, a NUL byte and a control character, a path that names no
-/// file, and a path or component longer than a Linux filesystem holds
-/// (checked first, so a pathological imported path costs no more than
-/// one pass). The reading is lexical: the staging directory is created
-/// empty by the export and only the stager writes into it, so no symlink
-/// sits on a path.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Destination(String);
+pub use inspectah_core::types::destination::{Destination, PathError};
 
-impl Destination {
-    /// The normalized form of `path`, or the rule it breaks.
-    pub fn new(path: &str) -> Result<Self, PathError> {
-        if path.len() > MAX_EXPORT_PATH_LEN {
-            return Err(PathError::TooLong);
-        }
-        if path.contains('\0') {
-            return Err(PathError::NulByte);
-        }
-        if has_line_break_or_control(path) {
-            return Err(PathError::LineBreakOrControl);
-        }
-        let mut normal = String::with_capacity(path.len() + 1);
-        for component in path.split('/') {
-            match component {
-                "" | "." => {}
-                ".." => return Err(PathError::Traversal),
-                name if name.len() > MAX_PATH_COMPONENT_LEN => {
-                    return Err(PathError::ComponentTooLong);
-                }
-                name => {
-                    normal.push('/');
-                    normal.push_str(name);
-                }
-            }
-        }
-        if normal.is_empty() {
-            return Err(PathError::NoFileName);
-        }
-        Ok(Self(normal))
-    }
-
-    /// The absolute path, `/` first.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// The path below `/`, for joining under a staging directory.
-    fn relative(&self) -> &str {
-        &self.0[1..]
-    }
-
-    /// The directory this path is in, `None` for a top-level name. A
-    /// prefix of a normal path ending before a separator is normal too.
-    fn parent(&self) -> Option<Destination> {
-        let (dir, _) = self.0.rsplit_once('/')?;
-        (!dir.is_empty()).then(|| Destination(dir.to_owned()))
-    }
-
-    /// Whether a zero-length file here is a mask: a file directly in
-    /// `/etc/systemd/system` named with a unit type suffix.
-    fn is_unit_file_path(&self) -> bool {
-        self.0.rsplit_once('/').is_some_and(|(dir, name)| {
-            dir == ETC_UNIT_DIR
-                && name.rsplit_once('.').is_some_and(|(stem, suffix)| {
-                    !stem.is_empty() && UNIT_TYPE_SUFFIXES.contains(&suffix)
-                })
-        })
-    }
-}
-
-impl std::fmt::Display for Destination {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
+/// Whether a zero-length file at `dest` is a mask: a file directly in
+/// `/etc/systemd/system` named with a unit type suffix.
+fn is_unit_file_path(dest: &Destination) -> bool {
+    dest.as_str().rsplit_once('/').is_some_and(|(dir, name)| {
+        dir == ETC_UNIT_DIR
+            && name.rsplit_once('.').is_some_and(|(stem, suffix)| {
+                !stem.is_empty() && UNIT_TYPE_SUFFIXES.contains(&suffix)
+            })
+    })
 }
 
 /// Why the export withholds a file it was offered.
@@ -381,44 +308,6 @@ pub fn validate_symlink_target(target: &str, _root: &str) -> Result<(), PathErro
     Ok(())
 }
 
-/// Path safety errors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum PathError {
-    #[error("path contains NUL byte")]
-    NulByte,
-    #[error("path contains a line break or control character")]
-    LineBreakOrControl,
-    #[error("absolute path not allowed")]
-    AbsolutePath,
-    #[error("path traversal detected")]
-    Traversal,
-    #[error("symlink escapes root")]
-    SymlinkEscape,
-    #[error("path names no file")]
-    NoFileName,
-    #[error("path is longer than {MAX_EXPORT_PATH_LEN} bytes")]
-    TooLong,
-    #[error("a path component is longer than {MAX_PATH_COMPONENT_LEN} bytes")]
-    ComponentTooLong,
-}
-
-impl PathError {
-    /// The variant's name, as refine's view names the rule a refused
-    /// offer broke. The one place it is spelled.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::NulByte => "NulByte",
-            Self::LineBreakOrControl => "LineBreakOrControl",
-            Self::AbsolutePath => "AbsolutePath",
-            Self::Traversal => "Traversal",
-            Self::SymlinkEscape => "SymlinkEscape",
-            Self::NoFileName => "NoFileName",
-            Self::TooLong => "TooLong",
-            Self::ComponentTooLong => "ComponentTooLong",
-        }
-    }
-}
-
 /// Destinations a config entry must not be staged at, because another
 /// section carries the file or it is not carried at all:
 ///
@@ -645,11 +534,13 @@ impl StagedFileKind {
     }
 
     /// Whether the file is an inventory's record of a host file the config
-    /// walk also records: a repo file, a GPG key or a firewall zone. These
-    /// three are the kinds the config walk can record at the same path on a
-    /// host (it excludes none of their directories).
+    /// walk also records and whose config entry stays a live control: a
+    /// firewall zone. A repo file or GPG key is not one: its config entry
+    /// is inventory shadowed by `Repositories` (`settle_repo_ownership`),
+    /// never offered, so the repo toggle is the one decision and an
+    /// included config twin cannot outvote it.
     fn is_inventory_record(self) -> bool {
-        matches!(self, Self::RepoFile | Self::GpgKey | Self::FirewallZone)
+        matches!(self, Self::FirewallZone)
     }
 
     /// Whether inspectah generates the file from its own template: a
@@ -734,10 +625,12 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
             (StagedFileKind::RepoFile, &rpm.repo_files),
             (StagedFileKind::GpgKey, &rpm.gpg_keys),
         ] {
+            // A key the scan refused holds a placeholder, never the key:
+            // it is not offered, whatever its disposition.
             out.extend(
                 files
                     .iter()
-                    .filter(|f| f.disposition.is_included())
+                    .filter(|f| f.disposition.is_included() && f.rejected.is_none())
                     .map(|f| Offer::borrowed(kind, &f.path, &f.content)),
             );
         }
@@ -999,7 +892,12 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
         .config
         .iter()
         .flat_map(|config| &config.withheld)
-        .filter_map(|row| Some((Destination::new(&row.path).ok()?.0, row.member)))
+        .filter_map(|row| {
+            Some((
+                Destination::new(&row.path).ok()?.as_str().to_owned(),
+                row.member,
+            ))
+        })
         .collect();
     let mut out = StagedWrites::default();
     let mut resolved = Vec::new();
@@ -1054,13 +952,14 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
     }
 
     for offered in by_dest.values_mut() {
-        // The rule for a file two sections record: the repo, GPG key and
-        // firewall inventories keep one representative payload per path in
-        // a fleet aggregate, while the config entry keeps the content
-        // variants. The inventory copy yields to an included config entry,
-        // so that entry's content is the write (whichever variant is
-        // included, which refine's variant selection does not yet set) and
-        // the repo file, key or zone stays in the export.
+        // The rule for a file two sections record: the firewall inventory
+        // keeps one representative payload per path in a fleet aggregate,
+        // while the config entry keeps the content variants. The zone copy
+        // yields to an included config entry, so that entry's content is
+        // the write and the zone stays in the export. A repo file or key
+        // never meets this rule from a loaded snapshot (its config twin is
+        // inventory); one built in memory with both included falls to the
+        // one-content rule below, or a conflict that withholds both.
         if offered
             .iter()
             .any(|(kind, _)| *kind == StagedFileKind::ConfigFile)
@@ -1118,7 +1017,7 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
         let Some((source, content)) = offered.into_iter().next() else {
             continue;
         };
-        if content.is_empty() && dest.is_unit_file_path() {
+        if content.is_empty() && is_unit_file_path(&dest) {
             out.withheld
                 .push((dest, source, WithheldWhy::ZeroLengthUnitFile));
             continue;

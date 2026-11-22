@@ -2,11 +2,12 @@ use std::collections::HashSet;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
-use inspectah_core::types::repo::RepoId;
+use inspectah_core::types::destination::Destination;
+use inspectah_core::types::repo::{RepoId, SectionId};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 use inspectah_refine::repo_index::RepoIndex;
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{ItemId, RefinementOp, RepoProvenance};
+use inspectah_refine::types::{ItemId, RefineError, RefinementOp, RepoControl, RepoProvenance};
 
 pub fn make_snap_with_repos() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
@@ -115,8 +116,14 @@ fn test_repo_index_packages_by_repo() {
 fn test_repo_index_multi_section_repo_file() {
     let snap = make_snap_with_repos();
     let index = RepoIndex::build(&snap);
-    let baseos_files = index.repo_file_by_section().get("baseos").unwrap();
-    let appstream_files = index.repo_file_by_section().get("appstream").unwrap();
+    let baseos_files = index
+        .repo_file_by_section()
+        .get(&SectionId::new("baseos"))
+        .unwrap();
+    let appstream_files = index
+        .repo_file_by_section()
+        .get(&SectionId::new("appstream"))
+        .unwrap();
     assert!(baseos_files.contains(&"/etc/yum.repos.d/centos.repo".to_string()));
     assert!(appstream_files.contains(&"/etc/yum.repos.d/centos.repo".to_string()));
 }
@@ -155,7 +162,7 @@ fn a_key_named_literally_and_with_a_variable_is_one_shared_key() {
 
     for id in ["epel", "mirror"] {
         assert_eq!(
-            index.gpg_keys_by_section().get(id),
+            index.gpg_keys_by_section().get(&SectionId::new(id)),
             Some(&vec![KEY.to_string()]),
             "{id} names the key at its captured path"
         );
@@ -177,7 +184,7 @@ fn test_repo_index_gpg_shared_key() {
     let index = RepoIndex::build(&snap);
     for id in ["baseos", "appstream"] {
         assert_eq!(
-            index.gpg_keys_by_section().get(id),
+            index.gpg_keys_by_section().get(&SectionId::new(id)),
             Some(&vec![
                 "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".to_string()
             ]),
@@ -304,7 +311,7 @@ fn a_replaced_uncaptured_key_does_not_make_a_repo_incomplete() {
 }
 
 #[test]
-fn validate_target_accepts_incomplete_and_refuses_the_rest() {
+fn a_repo_op_is_refused_only_when_the_repo_has_no_control() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![
@@ -380,38 +387,36 @@ fn validate_target_accepts_incomplete_and_refuses_the_rest() {
         "Incomplete provenance should be accepted"
     );
 
-    // Disabled -> Err(BadRequest), message names the provenance.
-    let err = session
+    // Disabled, with an attributed package and a file the export carries:
+    // a carriage-only switch. The decision moves; the file stays, since
+    // the enabled `[incomplete-repo]` keeps it.
+    session
         .apply(RefinementOp::SetInclude {
             item_id: ItemId::Repo {
                 path: "disabled-repo".into(),
             },
             include: false,
         })
-        .unwrap_err();
-    assert!(format!("{err}").contains("Disabled"));
+        .expect("a disabled repo that owns a carriable file has a carriage-only switch");
+    assert_eq!(
+        session.repo_state("disabled-repo").control,
+        RepoControl::CarriageOnly
+    );
 
-    // Stale (referenced by a package, no section on the host) -> Err(BadRequest).
-    let err = session
-        .apply(RefinementOp::SetInclude {
-            item_id: ItemId::Repo {
-                path: "stale-repo".into(),
-            },
-            include: false,
-        })
-        .unwrap_err();
-    assert!(format!("{err}").contains("Stale"));
-
-    // Unknown (pseudo repo) -> Err(BadRequest).
-    let err = session
-        .apply(RefinementOp::SetInclude {
-            item_id: ItemId::Repo {
-                path: "@commandline".into(),
-            },
-            include: false,
-        })
-        .unwrap_err();
-    assert!(format!("{err}").contains("Unknown"));
+    // Stale (referenced by a package, no section on the host) and a pseudo
+    // repo own nothing and have no definition: nothing to decide.
+    for path in ["stale-repo", "@commandline"] {
+        let err = session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Repo { path: path.into() },
+                include: false,
+            })
+            .unwrap_err();
+        assert!(
+            matches!(&err, RefineError::NoopTarget(m) if m.contains("nothing to decide")),
+            "{path}: {err}"
+        );
+    }
 }
 
 /// Only host-enabled sections keep a repo file or a key carried. A file
@@ -458,6 +463,11 @@ fn only_host_enabled_sections_keep_a_file_or_key_carried() {
         ..Default::default()
     });
     let index = RepoIndex::build(&snap);
+    let carried = |path: &str, excluded: &HashSet<String>| {
+        !index
+            .kept_by(&Destination::new(path).unwrap(), excluded, &snap)
+            .is_empty()
+    };
     let none = HashSet::new();
     let site = HashSet::from(["site".to_string()]);
     let disabled = HashSet::from([
@@ -471,30 +481,30 @@ fn only_host_enabled_sections_keep_a_file_or_key_carried() {
     let cases = [
         (
             ENABLED_FILE,
-            index.repo_file_carried(ENABLED_FILE, &none),
-            index.repo_file_carried(ENABLED_FILE, &site),
-            index.repo_file_carried(ENABLED_FILE, &disabled),
+            carried(ENABLED_FILE, &none),
+            carried(ENABLED_FILE, &site),
+            carried(ENABLED_FILE, &disabled),
             [true, false, true],
         ),
         (
             DISABLED_FILE,
-            index.repo_file_carried(DISABLED_FILE, &none),
-            index.repo_file_carried(DISABLED_FILE, &site),
-            index.repo_file_carried(DISABLED_FILE, &disabled),
+            carried(DISABLED_FILE, &none),
+            carried(DISABLED_FILE, &site),
+            carried(DISABLED_FILE, &disabled),
             [false, false, false],
         ),
         (
             SHARED_KEY,
-            index.gpg_key_carried(SHARED_KEY, &none),
-            index.gpg_key_carried(SHARED_KEY, &site),
-            index.gpg_key_carried(SHARED_KEY, &disabled),
+            carried(SHARED_KEY, &none),
+            carried(SHARED_KEY, &site),
+            carried(SHARED_KEY, &disabled),
             [true, false, true],
         ),
         (
             DISABLED_ONLY_KEY,
-            index.gpg_key_carried(DISABLED_ONLY_KEY, &none),
-            index.gpg_key_carried(DISABLED_ONLY_KEY, &site),
-            index.gpg_key_carried(DISABLED_ONLY_KEY, &disabled),
+            carried(DISABLED_ONLY_KEY, &none),
+            carried(DISABLED_ONLY_KEY, &site),
+            carried(DISABLED_ONLY_KEY, &disabled),
             [false, false, false],
         ),
     ];
@@ -584,7 +594,7 @@ fn a_duplicate_repo_id_takes_dnfs_definition_in_either_file_order() {
                 provenance,
                 "{what}, {order}: provenance"
             );
-            let mut defining = index.repo_file_by_section()["r"].clone();
+            let mut defining = index.repo_file_by_section()[&SectionId::new("r")].clone();
             defining.sort();
             assert_eq!(
                 defining,

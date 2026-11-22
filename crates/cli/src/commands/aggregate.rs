@@ -283,6 +283,15 @@ fn run_aggregate(args: &AggregateArgs) -> Result<()> {
     for notice in inspectah_pipeline::render::machine_state::export_notices(&merged) {
         eprintln!("{notice}");
     }
+    // The repo notices: an entry no copied repo file names. A scan or an
+    // aggregate has no refine exclusion, so no shared-file notice.
+    for notice in inspectah_pipeline::render::repo_owned::export_notices(
+        &merged,
+        &inspectah_pipeline::render::configtree::staged_writes(&merged),
+        &Default::default(),
+    ) {
+        eprintln!("{notice}");
+    }
 
     Ok(())
 }

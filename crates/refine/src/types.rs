@@ -593,6 +593,136 @@ pub struct RepoEffective {
     pub unlisted: usize,
 }
 
+/// What a repo's switch decides (§ 5.2 of the repo ownership spec).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepoControl {
+    /// Members and carriage: the switch cascades to its effective members
+    /// and moves its carriable files and keys.
+    Full,
+    /// Carriage only: its carriable files and keys, never its members. A
+    /// distro or host-disabled repo that owns a file or key the export can
+    /// carry.
+    CarriageOnly,
+    /// No switch: nothing the op could move.
+    #[default]
+    None,
+}
+
+/// A repo's decision, its carriage and its control, computed once per
+/// [`RefinedView`] (§ 5.1). The no-op rule, the row and the switch read
+/// this one value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoState {
+    pub control: RepoControl,
+    /// No repo op excluded the repo, or the last one included it.
+    pub kept: bool,
+    /// The carriable destinations this repo owns.
+    pub carriage_count: usize,
+    /// Of those, how many the projected snapshot includes.
+    pub carriage_included: usize,
+}
+
+impl Default for RepoState {
+    /// A repo the view has no state for: no control, and kept, since no
+    /// op can have excluded it.
+    fn default() -> Self {
+        Self {
+            control: RepoControl::None,
+            kept: true,
+            carriage_count: 0,
+            carriage_included: 0,
+        }
+    }
+}
+
+/// Which inventory a repo-owned entry is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepoOwnedKind {
+    RepoFile,
+    GpgKey,
+}
+
+/// One owner of a repo-owned entry, as the view shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoOwner {
+    /// The section, by exact spelling.
+    pub section_id: String,
+    /// The owner's row control; `none` when it has no row or no switch.
+    pub control: RepoControl,
+    pub kept: bool,
+}
+
+/// A section keeping an entry for an excluded owner (§ 6.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoKeeper {
+    pub section_id: String,
+    /// Set when the keeper is host-disabled and keeps the entry for this
+    /// included package's `--enablerepo` install.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enablerepo_package: Option<String>,
+}
+
+/// Why an owned entry has no owner (§ 3.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum NoOwnerCause {
+    /// A single-host snapshot: redaction rewrote the reference that named
+    /// it. `repo_files`: the repo files `snapshot.redactions` names, empty
+    /// for a snapshot another version wrote.
+    Redacted { repo_files: Vec<String> },
+    /// An aggregate: no representative repo file names it. `hosts`: the
+    /// hosts that have it. `redacted_repo_files`: as above, since a host's
+    /// redaction can be the cause instead.
+    Fleet {
+        hosts: Vec<String>,
+        redacted_repo_files: Vec<String>,
+    },
+}
+
+/// What the export does with a repo-owned entry, and why (§ 7.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum RepoOwnedExport {
+    /// Included and staged. `kept_by` names the sections keeping it for
+    /// an excluded owner; empty when no owner is excluded.
+    Ships { kept_by: Vec<RepoKeeper> },
+    /// Carriable and excluded: by a repo op, or by the scan or aggregate
+    /// default.
+    NotShipped,
+    /// A key the base image ships, with the package that ships it.
+    BaseImage { package: String },
+    /// A default repo file: never copied.
+    DefaultRepoFile,
+    /// A key the scan refused to store.
+    Rejected {
+        reason: inspectah_core::types::rpm::KeyRejection,
+    },
+    /// An entry no repo file in the snapshot, as stored, defines or names.
+    NoOwner { cause: NoOwnerCause },
+    /// Included, and withheld by the stager, with its reason.
+    Withheld { reason: String },
+}
+
+/// One destination of `rpm.repo_files` or `rpm.gpg_keys`, with who owns
+/// it and what the export does with it. The view lists one per
+/// destination, whether or not any owner has a row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoOwnedEntry {
+    /// `Destination::new` of the path: the identity every join uses.
+    pub destination: String,
+    /// Every spelling the snapshot records at this destination: the
+    /// inventory entries' paths and the paths of the config rows shadowed
+    /// by it. A config row joins on its own `path` being in this list.
+    pub recorded_paths: Vec<String>,
+    pub kind: RepoOwnedKind,
+    /// Every section that owns it, by exact spelling, sorted. Empty only
+    /// for `export: no_owner`.
+    pub owners: Vec<RepoOwner>,
+    pub export: RepoOwnedExport,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedView {
     pub packages: Vec<RefinedPackage>,
@@ -607,6 +737,15 @@ pub struct RefinedView {
     /// sees `RepoGroupInfo`'s three counts instead.
     #[serde(skip)]
     pub repo_effective: BTreeMap<String, RepoEffective>,
+    /// Each repo's decision, carriage and control (§ 5.1), keyed by
+    /// `RepoIndex::repo_identity`. Internal, like `repo_effective`: the
+    /// client sees them on `RepoGroupInfo` and `repo_owned`.
+    #[serde(skip)]
+    pub repo_states: BTreeMap<String, RepoState>,
+    /// One entry per repo-owned destination (§ 7.1). Internal: the web
+    /// view lists it as `repo_owned`.
+    #[serde(skip)]
+    pub repo_owned: Vec<RepoOwnedEntry>,
     pub generation: u64,
 }
 

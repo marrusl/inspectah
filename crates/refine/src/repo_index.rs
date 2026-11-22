@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use inspectah_core::repo_ownership::{OwnedKind, RepoOwnership, repo_ownership};
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::repo::{self, RepoId};
-use inspectah_core::types::rpm::RepoFile;
+use inspectah_core::types::destination::Destination;
+use inspectah_core::types::repo::{self, RepoId, SectionId};
 
 use crate::types::{RepoProvenance, RepoTier};
 
@@ -16,50 +17,42 @@ pub use repo::OFFICIAL_OPTIONAL_REPOS;
 ///
 /// `packages_by_repo` is keyed by [`RepoId`], which folds ASCII case, so a
 /// package's recorded spelling groups with any case of it. Everything a
-/// repo toggle acts on is keyed by the section's exact spelling instead:
-/// dnf keys repos case-sensitively, so `[site]` and `[SITE]` are two repos
-/// with their own files and keys. A toggle and a package each name one of
-/// them through [`Self::repo_identity`]. Provenance is judged on the one
-/// definition dnf uses, per exact spelling ([`Self::provenance`]).
+/// repo toggle acts on is keyed by the section's exact spelling
+/// ([`SectionId`]) instead: dnf keys repos case-sensitively, so `[site]`
+/// and `[SITE]` are two repos with their own files and keys. A toggle and
+/// a package each name one of them through [`Self::repo_identity`].
+/// Provenance is judged on the one definition dnf uses, per exact spelling
+/// ([`Self::provenance`]).
+///
+/// Who owns which file and key is core's [`repo_ownership`], read once:
+/// the session never changes repo file content, so the ownership the
+/// scan's last pass settled is the ownership every projection has.
 pub struct RepoIndex {
     /// Packages grouped by their `source_repo` section ID.
     packages_by_repo: BTreeMap<RepoId, Vec<String>>,
-    /// Repo file paths that define each section, by exact spelling.
-    repo_file_by_section: BTreeMap<String, Vec<String>>,
-    /// GPG key paths referenced by each section, by exact spelling: the
-    /// `path` of each captured key the section names, or the path as
-    /// written when no captured key answers it.
-    gpg_keys_by_section: BTreeMap<String, Vec<String>>,
-    /// Repo file path -> the exact spellings of the sections it defines
-    /// that the host enabled. Only these keep the file carried
-    /// ([`Self::repo_file_carried`]).
-    enabled_sections_by_file: BTreeMap<String, BTreeSet<String>>,
-    /// GPG key path (as in `gpg_keys_by_section`) -> the exact spellings of
-    /// the host-enabled sections that name it. Only these keep the key
-    /// carried ([`Self::gpg_key_carried`]).
-    enabled_sections_by_gpg_key: BTreeMap<String, BTreeSet<String>>,
+    /// Who owns each destination of `rpm.repo_files` and `rpm.gpg_keys`.
+    ownership: RepoOwnership,
+    /// Repo file destinations that define each section, by exact spelling.
+    repo_file_by_section: BTreeMap<SectionId, Vec<String>>,
+    /// GPG key destinations each section's `gpgkey=` names, by exact
+    /// spelling. A reference that names no captured key is not here.
+    gpg_keys_by_section: BTreeMap<SectionId, Vec<String>>,
     /// Provenance per section id, keyed by the id's exact spelling: dnf
     /// keys repos case-sensitively, so `[ab]` and `[AB]` each have their
     /// own. Read through [`Self::provenance`], which picks the spelling.
-    provenance_map: BTreeMap<String, RepoProvenance>,
+    provenance_map: BTreeMap<SectionId, RepoProvenance>,
+    /// Sections whose switch cascades to members (`repo::toggleable`).
+    toggleable: BTreeSet<SectionId>,
 }
 
-/// The paths of the captured keys a section's `gpgkey=` path names
-/// ([`RepoFile::is_key_named_by`]), sorted and without repeats; the path
-/// as written when none does. A path written with dnf variables names the
-/// key the scan recorded at its expanded path, and in an aggregate it can
-/// name one key per major.
-fn captured_key_paths(keys: &[RepoFile], reference: &str) -> Vec<String> {
-    let paths: BTreeSet<String> = keys
-        .iter()
-        .filter(|k| k.is_key_named_by(reference))
-        .map(|k| k.path.clone())
-        .collect();
-    if paths.is_empty() {
-        vec![reference.to_string()]
-    } else {
-        paths.into_iter().collect()
-    }
+/// A section that keeps an entry for an excluded owner (§ 6.1 of the repo
+/// ownership spec).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Keeper {
+    pub section: SectionId,
+    /// Set when the keeper is host-disabled and keeps the entry for this
+    /// included package's `--enablerepo` install.
+    pub enablerepo_package: Option<String>,
 }
 
 impl RepoIndex {
@@ -70,64 +63,37 @@ impl RepoIndex {
             None => {
                 return Self {
                     packages_by_repo: BTreeMap::new(),
+                    ownership: RepoOwnership::default(),
                     repo_file_by_section: BTreeMap::new(),
                     gpg_keys_by_section: BTreeMap::new(),
-                    enabled_sections_by_file: BTreeMap::new(),
-                    enabled_sections_by_gpg_key: BTreeMap::new(),
                     provenance_map: BTreeMap::new(),
+                    toggleable: BTreeSet::new(),
                 };
             }
         };
 
-        // 1. Parse repo files for sections and GPG key directives, using the
-        // INI parser shared with collect (`inspectah_core::types::repo`).
-        // These are the inventory of every defining file and key, which
-        // exclusion needs whichever definition dnf uses; provenance is
-        // judged on that one definition alone, in step 3.
-        let mut repo_file_by_section: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let mut gpg_keys_by_section: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let mut enabled_sections_by_file: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        let mut enabled_sections_by_gpg_key: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        // Every exact spelling any file defines.
-        let mut spellings: BTreeSet<String> = BTreeSet::new();
-
-        for repo_file in &rpm.repo_files {
-            for section in repo::parse_repo_sections(&repo_file.content) {
-                let spelling = section.id.as_str();
-                repo_file_by_section
-                    .entry(spelling.to_owned())
+        // 1. Ownership, from the one parser and the one matcher in core.
+        let ownership = repo_ownership(rpm);
+        let mut repo_file_by_section: BTreeMap<SectionId, Vec<String>> = BTreeMap::new();
+        let mut gpg_keys_by_section: BTreeMap<SectionId, Vec<String>> = BTreeMap::new();
+        for (dest, entry) in ownership.entries() {
+            let map = match entry.kind {
+                OwnedKind::RepoFile => &mut repo_file_by_section,
+                OwnedKind::GpgKey => &mut gpg_keys_by_section,
+            };
+            for section in entry.sections() {
+                map.entry(section)
                     .or_default()
-                    .push(repo_file.path.clone());
-                // Recorded per file, not per id: the same id can be enabled
-                // in one file and disabled in another.
-                if section.enabled {
-                    enabled_sections_by_file
-                        .entry(repo_file.path.clone())
-                        .or_default()
-                        .insert(spelling.to_owned());
-                }
-
-                for key_path in section
-                    .gpg_key_paths
-                    .iter()
-                    .flat_map(|reference| captured_key_paths(&rpm.gpg_keys, reference))
-                {
-                    gpg_keys_by_section
-                        .entry(spelling.to_owned())
-                        .or_default()
-                        .push(key_path.clone());
-
-                    if section.enabled {
-                        enabled_sections_by_gpg_key
-                            .entry(key_path)
-                            .or_default()
-                            .insert(spelling.to_owned());
-                    }
-                }
-
-                spellings.insert(spelling.to_owned());
+                    .push(dest.as_str().to_owned());
             }
         }
+        // Every exact spelling any file defines.
+        let spellings: BTreeSet<SectionId> = rpm
+            .repo_files
+            .iter()
+            .flat_map(|f| repo::parse_repo_sections(&f.content))
+            .map(|sec| sec.id)
+            .collect();
 
         // 2. Map packages by source_repo. RepoId folds ASCII case, so a
         // package's recorded spelling (e.g. dnf repoquery's "AppStream")
@@ -147,39 +113,121 @@ impl RepoIndex {
         // dnf uses on the host (`effective_definition`: the first file in
         // dnf's read order), never from the order of `repo_files`, which is
         // the host's `read_dir` order. Each exact spelling is its own repo.
-        let mut provenance_map: BTreeMap<String, RepoProvenance> = BTreeMap::new();
+        // A key the scan rejected is not captured.
+        let files = || {
+            rpm.repo_files
+                .iter()
+                .map(|f| (f.path.as_str(), f.content.as_str()))
+        };
+        let mut provenance_map: BTreeMap<SectionId, RepoProvenance> = BTreeMap::new();
+        let mut toggleable: BTreeSet<SectionId> = BTreeSet::new();
         for spelling in spellings {
-            let Some(section) = repo::effective_definition(
-                rpm.repo_files
-                    .iter()
-                    .map(|f| (f.path.as_str(), f.content.as_str())),
-                &RepoId::new(spelling.as_str()),
-            ) else {
+            let Some(section) =
+                repo::effective_definition(files(), &RepoId::new(spelling.as_str()))
+            else {
                 continue;
             };
             let prov = if !section.enabled {
                 RepoProvenance::Disabled
             } else if section.has_source
-                && section
-                    .gpg_key_paths
-                    .iter()
-                    .all(|p| rpm.gpg_keys.iter().any(|k| k.is_key_named_by(p)))
+                && section.local_keys().all(|p| {
+                    rpm.gpg_keys
+                        .iter()
+                        .any(|k| k.rejected.is_none() && k.is_key_named_by(p))
+                })
             {
                 RepoProvenance::Verified
             } else {
                 RepoProvenance::Incomplete
             };
+            if repo::toggleable(files(), spelling.as_str()) {
+                toggleable.insert(spelling.clone());
+            }
             provenance_map.insert(spelling, prov);
         }
 
         Self {
             packages_by_repo,
+            ownership,
             repo_file_by_section,
             gpg_keys_by_section,
-            enabled_sections_by_file,
-            enabled_sections_by_gpg_key,
             provenance_map,
+            toggleable,
         }
+    }
+
+    /// Who owns each destination of `rpm.repo_files` and `rpm.gpg_keys`.
+    pub fn ownership(&self) -> &RepoOwnership {
+        &self.ownership
+    }
+
+    /// Whether `repo`'s switch cascades to its members: not a distro repo,
+    /// and the definition the host's dnf uses for it is enabled.
+    pub fn is_toggleable(&self, repo: &str) -> bool {
+        self.toggleable.contains(&SectionId::new(repo))
+    }
+
+    /// Every section any repo file defines, by exact spelling.
+    pub fn sections(&self) -> impl Iterator<Item = &SectionId> {
+        self.provenance_map.keys()
+    }
+
+    /// The sections that keep the entry at `dest` (§ 6.1) when the
+    /// sections in `excluded`, by exact spelling, are excluded: each owner
+    /// not excluded and live in `snapshot`, which is the host enabling it
+    /// in the file that defines it, or the host disabling it while an
+    /// included, unlocked package attributed to it installs with
+    /// `--enablerepo` and needs the file and its keys.
+    pub fn kept_by(
+        &self,
+        dest: &Destination,
+        excluded: &HashSet<String>,
+        snapshot: &InspectionSnapshot,
+    ) -> Vec<Keeper> {
+        let Some(entry) = self.ownership.get(dest) else {
+            return Vec::new();
+        };
+        let mut keepers: BTreeSet<Keeper> = BTreeSet::new();
+        let mut seen: BTreeSet<&SectionId> = BTreeSet::new();
+        let mut owners: Vec<&inspectah_core::repo_ownership::Owner> = entry.owners.iter().collect();
+        // An enabled definition of a section decides before a disabled one.
+        owners.sort_by_key(|o| !o.enabled);
+        for owner in owners {
+            if excluded.contains(owner.section.as_str()) || !seen.insert(&owner.section) {
+                continue;
+            }
+            if owner.enabled {
+                keepers.insert(Keeper {
+                    section: owner.section.clone(),
+                    enablerepo_package: None,
+                });
+            } else if let Some(pkg) = self.enablerepo_package(&owner.section, snapshot) {
+                keepers.insert(Keeper {
+                    section: owner.section.clone(),
+                    enablerepo_package: Some(pkg),
+                });
+            }
+        }
+        keepers.into_iter().collect()
+    }
+
+    /// The least-named included, unlocked package attributed to `section`
+    /// in `snapshot`, which installs with `--enablerepo=<section>` while
+    /// the host has the section disabled.
+    fn enablerepo_package(
+        &self,
+        section: &SectionId,
+        snapshot: &InspectionSnapshot,
+    ) -> Option<String> {
+        snapshot
+            .rpm
+            .as_ref()?
+            .packages_added
+            .iter()
+            .filter(|p| p.disposition.is_included() && !p.locked)
+            .filter(|p| self.repo_identity(&p.source_repo) == section.as_str())
+            .map(|p| p.name.clone())
+            .min()
     }
 
     /// Packages grouped by their `source_repo` section ID.
@@ -187,15 +235,15 @@ impl RepoIndex {
         &self.packages_by_repo
     }
 
-    /// Repo file paths that define each section, keyed by the section's
-    /// exact spelling ([`Self::repo_identity`] names the key).
-    pub fn repo_file_by_section(&self) -> &BTreeMap<String, Vec<String>> {
+    /// Repo file destinations that define each section, keyed by the
+    /// section's exact spelling ([`Self::repo_identity`] names the key).
+    pub fn repo_file_by_section(&self) -> &BTreeMap<SectionId, Vec<String>> {
         &self.repo_file_by_section
     }
 
-    /// GPG key paths referenced by each section, keyed by the section's
+    /// GPG key destinations each section names, keyed by the section's
     /// exact spelling ([`Self::repo_identity`] names the key).
-    pub fn gpg_keys_by_section(&self) -> &BTreeMap<String, Vec<String>> {
+    pub fn gpg_keys_by_section(&self) -> &BTreeMap<SectionId, Vec<String>> {
         &self.gpg_keys_by_section
     }
 
@@ -210,36 +258,8 @@ impl RepoIndex {
     /// packages, files and keys a toggle reaches, which repos are excluded,
     /// and the effective-member counts.
     pub fn repo_identity<'a>(&'a self, recorded: &'a str) -> &'a str {
-        repo::section_spelling(self.provenance_map.keys().map(String::as_str), recorded)
+        repo::section_spelling(self.provenance_map.keys().map(SectionId::as_str), recorded)
             .unwrap_or(recorded)
-    }
-
-    /// Whether the repo file at `path` stays carried when the sections in
-    /// `excluded`, by exact spelling, are excluded: at least one section
-    /// the host enabled in it is not excluded.
-    ///
-    /// A section the host disabled does not count. The image never uses
-    /// it, so it cannot be what keeps the file: EPEL's `epel.repo` holds
-    /// `[epel]` beside the host-disabled `[epel-debuginfo]` and
-    /// `[epel-source]`, and excluding `[epel]` has to drop the file. A file
-    /// with no host-enabled section at all is therefore not carried once a
-    /// repo exclusion reaches it.
-    pub fn repo_file_carried(&self, path: &str, excluded: &HashSet<String>) -> bool {
-        self.enabled_sections_by_file
-            .get(path)
-            .is_some_and(|ids| ids.iter().any(|id| !excluded.contains(id)))
-    }
-
-    /// Whether the GPG key at `key_path` (a path as in
-    /// [`Self::gpg_keys_by_section`]) stays carried when the sections in
-    /// `excluded` are excluded: a section the host enabled names it and is
-    /// not excluded, so the file holding that section is itself carried
-    /// ([`Self::repo_file_carried`]). Sections the host disabled do not
-    /// count, for the same reason they do not keep a file.
-    pub fn gpg_key_carried(&self, key_path: &str, excluded: &HashSet<String>) -> bool {
-        self.enabled_sections_by_gpg_key
-            .get(key_path)
-            .is_some_and(|ids| ids.iter().any(|id| !excluded.contains(id)))
     }
 
     /// Look up the provenance of a repo section ID.
@@ -253,14 +273,14 @@ impl RepoIndex {
         if id.as_str().is_empty() || id.as_str().eq_ignore_ascii_case("@commandline") {
             return RepoProvenance::Unknown;
         }
-        let defined = self.provenance_map.keys().map(String::as_str);
+        let defined = self.provenance_map.keys().map(SectionId::as_str);
         if let Some(spelling) = repo::section_spelling(defined, id.as_str()) {
-            return self.provenance_map[spelling];
+            return self.provenance_map[&SectionId::new(spelling)];
         }
         let any_variant = self
             .provenance_map
             .keys()
-            .any(|spelling| spelling.eq_ignore_ascii_case(id.as_str()));
+            .any(|spelling| spelling.as_str().eq_ignore_ascii_case(id.as_str()));
         if !any_variant && self.packages_by_repo.contains_key(id) {
             RepoProvenance::Stale
         } else {

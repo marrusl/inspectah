@@ -1,6 +1,6 @@
 ---
 name: cross-inspector-shadow-passes
-description: Where a file lands in two inventories with two dispositions, one of them must be marked Inventory at collect time -- in its own pass, below finalize_cross_inspector, never inside a sibling pass's early returns. Masks are states and an administrator's storage unit file is a config entry, so neither is in units.drop_ins. Also: absence from units.state_changes is not an exclusion.
+description: Where a file lands in two inventories with two dispositions, one of them must be marked Inventory at collect time -- in its own pass, below finalize_cross_inspector, never inside a sibling pass's early returns; the repo pass runs again after redaction and after an aggregate merge, and load checks it. Masks are states and an administrator's storage unit file is a config entry, so neither is in units.drop_ins. Also: absence from units.state_changes is not an exclusion.
 ---
 
 # Cross-Inspector Shadow Passes
@@ -74,25 +74,41 @@ unconditionally and holds no logic of its own:
 ```rust
 pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
     shadow_unit_owned_paths(snapshot);
+    shadow_repo_owned_paths(snapshot);
 }
 ```
 
-One pass remains, `shadow_unit_owned_paths`; a sysctl pass sat beside
-it until sysctl files became ordinary config entries. Each pass owns its
-own missing-section `return`s. The rule for adding a second pass still
-stands: give it its own function and call it from the dispatcher, never
-append it to an existing pass's body. When the body of
+Two passes: `shadow_unit_owned_paths` (`ConfigShadow::Units`) and
+`shadow_repo_owned_paths`, which calls core's
+`repo_ownership::settle_repo_ownership` (`ConfigShadow::Repositories`):
+every config entry at the destination of an `rpm.repo_files` or
+`rpm.gpg_keys` entry becomes inventory, and a repo file or key no repo op
+can carry is excluded. A sysctl pass sat beside them until sysctl files
+became ordinary config entries. Each pass owns its own missing-section
+`return`s, and each is its own function called from the dispatcher,
+never appended to another pass's body.
+
+The repo pass also runs **after** collection, because a shadow set at
+collect time does not survive two later stages: `finish_scan` runs it
+again after redaction, which rewrites repo content and can leave a key
+no stored repo file names, and `merge_snapshots` runs it once after every
+section is merged, because the config merge clones one host's entry per
+content variant and repo files and keys pick their representatives
+independently. `InspectionSnapshot::load` checks the result
+(`check_repo_ownership`) and refuses a snapshot that breaks it. Both
+passes compare paths by `Destination` (through core's
+`shadow_matching_config_entries`), so an ostree scan's relative
+`etc/...` spelling and a `//` path are shadowed too. When the body of
 `finalize_cross_inspector` **was** the old sysctl pass, a second pass
 appended to it would not have run on any host that took one of that
 pass's early returns, which was most of them. Nothing would report it:
 the annotation's absence looks exactly like "no overlap on this host,"
 no warning fires, and the export is merely wrong.
 
-When a second pass is added, add one unit test per direction to
+Each pair of passes has one unit test per direction in
 `collect::finalize_tests`: each pass runs on a host where the other
-returns early. The sysctl and service passes had that pair
-(`the_service_pass_runs_where_the_sysctl_pass_returns_early` and its
-mirror); they went with the sysctl pass.
+returns early (`the_repo_pass_runs_where_the_units_pass_returns_early`
+and its mirror).
 
 ## Name the variant for the set, not the field
 
@@ -209,9 +225,11 @@ has already set it false. Measured through `/api/view`.
 Only the service case above has been measured. A read of the source
 suggests the same or related failures for quadlets
 (`containers.quadlet_units`, subtracted from the config tree whatever
-the quadlet's own disposition), and repo files and GPG keys (an **OR** rule rather than a
-subtraction: either inclusion stages the file). None of these has a host
-measurement. Local systemd timers are no longer on this list: the stager
+the quadlet's own disposition). It has no host measurement. Repo files
+and GPG keys left this list with the `Repositories` shadow: the stager's
+yield rule no longer lets an included config twin outvote the repo
+toggle, and `crates/cli/tests/repo_ownership_test.rs` drives both
+controls through collector-built hosts. Local systemd timers are no longer on this list: the stager
 has no local-timer writer, so a local timer's file is staged only by its
 config row, or its drop-in row for a full shadow. **Do not fix one from a source trace**:
 this subsystem has produced a chain of confident, wrong conclusions
@@ -220,7 +238,8 @@ reasoned from unverified premises. Measure first.
 ## See Also
 
 - `crates/pipeline/src/collect.rs` -- `finalize_cross_inspector` and the passes
-- `crates/core/src/types/config.rs` -- `ConfigShadow`, `ConfigFileEntry::shadowed_by`
+- `crates/core/src/types/config.rs` -- `ConfigShadow`, `ConfigFileEntry::shadowed_by`, `shadow_matching_config_entries`
+- `crates/core/src/repo_ownership.rs` -- `repo_ownership`, `settle_repo_ownership`, `check_repo_ownership`
 - `crates/pipeline/src/render/configtree.rs` -- `owned_elsewhere` and `staged_writes`
 - `crates/cli/tests/units_scan_test.rs` -- the four-state regression test, and both legs of the drop-in guard
 - `crates/refine/src/session.rs` -- the `ItemId::DropIn` arm of `SetInclude` validation, and the `ItemId::Unit` cascade

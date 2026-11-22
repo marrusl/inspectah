@@ -1,0 +1,1273 @@
+//! The repo section owns its `.repo` files and the GPG keys they name, on
+//! collector-built hosts (`process-docs/specs/proposed/2026-11-21-repo-
+//! section-owns-repo-files-and-keys.md`, § 9).
+//!
+//! Every host is a [`UnitHost`] run through the real RPM, config, units
+//! and scheduled-task inspectors and the scan's own calls. A hand-built
+//! `RepoFile` or `ConfigFileEntry` would be free to encode a layout the
+//! collectors cannot produce.
+
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use crate::unit_hosts::{
+    UnitHost, export_session, reload, render_export, scan, scan_finished, scan_unredacted, session,
+};
+use inspectah_core::aggregate::merge_snapshots;
+use inspectah_core::repo_ownership::{check_repo_ownership, repo_ownership, settle_repo_ownership};
+use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
+use inspectah_core::types::config::ConfigShadow;
+use inspectah_core::types::destination::Destination;
+use inspectah_core::types::rpm::KeyRejection;
+use inspectah_refine::repo_index::RepoIndex;
+use inspectah_refine::session::RefineSession;
+use inspectah_refine::types::{
+    ContentHash, ItemId, NoOwnerCause, RefineError, RefinementOp, RepoControl, RepoOwnedExport,
+    RepoProvenance,
+};
+
+const CUSTOM_REPO: &str = "/etc/yum.repos.d/custom.repo";
+const CUSTOM_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom";
+const EPEL_REPO: &str = "/etc/yum.repos.d/epel.repo";
+const EPEL_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9";
+const ORPHAN_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-orphan";
+const RPMNEW: &str = "/etc/yum.repos.d/custom.repo.rpmnew";
+const REPO_COPY: &str = "COPY config/etc/yum.repos.d/ /etc/yum.repos.d/";
+const KEY_COPY: &str = "COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/";
+
+/// A public key block, as the scan accepts it.
+const PGP: &str =
+    "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBFtest\n-----END PGP PUBLIC KEY BLOCK-----\n";
+
+fn custom_repo() -> String {
+    format!(
+        "[custom]\nname=Custom\nbaseurl=https://custom.example/repo\nenabled=1\n\
+         gpgkey=file://{CUSTOM_KEY}\n"
+    )
+}
+
+fn epel_repo() -> String {
+    format!(
+        "[epel]\nname=EPEL\nmetalink=https://mirrors.example/epel\nenabled=1\n\
+         gpgkey=file://{EPEL_KEY}\n\n[epel-debuginfo]\nname=EPEL debug\n\
+         metalink=https://mirrors.example/epel-debug\nenabled=0\ngpgkey=file://{EPEL_KEY}\n"
+    )
+}
+
+/// The host § 9 uses throughout: an unowned `custom.repo` and its key, a
+/// modified `epel.repo` owned by `epel-release` with its key, a key no
+/// repo names, a `.rpmnew` beside `custom.repo`, and members `tool-a` and
+/// `tool-b` from `custom`, `bat` from `epel`. EPEL's key is named
+/// literally: the scan's variable expansion has its own tests.
+fn base_host() -> UnitHost {
+    UnitHost::new()
+        .base_package("bash")
+        .file(CUSTOM_REPO, &custom_repo())
+        .file(CUSTOM_KEY, PGP)
+        .owned_file(EPEL_REPO, &epel_repo(), "epel-release")
+        .owned_file(EPEL_KEY, PGP, "epel-release")
+        .rpm_va(&format!("S.5....T.  c {EPEL_REPO}\n"), 1)
+        .file(ORPHAN_KEY, PGP)
+        .file(RPMNEW, &custom_repo())
+        .package("epel-release")
+        .package_from("tool-a", "custom")
+        .package_from("tool-b", "custom")
+        .package_from("bat", "epel")
+}
+
+/// The parser inputs of T1 to T3, added to `host`.
+fn with_parser_inputs(host: UnitHost) -> UnitHost {
+    let key = |name: &str| format!("/etc/pki/rpm-gpg/{name}");
+    host.file(
+        "/etc/yum.repos.d/cont.repo",
+        "[cont]\nbaseurl=https://cont.example/\ngpgkey=file:///etc/pki/rpm-gpg/A\n  \
+         file:///etc/pki/rpm-gpg/B\n",
+    )
+    .file(
+        "/etc/yum.repos.d/super.repo",
+        "[sup]\nbaseurl=https://sup.example/\ngpgkey=file:///etc/pki/rpm-gpg/OLD\n\
+         gpgkey=file:///etc/pki/rpm-gpg/NEW\n",
+    )
+    .file(
+        "/etc/yum.repos.d/bare.repo",
+        "[bare]\nbaseurl=https://bare.example/\ngpgkey=/etc/pki/rpm-gpg/BARE\n",
+    )
+    .file(
+        "/etc/yum.repos.d/pre.repo",
+        "gpgkey=file:///etc/pki/rpm-gpg/PRE\n[pre]\nbaseurl=https://pre.example/\n",
+    )
+    .file("/etc/yum.repos.d/empty.repo", "# comments only\n")
+    .file(
+        "/etc/yum.repos.d/reject.repo",
+        "[rej]\nbaseurl=https://rej.example/\n\
+         gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp file:///etc/pki/rpm-gpg/RPM-GPG-KEY-priv\n",
+    )
+    .file(&key("A"), PGP)
+    .file(&key("B"), PGP)
+    .file(&key("OLD"), PGP)
+    .file(&key("NEW"), PGP)
+    .file(&key("BARE"), PGP)
+    .file(&key("PRE"), PGP)
+    .file(&key("RPM-GPG-KEY-notpgp"), "plain text, not a key\n")
+    .file(
+        &key("RPM-GPG-KEY-priv"),
+        &format!("{PGP}-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQ\n-----END PGP PRIVATE KEY BLOCK-----\n"),
+    )
+}
+
+fn rpm(snap: &InspectionSnapshot) -> &inspectah_core::types::rpm::RpmSection {
+    snap.rpm.as_ref().expect("an rpm section")
+}
+
+fn key_paths(snap: &InspectionSnapshot) -> BTreeSet<&str> {
+    rpm(snap).gpg_keys.iter().map(|k| k.path.as_str()).collect()
+}
+
+fn config_row<'a>(
+    snap: &'a InspectionSnapshot,
+    path: &str,
+) -> Option<&'a inspectah_core::types::config::ConfigFileEntry> {
+    snap.config.as_ref()?.files.iter().find(|f| f.path == path)
+}
+
+fn shadowed_by_repositories(snap: &InspectionSnapshot, path: &str) -> bool {
+    let row = config_row(snap, path).unwrap_or_else(|| panic!("a config row for {path}"));
+    row.disposition.is_inventory() && row.shadowed_by == Some(ConfigShadow::Repositories)
+}
+
+fn set_repo(id: &str, include: bool) -> RefinementOp {
+    RefinementOp::SetInclude {
+        item_id: ItemId::Repo { path: id.into() },
+        include,
+    }
+}
+
+fn set_config(path: &str, include: bool) -> RefinementOp {
+    RefinementOp::SetInclude {
+        item_id: ItemId::Config { path: path.into() },
+        include,
+    }
+}
+
+fn set_package(name: &str, include: bool) -> RefinementOp {
+    RefinementOp::SetInclude {
+        item_id: ItemId::Package {
+            name: name.into(),
+            arch: "x86_64".into(),
+        },
+        include,
+    }
+}
+
+/// What an export tree stages under `config/` at `path`.
+fn staged(tree: &Path, path: &str) -> Option<String> {
+    std::fs::read_to_string(tree.join("config").join(&path[1..])).ok()
+}
+
+fn containerfile(tree: &Path) -> String {
+    std::fs::read_to_string(tree.join("Containerfile")).expect("Containerfile")
+}
+
+/// Every file under `config/<dir>` of an export tree, relative to `config/`.
+fn files_under(tree: &Path, dir: &str) -> BTreeSet<String> {
+    let root = tree.join("config");
+    let mut out = BTreeSet::new();
+    let mut stack = vec![root.join(dir)];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                out.insert(p.strip_prefix(&root).unwrap().display().to_string());
+            }
+        }
+    }
+    out
+}
+
+fn repo_files_and_keys(tree: &Path) -> BTreeSet<String> {
+    let mut all = files_under(tree, "etc/yum.repos.d");
+    all.extend(files_under(tree, "etc/pki/rpm-gpg"));
+    all
+}
+
+fn export_state<'a>(session: &'a RefineSession, path: &str) -> &'a RepoOwnedExport {
+    let dest = Destination::new(path).unwrap();
+    &session
+        .repo_owned()
+        .iter()
+        .find(|e| e.destination == dest.as_str())
+        .unwrap_or_else(|| panic!("a repo_owned entry for {path}"))
+        .export
+}
+
+// ---------------------------------------------------------------------
+// T1. One parser.
+// ---------------------------------------------------------------------
+
+#[test]
+fn t1_collection_and_ownership_read_one_parse() {
+    let snap = scan_unredacted(with_parser_inputs(base_host()));
+    let keys = key_paths(&snap);
+    for named in [
+        "/etc/pki/rpm-gpg/A",
+        "/etc/pki/rpm-gpg/B",
+        "/etc/pki/rpm-gpg/NEW",
+        "/etc/pki/rpm-gpg/BARE",
+        EPEL_KEY,
+        CUSTOM_KEY,
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp",
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-priv",
+    ] {
+        assert!(keys.contains(named), "{named} is collected: {keys:?}");
+    }
+    for unnamed in ["/etc/pki/rpm-gpg/OLD", "/etc/pki/rpm-gpg/PRE", ORPHAN_KEY] {
+        assert!(!keys.contains(unnamed), "{unnamed} is not a repo key");
+    }
+    assert!(
+        rpm(&snap)
+            .repo_files
+            .iter()
+            .all(|f| f.path != "/etc/yum.repos.d/empty.repo"),
+        "a file that defines no section is not a repo definition"
+    );
+
+    // The invariant: every repo file defines a section, and every key is
+    // named by a section of some repo file.
+    let ownership = repo_ownership(rpm(&snap));
+    for (dest, entry) in ownership.entries() {
+        assert!(!entry.owners.is_empty(), "{dest} has an owner");
+    }
+
+    for (path, why) in [
+        ("/etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp", KeyRejection::NotPgp),
+        (
+            "/etc/pki/rpm-gpg/RPM-GPG-KEY-priv",
+            KeyRejection::PrivateKeyMaterial,
+        ),
+    ] {
+        let key = rpm(&snap).gpg_keys.iter().find(|k| k.path == path).unwrap();
+        assert_eq!(key.rejected, Some(why), "{path}");
+        assert!(!key.disposition.is_included(), "{path}");
+        assert!(key.content.starts_with("# REDACTED"), "{path}: placeholder");
+    }
+    assert_eq!(
+        RepoIndex::build(&snap).provenance(&inspectah_core::types::repo::RepoId::new("rej")),
+        RepoProvenance::Incomplete
+    );
+}
+
+// ---------------------------------------------------------------------
+// T2. The ownership pass on a scan.
+// ---------------------------------------------------------------------
+
+#[test]
+fn t2_config_twins_are_decided_under_repositories() {
+    let snap = scan(with_parser_inputs(base_host()));
+    for path in [
+        CUSTOM_REPO,
+        EPEL_REPO,
+        CUSTOM_KEY,
+        "/etc/pki/rpm-gpg/A",
+        "/etc/pki/rpm-gpg/B",
+        "/etc/pki/rpm-gpg/BARE",
+    ] {
+        assert!(shadowed_by_repositories(&snap, path), "{path}");
+    }
+    for path in [
+        ORPHAN_KEY,
+        RPMNEW,
+        "/etc/yum.repos.d/empty.repo",
+        "/etc/pki/rpm-gpg/OLD",
+        "/etc/pki/rpm-gpg/PRE",
+    ] {
+        let row = config_row(&snap, path).unwrap_or_else(|| panic!("a config row for {path}"));
+        assert_eq!(row.shadowed_by, None, "{path}");
+        assert!(!row.disposition.is_inventory(), "{path} keeps its control");
+    }
+    check_repo_ownership(&snap).expect("the scan holds the invariants");
+}
+
+#[test]
+fn t2_a_key_named_with_a_double_slash_is_still_shadowed() {
+    let snap = scan(UnitHost::new().base_package("bash").file(
+        CUSTOM_REPO,
+        "[custom]\nbaseurl=https://custom.example/\ngpgkey=file:///etc/pki/rpm-gpg//RPM-GPG-KEY-custom\n",
+    ).file(CUSTOM_KEY, PGP));
+    assert!(shadowed_by_repositories(&snap, CUSTOM_KEY));
+    check_repo_ownership(&snap).expect("settled");
+}
+
+// ---------------------------------------------------------------------
+// T3. Four-state contract and reach, refine.
+// ---------------------------------------------------------------------
+
+/// The repo switch is the one control: the config row refuses both
+/// directions, every accepted repo op is obeyed by the staged tree and
+/// the Containerfile, and only a repo op moves a repo file or key.
+#[test]
+fn t3_the_repo_switch_is_the_one_control() {
+    let snap = reload(&scan(with_parser_inputs(base_host())));
+    for (repo, path) in [
+        ("custom", CUSTOM_REPO),
+        ("epel", EPEL_REPO),
+        ("custom", CUSTOM_KEY),
+    ] {
+        let mut s = session(&snap);
+        for include in [false, true] {
+            assert!(
+                matches!(
+                    s.apply(set_config(path, include)),
+                    Err(RefineError::InventoryNotToggleable(_))
+                ),
+                "{path}: the config row is read-only"
+            );
+        }
+        for include in [false, true, false] {
+            s.apply(set_repo(repo, include))
+                .unwrap_or_else(|e| panic!("{repo} include={include}: {e}"));
+            let tree = export_session(&s);
+            assert_eq!(
+                staged(tree.path(), path).is_some(),
+                include,
+                "{path} {include}"
+            );
+            let file = containerfile(tree.path());
+            if path.ends_with(".repo") {
+                let repo_files = files_under(tree.path(), "etc/yum.repos.d");
+                assert_eq!(file.contains(REPO_COPY), !repo_files.is_empty(), "{file}");
+            }
+            assert!(
+                !file
+                    .lines()
+                    .any(|l| l.starts_with("# FIXME") && l.contains(path)),
+                "nothing written twice or withheld:\n{file}"
+            );
+            // Only repo ops moved repo dispositions: every entry that
+            // differs from the scan's is one a repo op reaches.
+            let projected = s.snapshot_projected();
+            let index = s.repo_index();
+            for (before, after) in rpm(&snap)
+                .repo_files
+                .iter()
+                .chain(&rpm(&snap).gpg_keys)
+                .zip(
+                    rpm(&projected)
+                        .repo_files
+                        .iter()
+                        .chain(&rpm(&projected).gpg_keys),
+                )
+            {
+                if before.disposition != after.disposition {
+                    let dest = Destination::new(&before.path).unwrap();
+                    assert!(
+                        index
+                            .ownership()
+                            .get(&dest)
+                            .is_some_and(|e| e.owners.iter().any(|o| o.section.as_str() == repo)),
+                        "{}: moved by {repo}",
+                        before.path
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn t3_every_carriable_entry_can_be_dropped_and_rejected_keys_never_ship() {
+    let snap = reload(&scan(with_parser_inputs(base_host())));
+    let probe = session(&snap);
+    let mut owners: Vec<String> = probe
+        .view()
+        .repo_states
+        .iter()
+        .filter(|(_, s)| s.control != RepoControl::None)
+        .map(|(id, _)| id.clone())
+        .collect();
+    owners.sort();
+    for order in [owners.clone(), owners.iter().rev().cloned().collect()] {
+        let mut s = session(&snap);
+        for id in &order {
+            s.apply(set_repo(id, false))
+                .unwrap_or_else(|e| panic!("exclude {id}: {e}"));
+        }
+        let tree = export_session(&s);
+        let owned: BTreeSet<String> = repo_ownership(rpm(&snap))
+            .entries()
+            .map(|(d, _)| d.as_str()[1..].to_owned())
+            .collect();
+        let left: BTreeSet<String> = repo_files_and_keys(tree.path())
+            .intersection(&owned)
+            .cloned()
+            .collect();
+        assert!(
+            left.is_empty(),
+            "excluding every switch leaves no repo-owned file or key: {left:?}"
+        );
+    }
+    // Excluding then including [rej] leaves both rejected keys out.
+    let mut s = session(&snap);
+    s.apply(set_repo("rej", false)).unwrap();
+    s.apply(set_repo("rej", true)).unwrap();
+    let tree = export_session(&s);
+    for name in ["RPM-GPG-KEY-notpgp", "RPM-GPG-KEY-priv"] {
+        let path = format!("/etc/pki/rpm-gpg/{name}");
+        assert!(staged(tree.path(), &path).is_none(), "{path}");
+        assert!(matches!(
+            export_state(&s, &path),
+            RepoOwnedExport::Rejected { .. }
+        ));
+    }
+}
+
+// ---------------------------------------------------------------------
+// T4. Zero-member repos and initial exclusions.
+// ---------------------------------------------------------------------
+
+#[test]
+fn t4_a_repo_whose_members_are_all_excluded_still_decides_its_files() {
+    let snap = reload(&scan(base_host()));
+    let mut s = session(&snap);
+    s.apply(set_package("tool-a", false)).unwrap();
+    s.apply(set_package("tool-b", false)).unwrap();
+    let state = s.repo_state("custom");
+    assert!(state.kept);
+    assert_eq!((state.carriage_included, state.carriage_count), (2, 2));
+
+    s.apply(set_repo("custom", false))
+        .expect("the exclude moves the decision and the files");
+    assert!(!s.repo_state("custom").kept);
+    let tree = export_session(&s);
+    assert!(staged(tree.path(), CUSTOM_REPO).is_none());
+    assert!(staged(tree.path(), CUSTOM_KEY).is_none());
+
+    s.apply(set_repo("custom", true)).expect("include");
+    let tree = export_session(&s);
+    assert!(staged(tree.path(), CUSTOM_REPO).is_some());
+    assert!(staged(tree.path(), CUSTOM_KEY).is_some());
+    let included: BTreeSet<String> = s
+        .snapshot_projected()
+        .rpm
+        .unwrap()
+        .packages_added
+        .iter()
+        .filter(|p| p.disposition.is_included())
+        .map(|p| p.name.clone())
+        .collect();
+    assert!(included.contains("tool-a") && included.contains("tool-b"));
+
+    s.undo().unwrap();
+    assert!(staged(export_session(&s).path(), CUSTOM_REPO).is_none());
+    s.redo().unwrap();
+    assert!(staged(export_session(&s).path(), CUSTOM_REPO).is_some());
+}
+
+/// A bootstrap repo no package is attributed to, which serves the
+/// `vendor-release` package that owns its file.
+#[test]
+fn t4_a_never_attributed_repo_has_a_row_and_a_switch() {
+    const VENDOR_REPO: &str = "/etc/yum.repos.d/vendor.repo";
+    const VENDOR_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-vendor";
+    let host = UnitHost::new()
+        .base_package("bash")
+        .owned_file(
+            VENDOR_REPO,
+            &format!(
+                "[bootstrap]\nbaseurl=https://vendor.example/\nenabled=1\n\
+                 gpgkey=file://{VENDOR_KEY}\n"
+            ),
+            "vendor-release",
+        )
+        .owned_file(VENDOR_KEY, PGP, "vendor-release")
+        .package_from("vendor-release", "@commandline")
+        .enabled_repos(&["bootstrap"])
+        .available("vendor-release", "bootstrap");
+    let snap = reload(&scan_finished(host));
+    let vendor = rpm(&snap)
+        .packages_added
+        .iter()
+        .find(|p| p.name == "vendor-release")
+        .unwrap();
+    assert_eq!(
+        vendor
+            .repo_enabling_from
+            .iter()
+            .map(|r| r.as_str())
+            .collect::<Vec<_>>(),
+        ["bootstrap"]
+    );
+
+    let mut s = session(&snap);
+    // Refine opens a `@commandline` package excluded; the operator
+    // includes it, and the export installs it from `bootstrap`.
+    s.apply(set_package("vendor-release", true)).unwrap();
+    let file = containerfile(export_session(&s).path());
+    assert!(file.contains("    vendor-release"), "{file}");
+    let row = inspectah_refine::projection::project_decisions(&s)
+        .repo_groups
+        .into_iter()
+        .find(|g| g.section_id == "bootstrap")
+        .expect("bootstrap has a row");
+    assert_eq!(row.control, RepoControl::Full);
+    assert!(row.kept);
+    assert_eq!((row.carriage_included, row.carriage_count), (2, 2));
+
+    s.apply(set_repo("bootstrap", false))
+        .expect("excluding the bootstrap repo is accepted");
+    let tree = export_session(&s);
+    assert!(staged(tree.path(), VENDOR_REPO).is_none());
+    assert!(staged(tree.path(), VENDOR_KEY).is_none());
+    let file = containerfile(tree.path());
+    assert!(
+        file.contains("# FIXME: re-include repo bootstrap"),
+        "vendor-release is demoted with the existing FIXME:\n{file}"
+    );
+}
+
+#[test]
+fn t4_a_repo_with_no_control_is_refused_with_nothing_to_decide() {
+    let snap = reload(&scan(base_host()));
+    let mut s = session(&snap);
+    for include in [true, false] {
+        assert!(matches!(
+            s.apply(set_repo("nosuch", include)),
+            Err(RefineError::NoopTarget(m)) if m.starts_with("nothing to decide in 'nosuch'")
+        ));
+    }
+    // A kept repo, fully carried, with every member included.
+    assert!(matches!(
+        s.apply(set_repo("custom", true)),
+        Err(RefineError::NoopTarget(m)) if m.contains("already kept")
+    ));
+}
+
+#[test]
+fn t4_a_default_repo_file_is_never_staged() {
+    const REDHAT: &str = "/etc/yum.repos.d/redhat.repo";
+    let host = base_host()
+        .file(
+            REDHAT,
+            "[rhel-9-for-x86_64-baseos-rpms]\nbaseurl=https://cdn.example/baseos\n\
+         [codeready-builder-for-rhel-9-x86_64-rpms]\nbaseurl=https://cdn.example/crb\nenabled=1\n",
+        )
+        .package_from("crb-tool", "codeready-builder-for-rhel-9-x86_64-rpms");
+    let snap = reload(&scan(host));
+    assert!(shadowed_by_repositories(&snap, REDHAT));
+    assert!(staged(render_export(&snap).path(), REDHAT).is_none());
+    let mut s = session(&snap);
+    assert_eq!(
+        s.repo_state("codeready-builder-for-rhel-9-x86_64-rpms")
+            .carriage_count,
+        0
+    );
+    s.apply(set_repo("codeready-builder-for-rhel-9-x86_64-rpms", false))
+        .expect("moves the member");
+    s.apply(set_repo("codeready-builder-for-rhel-9-x86_64-rpms", true))
+        .expect("moves the member back");
+    assert!(staged(export_session(&s).path(), REDHAT).is_none());
+    assert!(matches!(
+        export_state(&s, REDHAT),
+        RepoOwnedExport::DefaultRepoFile
+    ));
+}
+
+// ---------------------------------------------------------------------
+// T5. Shared files.
+// ---------------------------------------------------------------------
+
+#[test]
+fn t5_a_key_two_repos_name_ships_while_the_other_keeps_it() {
+    const KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-shared";
+    let repo = |id: &str| format!("[{id}]\nbaseurl=https://{id}.example/\ngpgkey=file://{KEY}\n");
+    let snap = reload(&scan(
+        UnitHost::new()
+            .base_package("bash")
+            .file("/etc/yum.repos.d/a.repo", &repo("a"))
+            .file("/etc/yum.repos.d/b.repo", &repo("b"))
+            .file(KEY, PGP),
+    ));
+    let mut s = session(&snap);
+    let tree_before = export_session(&s);
+    s.apply(set_repo("a", false))
+        .expect("the decision moves though no staged byte of the key does");
+    assert!(!s.repo_state("a").kept);
+    match export_state(&s, KEY) {
+        RepoOwnedExport::Ships { kept_by } => {
+            assert_eq!(kept_by.len(), 1);
+            assert_eq!(kept_by[0].section_id, "b");
+            assert_eq!(kept_by[0].enablerepo_package, None);
+        }
+        other => panic!("the key ships for b: {other:?}"),
+    }
+    assert_eq!(
+        staged(tree_before.path(), KEY),
+        staged(export_session(&s).path(), KEY)
+    );
+    s.apply(set_repo("b", false)).unwrap();
+    assert!(staged(export_session(&s).path(), KEY).is_none());
+    s.undo().unwrap();
+    assert!(staged(export_session(&s).path(), KEY).is_some());
+    s.redo().unwrap();
+    assert!(staged(export_session(&s).path(), KEY).is_none());
+}
+
+#[test]
+fn t5_one_file_with_mixed_toggles_ships_whole_and_says_so() {
+    const AB: &str = "/etc/yum.repos.d/ab.repo";
+    let snap = reload(&scan(
+        UnitHost::new()
+            .base_package("bash")
+            .file(
+                AB,
+                "[a]\nbaseurl=https://a.example/\n[b]\nbaseurl=https://b.example/\n\
+                 [a-source]\nbaseurl=https://a.example/src\nenabled=0\n",
+            )
+            .package_from("pa", "a")
+            .package_from("pb", "b"),
+    ));
+    let mut s = session(&snap);
+    s.apply(set_repo("a", false)).unwrap();
+    let tree = export_session(&s);
+    assert!(staged(tree.path(), AB).is_some(), "the file ships whole");
+    let file = containerfile(tree.path());
+    let line = format!(
+        "# {AB} also defines repo a, excluded in refine; the file is copied whole for repo b, \
+         so a stays defined as the host had it"
+    );
+    assert!(file.lines().any(|l| l == line), "{file}");
+    let packed = tempfile::tempdir().unwrap();
+    let warnings = s
+        .export_plan(s.generation())
+        .unwrap()
+        .render(&packed.path().join("x.tar.gz"))
+        .unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.text().starts_with(&format!("{AB} also defines repo a"))),
+        "{warnings:?}"
+    );
+    s.apply(set_repo("b", false)).unwrap();
+    assert!(
+        staged(export_session(&s).path(), AB).is_none(),
+        "the disabled [a-source] does not keep it"
+    );
+}
+
+#[test]
+fn t5_sections_that_differ_only_in_case_are_two_repos() {
+    const SITE: &str = "/etc/yum.repos.d/site.repo";
+    const K: &str = "/etc/pki/rpm-gpg/K";
+    let lower = "[site]\nbaseurl=https://lower.example/\ngpgkey=file:///etc/pki/rpm-gpg/K\n";
+    let upper = "[SITE]\nbaseurl=https://upper.example/\ngpgkey=file:///etc/pki/rpm-gpg/K\n";
+    for content in [format!("{lower}{upper}"), format!("{upper}{lower}")] {
+        let snap = reload(&scan(
+            UnitHost::new()
+                .base_package("bash")
+                .file(SITE, &content)
+                .file(K, PGP)
+                .package_from("pkg", "SITE"),
+        ));
+        let ownership = repo_ownership(rpm(&snap));
+        for path in [SITE, K] {
+            let ids: Vec<&str> = ownership
+                .get(&Destination::new(path).unwrap())
+                .unwrap()
+                .owners
+                .iter()
+                .map(|o| o.section.as_str())
+                .collect();
+            let ids: BTreeSet<&str> = ids.into_iter().collect();
+            assert_eq!(ids, BTreeSet::from(["SITE", "site"]), "{path}");
+        }
+        let mut s = session(&snap);
+        s.apply(set_repo("site", false)).unwrap();
+        let pkg_included = s
+            .snapshot_projected()
+            .rpm
+            .unwrap()
+            .packages_added
+            .iter()
+            .any(|p| p.name == "pkg" && p.disposition.is_included());
+        assert!(pkg_included, "pkg is SITE's, not site's");
+        for path in [SITE, K] {
+            match export_state(&s, path) {
+                RepoOwnedExport::Ships { kept_by } => {
+                    assert_eq!(kept_by[0].section_id, "SITE", "{path}")
+                }
+                other => panic!("{path}: {other:?}"),
+            }
+        }
+        s.apply(set_repo("SITE", false)).unwrap();
+        let tree = export_session(&s);
+        assert!(staged(tree.path(), SITE).is_none());
+        assert!(staged(tree.path(), K).is_none());
+    }
+}
+
+#[test]
+fn t5_a_disabled_repo_with_an_enablerepo_install_keeps_a_shared_key() {
+    const KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-ad";
+    let snap = reload(&scan_finished(
+        UnitHost::new()
+            .base_package("bash")
+            .file(
+                "/etc/yum.repos.d/a.repo",
+                &format!("[a]\nbaseurl=https://a.example/\ngpgkey=file://{KEY}\n"),
+            )
+            .file(
+                "/etc/yum.repos.d/d.repo",
+                &format!("[d]\nbaseurl=https://d.example/\nenabled=0\ngpgkey=file://{KEY}\n"),
+            )
+            .file(KEY, PGP)
+            .package_from("pd", "d")
+            .enabled_repos(&["a"]),
+    ));
+    let mut s = session(&snap);
+    assert_eq!(s.repo_state("d").control, RepoControl::CarriageOnly);
+    let before = containerfile(export_session(&s).path());
+    assert!(before.contains("--enablerepo=d"), "{before}");
+    s.apply(set_repo("a", false)).unwrap();
+    match export_state(&s, KEY) {
+        RepoOwnedExport::Ships { kept_by } => {
+            assert_eq!(kept_by[0].section_id, "d");
+            assert_eq!(kept_by[0].enablerepo_package.as_deref(), Some("pd"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(containerfile(export_session(&s).path()).contains("--enablerepo=d"));
+
+    // d's carriage-only switch drops d.repo and leaves pd alone.
+    s.apply(set_repo("d", false)).unwrap();
+    let projected = s.snapshot_projected();
+    assert!(
+        rpm(&projected)
+            .packages_added
+            .iter()
+            .any(|p| p.name == "pd" && p.disposition.is_included()),
+        "a carriage-only switch never moves members"
+    );
+    assert!(staged(export_session(&s).path(), "/etc/yum.repos.d/d.repo").is_none());
+}
+
+// ---------------------------------------------------------------------
+// T6. CLI export.
+// ---------------------------------------------------------------------
+
+#[test]
+fn t6_the_scan_tarball_stages_each_repo_file_and_key_once() {
+    let snap = scan(with_parser_inputs(base_host()));
+    let tree = render_export(&snap);
+    let file = containerfile(tree.path());
+    for path in [CUSTOM_REPO, EPEL_REPO, CUSTOM_KEY, EPEL_KEY] {
+        assert!(staged(tree.path(), path).is_some(), "{path}");
+    }
+    assert_eq!(
+        staged(tree.path(), EPEL_REPO).as_deref(),
+        Some(epel_repo().as_str())
+    );
+    for path in [RPMNEW, "/etc/yum.repos.d/empty.repo", ORPHAN_KEY] {
+        assert!(
+            staged(tree.path(), path).is_some(),
+            "{path}: an ordinary config file"
+        );
+    }
+    for name in ["RPM-GPG-KEY-notpgp", "RPM-GPG-KEY-priv"] {
+        assert!(staged(tree.path(), &format!("/etc/pki/rpm-gpg/{name}")).is_none());
+    }
+    assert!(
+        file.contains(REPO_COPY) && file.contains(KEY_COPY),
+        "{file}"
+    );
+}
+
+#[test]
+fn t6_the_scan_path_and_refine_stage_the_same_repo_tree() {
+    let snap = reload(&scan(base_host()));
+    let mut s = session(&snap);
+    s.apply(set_repo("custom", false)).unwrap();
+    let refine = export_session(&s);
+    let cli = render_export(&s.snapshot_projected());
+    assert!(staged(refine.path(), CUSTOM_REPO).is_none());
+    assert!(staged(refine.path(), CUSTOM_KEY).is_none());
+    assert_eq!(
+        repo_files_and_keys(refine.path()),
+        repo_files_and_keys(cli.path())
+    );
+}
+
+#[test]
+fn t6_an_aggregate_excludes_default_repo_files_and_rejected_keys() {
+    let host = |name: &str| {
+        reload(&scan(
+            with_parser_inputs(base_host())
+                .file(
+                    "/etc/yum.repos.d/redhat.repo",
+                    "[rhel-9-for-x86_64-baseos-rpms]\nbaseurl=https://cdn.example/\n",
+                )
+                .file("/etc/hostname", &format!("{name}\n")),
+        ))
+    };
+    let (merged, _) = merge_snapshots(vec![host("h1"), host("h2")], None, None).unwrap();
+    let merged = reload(&merged);
+    for path in [
+        "/etc/yum.repos.d/redhat.repo",
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-notpgp",
+        "/etc/pki/rpm-gpg/RPM-GPG-KEY-priv",
+    ] {
+        let entry = rpm(&merged)
+            .repo_files
+            .iter()
+            .chain(&rpm(&merged).gpg_keys)
+            .find(|e| e.path == path)
+            .unwrap();
+        assert!(!entry.disposition.is_included(), "{path}");
+        assert!(
+            staged(render_export(&merged).path(), path).is_none(),
+            "{path}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------
+// T7. Aggregate.
+// ---------------------------------------------------------------------
+
+fn named(host: UnitHost, name: &str) -> InspectionSnapshot {
+    reload(&scan(host.file("/etc/hostname", &format!("{name}\n"))))
+}
+
+/// After every fleet case: the invariants hold on the merged snapshot and
+/// on it reloaded, and every config entry at a repo destination is
+/// decided under Repositories.
+fn assert_fleet_invariants(merged: &InspectionSnapshot) {
+    check_repo_ownership(merged).expect("merged");
+    let reloaded = reload(merged);
+    check_repo_ownership(&reloaded).expect("reloaded");
+    let ownership = repo_ownership(rpm(merged));
+    for row in merged.config.iter().flat_map(|c| &c.files) {
+        if Destination::new(&row.path).is_ok_and(|d| ownership.contains(&d))
+            && !row.disposition.is_advisory()
+        {
+            assert_eq!(
+                row.shadowed_by,
+                Some(ConfigShadow::Repositories),
+                "{}",
+                row.path
+            );
+        }
+    }
+    let mut again = merged.clone();
+    settle_repo_ownership(&mut again);
+    assert_eq!(&again, merged, "settling twice changes nothing");
+}
+
+#[test]
+fn t7_the_most_common_version_ships_with_a_line_naming_the_others() {
+    let custom = |base: &str| {
+        UnitHost::new().base_package("bash").file(
+            CUSTOM_REPO,
+            &format!("[custom]\nbaseurl=https://{base}.example/\n"),
+        )
+    };
+    let (merged, _) = merge_snapshots(
+        vec![
+            named(custom("one"), "h1"),
+            named(custom("one"), "h2"),
+            named(custom("two"), "h3"),
+        ],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_fleet_invariants(&merged);
+    let row = &rpm(&merged).repo_files[0];
+    let prevalence = row.aggregate.as_ref().unwrap();
+    assert_eq!(
+        prevalence.payload_hosts.as_deref(),
+        Some(&["h1".to_string(), "h2".to_string()][..])
+    );
+    let tree = render_export(&merged);
+    let file = containerfile(tree.path());
+    let line = format!(
+        "# {CUSTOM_REPO}: the export copies the version 2 of 3 hosts with this file have; a \
+         different version is on h3"
+    );
+    assert!(file.lines().any(|l| l == line), "{file}");
+}
+
+#[test]
+fn t7_a_key_whose_content_differs_between_hosts_gets_the_line() {
+    let host = |key: &str| {
+        UnitHost::new()
+            .base_package("bash")
+            .file(CUSTOM_REPO, &custom_repo())
+            .file(CUSTOM_KEY, key)
+    };
+    let other = PGP.replace("mQENBFtest", "mQENBFother");
+    let (merged, _) = merge_snapshots(
+        vec![named(host(PGP), "h1"), named(host(&other), "h2")],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_fleet_invariants(&merged);
+    let file = containerfile(render_export(&merged).path());
+    assert!(
+        file.lines().any(|l| l.starts_with(&format!(
+            "# {CUSTOM_KEY}: the export copies the version 1 of 2"
+        ))),
+        "{file}"
+    );
+}
+
+/// The config rows of a fleet repo file are read-only: every config op on
+/// them is refused, and the export stages the repo row's representative.
+#[test]
+fn t7_fleet_config_variants_of_a_repo_file_are_read_only() {
+    let custom = |base: &str| {
+        UnitHost::new().base_package("bash").file(
+            CUSTOM_REPO,
+            &format!("[custom]\nbaseurl=https://{base}.example/\n"),
+        )
+    };
+    for (first, second) in [("alpha", "beta"), ("beta", "alpha")] {
+        let (merged, _) = merge_snapshots(
+            vec![
+                named(custom(first), "host-a"),
+                named(custom(second), "host-b"),
+            ],
+            None,
+            None,
+        )
+        .unwrap();
+        assert_fleet_invariants(&merged);
+        let representative = rpm(&merged).repo_files[0].content.clone();
+        let mut s = session(&reload(&merged));
+        let hash = |content: &str| ContentHash::from_content(content.as_bytes());
+        let ops = [
+            set_config(CUSTOM_REPO, true),
+            set_config(CUSTOM_REPO, false),
+            RefinementOp::SelectVariant {
+                item_id: ItemId::Config {
+                    path: CUSTOM_REPO.into(),
+                },
+                target: hash(&representative),
+            },
+            RefinementOp::EditVariant {
+                item_id: ItemId::Config {
+                    path: CUSTOM_REPO.into(),
+                },
+                content: "[custom]\nbaseurl=https://edited.example/\n".into(),
+                based_on: None,
+            },
+            RefinementOp::DiscardVariant {
+                item_id: ItemId::Config {
+                    path: CUSTOM_REPO.into(),
+                },
+                variant: hash(&representative),
+            },
+        ];
+        for op in ops {
+            assert!(
+                matches!(
+                    s.apply(op.clone()),
+                    Err(RefineError::InventoryNotToggleable(_))
+                ),
+                "{op:?}"
+            );
+        }
+        assert_eq!(s.timeline_len(), 0);
+        assert_eq!(
+            staged(export_session(&s).path(), CUSTOM_REPO).as_deref(),
+            Some(representative.as_str())
+        );
+    }
+}
+
+/// Correlated keys over three hosts: every representative names A, so B,
+/// which every host collected, has no owner, is never staged, and the
+/// export names it.
+#[test]
+fn t7_a_key_no_copied_version_names_is_left_out_and_named() {
+    const A: &str = "/etc/pki/rpm-gpg/A";
+    const B: &str = "/etc/pki/rpm-gpg/B";
+    let repo = |id: &str, key: &str| {
+        format!("[{id}]\nbaseurl=https://{id}.example/\nenabled=1\ngpgkey=file://{key}\n")
+    };
+    let host = |x: &str, y: &str, z: &str| {
+        UnitHost::new()
+            .base_package("bash")
+            .file("/etc/yum.repos.d/x.repo", &repo("x", x))
+            .file("/etc/yum.repos.d/y.repo", &repo("y", y))
+            .file("/etc/yum.repos.d/z.repo", &repo("z", z))
+            .file(A, PGP)
+            .file(B, PGP)
+    };
+    let hosts = || {
+        vec![
+            named(host(B, A, A), "h1"),
+            named(host(A, B, A), "h2"),
+            named(host(A, A, B), "h3"),
+        ]
+    };
+    let (merged, _) = merge_snapshots(hosts(), None, None).unwrap();
+    assert_fleet_invariants(&merged);
+    let mut rotated = hosts();
+    rotated.rotate_left(1);
+    let (merged_rotated, _) = merge_snapshots(rotated, None, None).unwrap();
+    assert_eq!(merged.rpm, merged_rotated.rpm);
+    assert_eq!(merged.config, merged_rotated.config);
+
+    let b = rpm(&merged).gpg_keys.iter().find(|k| k.path == B).unwrap();
+    assert!(!b.disposition.is_included());
+    assert!(shadowed_by_repositories(&merged, B));
+    let mut s = session(&reload(&merged));
+    match export_state(&s, B) {
+        RepoOwnedExport::NoOwner {
+            cause: NoOwnerCause::Fleet { hosts, .. },
+        } => assert_eq!(hosts, &["h1", "h2", "h3"]),
+        other => panic!("{other:?}"),
+    }
+    for id in ["x", "y", "z"] {
+        s.apply(set_repo(id, false)).unwrap();
+    }
+    assert!(repo_files_and_keys(export_session(&s).path()).is_empty());
+    for id in ["x", "y", "z"] {
+        s.apply(set_repo(id, true)).unwrap();
+    }
+    let tree = export_session(&s);
+    assert!(staged(tree.path(), A).is_some());
+    assert!(staged(tree.path(), B).is_none());
+    let packed = tempfile::tempdir().unwrap();
+    let warnings = s
+        .export_plan(s.generation())
+        .unwrap()
+        .render(&packed.path().join("x.tar.gz"))
+        .unwrap();
+    assert!(
+        warnings.iter().any(|w| w.text()
+            == format!(
+                "{B} is not copied: no version of a repo file that the export copies names it. \
+                 h1, h2, h3 have it because a different version of a repo file names it there."
+            )),
+        "{warnings:?}"
+    );
+}
+
+/// A key one host's repo owns and another host records as a plain config
+/// file: the merged config row is decided under Repositories in both host
+/// orders, and only `custom`'s switch stages the key.
+#[test]
+fn t7_a_key_one_hosts_repo_owns_is_decided_by_that_repo_in_both_orders() {
+    const K: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-k";
+    let plain = || UnitHost::new().base_package("bash").file(K, PGP);
+    let with_repo = || {
+        plain().file(
+            CUSTOM_REPO,
+            &format!("[custom]\nbaseurl=https://custom.example/\nenabled=1\ngpgkey=file://{K}\n"),
+        )
+    };
+    let mut seen_config = None;
+    for (a, b) in [("host-a", "host-b"), ("host-b", "host-a")] {
+        let (merged, _) =
+            merge_snapshots(vec![named(plain(), a), named(with_repo(), b)], None, None).unwrap();
+        assert_fleet_invariants(&merged);
+        let rows: Vec<_> = merged
+            .config
+            .iter()
+            .flat_map(|c| &c.files)
+            .filter(|f| f.path == K)
+            .cloned()
+            .collect();
+        assert_eq!(rows.len(), 1, "one variant");
+        assert!(shadowed_by_repositories(&merged, K));
+        if let Some(previous) = &seen_config {
+            assert_eq!(&rows[0].content, previous);
+        }
+        seen_config = Some(rows[0].content.clone());
+
+        let mut s = session(&reload(&merged));
+        let state = s.repo_state("custom");
+        assert_eq!(state.control, RepoControl::Full);
+        assert!(state.kept);
+        assert_eq!((state.carriage_included, state.carriage_count), (0, 2));
+        assert!(staged(export_session(&s).path(), K).is_none());
+        for include in [true, false] {
+            assert!(matches!(
+                s.apply(set_config(K, include)),
+                Err(RefineError::InventoryNotToggleable(_))
+            ));
+        }
+        s.apply(set_repo("custom", true)).unwrap();
+        let tree = export_session(&s);
+        assert!(staged(tree.path(), K).is_some());
+        assert!(staged(tree.path(), CUSTOM_REPO).is_some());
+        s.apply(set_repo("custom", false)).unwrap();
+        let tree = export_session(&s);
+        assert!(repo_files_and_keys(tree.path()).is_empty());
+        s.undo().unwrap();
+        assert!(staged(export_session(&s).path(), K).is_some());
+        s.redo().unwrap();
+        assert!(staged(export_session(&s).path(), K).is_none());
+    }
+}
+
+// ---------------------------------------------------------------------
+// T9. Load.
+// ---------------------------------------------------------------------
+
+#[test]
+fn t9_load_refuses_each_violation() {
+    let snap = scan(base_host());
+    let json = serde_json::to_value(&snap).unwrap();
+    InspectionSnapshot::load(&json.to_string()).expect("the unedited snapshot loads");
+    let files = json["config"]["files"].as_array().unwrap();
+    let at = |path: &str| files.iter().position(|f| f["path"] == path).unwrap();
+
+    let mut unshadowed = json.clone();
+    let i = at(CUSTOM_KEY);
+    unshadowed["config"]["files"][i]["shadowed_by"] = serde_json::Value::Null;
+    unshadowed["config"]["files"][i]["disposition"] =
+        serde_json::to_value(FindingKind::included()).unwrap();
+    let err = InspectionSnapshot::load(&unshadowed.to_string()).unwrap_err();
+    assert!(err.to_string().contains(CUSTOM_KEY), "{err}");
+
+    let mut stray = json.clone();
+    let i = at(ORPHAN_KEY);
+    stray["config"]["files"][i]["shadowed_by"] = serde_json::json!("repositories");
+    stray["config"]["files"][i]["disposition"] =
+        serde_json::to_value(FindingKind::inventory()).unwrap();
+    let err = InspectionSnapshot::load(&stray.to_string()).unwrap_err();
+    assert!(err.to_string().contains("no repo records it"), "{err}");
+}
+
+// ---------------------------------------------------------------------
+// T10. Redaction.
+// ---------------------------------------------------------------------
+
+#[test]
+fn t10_a_key_whose_reference_redaction_rewrote_is_left_out_and_named() {
+    const VEND: &str = "/etc/yum.repos.d/vend.repo";
+    const KEY: &str = "/etc/pki/rpm-gpg/token=vendor";
+    let host = || {
+        UnitHost::new()
+            .base_package("bash")
+            .file(
+                VEND,
+                &format!("[vend]\nbaseurl=https://vend.example/\nenabled=1\ngpgkey=file://{KEY}\n"),
+            )
+            .file(KEY, PGP)
+            .package_from("pkg", "vend")
+    };
+
+    // Collection: owned and shadowed.
+    let collected = scan_unredacted(host());
+    assert!(
+        rpm(&collected)
+            .gpg_keys
+            .iter()
+            .any(|k| k.path == KEY && k.disposition.is_included())
+    );
+    assert!(shadowed_by_repositories(&collected, KEY));
+
+    // Redaction and finish_scan.
+    let snap = scan_finished(host());
+    let vend = rpm(&snap)
+        .repo_files
+        .iter()
+        .find(|f| f.path == VEND)
+        .unwrap();
+    assert!(
+        !vend.content.contains("token=vendor"),
+        "the reference is redacted"
+    );
+    assert!(snap.redactions.iter().any(|r| r.path == VEND));
+    let key = rpm(&snap).gpg_keys.iter().find(|k| k.path == KEY).unwrap();
+    assert!(!key.disposition.is_included(), "no owner: excluded");
+    assert!(shadowed_by_repositories(&snap, KEY));
+    check_repo_ownership(&snap).expect("settled after redaction");
+
+    // Serialization and load.
+    let json = serde_json::to_string_pretty(&snap).unwrap();
+    let loaded = InspectionSnapshot::load(&json).expect("loads");
+    let mut again = loaded.clone();
+    settle_repo_ownership(&mut again);
+    assert_eq!(again, loaded);
+
+    // The scan tarball stages vend.repo and not the key.
+    let tree = render_export(&snap);
+    assert!(staged(tree.path(), VEND).is_some());
+    assert!(staged(tree.path(), KEY).is_none());
+
+    // Refine.
+    let mut s = session(&loaded);
+    match export_state(&s, KEY) {
+        RepoOwnedExport::NoOwner {
+            cause: NoOwnerCause::Redacted { repo_files },
+        } => assert_eq!(repo_files, &[VEND]),
+        other => panic!("{other:?}"),
+    }
+    let state = s.repo_state("vend");
+    assert_eq!(state.control, RepoControl::Full);
+    assert_eq!((state.carriage_included, state.carriage_count), (1, 1));
+    s.apply(set_repo("vend", false)).unwrap();
+    assert!(staged(export_session(&s).path(), VEND).is_none());
+    s.apply(set_repo("vend", true)).unwrap();
+    let tree = export_session(&s);
+    assert!(staged(tree.path(), VEND).is_some());
+    assert!(staged(tree.path(), KEY).is_none());
+    let packed = tempfile::tempdir().unwrap();
+    let warnings = s
+        .export_plan(s.generation())
+        .unwrap()
+        .render(&packed.path().join("x.tar.gz"))
+        .unwrap();
+    let expected = format!(
+        "{KEY} is not copied: redaction changed a gpgkey= reference in {VEND}, so no repo file \
+         the export copies names it. Review the redacted reference; if it named this key, \
+         restore it and add the key to the image yourself."
+    );
+    assert!(
+        warnings.iter().any(|w| w.text() == expected),
+        "{warnings:?}"
+    );
+
+    // Aggregate of two copies: the cause is fleet, with the review sentence.
+    let (merged, _) = merge_snapshots(
+        vec![
+            reload(&scan_finished(host().file("/etc/hostname", "h1\n"))),
+            reload(&scan_finished(host().file("/etc/hostname", "h2\n"))),
+        ],
+        None,
+        None,
+    )
+    .unwrap();
+    check_repo_ownership(&merged).expect("merged");
+    check_repo_ownership(&reload(&merged)).expect("reloaded");
+    let s = session(&reload(&merged));
+    assert!(matches!(
+        export_state(&s, KEY),
+        RepoOwnedExport::NoOwner {
+            cause: NoOwnerCause::Fleet { .. }
+        }
+    ));
+
+    // Without redaction, the key stays included and owned.
+    let mut raw = scan_unredacted(host());
+    raw.redaction_state = Some(inspectah_core::types::redaction::RedactionState::Raw);
+    settle_repo_ownership(&mut raw);
+    assert!(
+        rpm(&raw)
+            .gpg_keys
+            .iter()
+            .any(|k| k.path == KEY && k.disposition.is_included())
+    );
+    assert!(staged(render_export(&raw).path(), KEY).is_some());
+}

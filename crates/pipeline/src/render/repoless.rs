@@ -183,10 +183,10 @@ fn disabled_repo_install(
         .filter(|sec| {
             !sec.enabled
                 && sec.has_source
-                && keys_included(rpm, repos, &sec.gpg_key_paths)
+                && keys_included(rpm, repos, sec.local_keys())
                 && sanitize_shell_value(sec.id.as_str()).is_some()
         })
-        .map(|sec| sec.id)
+        .map(|sec| RepoId::new(sec.id.as_str()))
 }
 
 /// Where the package phase's early `COPY` puts the export's repo files.
@@ -1164,9 +1164,9 @@ mod tests {
         // The route judges the files the build has when it installs: what
         // the stager writes under `/etc/yum.repos.d`, with the content it
         // writes. An included repo file the stager withholds or refuses is
-        // not one of them, and where an included config entry at the same
-        // path replaces a repo file's content, dnf reads the config
-        // entry's.
+        // not one of them. A config entry at the repo file's own path has
+        // no vote: the repo ownership pass makes it inventory, so dnf reads
+        // the repo file's content whatever the config entry holds.
         const CUSTOM: &str = "/etc/yum.repos.d/custom.repo";
         let other = || {
             repo_file(
@@ -1207,16 +1207,16 @@ mod tests {
                 false,
             ),
             (
-                "a config entry enables the repo the repo file disabled",
+                "a config twin that enables the repo does not change the file",
                 vec![repo_file(CUSTOM, R_DISABLED, false)],
                 vec![(CUSTOM, R_ENABLED)],
-                false,
+                true,
             ),
             (
-                "a config entry disables the repo the repo file enabled",
+                "a config twin that disables the repo does not change the file",
                 vec![repo_file(CUSTOM, R_ENABLED, false)],
                 vec![(CUSTOM, R_DISABLED)],
-                true,
+                false,
             ),
         ];
         for (what, files, config, expected) in cases {
@@ -1229,6 +1229,7 @@ mod tests {
                     .map(|(path, content)| config_entry(path, content))
                     .collect(),
             });
+            inspectah_core::repo_ownership::settle_repo_ownership(&mut snap);
             assert_eq!(routes_and_renders_enablerepo(&snap), expected, "{what}");
         }
     }
@@ -1287,6 +1288,7 @@ mod tests {
                     .map(|(path, content)| config_entry(path, content))
                     .collect(),
             });
+            inspectah_core::repo_ownership::settle_repo_ownership(&mut snap);
             assert_eq!(routes_and_renders_enablerepo(&snap), expected, "{what}");
             let rpm = snap.rpm.as_ref().expect("an rpm section");
             let uploads = VerifiedUploads::new();

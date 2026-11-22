@@ -1900,6 +1900,7 @@ mod tests {
                 hosts: vec!["host-a".into(), "host-b".into()],
                 aggregate_count: None,
                 aggregate_hosts: None,
+                payload_hosts: None,
             }),
             ..Default::default()
         };
@@ -2836,6 +2837,7 @@ mod tests {
                                 "host-b".into(),
                                 "host-c".into(),
                             ]),
+                            payload_hosts: None,
                         }),
                         ..Default::default()
                     },
@@ -2867,6 +2869,7 @@ mod tests {
                                 "host-b".into(),
                                 "host-c".into(),
                             ]),
+                            payload_hosts: None,
                         }),
                         ..Default::default()
                     },
@@ -3035,6 +3038,7 @@ mod tests {
                                 "host-b".into(),
                                 "host-c".into(),
                             ]),
+                            payload_hosts: None,
                         }),
                         ..Default::default()
                     },
@@ -3053,6 +3057,7 @@ mod tests {
                                 "host-b".into(),
                                 "host-c".into(),
                             ]),
+                            payload_hosts: None,
                         }),
                         ..Default::default()
                     },

@@ -940,9 +940,11 @@ fn two_collected_files_at_a_generated_units_path_are_withheld() {
 
 /// The config walk records an unowned file under `/etc`, and the repo,
 /// GPG key or firewall inventory records the same file again. Same bytes:
-/// one write, nothing withheld. Different bytes (a fleet aggregate keeps
-/// the config entry's variants and one representative inventory row): the
-/// config entry's content is the one write and nothing is withheld. With no
+/// one write, nothing withheld. Different bytes: for a firewall zone (a
+/// fleet aggregate keeps the config entry's variants and one
+/// representative inventory row) the config entry's content is the one
+/// write; for a repo file or key the config twin has no vote once
+/// ownership is settled, and an unsettled pair is a conflict. With no
 /// config entry included, the inventory copy is written. Two included
 /// config entries with different content still conflict.
 #[test]
@@ -1029,8 +1031,31 @@ fn a_file_two_sections_record_with_one_content_is_written_once() {
             );
         }
 
-        // The two records disagree: the config entry decides the content.
+        // The two records disagree. For a repo file or key, the repo
+        // ownership pass makes the config twin inventory, so a loaded
+        // snapshot never offers both; one built in memory with both
+        // included is the stager's backstop: a conflict, both withheld.
         let snap = offer(kind, path, body, "changed by hand\n");
+        if kind != StagedFileKind::FirewallZone {
+            let staged = staged_writes(&snap);
+            assert!(!staged.writes.contains_key(&dest(path)), "{kind:?}");
+            assert_eq!(staged.withheld.len(), 2, "{kind:?}: {:?}", staged.withheld);
+            let mut settled = snap.clone();
+            inspectah_core::repo_ownership::settle_repo_ownership(&mut settled);
+            if kind == StagedFileKind::RepoFile {
+                let staged = staged_writes(&settled);
+                assert_eq!(
+                    staged
+                        .writes
+                        .get(&dest(path))
+                        .map(|w| (w.source, w.content.as_ref())),
+                    Some((kind, body)),
+                    "settled: the repo inventory's copy is the write"
+                );
+            }
+            continue;
+        }
+        // The firewall zone's config entry decides the content.
         let staged = staged_writes(&snap);
         assert!(
             staged.withheld.is_empty(),

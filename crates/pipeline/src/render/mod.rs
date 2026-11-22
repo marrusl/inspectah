@@ -39,6 +39,7 @@ pub mod not_carried;
 pub mod unit_plan;
 
 pub mod repo_enabling;
+pub mod repo_owned;
 pub mod repoless;
 pub mod unmanaged;
 
@@ -344,6 +345,7 @@ mod tests {
             aggregate: _,
             gpgkey_references: _, // identifier: the literal spelling of `path`
             shipped_by_base: _,   // identifier: an rpm package name
+            rejected: _,          // classification: a fixed enum
         } = RepoFile::default();
 
         // `units.drop_ins[]`.

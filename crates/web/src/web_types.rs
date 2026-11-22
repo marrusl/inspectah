@@ -21,7 +21,8 @@ use inspectah_refine::projection::{
     MountFindingView, NotCarriedRow, UndeterminedInstallView, WithheldView,
 };
 use inspectah_refine::types::{
-    ItemId, RefineStats, RefinedConfig, RefinedPackage, RepoProvenance, RepoTier, TriageTag,
+    ItemId, RefineStats, RefinedConfig, RefinedPackage, RepoControl, RepoOwnedEntry,
+    RepoProvenance, RepoTier, TriageTag,
 };
 use serde::Serialize;
 
@@ -208,9 +209,20 @@ pub struct RepoGroupInfo {
     /// Of the effective members, those absent from `view.packages` after
     /// its display filters.
     pub effective_unlisted: usize,
-    /// `!repos_excluded().contains(section)`, the repo-exclusion history --
-    /// not derived from the effective-member counts above (§ 3.2).
-    pub enabled: bool,
+    /// What the switch decides (§ 5.2 of the repo ownership spec). `none`
+    /// renders no switch.
+    pub control: RepoControl,
+    /// The repo's decision: no repo op excluded it, or the last one
+    /// included it (§ 5.1). Renamed from `enabled`, which collided with
+    /// the host's `enabled=` and read as if it said what the files do.
+    pub kept: bool,
+    /// The carriable entries this repo owns, and how many of them the
+    /// projected snapshot includes.
+    pub carriage_count: usize,
+    pub carriage_included: usize,
+    /// The destination of every entry this repo owns, carriable or not;
+    /// each is the `destination` of one `repo_owned` entry. Sorted.
+    pub owns: Vec<String>,
 }
 
 /// A classified unit state change, projected for the view response
@@ -281,6 +293,10 @@ pub struct DropInDecisionDto {
     /// Present when the export does not write the file this row offers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub withheld: Option<WithheldView>,
+    /// The paths of the config rows this drop-in's destination shadows,
+    /// so a `"units"` config row joins on its own `path`, an ostree
+    /// scan's relative spelling included.
+    pub config_paths: Vec<String>,
 }
 
 /// A config row for the view response: the refined row as before, and
@@ -637,6 +653,11 @@ pub struct ViewResponse {
     pub stats: RefineStats,
     pub generation: u64,
     pub repo_groups: Vec<RepoGroupInfo>,
+    /// One entry per destination of `rpm.repo_files` and `rpm.gpg_keys`:
+    /// who owns it and what the export does with it. A config row with
+    /// `shadowed_by: "repositories"` joins the entry whose
+    /// `recorded_paths` holds its `path`.
+    pub repo_owned: Vec<RepoOwnedEntry>,
     pub baseline_summary: Option<BaselineSummary>,
     pub version_changes: Vec<VersionChangeEntry>,
     pub unit_states: Vec<ServiceDecisionDto>,

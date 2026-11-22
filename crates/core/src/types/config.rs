@@ -1,4 +1,5 @@
 use super::aggregate::{AggregatePrevalence, VariantSelection};
+use super::destination::Destination;
 use super::{AdvisoryType, FindingKind};
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +63,10 @@ pub enum ConfigShadow {
     /// `/etc/systemd/system/` as well as `*.service.d/*.conf`, so a
     /// `ServiceDropIn` spelling would promise less than the variant owns.
     Units,
+    /// The file's destination is that of an entry of `rpm.repo_files` or
+    /// `rpm.gpg_keys`: the repo toggle decides whether it ships, and the
+    /// repo inventory's entry is what the stager writes.
+    Repositories,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -104,6 +109,36 @@ impl ConfigFileEntry {
                 ..
             }
         )
+    }
+}
+
+/// Mark every entry of `config` whose path is one of `owners` as
+/// inventory shadowed by `shadow`, comparing by [`Destination`], so an
+/// ostree scan's relative `etc/...` spelling and a `//` path match the
+/// absolute path another section records.
+///
+/// An advisory lives in the same field, and shadowing would erase it:
+/// `config_advisories` matches on `FindingKind::Advisory`, so the operator
+/// would lose the warning that the file points outside /etc. An advisory
+/// entry is already never materialized, so the shadow would buy nothing in
+/// exchange. A machine-state entry is decided in its own list and is left
+/// alone too.
+pub fn shadow_matching_config_entries(
+    config: Option<&mut ConfigSection>,
+    owners: &std::collections::BTreeSet<Destination>,
+    shadow: ConfigShadow,
+) {
+    let Some(config) = config else {
+        return;
+    };
+    for entry in &mut config.files {
+        if entry.disposition.is_advisory() || entry.disposition.is_machine_state() {
+            continue;
+        }
+        if Destination::new(&entry.path).is_ok_and(|d| owners.contains(&d)) {
+            entry.shadowed_by = Some(shadow.clone());
+            entry.disposition = FindingKind::inventory();
+        }
     }
 }
 

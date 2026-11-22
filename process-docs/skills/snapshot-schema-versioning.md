@@ -119,6 +119,14 @@ Seven bumps, two different arguments, all landing on "reject":
   `machine_state::validate`, so a hand-written fixture with a config
   entry at a class path fails to load: use a `MachineState` entry or a
   `withheld` row.
+  The same release adds `ConfigShadow::Repositories`, `RepoFile::rejected`
+  and `AggregatePrevalence::payload_hosts`, riding the same bump: a
+  schema-30 snapshot's repo config twins are live and its rejected keys
+  unmarked, so rendering it ships a repo file or key on either of two
+  controls. `load` also runs `repo_ownership::check_repo_ownership`, so a
+  hand-written fixture whose config row at a repo path is not shadowed, or
+  whose ownerless key is included, fails to load: run
+  `settle_repo_ownership` on it first.
 
 The second argument does not follow from the first. A renamed field
 would force the bump even if the data were recoverable, and stale

@@ -561,16 +561,6 @@ const REPO_EXCLUDED_HOLD: &str = "needs a package from a repo excluded in this e
 /// Where the host keeps the `vendor` repo.
 const VENDOR_REPO_PATH: &str = "/etc/yum.repos.d/vendor.repo";
 
-/// Excludes the configuration file at `path` through refine's toggle.
-fn exclude_config(session: &mut RefineSession, path: &str) {
-    session
-        .apply(RefinementOp::SetInclude {
-            item_id: ItemId::Config { path: path.into() },
-            include: false,
-        })
-        .unwrap_or_else(|e| panic!("exclude config {path}: {e}"));
-}
-
 /// Sets the repo `id` to `include` through refine's repo toggle.
 fn set_repo(session: &mut RefineSession, id: &str, include: bool) {
     session
@@ -584,9 +574,8 @@ fn set_repo(session: &mut RefineSession, id: &str, include: bool) {
 /// `agent`, from `appstream`, requires `(vendor-runtime or helper)`. The
 /// host never had `vendor-runtime`; it has `helper`, which only the
 /// enabled custom repo `vendor` serves. With `helper` included and then
-/// `vendor` excluded in refine, along with the config entry that would
-/// still stage `vendor.repo` (a file either writer stages ships, and dnf
-/// can then fetch from it),
+/// `vendor` excluded in refine, which drops `vendor.repo` (its
+/// Configuration row is read-only, decided under Repositories),
 /// neither operand can be fetched, so `agent` is held on that export,
 /// opened from the collected snapshot or the scan tarball, and on the
 /// scan path's render of what refine exports: only `app` is installed, no
@@ -627,7 +616,6 @@ fn excluding_a_dependencys_repo_holds_its_owner() {
         );
 
         set_repo(&mut session, "vendor", false);
-        exclude_config(&mut session, VENDOR_REPO_PATH);
         let refine = surfaces_of(&session);
         let scan_dir = tempfile::tempdir().expect("tempdir");
         scan_export(session.snapshot_projected(), scan_dir.path());
@@ -747,7 +735,6 @@ fn include_after_losing_vendor(snapshot: InspectionSnapshot, item_id: ItemId) ->
     let mut session = RefineSession::new(snapshot);
     set_package(&mut session, "dmidecode", "x86_64", true);
     set_repo(&mut session, "vendor", false);
-    exclude_config(&mut session, VENDOR_REPO_PATH);
     let held = surfaces_of(&session);
     assert!(
         held.not_carried_block()

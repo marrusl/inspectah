@@ -1147,6 +1147,12 @@ fn test_merge_rpm_sections_keeps_gpgkey_references() {
 fn test_merge_rpm_sections_leaves_a_key_to_the_base_only_when_every_host_does() {
     const KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release";
     let host = |shipped: bool| RpmSection {
+        repo_files: vec![RepoFile {
+            path: "/etc/yum.repos.d/r.repo".into(),
+            content: format!("[r]\nbaseurl=https://example.invalid/r\ngpgkey=file://{KEY}\n"),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
         gpg_keys: vec![RepoFile {
             path: KEY.into(),
             content: "-----BEGIN PGP PUBLIC KEY BLOCK-----\nrh\n".into(),
@@ -1176,6 +1182,12 @@ fn test_merge_rpm_sections_leaves_a_key_to_the_base_only_when_every_host_does() 
             &inspectah_core::aggregate::merge::ClassPaths::default(),
         )
         .unwrap();
+        // The base-shipped exclusion is the repo ownership pass's, which
+        // `merge_snapshots` runs over the merged sections.
+        let mut merged = inspectah_core::snapshot::InspectionSnapshot::new();
+        merged.rpm = Some(result);
+        inspectah_core::repo_ownership::settle_repo_ownership(&mut merged);
+        let result = merged.rpm.unwrap();
         assert_eq!(result.gpg_keys.len(), 1, "{name}");
         let key = &result.gpg_keys[0];
         assert_eq!(key.shipped_by_base.as_deref(), expect_shipped, "{name}");

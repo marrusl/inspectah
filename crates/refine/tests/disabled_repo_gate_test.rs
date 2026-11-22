@@ -77,6 +77,7 @@ fn snapshot(source_repo: &str, repo_file: Option<(&str, bool)>) -> InspectionSna
                     aggregate: None,
                     gpgkey_references: Default::default(),
                     shipped_by_base: None,
+                    rejected: None,
                 }]
             })
             .unwrap_or_default(),
@@ -387,36 +388,39 @@ fn a_disabled_repo_dependency_of_an_enabled_repo_leaf_installs_from_its_repo() {
     );
 }
 
-/// Refine refuses to toggle a disabled repo, so through the session the
-/// file cannot be excluded after the gate let the package through. If it
-/// is excluded anyway (a resumed or hand-edited snapshot), the package,
-/// still included, falls back to the repo-less block: no flag and no
-/// plain install, so the build does not fail on it.
+/// A host-disabled repo that owns a file the export carries has a
+/// carriage-only switch: excluding it drops the file and leaves its
+/// packages alone. The package, still included, falls back to the
+/// repo-less block: no flag and no plain install, so the build does not
+/// fail on it.
 #[test]
 fn a_repo_file_excluded_after_the_gate_falls_back_to_repoless() {
     let mut session = RefineSession::new(snapshot(REPO_ID, Some((DISABLED_WITH_SOURCE, true))));
     assert!(openh264_included(&session), "the gate let it through");
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Repo {
+                path: REPO_ID.into(),
+            },
+            include: false,
+        })
+        .expect("a disabled repo's carriage-only switch drops its file");
     assert!(
-        session
-            .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Repo {
-                    path: REPO_ID.into(),
-                },
-                include: false,
-            })
-            .is_err(),
-        "refine refuses to toggle a disabled repo today; if that changes, \
-         this test should drive the exclusion through the op instead"
+        openh264_included(&session),
+        "a carriage-only switch never moves members"
     );
 
-    let mut projected = session.snapshot_projected();
-    projected
-        .rpm
-        .as_mut()
-        .expect("rpm section")
-        .repo_files
-        .iter_mut()
-        .for_each(|f| f.disposition = FindingKind::excluded());
+    let projected = session.snapshot_projected();
+    assert!(
+        projected
+            .rpm
+            .as_ref()
+            .expect("rpm section")
+            .repo_files
+            .iter()
+            .all(|f| !f.disposition.is_included()),
+        "the repo file is excluded"
+    );
     let containerfile = render_containerfile(&projected, None, None);
 
     assert!(

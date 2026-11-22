@@ -5050,7 +5050,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 host: |m| m,
                 keys: &[],
                 warning: Some(
-                    "GPG key file:///etc/pki/rpm-gpg/RPM-GPG-KEY-$nosuchvar named in \
+                    "GPG key /etc/pki/rpm-gpg/RPM-GPG-KEY-$nosuchvar named in \
                      /etc/yum.repos.d/epel.repo was not collected: dnf variable $nosuchvar \
                      is not defined on this host. If the image enables a repo from that \
                      file, dnf cannot verify its packages. To fix it, change that gpgkey= \
@@ -5063,7 +5063,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 host: |m| m,
                 keys: &[],
                 warning: Some(
-                    "GPG key file:///etc/pki/rpm-gpg/RPM-GPG-KEY-missing named in \
+                    "GPG key /etc/pki/rpm-gpg/RPM-GPG-KEY-missing named in \
                      /etc/yum.repos.d/epel.repo was not collected: \
                      /etc/pki/rpm-gpg/RPM-GPG-KEY-missing could not be read. If the image \
                      enables a repo from that file, dnf cannot verify its packages. To fix \

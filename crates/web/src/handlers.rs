@@ -9,10 +9,11 @@ use inspectah_core::types::users::UserContainerfileStrategy;
 use inspectah_pipeline::export_warning::{ExportWarning, ExportWarningKind};
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{RefinementOp, RepoProvenance, TimelineEntry, UserPasswordOp};
+use inspectah_refine::types::{
+    RefinementOp, RepoControl, RepoProvenance, TimelineEntry, UserPasswordOp,
+};
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::BTreeSet;
 
 /// Primary header name for acknowledging sensitive data exports.
 /// Both this and the legacy header are accepted for backward compatibility.
@@ -256,9 +257,6 @@ pub async fn get_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
     let view = session.view();
     let repo_index = session.repo_index();
-    let changes = session.pending_changes();
-    let repos_excluded = changes.repos_excluded();
-    let excluded: BTreeSet<&str> = repos_excluded.iter().map(|s| s.as_str()).collect();
 
     // Count visible packages per source_repo, keeping the package's recorded
     // spelling as-is -- RepoIndex and RepoId fold ASCII case internally, so
@@ -273,6 +271,12 @@ pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
     // Also include repos known to the index but not visible (0-count)
     for section_id in repo_index.packages_by_repo().keys() {
         repo_counts.entry(section_id.to_string()).or_insert(0);
+    }
+    // And every repo with a switch, attributed or not (§ 5.4).
+    for (section_id, state) in &view.repo_states {
+        if state.control != RepoControl::None {
+            repo_counts.entry(section_id.clone()).or_insert(0);
+        }
     }
 
     let mut groups: Vec<RepoGroupInfo> = repo_counts
@@ -289,9 +293,10 @@ pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
                 RepoIndex::is_distro_repo(&section_id)
             };
             let tier = RepoIndex::repo_tier(&section_id);
-            // The excluded set holds `RepoIndex::repo_identity`s; a group
-            // spelled as the lone case variant of a section is that repo.
-            let enabled = !excluded.contains(repo_index.repo_identity(&section_id));
+            // Read by `RepoIndex::repo_identity`; a group spelled as the
+            // lone case variant of a section is that repo.
+            let state = session.repo_state(&section_id);
+            let owns = session.repo_owns(&section_id);
             let effective = session.repo_effective(&RepoId::new(section_id.as_str()));
             RepoGroupInfo {
                 section_id,
@@ -302,7 +307,11 @@ pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
                 effective_member_count: effective.member_count,
                 effective_included: effective.included,
                 effective_unlisted: effective.unlisted,
-                enabled,
+                control: state.control,
+                kept: state.kept,
+                carriage_count: state.carriage_count,
+                carriage_included: state.carriage_included,
+                owns,
             }
         })
         .collect();
@@ -1288,7 +1297,7 @@ mod tests {
         assert!(appstream.is_distro);
         assert_eq!(appstream.provenance, RepoProvenance::Verified);
         assert_eq!(appstream.tier, RepoTier::Distro);
-        assert!(appstream.enabled);
+        assert!(appstream.kept);
 
         let baseos = groups
             .iter()
@@ -1305,7 +1314,7 @@ mod tests {
         assert_eq!(epel.tier, RepoTier::ThirdParty);
         // epel has packages but no section on the host -> Stale
         assert_eq!(epel.provenance, RepoProvenance::Stale);
-        assert!(epel.enabled);
+        assert!(epel.kept);
     }
 
     #[test]
@@ -1438,10 +1447,7 @@ mod tests {
         let groups = build_repo_groups(&session);
         let epel_group = groups.iter().find(|g| g.section_id == "epel");
         assert!(epel_group.is_some(), "epel group should exist");
-        assert!(
-            !epel_group.unwrap().enabled,
-            "epel group should be disabled"
-        );
+        assert!(!epel_group.unwrap().kept, "epel group should be disabled");
     }
 
     // -- deduplicate_version tests -------------------------------------------

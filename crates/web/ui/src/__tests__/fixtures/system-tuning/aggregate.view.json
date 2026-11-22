@@ -112,6 +112,7 @@
   "packages": [],
   "quadlets": [],
   "repo_groups": [],
+  "repo_owned": [],
   "session_is_sensitive": false,
   "stats": {
     "baseline_available": false,

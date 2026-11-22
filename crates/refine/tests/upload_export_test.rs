@@ -1577,6 +1577,7 @@ fn disabled_repo_snapshot(cache_path: &Path) -> InspectionSnapshot {
             aggregate: None,
             gpgkey_references: Default::default(),
             shipped_by_base: None,
+            rejected: None,
         }],
         ..Default::default()
     });
@@ -1686,6 +1687,7 @@ fn repo_enabling_snapshot() -> InspectionSnapshot {
             aggregate: None,
             gpgkey_references: Default::default(),
             shipped_by_base: None,
+            rejected: None,
         }],
         ..Default::default()
     });
@@ -1819,8 +1821,9 @@ fn distro_repo_enabling_snapshot(included: bool) -> InspectionSnapshot {
     snap
 }
 
-/// Refine refuses to toggle a distro repo, so the demotion FIXME never
-/// names one, even when re-including its file would serve the package.
+/// A distro repo's switch is carriage-only: it never re-includes packages,
+/// so the demotion FIXME, whose advice says the repo's packages come back
+/// too, never names one. The switch still brings the file back.
 #[test]
 fn a_distro_repo_that_would_serve_is_not_named_in_the_demotion_fixme() {
     // The control: with its file carried, `extras` serves the package, so
@@ -1840,17 +1843,19 @@ fn a_distro_repo_that_would_serve_is_not_named_in_the_demotion_fixme() {
     let file = containerfile(&demoted);
     assert!(file.contains(&upload_only_fixme("extras")), "{file}");
     assert!(!file.contains("re-include repo"), "{file}");
+    h.session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Repo {
+                path: "extras".into(),
+            },
+            include: true,
+        })
+        .expect("the distro repo's carriage-only switch includes its file");
+    let projected = h.session.snapshot_projected();
     assert!(
-        matches!(
-            h.session.apply(RefinementOp::SetInclude {
-                item_id: ItemId::Repo {
-                    path: "extras".into(),
-                },
-                include: true,
-            }),
-            Err(RefineError::BadRequest(_))
-        ),
-        "refine refuses the distro repo's toggle"
+        projected.rpm.as_ref().unwrap().repo_files[0]
+            .disposition
+            .is_included()
     );
 }
 

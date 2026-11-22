@@ -337,7 +337,18 @@ pub struct RepoGroup {
     pub is_distro: bool,
     pub tier: RepoTier,
     pub package_count: usize,
-    pub enabled: bool,
+    /// What the switch decides (§ 5.2 of the repo ownership spec).
+    pub control: crate::types::RepoControl,
+    /// The repo's decision: no repo op excluded it, or the last one
+    /// included it (§ 5.1).
+    pub kept: bool,
+    /// The carriable entries this repo owns, and how many the projected
+    /// snapshot includes.
+    pub carriage_count: usize,
+    pub carriage_included: usize,
+    /// The destination of every entry this repo owns, carriable or not.
+    /// Sorted.
+    pub owns: Vec<String>,
 }
 
 // ── Reference projection ─────────────────────────────────────────
@@ -542,6 +553,7 @@ pub struct RefConfigRef {
 pub fn config_ref_summary(entry: &RefConfigRef) -> String {
     match entry.shadowed_by {
         Some(ConfigShadow::Units) => CONTROLLED_IN_SERVICE_DROP_INS.to_string(),
+        Some(ConfigShadow::Repositories) => DECIDED_UNDER_REPOSITORIES.to_string(),
         None => DECIDED_UNDER_CONFIG_FILES.to_string(),
     }
 }
@@ -554,6 +566,11 @@ pub const DECIDED_UNDER_CONFIG_FILES: &str = "decided under Configuration Files"
 /// entry. The Service Drop-ins row keyed by the same path is the one
 /// decision, and the Configuration Files row is inventory.
 pub const CONTROLLED_IN_SERVICE_DROP_INS: &str = "controlled in Service Drop-ins";
+
+/// Summary on a row whose file is a `.repo` file or GPG key a repo owns.
+/// The repo's switch under Repositories is the one decision, and the
+/// Configuration Files row is inventory.
+pub const DECIDED_UNDER_REPOSITORIES: &str = "decided under Repositories";
 
 #[derive(Debug, Clone)]
 pub struct RefAlternativeEntry {

@@ -2,7 +2,8 @@ use super::dnf_vars::{DnfVars, ExpandError};
 use inspectah_core::machine_state;
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::FindingKind;
-use inspectah_core::types::rpm::{FileOwnershipEntry, RepoFile, RpmVaEntry};
+use inspectah_core::types::repo::parse_repo_sections;
+use inspectah_core::types::rpm::{FileOwnershipEntry, KeyRejection, RepoFile, RpmVaEntry};
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::path::Path;
@@ -91,6 +92,13 @@ pub fn collect_repo_files(exec: &dyn Executor, left_out: &mut Vec<String>) -> Ve
             continue;
         }
 
+        // A file that defines no section is not a repo definition: no repo
+        // owns it, and its config row, when the config walk records one,
+        // stays its own control.
+        if parse_repo_sections(&content).is_empty() {
+            continue;
+        }
+
         let path_str = path.to_string_lossy().to_string();
         let is_default = is_default_repo(&path_str);
 
@@ -103,6 +111,7 @@ pub fn collect_repo_files(exec: &dyn Executor, left_out: &mut Vec<String>) -> Ve
             aggregate: None,
             gpgkey_references: Default::default(),
             shipped_by_base: None,
+            rejected: None,
         });
     }
 
@@ -158,50 +167,6 @@ fn classify_gpg_content(content: &str) -> GpgContent {
     }
 }
 
-/// The `gpgkey=` values of a repo file, read the way dnf's ini parser
-/// reads them: the key starts in column 0 and may have spaces around `=`,
-/// and an indented line continues the previous value. A comment or an
-/// empty line ends it.
-fn gpgkey_values(repo_content: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    // The value being read, when the current key is `gpgkey`.
-    let mut gpgkey: Option<String> = None;
-    // Whether the previous line belonged to a key=value item, so an
-    // indented line continues it.
-    let mut in_item = false;
-
-    for line in repo_content.lines() {
-        let trimmed = line.trim_matches([' ', '\t', '\r']);
-        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-            values.extend(gpgkey.take());
-            in_item = false;
-        } else if trimmed.is_empty() {
-            // A blank but not empty line stays inside the value.
-        } else if line.starts_with([' ', '\t', '\r']) && !trimmed.starts_with('[') {
-            if let Some(value) = gpgkey.as_mut()
-                && in_item
-            {
-                value.push('\n');
-                value.push_str(trimmed);
-            }
-        } else {
-            values.extend(gpgkey.take());
-            in_item = false;
-            if trimmed.starts_with('[') {
-                continue;
-            }
-            if let Some((key, value)) = line.split_once('=') {
-                in_item = true;
-                if key.trim_end_matches([' ', '\t']) == "gpgkey" {
-                    gpgkey = Some(value.trim_matches([' ', '\t', '\r']).to_string());
-                }
-            }
-        }
-    }
-    values.extend(gpgkey);
-    values
-}
-
 /// Why a key that a repo file names was not collected.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnreadReason {
@@ -254,7 +219,7 @@ impl fmt::Display for UnreadReason {
 /// A local key reference that produced no key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct UnreadGpgKey {
-    /// The reference as the repo file writes it.
+    /// The reference as the repo file writes it, `file://` removed.
     pub reference: String,
     pub reason: UnreadReason,
 }
@@ -271,6 +236,9 @@ pub struct GpgKeyScan {
 
 /// Extract GPG key files referenced in repo content.
 ///
+/// The references are each section's final `gpgkey=` value as
+/// `parse_repo_sections` reads it, so a value a later assignment replaced,
+/// or one before the first header, names no key.
 /// Local references (`gpgkey=file:///...` or a bare path) have their dnf
 /// variables expanded with the host's values, then are read and validated;
 /// the key is recorded at its expanded path, which is the path dnf in the
@@ -283,94 +251,95 @@ pub struct GpgKeyScan {
 pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars) -> GpgKeyScan {
     let mut scan = GpgKeyScan::default();
 
-    for value in gpgkey_values(repo_content) {
-        // dnf separates multiple keys with whitespace or commas.
-        for reference in value
-            .split(|c: char| c.is_whitespace() || c == ',')
-            .filter(|r| !r.is_empty())
-        {
-            if reference.contains("://") && !reference.starts_with("file://") {
+    // Each section's final `gpgkey=` value, as the one parser reads it
+    // (`parse_repo_sections`): ownership reads the same parse, so every
+    // key recorded here is named by some section's local reference.
+    let references: Vec<String> = parse_repo_sections(repo_content)
+        .iter()
+        .flat_map(|sec| sec.local_keys().map(str::to_owned).collect::<Vec<_>>())
+        .collect();
+    for reference in references.iter().map(String::as_str) {
+        let expanded = match vars.expand(reference) {
+            Ok(expanded) => expanded,
+            Err(e) => {
+                scan.unread.push(UnreadGpgKey {
+                    reference: reference.to_string(),
+                    reason: UnreadReason::Expand(e),
+                });
                 continue;
             }
-
-            let expanded = match vars.expand(reference) {
-                Ok(expanded) => expanded,
-                Err(e) => {
-                    scan.unread.push(UnreadGpgKey {
-                        reference: reference.to_string(),
-                        reason: UnreadReason::Expand(e),
-                    });
-                    continue;
-                }
-            };
-            let key_path = expanded.strip_prefix("file://").unwrap_or(&expanded);
-            if key_path.is_empty() {
-                continue;
-            }
-            // The spelling `parse_repo_sections` reads back from the repo
-            // file, kept so consumers can match the section to this key.
-            let literal = reference.strip_prefix("file://").unwrap_or(reference);
-            let gpgkey_references = if literal == key_path {
-                BTreeSet::new()
-            } else {
-                BTreeSet::from([literal.to_string()])
-            };
-
-            let content = match exec.read_file(Path::new(key_path)) {
-                Ok(content) => content,
-                Err(e) => {
-                    if machine_state::refusal(&e).is_some() {
-                        scan.left_out.push(machine_state::left_out_reason(key_path));
-                    }
-                    scan.unread.push(UnreadGpgKey {
-                        reference: reference.to_string(),
-                        reason: UnreadReason::Unreadable(key_path.to_string()),
-                    });
-                    continue;
-                }
-            };
-
-            let (reason, placeholder) = match classify_gpg_content(&content) {
-                GpgContent::PublicKey => {
-                    scan.keys.push(RepoFile {
-                        path: key_path.to_string(),
-                        content,
-                        is_default_repo: false,
-                        disposition: FindingKind::included(),
-                        locked: false,
-                        aggregate: None,
-                        gpgkey_references,
-                        shipped_by_base: None,
-                    });
-                    continue;
-                }
-                GpgContent::NotPgp => (
-                    UnreadReason::NotPgp(key_path.to_string()),
-                    "did not contain a PGP public key block",
-                ),
-                GpgContent::PrivateKeyMaterial => (
-                    UnreadReason::PrivateKeyMaterial(key_path.to_string()),
-                    "held PGP private key material",
-                ),
-            };
-            // Include with a placeholder, so the snapshot says the key was
-            // named, without leaking host file content into it.
-            eprintln!("WARNING: gpgkey file {reason}, content redacted");
-            scan.unread.push(UnreadGpgKey {
-                reference: reference.to_string(),
-                reason,
-            });
-            scan.keys.push(RepoFile {
-                path: key_path.to_string(),
-                content: format!("# REDACTED: file {placeholder} (source: {key_path})"),
-                is_default_repo: false,
-                disposition: FindingKind::excluded(),
-                locked: false,
-                aggregate: None,
-                gpgkey_references,
-                shipped_by_base: None,
-            });
+        };
+        let key_path = expanded.as_str();
+        if key_path.is_empty() {
+            continue;
         }
+        // The spelling `parse_repo_sections` reads back from the repo
+        // file, kept so consumers can match the section to this key.
+        let literal = reference;
+        let gpgkey_references = if literal == key_path {
+            BTreeSet::new()
+        } else {
+            BTreeSet::from([literal.to_string()])
+        };
+
+        let content = match exec.read_file(Path::new(key_path)) {
+            Ok(content) => content,
+            Err(e) => {
+                if machine_state::refusal(&e).is_some() {
+                    scan.left_out.push(machine_state::left_out_reason(key_path));
+                }
+                scan.unread.push(UnreadGpgKey {
+                    reference: reference.to_string(),
+                    reason: UnreadReason::Unreadable(key_path.to_string()),
+                });
+                continue;
+            }
+        };
+
+        let (reason, placeholder, rejection) = match classify_gpg_content(&content) {
+            GpgContent::PublicKey => {
+                scan.keys.push(RepoFile {
+                    path: key_path.to_string(),
+                    content,
+                    is_default_repo: false,
+                    disposition: FindingKind::included(),
+                    locked: false,
+                    aggregate: None,
+                    gpgkey_references,
+                    shipped_by_base: None,
+                    rejected: None,
+                });
+                continue;
+            }
+            GpgContent::NotPgp => (
+                UnreadReason::NotPgp(key_path.to_string()),
+                "did not contain a PGP public key block",
+                KeyRejection::NotPgp,
+            ),
+            GpgContent::PrivateKeyMaterial => (
+                UnreadReason::PrivateKeyMaterial(key_path.to_string()),
+                "held PGP private key material",
+                KeyRejection::PrivateKeyMaterial,
+            ),
+        };
+        // Include with a placeholder, so the snapshot says the key was
+        // named, without leaking host file content into it.
+        eprintln!("WARNING: gpgkey file {reason}, content redacted");
+        scan.unread.push(UnreadGpgKey {
+            reference: reference.to_string(),
+            reason,
+        });
+        scan.keys.push(RepoFile {
+            path: key_path.to_string(),
+            content: format!("# REDACTED: file {placeholder} (source: {key_path})"),
+            is_default_repo: false,
+            disposition: FindingKind::excluded(),
+            locked: false,
+            aggregate: None,
+            gpgkey_references,
+            shipped_by_base: None,
+            rejected: Some(rejection),
+        });
     }
 
     scan
@@ -534,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_gpg_key_extraction_multiple_keys() {
-        let repo_content = "gpgkey=file:///key1.asc file:///key2.asc\n";
+        let repo_content = "[r]\ngpgkey=file:///key1.asc file:///key2.asc\n";
         let mock = MockExecutor::new()
             .with_file("/key1.asc", "KEY1")
             .with_file("/key2.asc", "KEY2");
@@ -545,7 +514,7 @@ mod tests {
 
     #[test]
     fn test_gpg_key_extraction_http_urls_skipped() {
-        let repo_content = "gpgkey=https://example.com/key.asc\n";
+        let repo_content = "[r]\ngpgkey=https://example.com/key.asc\n";
         let mock = MockExecutor::new();
 
         let keys = extract_gpg_keys(repo_content, &mock, &DnfVars::from_host(&mock)).keys;
@@ -595,7 +564,7 @@ mod tests {
 
     #[test]
     fn test_gpg_key_mixed_valid_and_invalid() {
-        let repo_content = "gpgkey=file:///good-key file:///bad-file\n";
+        let repo_content = "[r]\ngpgkey=file:///good-key file:///bad-file\n";
         let mock = MockExecutor::new()
             .with_file("/good-key", "-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata\n")
             .with_file("/bad-file", "this is not a GPG key at all");
@@ -605,9 +574,11 @@ mod tests {
         // First key is valid
         assert!(keys[0].disposition.is_included());
         assert!(keys[0].content.contains("BEGIN PGP"));
-        // Second key is redacted
+        // Second key is redacted, and marked rejected
         assert!(!keys[1].disposition.is_included());
         assert!(keys[1].content.contains("REDACTED"));
+        assert_eq!(keys[0].rejected, None);
+        assert_eq!(keys[1].rejected, Some(KeyRejection::NotPgp));
     }
 
     // --- Self-exclusion tests ---
