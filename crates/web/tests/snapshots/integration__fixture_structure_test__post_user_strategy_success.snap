@@ -102,6 +102,9 @@ expression: value
   "flatpaks": [],
   "generated_timers": [],
   "generation": 1,
+  "machine_state": [],
+  "machine_state_notices": [],
+  "machine_state_steps": [],
   "manual_links": [],
   "mount_findings": [],
   "packages": [

@@ -25,6 +25,9 @@ expression: value
   "generation": 1,
   "has_unmanaged_scan": false,
   "language_packages": [],
+  "machine_state": [],
+  "machine_state_notices": [],
+  "machine_state_steps": [],
   "manual_links": [
     {
       "advisories": [

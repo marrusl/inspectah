@@ -166,6 +166,9 @@
       "enabled": true
     }
   ],
+  "machine_state": [],
+  "machine_state_notices": [],
+  "machine_state_steps": [],
   "repo_conflict_count": 0,
   "sysctl": { "state": "aggregate" }
 }
