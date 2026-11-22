@@ -88,7 +88,10 @@ only when the subscription is preserved), and the pipeline runs it through
 - `rpm/` — RPM package inventory, modules, repos, classifier
   - `rpm/repoless.rs` — Repo-less RPM detection (empty/disabled repos) and dnf cache scanning
   - `rpm/dnf_vars.rs`: the host's dnf variables, used to expand `gpgkey=` paths in `rpm/repos.rs`
-- `config/` — Modified config files via `rpm -Va`
+- `config/`: the config files the image carries, from four branches in `mod.rs`: modified packaged files (`rpm -Va`), `%ghost` files, the unowned `/etc` walk (`walk.rs`) and orphans of removed packages
+  - `admit.rs`: the checks before any read of a candidate: `locate` (a path under a directory link is refused, and exclusions match the normalized spelling) and `readable` (never a FIFO, socket or device; a final link is read only to carried config under `/etc`). `capture_config` in `mod.rs` asks `readable` on every branch
+  - `ghost.rs`: the `%ghost` branch: the file-flags query, `classify_ghost` (what is general config, a credential, machine state, another section's file, generated, deferred), the interim machine-state member list and the `authselect check`/`authselect test` parsing (see `ghost-config-files.md`)
+  - `audit_rules.rs`: whether `/etc/audit/audit.rules` is written by `augenrules` or loaded directly, from the audit units after `/etc` overrides and drop-ins
 - `units/`: `UnitsInspector`, which writes the `units` section for every unit kind
   - `mod.rs`: the inspector: `systemctl list-unit-files`, the name gate, masks, drop-ins, owners, state changes, mount findings, instances found from links, the install comparison and the default target
   - `resolve.rs`: the unit file systemd would load for a name, from `/etc/systemd/system` and the vendor directory, and the search-path refusal (`UNREAD_SEARCH_PATH`)
@@ -114,6 +117,7 @@ only when the subscription is preserved), and the pipeline runs it through
 
 Artifact generators invoked after triage decisions finalized:
 - `containerfile.rs` — Containerfile generation
+- `authselect.rs`: the collected authselect selection rendered as `RUN authselect select <profile> <features> --force` after the config `COPY`, or a FIXME naming the files a custom profile is missing
 - `kickstart.rs` — Kickstart file for traditional installs
 - `report.rs`, `report_data.rs`: HTML migration report; one template per section under `crates/pipeline/templates/report/` (`units.html` for the unit section)
 - `audit.rs` — Audit trail of decisions

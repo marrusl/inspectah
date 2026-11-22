@@ -40,6 +40,10 @@ path just because `rpm -Va` named it.
   or device, since opening a FIFO with no writer blocks and the
   subprocess timeout does not cover file reads. `MockExecutor`'s
   `with_special_file` registers such a path and panics if it is read.
+- **Never through a directory link**: `admit::locate` refuses a path
+  with a symlink in any directory above it, with a scan warning, and
+  hands back the normalized spelling the class is decided on (see
+  [Admission](#admission-one-gate-before-every-read)).
 - **Carries only general configuration no other section owns.**
   `classify_ghost` decides every path before anything reads it, in this
   order:
@@ -50,13 +54,17 @@ path just because `rpm -Va` named it.
   - `MachineState`: the § 5.2 members of the machine-state class spec by
     path (`is_machine_state_member`). Skipped silently until the class
     lands.
-  - `OwnedBy(inspector)`: a file another section records. The table
-    (`OWNED_ELSEWHERE`, `OWNED_DIRS_ELSEWHERE`) holds each owner's own
-    constant, the one it reads the file by: storage's `FSTAB_PATH` and
-    `CRYPTTAB_PATH`, the users section's account databases, the SELinux
-    section's `SELINUX_CONFIG_PATH`, kernelboot's `LOCALE_CONF_PATH`, and
-    the repos section's `REPO_DIR`. Add a claim there, in the owner's
-    module, rather than a second list here. Storage claims `crypttab`
+  - `OwnedBy(inspector)`: a file another section records. The tables
+    (`OWNED_ELSEWHERE`, `OWNED_BY_RULE_ELSEWHERE`) hold each owner's own
+    constant or predicate, the one it reads the file by: storage's
+    `FSTAB_PATH` and `CRYPTTAB_PATH`, the users section's account
+    databases, the SELinux section's `SELINUX_CONFIG_PATH`, kernelboot's
+    `LOCALE_CONF_PATH`, and the repos section's `is_repo_file_path`
+    (a `*.repo` file directly in `/etc/yum.repos.d`, the one test
+    `collect_repo_files` reads by). A nested file or another suffix there
+    is general configuration: a claim wider than its reader drops a file
+    from both. Add a claim there, in the owner's module, rather than a
+    second list here. Storage claims `crypttab`
     but does not parse it yet, so an entry in it is recorded nowhere.
   - `Generated`: written on the host from input the image has or writes
     again (`GHOST_GENERATED_EXACT`, `GHOST_GENERATED_PREFIX`, authselect's
@@ -64,6 +72,8 @@ path just because `rpm -Va` named it.
     (`is_excluded_unowned_path`), a dev artifact, or the SELinux
     fcontext store.
   - `Deferred`: the keymap files, which the open locale item decides.
+  - `AuditRules`: `/etc/audit/audit.rules`, which the host decides (see
+    [audit.rules](#etcauditauditrules)).
   - `Config`: everything else, collected as `RpmOwnedModified`,
     `rpm_va_flags: None`, with its package and content (redaction
     applies).
@@ -124,7 +134,7 @@ regular files.
 | `/etc/chrony.keys` | chrony `cg` | `cn`, not a ghost | absent | Credential | NTP authentication keys, `<id> <hash> HEX:<key>` |
 | `/etc/machine-id`, `/etc/hostname` | systemd `cng` | yes | yes | MachineState | § 5.2 members |
 | `/etc/authselect/{nsswitch.conf,system-auth,password-auth,fingerprint-auth,smartcard-auth,postlogin,dconf-db,dconf-locks}` | authselect-libs `g` | yes | yes | Generated | `authselect select` writes them again |
-| `/etc/audit/audit.rules` | audit(-rules) `cng` | yes | yes | Generated | `augenrules --load` writes it from `rules.d` (`auditd.service` `ExecStartPost=` on 9.8, `audit-rules.service` on 10.2) |
+| `/etc/audit/audit.rules` | audit(-rules) `cng` | yes | yes | AuditRules | `augenrules --load` writes it from `rules.d` with the packaged units; the admin's when the host loads it directly |
 | `/etc/avahi/etc/localtime` | avahi `g` | yes | yes | Generated | avahi's `%post` copies `/etc/localtime` into its chroot |
 | `/etc/crypto-policies/state/*` | crypto-policies `g` | yes | yes | Generated | written from `config` |
 | `/etc/crypto-policies/back-ends/nss.config` | crypto-policies `cmng` | yes | yes | Generated | the walk's back-ends glob |
@@ -150,6 +160,98 @@ plain `%config(noreplace)` file (`cn`, 540 bytes stock). An admin who
 adds a key makes it an `rpm -Va` content change, and that branch
 collects it with its content. The credential list is applied to the
 ghost branch only.
+
+## Admission: one gate before every read
+
+`crates/collect/src/inspectors/config/admit.rs`. Every exclusion the
+config inspector has matches a path by its spelling, and the kernel
+follows links in every component of a path, `lstat` included. Two
+checks close that, and every branch (`rpm -Va`, ghost, the unowned
+walk, orphans, authselect's edited files) runs both:
+
+- **`locate`, before any rule is asked.** The path is normalized (`.`
+  and repeated separators removed; a `..` is refused), and its directory
+  is resolved with `resolve_final_target`. If that is not the directory
+  as spelled, a directory above the file is a link and the path is
+  refused. With `/etc/app/state -> /etc`, `/etc/app/state/chrony.keys`
+  read `/etc/chrony.keys` as `Config` before this; the same held for
+  `machine-id`, `shadow` and a `/etc/yum.repos.d` alias. A packaged path
+  refused this way (ghost or `rpm -Va`) is a scan warning; a walked one
+  is skipped silently, since the walk reaches the file under its own
+  name. Refusing outright was chosen over resolving the path and applying
+  every exclusion twice: measured on `rhel9` and `rhel10`, 2026-11-21,
+  after drift runs, no packaged file lies under a directory link in
+  `/etc` (`find /etc -type l -xtype d` against `rpm -qa` file lists),
+  and every directory link there points out of `/etc` (`/etc/httpd/logs`,
+  `/etc/swid/swidtags.d/redhat.com`, which the walk already skips) or at
+  a directory the walk reaches by its own name (`/etc/ssl/certs`,
+  `/etc/yum/vars`, `/etc/xdg/systemd/user`). The scans of those hosts
+  held no config entry under any of them.
+- **`readable`, inside `capture_config`.** A regular file is read. A
+  link is followed to its end: `/dev/null` is a mask, kept empty and
+  never opened; a FIFO, socket or device is never opened; a regular file
+  under `/etc` is read only when `classify_ghost` calls its path
+  `Config`; anything else is not read. One exception leaves `/etc`: a
+  custom authselect profile's link into the shipped profiles. A modified
+  packaged file re-pointed at a withheld file is a scan warning; a walked
+  link leaving `/etc` (other than the `/var` and `/usr` cross-tree cases
+  and the allowlist) is a `CrossTreeSymlink` advisory with no content.
+- **The reads that only decide** (DHCP detection over
+  `system-connections`, the crypto policy, the anacrontab modernization
+  rule, the audit units) check `opens_without_blocking` first.
+- **`rpm -Va` decides the kind before it reads**: a metadata-only row is
+  dropped before content capture, so a ghost FIFO with a `.M.......` row
+  is never opened.
+
+**Known limitation:** the checks and the read are separate calls, so a
+file replaced between them (a regular file swapped for a FIFO, or a
+directory for a link) is read as what it became. Closing that needs the
+executor to open with `O_NONBLOCK` and check type and path through the
+descriptor. Not covered by the gate: the ostree branch of the config
+inspector (not reached, since the inspector applies to package-based
+hosts only), and readers outside it, such as the repos section's
+`collect_repo_files`, which opens each `*.repo` entry without a type
+check.
+
+## `/etc/audit/audit.rules`
+
+`config/audit_rules.rs`. With the packaged units, `augenrules --load`
+builds the file from `/etc/audit/rules.d/*.rules` (which the walk and
+`rpm -Va` carry) and loads it: `ExecStartPost=-/sbin/augenrules --load`
+in `auditd.service` on RHEL 9.8 (audit 3.1.5), `ExecStart=/usr/sbin/augenrules --load`
+in `audit-rules.service` on RHEL 10.2 (audit-rules 4.0.3), whose
+`auditd.service` has no loader. Both units are in
+`testdata/fixtures/config/audit/`, copied from the hosts on 2026-11-21
+(`rpm -V` clean). RHEL also supports loading the file directly: copy
+the unit to `/etc/systemd/system/`, comment out the `augenrules` line
+and enable the `auditctl -R /etc/audit/audit.rules` line the RHEL 9 unit
+ships commented (its own comment and the RHEL 9 hardening guide,
+"Disabling augenrules").
+
+`augenrules` (read on both hosts) always writes its output when
+`rules.d` exists, since the output starts with a header line, and loads
+the old file unchanged when `rules.d` is missing.
+
+`source` reads both loader units the way systemd would: the `/etc`
+unit file or the packaged one, then drop-ins from `<unit>.d/` and
+`service.d/` in `/etc` and `/usr/lib` in file-name order, an `/etc` one
+hiding a packaged one of the same name, an empty assignment clearing the
+setting, a `/dev/null` unit masked. Then:
+
+| Host | Class | Both exports |
+|---|---|---|
+| a start command runs `augenrules` (not `--check`) and `rules.d` is a directory | `Augenrules`: not collected | not staged; `rules.d` carries the rules |
+| no start command runs `augenrules`, one runs `auditctl -R /etc/audit/audit.rules` | `LoadedDirectly`: collected as `RpmOwnedModified` | staged under `config/etc/audit/`, copied by `COPY config/etc/ /etc/`, as are the `/etc` override or drop-in, which the walk collects |
+| anything else (no `rules.d`, a masked or missing loader, an unreadable unit or drop-in) | `Unknown`: collected | staged, and a scan warning names the file and the reason |
+
+Carrying is the safe side: a carried file `augenrules` regenerates is
+only rewritten at the first audit start, while a dropped file the host
+loads directly leaves the image with no audit rules. Nothing sets the
+host's 0640 on the staged file, as nothing does for the `rules.d` files.
+
+**Not measured:** no host here was switched to direct loading, so the
+`LoadedDirectly` row rests on the packaged unit's own instructions and
+the unit-file reading above, not on a booted image.
 
 ## authselect
 
