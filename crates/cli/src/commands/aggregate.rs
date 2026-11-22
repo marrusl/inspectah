@@ -448,6 +448,13 @@ fn format_warning(w: &AggregateWarning) -> String {
         AggregateWarning::StaleScanDates { spread_description } => {
             format!("stale scan dates: {spread_description}")
         }
+        AggregateWarning::UnreadableScanDates { hosts, scans } => {
+            format!(
+                "scan dates could not be read: {} ({} of {scans} scans); the stale scan dates check did not include them",
+                hosts.join(", "),
+                hosts.len()
+            )
+        }
         AggregateWarning::BaselineConflict {
             distribution,
             selected,
@@ -516,6 +523,21 @@ fn format_validation_errors(errors: &[AggregateValidationError]) -> anyhow::Erro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The unreadable-dates warning names the hosts and says the stale
+    /// check left them out, apart from the stale scan dates warning.
+    #[test]
+    fn unreadable_scan_dates_warning_names_the_hosts() {
+        let text = format_warning(&AggregateWarning::UnreadableScanDates {
+            hosts: vec!["host-2".into(), "host-3".into()],
+            scans: 3,
+        });
+        assert_eq!(
+            text,
+            "scan dates could not be read: host-2, host-3 (2 of 3 scans); \
+             the stale scan dates check did not include them"
+        );
+    }
 
     // -----------------------------------------------------------------------
     // Aggregate init metadata extraction regression tests

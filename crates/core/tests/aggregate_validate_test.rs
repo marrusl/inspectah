@@ -417,6 +417,76 @@ fn stale_scan_dates_warn_only_past_the_threshold() {
     );
 }
 
+/// A timestamp that is not an RFC 3339 time cannot be placed, so the
+/// stale-date check did not cover that scan. It gets a warning of its
+/// own, naming the hosts, beside whatever the readable timestamps show,
+/// whether none, one or two of the others are readable. A snapshot with
+/// no timestamp at all is not one of them.
+#[test]
+fn unreadable_scan_dates_warn_apart_from_staleness() {
+    let warnings = |timestamps: &[Option<serde_json::Value>]| {
+        let snaps: Vec<_> = timestamps
+            .iter()
+            .enumerate()
+            .map(|(i, ts)| {
+                let mut snap = make_snap(&format!("host-{}", i + 1), "9.4");
+                if let Some(ts) = ts {
+                    snap.meta.insert("timestamp".into(), ts.clone());
+                }
+                snap
+            })
+            .collect();
+        validate_snapshots(&snaps).warnings
+    };
+    let unreadable = |w: &[AggregateWarning]| {
+        w.iter()
+            .filter_map(|w| match w {
+                AggregateWarning::UnreadableScanDates { hosts, scans } => {
+                    Some((hosts.clone(), *scans))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let stale = |w: &[AggregateWarning]| {
+        w.iter()
+            .any(|w| matches!(w, AggregateWarning::StaleScanDates { .. }))
+    };
+    let at = |ts: &str| Some(serde_json::json!(ts));
+    let bad = at("not-a-date");
+
+    // Zero readable: both scans unreadable, one as text, one not a string.
+    let w = warnings(&[bad.clone(), Some(serde_json::json!(1795153386))]);
+    assert_eq!(
+        unreadable(&w),
+        [(vec!["host-1".to_string(), "host-2".to_string()], 2)]
+    );
+    assert!(!stale(&w), "{w:?}");
+
+    // One readable.
+    let w = warnings(&[at("2026-11-01T00:00:00Z"), bad.clone()]);
+    assert_eq!(unreadable(&w), [(vec!["host-2".to_string()], 2)]);
+    assert!(!stale(&w), "{w:?}");
+
+    // Two readable, minutes apart: still a warning for the third.
+    let w = warnings(&[
+        at("2026-11-01T00:00:00Z"),
+        at("2026-11-01T00:12:00Z"),
+        bad.clone(),
+    ]);
+    assert_eq!(unreadable(&w), [(vec!["host-3".to_string()], 3)]);
+    assert!(!stale(&w), "{w:?}");
+
+    // Two readable, weeks apart: both warnings, each for its own reason.
+    let w = warnings(&[at("2026-11-01T00:00:00Z"), at("2026-11-20T00:00:00Z"), bad]);
+    assert_eq!(unreadable(&w), [(vec!["host-3".to_string()], 3)]);
+    assert!(stale(&w), "{w:?}");
+
+    // Control: readable or absent timestamps raise no unreadable warning.
+    let w = warnings(&[at("2026-11-01T00:00:00Z"), None]);
+    assert!(unreadable(&w).is_empty(), "{w:?}");
+}
+
 #[test]
 fn test_no_stale_scan_dates_when_same() {
     let mut a = make_snap("host-1", "9.4");

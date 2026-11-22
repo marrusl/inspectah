@@ -278,7 +278,7 @@ Strict mode (fail on warnings):
 inspectah aggregate --strict /srv/snapshots/
 ```
 
-With `--strict`, any warning aborts the run with exit code 1. Aggregating scans taken more than 7 days apart prints a `stale scan dates` warning.
+With `--strict`, any warning aborts the run with exit code 1. Aggregating scans taken more than 7 days apart prints a `stale scan dates` warning, and a scan whose timestamp cannot be read prints `scan dates could not be read`.
 
 Aggregate snapshots that contain sensitive data (subscription certs, password hashes):
 

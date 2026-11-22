@@ -51,6 +51,15 @@ pub enum AggregateWarning {
     StaleScanDates {
         spread_description: String,
     },
+    /// Scans whose recorded timestamp is not an RFC 3339 time, so the
+    /// stale scan dates check could not place them. A snapshot that
+    /// recorded no timestamp is not one of them.
+    UnreadableScanDates {
+        /// The hosts with an unreadable timestamp, sorted.
+        hosts: Vec<String>,
+        /// How many scans were given.
+        scans: usize,
+    },
     BaselineConflict {
         distribution: Vec<(String, usize)>,
         selected: String,
@@ -244,16 +253,31 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
     // Scans of a fleet taken one after another, over hours or days, are
     // one picture of it; the warning is for a host scanned so much earlier
     // than another that the two may not describe the fleet at one time.
+    // A recorded timestamp that does not parse leaves that scan out of
+    // the check, which is then incomplete: it gets a warning of its own,
+    // so `--strict` does not pass on dates it never compared.
     {
-        let timestamps: Vec<(chrono::DateTime<chrono::FixedOffset>, &str)> = snapshots
-            .iter()
-            .filter_map(|s| s.meta.get("timestamp").and_then(|v| v.as_str()))
-            .filter_map(|ts| {
-                chrono::DateTime::parse_from_rfc3339(ts)
-                    .ok()
-                    .map(|at| (at, ts))
-            })
-            .collect();
+        let mut timestamps: Vec<(chrono::DateTime<chrono::FixedOffset>, &str)> = Vec::new();
+        let mut unreadable: Vec<String> = Vec::new();
+        for snap in snapshots {
+            let Some(value) = snap.meta.get("timestamp") else {
+                continue;
+            };
+            match value
+                .as_str()
+                .and_then(|ts| Some((chrono::DateTime::parse_from_rfc3339(ts).ok()?, ts)))
+            {
+                Some(parsed) => timestamps.push(parsed),
+                None => unreadable.push(HostIdentity::of(snap).to_string()),
+            }
+        }
+        if !unreadable.is_empty() {
+            unreadable.sort();
+            result.warnings.push(AggregateWarning::UnreadableScanDates {
+                hosts: unreadable,
+                scans: snapshots.len(),
+            });
+        }
         if let (Some(min), Some(max)) = (timestamps.iter().min(), timestamps.iter().max()) {
             let spread = max.0.signed_duration_since(min.0);
             if spread > chrono::Duration::days(STALE_SCAN_SPREAD_DAYS) {

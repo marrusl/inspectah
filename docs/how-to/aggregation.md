@@ -261,9 +261,12 @@ With any warning, `--strict` prints each, then an
 `error: aborting due to --strict` line, and exits with code 1. The
 two scans above, taken 12 minutes apart, raise none. `stale scan dates` is
 raised only when the earliest and the latest scan are more than 7 days apart,
-so scanning a fleet host by host over a few days raises nothing. The other
-warnings are a baseline conflict (hosts scanned against different images), a
-spread of minor versions, and a mix of system types.
+so scanning a fleet host by host over a few days raises nothing. A scan whose
+recorded timestamp cannot be read is left out of that check and raises
+`scan dates could not be read`, naming the host, so `--strict` fails rather
+than pass on dates it never compared. The other warnings are a baseline
+conflict (hosts scanned against different images), a spread of minor
+versions, and a mix of system types.
 
 ## Refine aggregate data
 
