@@ -287,9 +287,9 @@ The `.repo` file's and the keys' rows under Configuration Files are
 read-only. They read "Decided under Repositories", with "Ships" or "Not
 shipped" beside it, a sentence saying why, and a "Go to repo `<repo>`" link
 that opens Packages at that repository's switch. In the fleet (aggregate)
-view these rows still show a checkbox. The server refuses that change and
-refine shows "Nothing was changed: `<path>` is decided by the section that
-owns it, not by this row." Use the repository's switch instead.
+view these rows are read-only too: they read "Decided under Repositories"
+with a "Go to repo `<repo>`" link, without the Ships state or the
+sentence.
 
 The server refuses a repository operation that would change nothing, with
 a message instead of a recorded change. Refine shows it on the
