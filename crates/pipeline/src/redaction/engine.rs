@@ -32,6 +32,21 @@ const URL_AUTH_REDACTED_MARKER: &str = "://REDACTED@";
 /// also rewrites content it did not scrub, so the marker is the signal.
 const COMPOSE_REDACTED_MARKER: &str = "<REDACTED>";
 
+/// Where dnf reads `.repo` files from.
+const YUM_REPOS_DIR: &str = "/etc/yum.repos.d/";
+
+/// Whether `path` is a `.repo` file dnf reads: a `*.repo` directly in
+/// `/etc/yum.repos.d/`, in any spelling [`Destination`] reads as that, so
+/// a repo inventory entry and its Configuration row (`etc/yum.repos.d/x.repo`
+/// on an ostree host) are both one.
+fn is_repo_file_path(path: &str) -> bool {
+    Destination::new(path).is_ok_and(|d| {
+        d.as_str()
+            .strip_prefix(YUM_REPOS_DIR)
+            .is_some_and(|name| !name.contains('/') && name.ends_with(".repo"))
+    })
+}
+
 /// A URL in a `.repo` option value: a scheme, `://`, then everything up to
 /// whitespace or a comma, which is how dnf splits a `baseurl=`,
 /// `mirrorlist=`, `metalink=` or `gpgkey=` value into URLs.
@@ -392,6 +407,16 @@ impl<'c> LineCursor<'c> {
         self.pos = pos;
     }
 
+    /// Whether the line holding the current position is an INI section
+    /// header: `[`, then anything, then `]`, once trimmed, as
+    /// `parse_repo_sections` reads a header.
+    fn is_section_header(&self) -> bool {
+        let rest = &self.content[self.start..];
+        let line = &rest[..rest.find(['\r', '\n']).unwrap_or(rest.len())];
+        let line = line.trim();
+        line.starts_with('[') && line.ends_with(']')
+    }
+
     /// Returns true if the match whose whole match starts at `claim_start`
     /// falls on a comment line: the text of the current line before the
     /// match, trimmed, starts with one of `markers` (see
@@ -501,6 +526,7 @@ fn collect_eligible_matches(
     path: Option<&str>,
 ) -> Vec<EligibleMatch> {
     let markers = comment_markers(path);
+    let headers_kept = path.is_some_and(is_repo_file_path);
     let mut lines = LineCursor::new(content);
     let mut found = Vec::new();
     // The union of the eligible secrets kept last, which overlap one
@@ -522,6 +548,10 @@ fn collect_eligible_matches(
         }
         if pos < line_end && redundant >= MAX_REDUNDANT_RESCANS_PER_LINE {
             lines.advance(pos);
+            if headers_kept && lines.is_section_header() {
+                pos = line_end;
+                continue;
+            }
             found.push(EligibleMatch {
                 claim: pos..line_end,
                 start: pos,
@@ -546,7 +576,15 @@ fn collect_eligible_matches(
         let nested = whole.start() < read_to && whole.start() < line_end;
         read_to = read_to.max(whole.end());
 
-        let added = match eligible_match(pat, content, &caps, path, &markers, &mut lines) {
+        let added = match eligible_match(
+            pat,
+            content,
+            &caps,
+            path,
+            &markers,
+            headers_kept,
+            &mut lines,
+        ) {
             Some(em) if em.start < covered.end && em.end <= covered.end => false,
             Some(em) => {
                 covered = if em.start < covered.end {
@@ -588,6 +626,7 @@ fn eligible_match(
     caps: &Captures<'_>,
     path: Option<&str>,
     markers: &[&str],
+    headers_kept: bool,
     lines: &mut LineCursor<'_>,
 ) -> Option<EligibleMatch> {
     let whole = caps.get(0)?;
@@ -604,6 +643,16 @@ fn eligible_match(
     // Filter 1: skip matches on comment lines
     lines.advance(secret.start());
     if lines.is_comment(whole.start(), markers) {
+        return None;
+    }
+
+    // Filter 1b: in a `.repo` file (`headers_kept`), skip matches on a
+    // `[section]` header line. A header holds a repo id, never a secret,
+    // and a repo id can spell a credential key: in
+    // `[copr:copr.fedorainfracloud.org:token:vendor]` the generic pattern
+    // took `vendor]`, the file then defined no section, and every
+    // decision read from the stored file lost the repo.
+    if headers_kept && lines.is_section_header() {
         return None;
     }
 
@@ -2874,7 +2923,16 @@ baseurl = https://cdn.redhat.com
             let whole = caps.get(0).unwrap();
             let secret = caps.name(SECRET_GROUP).unwrap_or(whole);
             let mut lines = LineCursor::new(content);
-            if let Some(em) = eligible_match(pat, content, &caps, path, &markers, &mut lines) {
+            let headers_kept = path.is_some_and(is_repo_file_path);
+            if let Some(em) = eligible_match(
+                pat,
+                content,
+                &caps,
+                path,
+                &markers,
+                headers_kept,
+                &mut lines,
+            ) {
                 secrets.push(em.start..em.end);
             }
             pos = if secret.start() > whole.start() {
@@ -3162,6 +3220,68 @@ baseurl = https://cdn.redhat.com
             !snapshot.redactions.is_empty(),
             "redactions must contain findings from repo file"
         );
+    }
+
+    /// A `.repo` file's `[section]` headers are never rewritten, in the
+    /// repo inventory or in its Configuration row, whatever credential
+    /// key a repo id spells; the values under them still are. Another
+    /// file's lines, and a `.repo` file's option lines, are searched as
+    /// before.
+    #[test]
+    fn test_redact_never_rewrites_a_repo_files_section_headers() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::rpm::{RepoFile, RpmSection};
+        let headers = [
+            "[copr:copr.fedorainfracloud.org:token:vendor]",
+            "  [password=hunter2]  ",
+            "[api_key: k1 token:t2 secret=s3 token=a token=b token=c token=d token=e]",
+        ];
+        for header in headers {
+            let content = format!("{header}\nbaseurl=https://v.example/\npassword=orchid92\n");
+            for path in [
+                "/etc/yum.repos.d/vendor.repo",
+                "etc/yum.repos.d//vendor.repo",
+            ] {
+                let mut snapshot = InspectionSnapshot::new();
+                snapshot.rpm = Some(RpmSection {
+                    repo_files: vec![RepoFile {
+                        path: path.into(),
+                        content: content.clone(),
+                        disposition: SnapshotFindingKind::included(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                });
+                snapshot.config = Some(ConfigSection {
+                    files: vec![ConfigFileEntry {
+                        path: path.into(),
+                        content: content.clone(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                });
+                redact(&mut snapshot, &RedactOptions::default());
+                for (what, got) in [
+                    (
+                        "repo",
+                        &snapshot.rpm.as_ref().unwrap().repo_files[0].content,
+                    ),
+                    (
+                        "config",
+                        &snapshot.config.as_ref().unwrap().files[0].content,
+                    ),
+                ] {
+                    assert!(
+                        got.starts_with(&format!("{header}\n")),
+                        "{what} {path}: {got}"
+                    );
+                    assert!(!got.contains("orchid92"), "{what} {path}: {got}");
+                }
+            }
+        }
+        // Not a `.repo` file dnf reads: its lines are searched whole.
+        let other = redact_string("[token:vendor]\n");
+        assert_ne!(other, "[token:vendor]\n");
     }
 
     /// A credential in any URL of a `.repo` file, and of its Configuration
