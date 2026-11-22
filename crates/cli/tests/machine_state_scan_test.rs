@@ -1646,3 +1646,46 @@ fn the_subscription_hostname_is_read_through_the_gate() {
     assert!(!json.contains("OPENSSH PRIVATE KEY"), "{json}");
     assert_marker_nowhere(&snap);
 }
+
+/// The RPM section's two readers of host files report a refusal: a
+/// `.repo` file linked to a key gives no repo row, and a `gpgkey=file://`
+/// reference to a withheld key file gives no key row. Each is a degraded
+/// reason naming the path, the section stays, partial, with the ordinary
+/// repo, and neither key name is opened.
+#[test]
+fn refused_repo_and_key_files_degrade_the_rpm_section() {
+    use inspectah_core::types::completeness::{Completeness, InspectorId};
+    const KEY: &str = "/etc/pki/tls/private/server.key";
+    let exec = SysctlHost::new()
+        .file(KEY, &encrypted_key())
+        .link("/etc/yum.repos.d/linked.repo", KEY)
+        .file(
+            "/etc/yum.repos.d/app.repo",
+            &format!("[app]\nname=app\nbaseurl=https://example.invalid/app\ngpgkey=file://{KEY}\n"),
+        )
+        .build();
+    let snap = reload(&scan_exec(&exec, std_inspectors()));
+    let rpm = snap.rpm.as_ref().expect("the RPM section stays");
+    let repos: Vec<&str> = rpm.repo_files.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(repos, vec!["/etc/yum.repos.d/app.repo"]);
+    assert!(rpm.gpg_keys.iter().all(|k| k.path != KEY), "no key row");
+    assert!(
+        matches!(
+            &snap.completeness,
+            Completeness::Partial { degraded_sections, .. } if degraded_sections.contains(&InspectorId::Rpm)
+        ),
+        "{:?}",
+        snap.completeness
+    );
+    for path in ["/etc/yum.repos.d/linked.repo", KEY] {
+        assert!(
+            snap.warnings.iter().any(|w| w
+                .message
+                .contains(&format!("machine-state file left out: {path}"))),
+            "{path} is a degraded reason: {:?}",
+            snap.warnings
+        );
+        assert_never_opened(&exec, path);
+    }
+    assert_marker_nowhere(&snap);
+}

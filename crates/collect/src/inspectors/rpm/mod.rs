@@ -60,6 +60,9 @@ struct SupplementaryData {
     rpm_va: Option<Vec<inspectah_core::types::rpm::RpmVaEntry>>,
     /// One per key a repo file names that could not be collected.
     gpg_key_warnings: Vec<Warning>,
+    /// A degraded reason per repo file or key file the read gate refused,
+    /// each once.
+    left_out: std::collections::BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -210,7 +213,8 @@ impl RpmInspector {
         exec: &dyn Executor,
         source: &SourceSystem,
     ) -> SupplementaryData {
-        let repo_files = repos::collect_repo_files(exec);
+        let mut left_out = Vec::new();
+        let repo_files = repos::collect_repo_files(exec, &mut left_out);
 
         let vars = dnf_vars::DnfVars::from_host(exec);
         let mut gpg_keys = Vec::new();
@@ -221,6 +225,7 @@ impl RpmInspector {
         let mut unread = std::collections::BTreeSet::new();
         for repo in &repo_files {
             let scan = repos::extract_gpg_keys(&repo.content, exec, &vars);
+            left_out.extend(scan.left_out);
             gpg_keys.extend(scan.keys);
             unread.extend(scan.unread.into_iter().map(|u| (repo.path.clone(), u)));
         }
@@ -271,6 +276,7 @@ impl RpmInspector {
             version_locks,
             rpm_va,
             gpg_key_warnings,
+            left_out: left_out.into_iter().collect(),
         }
     }
 }
@@ -531,6 +537,7 @@ impl Inspector for RpmInspector {
         }
 
         warnings.extend(supp.gpg_key_warnings);
+        let left_out = supp.left_out;
 
         // 9a. Normalize source_repo short names to full repo IDs so
         //     package tables and config trees use the same identifier.
@@ -560,11 +567,21 @@ impl Inspector for RpmInspector {
             ..Default::default()
         };
 
-        Ok(InspectorOutput {
+        let output = InspectorOutput {
             section: SectionData::Rpm(section),
             warnings,
             redaction_hints: Vec::new(),
-        })
+        };
+        if left_out.is_empty() {
+            Ok(output)
+        } else {
+            // A refused repo or key file has no row: the section is
+            // partial, and says which files it left out.
+            Err(InspectorError::Degraded {
+                partial: Box::new(output),
+                reason: left_out.into_iter().collect::<Vec<_>>().join("; "),
+            })
+        }
     }
 }
 

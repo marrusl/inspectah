@@ -1,4 +1,5 @@
 use super::dnf_vars::{DnfVars, ExpandError};
+use inspectah_core::machine_state;
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{FileOwnershipEntry, RepoFile, RpmVaEntry};
@@ -53,8 +54,10 @@ pub(crate) fn is_repo_file_path(path: &str) -> bool {
 }
 
 /// Collect all .repo files from /etc/yum.repos.d/
-/// Excludes inspectah's own COPR repo from output.
-pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
+/// Excludes inspectah's own COPR repo from output. A file the read gate
+/// refuses (a `.repo` name linked to a key) gives no row, and its
+/// degraded reason is pushed to `left_out`.
+pub fn collect_repo_files(exec: &dyn Executor, left_out: &mut Vec<String>) -> Vec<RepoFile> {
     let mut repo_files = Vec::new();
     let repo_dir = Path::new(REPO_DIR);
 
@@ -70,7 +73,12 @@ pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
         }
         let content = match exec.read_file(&path) {
             Ok(content) => content,
-            Err(_) => continue,
+            Err(e) => {
+                if machine_state::refusal(&e).is_some() {
+                    left_out.push(machine_state::left_out_reason(&path.to_string_lossy()));
+                }
+                continue;
+            }
         };
 
         // Skip files with NUL bytes or other binary content
@@ -256,6 +264,9 @@ pub struct UnreadGpgKey {
 pub struct GpgKeyScan {
     pub keys: Vec<RepoFile>,
     pub unread: Vec<UnreadGpgKey>,
+    /// The degraded reason for each key file the read gate refused, which
+    /// is also in `unread`.
+    pub left_out: Vec<String>,
 }
 
 /// Extract GPG key files referenced in repo content.
@@ -307,7 +318,10 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
 
             let content = match exec.read_file(Path::new(key_path)) {
                 Ok(content) => content,
-                Err(_) => {
+                Err(e) => {
+                    if machine_state::refusal(&e).is_some() {
+                        scan.left_out.push(machine_state::left_out_reason(key_path));
+                    }
                     scan.unread.push(UnreadGpgKey {
                         reference: reference.to_string(),
                         reason: UnreadReason::Unreadable(key_path.to_string()),
@@ -444,7 +458,7 @@ mod tests {
                 "[epel]\nname=EPEL 9\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n",
             );
 
-        let repos = collect_repo_files(&mock);
+        let repos = collect_repo_files(&mock, &mut Vec::new());
         assert_eq!(repos.len(), 2);
 
         let redhat_repo = repos.iter().find(|r| r.path.contains("redhat.repo"));
@@ -482,7 +496,7 @@ mod tests {
             .with_file("/etc/yum.repos.d/sub/nested.repo", "[nested]\nname=N\n")
             .with_file("/etc/yum.repos.d/custom.repo.bak", "[old]\nname=Old\n")
             .with_file("/etc/yum.repos.d/repos.conf", "[conf]\nname=C\n");
-        let read: Vec<String> = collect_repo_files(&mock)
+        let read: Vec<String> = collect_repo_files(&mock, &mut Vec::new())
             .into_iter()
             .map(|r| r.path)
             .collect();
@@ -499,7 +513,7 @@ mod tests {
                 "not a valid repo file\n\0\0\0",
             );
 
-        let repos = collect_repo_files(&mock);
+        let repos = collect_repo_files(&mock, &mut Vec::new());
         // Should not panic, malformed file should be skipped
         assert_eq!(repos.len(), 0);
     }
@@ -658,7 +672,7 @@ mod tests {
                 "[copr:copr.fedorainfracloud.org:mrussell:inspectah]\nbaseurl=https://download.copr.fedorainfracloud.org/results/mrussell/inspectah/\n",
             );
 
-        let repos = collect_repo_files(&mock);
+        let repos = collect_repo_files(&mock, &mut Vec::new());
         assert_eq!(repos.len(), 2, "inspectah COPR repo must be excluded");
 
         let repo_paths: Vec<&str> = repos.iter().map(|r| r.path.as_str()).collect();
