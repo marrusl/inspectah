@@ -466,8 +466,8 @@ The plan does not predict dnf's solver (Mark Russell, 2026-11-21). It
 reads two sets of package names, built once per plan by `Presence::new`
 from `export_installs`:
 
-- **certain**: the baseline's packages, every package the Containerfile
-  names on an install line, and what one of those certainly pulls in;
+- **certain**: the baseline's packages and every package the Containerfile
+  names on an install line, nothing else;
 - **possible**: `certain`, every included `packages_added` entry, and
   everything an included package may pull in: every `or` operand, both
   branches of every conditional, and every weak dependency
@@ -477,7 +477,9 @@ from `export_installs`:
 
 1. No owning package: plain.
 2. The owner certain: plain.
-3. The owner possible: guarded. This covers an excluded provider of a
+3. The owner possible: guarded. This covers every package present only
+   as another's dependency, the only provider on the source host of what
+   a named package requires included, an excluded provider of a
    capability another package provides too, an included auto package the
    Containerfile does not name (kept as one provider a leaf may pull in),
    a dependency only a conditional requirement brings, an `or` operand or
@@ -500,7 +502,7 @@ baseline) to whatever command is written.
 ### What counts as certain
 
 `export_installs` in `unit_plan.rs` is the one answer. A package is
-certain when:
+certain when, and only when (Mark Russell, 2026-11-21):
 
 - the Containerfile names it (`named_on_install_line`): an included
   package installed on its own route (`installs_on_its_own_route`) that
@@ -514,26 +516,19 @@ certain when:
 - the disabled-repo transaction names it: a package only a host-disabled
   repo serves that an installed leaf pulled in on the source host
   (`leaf_tree_pulled_in`, the `leaf_dep_tree` entries of the installed
-  leaves), the routing beta.6 released and the Containerfile reads too;
-- a named package's `dep_closures` entry lists it and a repo the image
-  enables serves it, or the disabled-repo transaction names it.
-  `dep_closures` follows Requires only: a Recommends or Supplements, and
-  every path through one, is possible only, because dnf skips a weak
-  dependency it cannot install and a plain `disable` of the missing unit
-  then fails on systemd 252. A snapshot without `dep_closures` (older than schema 29, or
-  hand-built) has only `leaf_dep_tree`, which credits every installed
-  provider of a capability, so it makes nothing certain.
+  leaves), the routing beta.6 released and the Containerfile reads too.
 
-**On a fleet** a closure counts only through a package every host has, on
-a fleet whose every host gave leaf data (`closure_is_certain`). The
-merged `dep_closures` entry is the intersection over the hosts that have
-the package, so it accounts for every provider installed beside it on
-those hosts. A package only some hosts have cannot see a provider another
-host's kept package brings: if `host-b`'s `other` provides the
-`transport` that `app`, only on `host-a`, requires from `helper`, the
-fleet image that installs both need not install `helper`. So `helper`'s
-commands are guarded. A package every host has meets every possible
-provider on some host, whose closure then leaves the dependency out.
+**A dependency is never certain**, however sure the source host's graph
+is. `dep_closures` says which installed package was the only provider
+of a requirement on the source host, and the target base image may hold
+another provider the host never had: with `base-provider` in the base
+image providing the `transport` that `app` requires, dnf installs `app`
+alone and leaves the host's only provider, `helper`, out. A plain
+`enable` of `helper.service` then fails on systemd 252, so its command is
+guarded (`a_target_only_provider_leaves_an_excluded_dependency_guarded`).
+That also guards an ordinary dependency's command on the common path,
+such as `httpd-core`'s `httpd.service` beside the leaf `httpd`. A fleet
+follows the same rule.
 
 ### Guarded commands
 
@@ -603,9 +598,10 @@ view shows a guarded command as planned: it does not say it is guarded.
 
 "Excluded" means the export does not name the package. A package that an
 installed package requires is in the image whatever its disposition,
-because dnf installs it with the package that needs it, so its unit
-command stays plain. One of several providers of a capability may or may
-not be installed: with the base image or another installed package
+unless the base image provides what it is needed for, because dnf
+installs it with the package that needs it: its unit command is kept,
+guarded. One of several providers of a capability may or may not be
+installed: with the base image or another installed package
 providing it too, dnf need not install it, and with only added ones it
 picks one. Its command is guarded. That covers refine's default exclusion
 of a non-leaf package (the scan tarball leaves the same package included,

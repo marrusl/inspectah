@@ -45,8 +45,11 @@ Everything that asks whether a package is in the image asks
 - **certain**: every package the Containerfile names on an install line
   (a leaf, a carried owner no installed leaf brings, a locked or
   anaconda package, one installed from its carried RPM, and a dependency
-  the disabled-repo transaction names), and what one of those certainly
-  pulls in;
+  the disabled-repo transaction names), and nothing else. A package
+  present only as another's dependency is not certain, however sure the
+  source host's graph is: the target base image may provide what it is
+  needed for through a package the host never had, and dnf then leaves
+  it out (Mark Russell, 2026-11-21);
 - **possible**: that, every included package, and everything an included
   package may pull in: every operand of an `or`, both branches of every
   conditional, and every weak dependency, whatever held on the source
@@ -98,11 +101,10 @@ resolve it.
   what they bring.
 
 A root's closure is `unit_plan::closure_of`, at a `Reach`: `Certain`
-reads the `dep_closures` entry, `Possible` both. `export_installs` counts
-a certain closure only for a named root, only when `dep_closures` is
-recorded (a snapshot with only `leaf_dep_tree` makes nothing certain,
-since the tree credits every installed provider of a capability), and
-only for a dependency a repo the image enables serves. `leaf_dep_tree`
+reads the `dep_closures` entry, `Possible` both. `export_installs` puts
+no closure in its certain set; the `/var` evidence
+(`pulled_in_by_included`) is what still reads `Reach::Certain`.
+`leaf_dep_tree`
 is what the leaf pulled in on the host (`RpmDepGraph::held`: each `or`
 by its first operand present, each conditional evaluated there), auto
 packages only: within the auto part of the leaf's two entries joined,
@@ -114,7 +116,10 @@ already, so a pulled-in package's own closure adds nothing.
 The class (`pulled_in_by_default_roots`) reads `Reach::Possible`, as it
 always counted every provider: an auto package a default root may pull
 in stays included by default, as the source host had it. It is not
-named on an install line, so its commands are guarded.
+named on an install line, so its commands are guarded. So is every
+package a named one requires: `httpd-core`'s `httpd.service`, which the
+leaf `httpd` brings, runs only if its unit file is in the image
+(`the_fixture_guards_only_a_dependencys_command`).
 
 The collector's dnf fallback cannot tell one provider from several, so
 it records every `dep_closures` entry empty and the whole closure in
@@ -147,14 +152,35 @@ owner that comes from a repo the host disabled, or whose possible
 closure (`unit_plan::possible_closure`: every provider, every branch,
 weak dependencies) holds a package that routes `DisabledRepo`
 (`OwnerHold::DisabledRepo`) or that no enabled repo serves by name, a
-local RPM or one from a repo the export lacks (`OwnerHold::NoRepo`). A
-requirement the collector could not read already puts every added
-package in the closure. A package named in the baseline does not count.
+local RPM or one from a repo the export lacks (`OwnerHold::NoRepo`).
+Every closure entry found in `packages_added` counts, whatever its name:
+the collector subtracts the base image by `name.arch`, so an added
+`libvendor.i686` beside the base image's `libvendor.x86_64` is another
+architecture the base image does not provide. Skipping an entry because
+its bare name is in `baseline_package_names` named an owner whose
+dependency the build cannot fetch
+(`another_arch_of_a_base_image_package_holds_its_owner`).
+
+The closures name installed packages only, so they cannot show a
+package the host never had. The collector records the added packages
+with a Requires that may need one in `rpm.unresolved_requirements`
+(schema 29): `DepExpr::may_need_uninstalled`, an operand no installed
+package provides in some branch the image may take, conditions never
+read and an `or` only when none of its operands is installed, or a
+dependency line the parser could not read. `(vendor-runtime unless
+local-switch)` with `local-switch` installed needed nothing on the host
+and needs `vendor-runtime` in an image without `local-switch`. An owner
+that is, or whose possible closure holds, such a package is
+`OwnerHold::Unresolved` (Mark Russell, 2026-11-21;
+`a_requirement_the_host_could_not_resolve_holds_its_owner`). The dnf
+fallback reads no requirement, so it lists every package and holds
+every owner. `DisabledRepo` wins over the others.
 `unit_owner_holds` is every owner with its hold; `default_carried_unit_owners`
 is the ones with none. A held owner is `AutoCarriage::HeldOwner`,
 excluded by default and listed with the hold's reason
 (`OwnerHold::reason`: "needs a repo disabled on the host", "needs a
-package no enabled repo serves"). Refine's leaf default excludes it
+package no enabled repo serves", "may need a package the host did not
+have"). Refine's leaf default excludes it
 too, since it is not in the carried set. Included by the operator, it
 installs as any auto package an operator includes does, as in beta.6.
 
@@ -188,7 +214,7 @@ the two exports disagree (`the_install_names_match`) or neither installs
 the package (`the_fixture_is_baseline_backed_and_has_a_not_carried_list`).
 `excluding_the_leaf_keeps_the_unit_owner_it_pulled_in` pins the
 membership rule; `crates/cli/tests/unit_owner_evidence_test.rs` pins the
-template instance, the three holds and their surfaces
+template instance, the holds and their surfaces
 (`an_owner_needing_a_repo_the_image_does_not_enable_is_not_carried_by_default`),
 a held owner once included
 (`including_an_owner_that_needs_a_disabled_repo_installs_it_as_released`),
@@ -224,10 +250,15 @@ scan does.
 no list is emitted, when the list below holds. The unit owners are still
 carried in every case but the first and the last. The collector's graph
 fallback, for a host where dnf could not name the user-installed
-packages, reads the edges that held on the host and keeps each member of
-a dependency cycle no root reaches as a leaf, so collector output no
-longer gives an empty tree over auto packages; a hand-built snapshot
-still can, and its owner still installs. The cases:
+packages, reads the edges that held on the host and classifies as beta.6
+did: a package nothing reaches is a leaf, and every member of a
+dependency cycle no root reaches is auto (Mark Russell, 2026-11-21).
+Promoting such members to leaves named packages beta.6 never named and
+put them outside the owner holds, so a cycle that needs a local RPM
+failed the build (`the_graph_fallback_leaves_an_unrooted_cycle_auto`).
+Two packages that need only each other therefore give an empty tree
+over auto packages, the third case below, and an owner among them still
+installs (`the_graph_fallback_still_carries_a_unit_owner`). The cases:
 
 - `leaf_packages` or `auto_packages` is `None` (the collector's
   unavailable or degraded state);
@@ -257,9 +288,8 @@ one, what that package pulls in is unknown, so `FleetDrops::of` is
 `None` and every unit emits. A `leaf_dep_tree` entry does not count: it
 leaves out a dependency the host also user-installed.
 `fleet_not_carried_packages` names the dropped owners of enabled units.
-A closure counts as certain on a fleet only through a package every host
-has, on a fleet whose every host gave leaf data
-(`unit_plan::closure_is_certain`); see `service-omission-model.md`.
+On a fleet, as on one host, only a named package is certain; see
+`service-omission-model.md`.
 The merge keeps only names, so a fleet entry's `arch` and `source_repo`
 are empty and the audit table prints `-`.
 
@@ -375,7 +405,12 @@ than one arch of that name. All reason wording comes from the constant
   include it.
 - A closure is the source host's dependency graph, not the target's: the
   image's dnf resolves against the target repos, which may offer a
-  provider the host lacked.
+  provider the host lacked. That is why only a named package is certain.
+- Without leaf data, a dependency cycle no root reaches is auto, as in
+  beta.6: with an unrelated leaf beside it, its members are not carried
+  and their recorded unit commands are omitted.
+- The source repo is read by name (`populate_source_repos`), so two
+  architectures of one added name share the first repo dnf prints.
 - The possible side over-counts on purpose. It counts every `or`
   operand and both branches of every conditional without evaluating
   them, so a package the image will not install can stay included by

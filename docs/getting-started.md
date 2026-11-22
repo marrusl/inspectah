@@ -189,9 +189,10 @@ the hostname and a timestamp.
 
 The scan carries packages that own a unit enabled on the host, such as
 `firewalld` or `cronie`. If it leaves one out because the package needs a
-repo disabled on the host, or a package no enabled repo serves, it ends
-with a `Notice:` line naming it with that reason and pointing at the Not
-carried table in `audit-report.md`.
+repo disabled on the host, or a package no enabled repo serves, or may
+need a package the host did not have, it ends with a `Notice:` line naming
+it with that reason and pointing at the Not carried table in
+`audit-report.md`.
 Include those packages in `inspectah refine` if the image needs them.
 
 ## Understand the output

@@ -128,9 +128,9 @@ The collector builds three graphs over the added packages.
   **Never infer roots from `depends_on`.** An edge only the image could
   need, `app -> alternate` through `(alternate if (missing-cap if
   switch))` while `switch` is installed, turns a root into a dependency,
-  and both exports then drop its recorded command. The fallback also
-  keeps every member of a dependency cycle no root reaches: someone
-  installed one of them, and which is not known.
+  and both exports then drop its recorded command. A dependency cycle no
+  root reaches is auto, as beta.6 classified it: promoting its members to
+  leaves named packages beta.6 never installed.
 - **`requires`, what installing `a` certainly installs**
   (`DepExpr::required`): a provider only when it is the sole installed
   provider of what `a` requires, an `or` only when one operand holds and
@@ -288,7 +288,20 @@ marks such a package `unread`, and `classify_deps_rpm` gives it a
 `depends_on` edge to every other added package, but no `held` or
 `requires` edge. So nothing is called absent because of it, its
 dependencies' commands are guarded, and a unit owner it may pull in a
-disabled-repo package for is not carried by default. The leaf tree is
+disabled-repo package for is not carried by default. It also puts the
+package in `unresolved_requirements`, below.
+
+**What the closures cannot name.** Every map above names installed
+packages only, so a requirement that may need a package the host never
+had leaves no trace in them: `(vendor-runtime unless local-switch)` with
+`local-switch` installed needs nothing on the host, and `vendor-runtime`
+in an image without `local-switch`. `DepExpr::may_need_uninstalled` reads
+a Requires for that: an operand no installed package provides, in any
+branch, conditions never read, and an `or` only when no operand is
+installed, since dnf can take an installed one. A package with such a
+Requires, or an unread line, is listed in `rpm.unresolved_requirements`,
+and a unit owner that is one or may pull one in is not carried by
+default. The dnf fallback reads no requirement and lists every package. The leaf tree is
 built on `held`, so the routing gains nothing from it, as in beta.6: a
 leaf whose unread requirement needs a package only a disabled repo serves
 still fails the plain `dnf install`, a known limitation.

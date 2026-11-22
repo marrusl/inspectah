@@ -126,14 +126,16 @@ command that would fail or do something the source host did not:
 
 **Commands that wait for their unit file.** A command for a vendor unit is
 written plain when the image certainly has its package: the base image ships
-it, the Containerfile installs it, or a package it installs requires it. When
-dnf may or may not install the package, the command runs only if the unit
-file is in the image. That happens for one of several packages that provide
-something an installed package needs, a package only a conditional dependency
-brings, a package another package only recommends or supplements (dnf skips
-one it cannot install), a package you include by hand in refine and the
-packages it needs, and, on a fleet, the packages a package only some hosts
-have needs. A timer's `enable` also waits for the file of the unit it starts
+it, or a Containerfile install line names it. When dnf may or may not install
+the package, the command runs only if the unit file is in the image. That
+happens for every package the image gets only because another package needs
+it, since the base image may already provide what that package needs: one
+an installed package requires, one of several packages that provide
+something an installed package needs, a package only a conditional
+dependency brings, a package another package only recommends or supplements
+(dnf skips one it cannot install), a package you include by hand in refine
+and the packages it needs, and, on a fleet, the packages a package only some
+hosts have needs. A timer's `enable` also waits for the file of the unit it starts
 when that unit comes from such a package. These commands follow the others
 in one `RUN`, under one comment, and the audit report lists them under its
 unit state changes:

@@ -79,8 +79,10 @@ Six bumps, two different arguments, all landing on "reject":
   broken payload.
 - 28 -> 29 added `rpm.dep_closures`, what each leaf and auto package
   certainly installs, leaves included, `rpm.dep_alternatives`, what
-  else it may install as one of several providers, and, for an
-  aggregate, `units.enabled_on_any_host`. A
+  else it may install as one of several providers,
+  `rpm.unresolved_requirements`, the packages with a requirement that may
+  need a package the host did not have, and, for an aggregate,
+  `units.enabled_on_any_host`. A
   schema-28 payload parses, the fields defaulting to absent, and a
   carried auto package's dependencies then read as not installed: listed
   as not carried, left out of the disabled-repo install that needs them,
