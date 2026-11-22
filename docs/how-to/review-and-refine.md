@@ -212,46 +212,114 @@ decided not to carry forward.
 
 ### Repositories
 
-The Repositories bar above the package list has one line per repository. Not
-every repository has a switch, and a switch does not always reach every
-package the repository serves. A repository gets a switch only when all of
-these hold:
+The Repositories bar above the package list has one line per repository. A
+repository decides its packages and also the `.repo` file that defines it
+and the GPG keys its `gpgkey=` names: the repository's switch is the only
+control over whether that file and those keys are copied into the image.
 
-- It is not a distro repository.
-- Its repo definition was found on the host and is enabled. The definition
-  is either complete, or incomplete, in which case the line also reads "repo
-  definition incomplete".
-- At least one of its packages is actionable and not locked.
+A repository has one of three kinds of switch, or none:
 
-Every other repository shows state text in place of a switch:
+- **A full switch** decides the repository's packages, its `.repo` file and
+  its keys. A repository gets one when it is not a distro repository, its
+  repo definition on the host is enabled, and it has an actionable,
+  unlocked package or a file or key the export can copy, so a repository
+  whose packages are all locked, or that has none, still has a switch for
+  its file. An incomplete definition adds "repo definition incomplete" to
+  the line.
+- **A files-and-keys switch** is for a distro repository, or one disabled on
+  the host, that defines a `.repo` file or names a key the export can copy,
+  such as a `company.repo` that mirrors `baseos` or a vendor file whose
+  every repository is disabled. It never moves packages. The line keeps its
+  state text, "always included" or "disabled on host", and reads "switch
+  moves files and keys only".
+- **No switch** when there is nothing to decide. The line shows state text
+  instead:
 
 | State text | Repository |
 |------------|------------|
-| "always included" | A distro repository |
-| "disabled on host" | The repo definition is present but disabled |
+| "always included" | A distro repository with no file or key to copy |
+| "disabled on host" | The repo definition is present but disabled, and owns no file or key to copy |
 | "repo id not found in any .repo file" | Packages name the repository, but no repo definition on the host does, usually because it was removed or renamed after install |
 | "installed outside any repo" | A pseudo repository or an empty repo id. The `@commandline` repository, for packages installed from a local file, is titled "Local / Manual installs". |
-| "nothing to decide: all members are locked" | The repository is eligible, but every one of its packages is locked or not actionable |
+| "nothing to decide: no package to change and no file or key the export can carry" | Every package is locked or not actionable, and there is no file or key to copy |
 
-A switch acts only on the repository's actionable, unlocked packages.
-Locked packages are never touched. The switch label counts those packages:
-"N of M packages included", or "M packages excluded" when none is included.
-When the Packages view hides some of them behind its display filters, the
-label ends with ", K not listed". The switch is on only when every one of
-those packages is included, so a repository with a partial selection shows
-as off. Turning it off excludes all of them, and turning it on includes all
-of them.
+A switch never touches a locked package. Its label counts what it decides:
 
-The server refuses a repository or package group operation that would
-change nothing, with a message instead of a recorded change, for example
-"nothing to change: all 8 effective members of 'epel' are already excluded".
+- "N of M packages included", or "M packages excluded" when none is
+  included, for a full switch with packages. When the Packages view hides
+  some of them behind its display filters, the label adds ", K not listed".
+  When some of the repository's files and keys are left out, it adds
+  ", repo files I of N carried".
+- "repo files I of N carried" for a repository with no packages, and for a
+  files-and-keys switch.
+- ", excluded in refine" at the end once you have excluded the repository.
 
-After you exclude a repository, its packages are listed under "From excluded
-repos" at the end of the Packages view. Each has its own checkbox, so you can
-bring one package back without re-including the repository; the repository's
-label then shows the partial count. A package with no serving repository has
-an Upload button in place of the checkbox, here as in the main list. Use it
-to supply the RPM, as described in [Handle Repo-less RPMs](repoless-rpms.md).
+The switch is on when the repository is not excluded, every file and key it
+can copy is copied, and, for a full switch, every one of its packages is
+included. Turning it off excludes the repository: a full switch excludes its
+packages, and both kinds leave out its `.repo` file and keys. Turning it on
+includes them all again.
+
+Under each line, the bar lists the files and keys the repository owns, by
+name, with what the export does with each. A file that is copied has no
+note. The notes are:
+
+| Note | Meaning |
+|------|---------|
+| "not shipped" | Left out, by your switch or by default |
+| "kept by `<repo>`" | You excluded this repository, but another repository you kept defines the same file or names the same key, so it is still copied |
+| "base image" | The base image already ships the key |
+| "default repo file" | A file such as `redhat.repo`, which the build gets from the base image or the subscription mount, so it is never copied |
+| "rejected: is not a PGP public key", "rejected: holds private key material" | The scan did not store the key file, so it is never copied |
+| "withheld: `<reason>`" | The export does not write the file, for the reason given |
+
+A file or key that no repository line lists, such as a default repo file
+whose repositories have no packages, or a key whose `gpgkey=` reference
+redaction changed, is listed under "Files and keys no repo switch decides",
+with why the export does or does not copy it.
+
+A `.repo` file that defines several repositories is copied whole while any
+repository you kept needs it, so a repository you excluded stays defined in
+the image as the host had it. The Containerfile and the export's warnings
+say so.
+
+The `.repo` file's and the keys' rows under Configuration Files are
+read-only. They read "Decided under Repositories", with "Ships" or "Not
+shipped" beside it, a sentence saying why, and a "Go to repo `<repo>`" link
+that opens Packages at that repository's switch. In the fleet (aggregate)
+view these rows still show a checkbox. The server refuses that change and
+refine shows "Nothing was changed: `<path>` is decided by the section that
+owns it, not by this row." Use the repository's switch instead.
+
+The server refuses a repository operation that would change nothing, with
+a message instead of a recorded change. Refine shows it on the
+repository's line and reloads the view, since the view it acted on was out
+of date:
+
+- "nothing to decide in '`<repo>`': no effective member and no file or key
+  the export can carry"
+- "repo '`<repo>`' is already kept, with its files and keys carried and
+  every effective member included"
+- "repo '`<repo>`' is already excluded, with no effective member included
+  and nothing more to drop"
+
+A package group operation that would change nothing is refused the same
+way, for example "nothing to change: all 8 effective members of 'epel' are
+already excluded".
+
+After you exclude a repository with a full switch, its packages are listed
+under "From excluded repos" at the end of the Packages view. Each has its own
+checkbox, so you can bring one package back without re-including the
+repository; the repository's label then shows the partial count. A package
+with no serving repository has an Upload button in place of the checkbox,
+here as in the main list. Use it to supply the RPM, as described in
+[Handle Repo-less RPMs](repoless-rpms.md).
+
+A package stays included when the export leaves out the `.repo` file or a
+key its repository needs, for example after you turn off a files-and-keys
+switch, but it cannot be installed by name. It shows an Upload button, and
+the Containerfile prints a `# FIXME:` in place of its install, naming the
+repository switch that brings the file and keys back, or the RPM upload.
 
 ### Packages not carried
 
@@ -442,7 +510,11 @@ User accounts discovered on the host have additional options beyond
 include/exclude:
 
 - **Containerfile strategy**: Choose how each user is handled: Skip, or
-  create the user with `useradd`.
+  create the user with `useradd`. The image gets the account and no home
+  content: the home directory is created at first boot, and the user's SSH
+  keys are not part of the image. Provision them at install time, for
+  example with the `sshkey` lines in the Kickstart artifact, cloud-init or
+  a systemd credential. The Containerfile names the key file the host had.
 - **Password**: Choose "No password", "Keep existing password" (offered
   only when the scan preserved the user's hash), or "Set new password",
   which you type and confirm in the browser.
