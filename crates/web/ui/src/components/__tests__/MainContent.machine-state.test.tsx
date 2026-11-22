@@ -43,13 +43,24 @@ type Reply =
 
 let replies: Reply[] = [];
 let bodies: unknown[] = [];
+/** What `GET /api/view` returns: the server's state. */
+let currentView: ViewResponse | null = null;
+let viewFetches = 0;
 
 beforeEach(() => {
   replies = [];
   bodies = [];
+  currentView = null;
+  viewFetches = 0;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/view") {
+        viewFetches += 1;
+        if (!currentView) throw new Error("no view queued");
+        const view = currentView;
+        return { ok: true, status: 200, json: async () => view };
+      }
       if (url !== "/api/op") throw new Error(`unexpected fetch: ${url}`);
       bodies.push(JSON.parse(String(init?.body)));
       const reply = replies.shift();
@@ -259,6 +270,45 @@ describe("MainContent: the machine-state block", () => {
     await waitFor(() => expect(include).toBeEnabled());
     expect(include).toHaveTextContent("Include");
     expect(rowEl(HOSTNAME)).not.toHaveTextContent("Included by you");
+  });
+
+  it("shows a redundant decision as information and shows the server's state", async () => {
+    // The view on screen is stale: the server already holds the hostname
+    // included, and refuses including it again.
+    const user = userEvent.setup();
+    render(<Harness initial={VIEW} />);
+    await expand(user);
+    currentView = INCLUDED;
+    replies.push({
+      status: 422,
+      error: `nothing to change: machine-state file ${HOSTNAME} is already included`,
+    });
+
+    await user.click(
+      within(rowEl(HOSTNAME)).getByRole("button", {
+        name: `Include ${HOSTNAME}`,
+      }),
+    );
+
+    const message = await within(rowEl(HOSTNAME)).findByTestId(
+      `machine-state-failure-${HOSTNAME}`,
+    );
+    expect(message).toHaveTextContent(
+      `Nothing to change: machine-state file ${HOSTNAME} is already included.`,
+    );
+    expect(message).not.toHaveTextContent("not saved");
+    expect(message.className).toMatch(/pf-m-info/);
+    // The row now shows what the server holds.
+    expect(viewFetches).toBe(1);
+    expect(
+      await within(rowEl(HOSTNAME)).findByRole("button", {
+        name: `Exclude ${HOSTNAME}`,
+      }),
+    ).toBeEnabled();
+    expect(rowEl(HOSTNAME)).toHaveTextContent("Included by you");
+    expect(
+      within(rowEl(HOSTNAME)).getByTestId(`machine-state-failure-${HOSTNAME}`),
+    ).toBeInTheDocument();
   });
 
   it("shows any other failure on the row as not saved", async () => {

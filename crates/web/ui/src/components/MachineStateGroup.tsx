@@ -39,9 +39,11 @@ export interface MachineStateFailure {
   /**
    * `not_carried`: the server refused the op as not carriable (422
    * `not carried:`), a statement about the file, not a fault.
+   * `nothing_to_change`: the row already held the decision (422
+   * `nothing to change:`); the owner refetches the view.
    * `failed`: anything else; the row keeps the server's current state.
    */
-  kind: "not_carried" | "failed";
+  kind: "not_carried" | "nothing_to_change" | "failed";
   text: string;
 }
 
@@ -555,7 +557,7 @@ function MachineStateRow({
       <div aria-live="polite" className="inspectah-machine-state__failure">
         {failure && (
           <Alert
-            variant={failure.kind === "not_carried" ? "info" : "warning"}
+            variant={failure.kind === "failed" ? "warning" : "info"}
             isInline
             isPlain
             title={failure.text}

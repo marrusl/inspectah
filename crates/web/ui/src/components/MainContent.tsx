@@ -25,7 +25,7 @@ import type {
 } from "../api/types";
 import { ApiError } from "../api/types";
 import { isIncluded, isToggleable } from "../api/disposition";
-import { applyOp, ungroupGroup } from "../api/client";
+import { applyOp, fetchView, ungroupGroup } from "../api/client";
 import { usePendingGuard } from "../hooks/usePendingGuard";
 import { useItemFailures } from "../hooks/useItemFailures";
 import { DecisionList } from "./DecisionList";
@@ -155,21 +155,38 @@ export interface MainContentProps {
 const NOT_CARRIED_PREFIX = "not carried:";
 
 /**
+ * The prefix of a 422 the session sends for a decision the row already
+ * holds: the view the request came from was stale.
+ */
+const NOTHING_TO_CHANGE_PREFIX = "nothing to change:";
+
+/** The server's reason after a 422 `prefix`, without its final period. */
+function refusalReason(err: ApiError, prefix: string): string {
+  return err.message.slice(prefix.length).trim().replace(/\.$/, "");
+}
+
+/**
  * What a machine-state row shows when its request failed. A 422
- * `not carried:` is the server stating a fact about the file, so it is
- * worded as one; anything else says the change did not happen.
+ * `not carried:` or `nothing to change:` is the server stating a fact
+ * about the file, so it is worded as one; anything else says the change
+ * did not happen.
  */
 export function machineStateFailure(err: unknown): MachineStateFailure {
-  if (
-    err instanceof ApiError &&
-    err.status === 422 &&
-    err.message.startsWith(NOT_CARRIED_PREFIX)
-  ) {
-    const why = err.message.slice(NOT_CARRIED_PREFIX.length).trim().replace(/\.$/, "");
-    return {
-      kind: "not_carried",
-      text: `inspectah does not carry this file: ${why}. Nothing was changed.`,
-    };
+  if (err instanceof ApiError && err.status === 422) {
+    if (err.message.startsWith(NOT_CARRIED_PREFIX)) {
+      const why = refusalReason(err, NOT_CARRIED_PREFIX);
+      return {
+        kind: "not_carried",
+        text: `inspectah does not carry this file: ${why}. Nothing was changed.`,
+      };
+    }
+    if (err.message.startsWith(NOTHING_TO_CHANGE_PREFIX)) {
+      const why = refusalReason(err, NOTHING_TO_CHANGE_PREFIX);
+      return {
+        kind: "nothing_to_change",
+        text: `Nothing to change: ${why}.`,
+      };
+    }
   }
   const message = err instanceof Error ? err.message : String(err);
   return { kind: "failed", text: `The change was not saved: ${message}` };
@@ -580,10 +597,24 @@ export function MainContent({
         })
           .then((updatedView) => onViewUpdate(updatedView))
           .catch((err: unknown) => {
-            recordFailure(machineStateFailure(err));
+            const failure = machineStateFailure(err);
+            recordFailure(failure);
             onMutationError(
               err instanceof Error ? err : new Error(String(err)),
             );
+            // The row already held the decision, so this view is stale:
+            // fetch the server's, which the row then shows.
+            if (failure.kind === "nothing_to_change") {
+              return fetchView()
+                .then((freshView) => onViewUpdate(freshView))
+                .catch((refetchErr: unknown) =>
+                  onMutationError(
+                    refetchErr instanceof Error
+                      ? refetchErr
+                      : new Error(String(refetchErr)),
+                  ),
+                );
+            }
           });
       });
     },
