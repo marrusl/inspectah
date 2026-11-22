@@ -127,9 +127,11 @@ UTF-8, and `read_file` on it fails with `InvalidData`, as
 `std::fs::read_to_string` does. `read_file` follows registered symlinks
 (an ancestor directory's too) when nothing is registered at the path
 itself, and `with_hard_link` gives two paths one content and one inode.
-`file_metadata` follows links; `with_file_mode` sets its mode bits. Every
-`read_file` and `read_head` is logged with its byte count (`read_log`,
-`was_read`), which machine-state tests use to prove a file was never
-opened, or only its two-byte header was. An inspector test builds its
+`file_metadata` follows links; `with_file_mode` sets its mode bits.
+`with_raw_dir_entry` adds a name that is not UTF-8, which `read_dir_raw`
+returns raw and `read_dir` lossily. Every `read_file`, `read_head` and
+`open_read` is logged with its byte count (`read_log`, `was_read`), which
+machine-state tests use to prove a file was never opened, or only its
+two-byte header was. An inspector test builds its
 context with `ScreenedExecutor::new(&mock)`.
 

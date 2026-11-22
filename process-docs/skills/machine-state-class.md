@@ -61,9 +61,10 @@ recovers it. Rules for a collector:
   `Command::new` and `RealExecutor::new` in collect. `RealExecutor` has a
   private field and no `Default`, so it cannot be built by literal either.
   `run_scan` builds the only one and wraps it at once.
-- `HostRead::read_head` is not on `Executor`, and the gate does not
-  implement `HostRead`: no collector can make a prefix read. The gate's
-  own are the keytab sniff and `screen_payload`'s check.
+- `HostRead` (`read_head`, `read_dir_raw`, `open_read`) is not on
+  `Executor`, and the gate does not implement it: no collector can make
+  a partial or raw read. The gate's own are the inventory's raw
+  listings, the keytab sniff and `screen_payload`'s streaming read.
 - A unit file or drop-in refusal is recorded through `unit_read_failure`
   (units inspector), so it reads `machine-state file left out: <path>`
   like every other collector's; the RPM section's repo and `gpgkey=` key
@@ -77,35 +78,62 @@ recovers it. Rules for a collector:
 rule's tree from the rule's directory, following directory links and
 matching the rule against the logical spelling, so a member directory
 that is a link elsewhere still puts the physical files in the inode set.
-It descends only where `may_match_below` says the rule can still match
-(a glob is read as an NFA over the path's start), so the `/etc`-rooted
-`krb5.keytab.*` glob never walks `/etc`, and it skips a directory already
-on the current path, which ends link cycles. Where it cannot finish (more
-than 32 directories deep, more than 65,536 entries, a name that is not
-UTF-8 where a rule could match, a directory `read_dir_strict` cannot list)
-it records a `ScreenGap`: the gate then withholds every path, and
-`run_scan` bails with the gap's message before any inspector runs.
-Never relax this to "withhold below the gap": a hard link or bind mount
-elsewhere of a file the inventory never listed would read as ordinary.
-In a mock, register a directory link with `with_link` and the target
-directory's listing; the build lists the resolved path, so no listing is
-needed at the link's own path.
+Each rule is read as an automaton (`RuleNfa`, a `Prefix` as its prefix
+then `*`); its live positions after a directory's logical path are the
+directory's `MatchState`. It descends only where the state is still
+alive below, so the `/etc`-rooted `krb5.keytab.*` glob never walks
+`/etc`. A link can give a directory a spelling the rule matches where
+its own did not (`/etc/insights-client/.state -> .` makes
+`registration.json` there `.state/registration.json`), so the walk keeps
+every directory's listed states by `(dev, ino)` and skips a repeat only
+when an earlier state `covers` the new one; otherwise it lists it again.
+Never go back to skipping on directory identity alone. States are
+finite, so cycles end.
+
+Names come from `read_dir_raw`, never lossy. A UTF-8 name, a literal
+U+FFFD included, is ordinary. A name that is not UTF-8 is fed to the
+automaton with each invalid run as `PathSym::NotUtf8`, which only a
+wildcard matches: a Latin-1 name directly under `/etc` cannot spell the
+`krb5.keytab.` stem and is skipped. Where it cannot finish (more than 32
+directories deep, more than 65,536 entries, a name that is not UTF-8
+where the rule could match it or below it, a directory it cannot list
+in full) it records a `ScreenGap`: the gate then withholds every path,
+and `open_gate` in `scan.rs`, the only way `run_scan` builds the gate,
+fails with the gap's message before any inspector runs. Never relax
+this to "withhold below the gap": a hard link or bind mount elsewhere of
+a file the inventory never listed would read as ordinary. In a mock,
+register a directory link with `with_link` and the target directory's
+listing; the build lists the resolved path, so no listing is needed at
+the link's own path. A name that is not UTF-8 is `with_raw_dir_entry`;
+on disk only Linux can create one (macOS refuses it with `EILSEQ`), so
+on-disk raw-name tests are `#[cfg(target_os = "linux")]`, and
+`screen_test.rs`'s `RootedHost` maps a temp directory to `/`.
 
 ## Unmanaged payloads are screened by content
 
 The bundler copies unmanaged files byte for byte, so the walk calls
-`screen_payload`, not `screen`: path, alias and inode, then one read of at
-most `PAYLOAD_CHECK_LEN` + 1 bytes judged by `payload_credential`. A
-keytab header wins; a file within the limit is judged whole, so bytes
-that are not UTF-8 are never a PEM key (an ordinary binary is carried); a
-longer file is a key unless its start rules that out. A file the check
-cannot read stays an item. `bundle_unmanaged_files` lives in
-`pipeline::render::unmanaged`, takes the host root (`/` in `run_scan`, a
-tempdir in tests), asks `screen_payload` again for every included regular
-file before copying any, and fails on a withheld answer or a read error;
-it never skips a file. Test the whole route with
+`screen_payload`, not `screen`: path, alias and inode, then
+`payload_credential` over one streaming read of the whole file
+(`open_read`, `PAYLOAD_READ_CHUNK` at a time; memory is that buffer and
+two short PEM labels). A keytab header wins. Otherwise `PemKeyFinder`,
+a byte-level state machine whose state carries across buffers, finds a
+PEM private-key block anywhere: a `BEGIN` marker whose label ends with
+`PRIVATE KEY`, at any position in a line, a body of key-body bytes
+(base64, whitespace, `\`, quotes, `,`, `:`, `-`, `#`) holding base64,
+then the `END` marker or the end of the file. Any other byte ends the
+candidate, which keeps a marker quoted in code or prose ordinary. Never
+reintroduce a verdict from part of a file: a prefix rule both missed
+late and embedded keys and withheld large CRLs and indented JSON. DER
+keys and PKCS#12 archives are not detected (no ASN.1 sniffing), and ship
+as ordinary payloads. A file the check cannot read stays an item.
+`bundle_unmanaged_files` lives in `pipeline::render::unmanaged`, takes
+the host root (`/` in `run_scan`, a tempdir in tests), asks
+`screen_payload` again for every included regular file before copying
+any, and fails on a withheld answer or a read error; it never skips a
+file. Test the whole route with
 `unmanaged_credentials_are_withheld_on_both_export_paths`: write each
-payload both to the `SysctlHost` and to a host-root tempdir.
+payload both to the `SysctlHost` and to a host-root tempdir. A key there
+needs base64 in its body, or the finder reads it as a placeholder.
 
 Not covered, and caught only by review: a file-opening route not on the
 lint list (a new dependency, a `libc` call) and a command whose output is a
