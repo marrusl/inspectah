@@ -117,11 +117,12 @@ pub struct AggregateItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variant_payload: Option<serde_json::Value>,
     /// A Configuration row's shadow, as the single-host view's config row
-    /// carries it: `"repositories"` when the repo toggle decides the file
-    /// (an entry of `rpm.repo_files` or `rpm.gpg_keys` is at its
-    /// destination), so the row is read-only inventory and offers no
-    /// include, variant or edit control, which the server refuses.
-    /// Absent on every other row.
+    /// carries it, copied from the row's variants: `"repositories"` when
+    /// the repo toggle decides the file (an entry of `rpm.repo_files` or
+    /// `rpm.gpg_keys` is at its destination), so the row is read-only
+    /// inventory and offers no include, variant or edit control, which the
+    /// server refuses; `"units"` when a `units.drop_ins` entry
+    /// materializes it. Absent on every other row.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadowed_by: Option<inspectah_core::types::config::ConfigShadow>,
 }
