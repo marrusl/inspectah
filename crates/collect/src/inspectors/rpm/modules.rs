@@ -77,9 +77,13 @@ fn parse_module_file_content(content: &str) -> Option<EnabledModuleStream> {
     }
 }
 
-/// Parse version lock entries from versionlock configuration
+/// Parse version lock entries from versionlock configuration.
+///
+/// On RHEL 9 and 10 the yum path is a link to the dnf one, so the same
+/// lines are read twice: a line already seen is skipped, or the
+/// Containerfile would lock each package twice.
 pub fn parse_version_locks(exec: &dyn Executor) -> Vec<VersionLockEntry> {
-    let mut locks = Vec::new();
+    let mut locks: Vec<VersionLockEntry> = Vec::new();
 
     // Try common versionlock plugin config locations
     let config_paths = [
@@ -99,60 +103,47 @@ pub fn parse_version_locks(exec: &dyn Executor) -> Vec<VersionLockEntry> {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-
-            if let Some(entry) = parse_versionlock_line(line) {
-                locks.push(entry);
+            if locks.iter().any(|l| l.raw_pattern == line) {
+                continue;
             }
+            locks.push(parse_versionlock_line(line));
         }
     }
 
     locks
 }
 
-fn parse_versionlock_line(line: &str) -> Option<VersionLockEntry> {
-    // Format: epoch:name-version-release.arch or name-epoch:version-release.arch
-    let raw_pattern = line.to_string();
-
-    // Simple NEVRA parsing - this is a simplified version
-    // Real implementation might need more robust parsing
-    let parts: Vec<&str> = line.split(':').collect();
-    if parts.len() < 2 {
-        return Some(VersionLockEntry {
-            raw_pattern,
-            disposition: FindingKind::included(),
-            ..Default::default()
-        });
-    }
-
-    let epoch_str = parts[0];
-    let rest = parts[1];
-
-    let epoch = epoch_str.parse::<i32>().unwrap_or(0);
-
-    // Parse name-version-release.arch
-    let nvra_parts: Vec<&str> = rest.rsplitn(2, '.').collect();
-    let arch = nvra_parts
-        .first()
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-    let nvr = nvra_parts.get(1).unwrap_or(&rest);
-
-    let nvr_parts: Vec<&str> = nvr.rsplitn(3, '-').collect();
-    let release = nvr_parts.first().map(|s| s.to_string()).unwrap_or_default();
-    let version = nvr_parts.get(1).map(|s| s.to_string()).unwrap_or_default();
-    let name = nvr_parts.get(2).map(|s| s.to_string()).unwrap_or_default();
-
-    Some(VersionLockEntry {
-        raw_pattern,
-        name,
-        epoch,
-        version,
-        release,
-        arch,
+/// One versionlock line. dnf writes `name-epoch:version-release.arch`
+/// (`curl-0:7.76.1-44.el9_9.1.*`); the yum plugin wrote
+/// `epoch:name-version-release.arch`. A line in neither form keeps only
+/// its raw pattern, which is what the Containerfile locks.
+fn parse_versionlock_line(line: &str) -> VersionLockEntry {
+    let fields = line.split_once(':').and_then(|(before, after)| {
+        let (vr_or_nvr, arch) = after.rsplit_once('.')?;
+        if let Ok(epoch) = before.parse::<i32>() {
+            let (nv, release) = vr_or_nvr.rsplit_once('-')?;
+            let (name, version) = nv.rsplit_once('-')?;
+            Some((name, epoch, version, release, arch))
+        } else {
+            let (name, epoch) = before.rsplit_once('-')?;
+            let epoch = epoch.parse::<i32>().ok()?;
+            let (version, release) = vr_or_nvr.rsplit_once('-')?;
+            Some((name, epoch, version, release, arch))
+        }
+    });
+    let mut entry = VersionLockEntry {
+        raw_pattern: line.to_owned(),
         disposition: FindingKind::included(),
-        locked: false,
-        aggregate: None,
-    })
+        ..Default::default()
+    };
+    if let Some((name, epoch, version, release, arch)) = fields {
+        entry.name = name.to_owned();
+        entry.epoch = epoch;
+        entry.version = version.to_owned();
+        entry.release = release.to_owned();
+        entry.arch = arch.to_owned();
+    }
+    entry
 }
 
 /// Parse rpm -Va output
@@ -234,6 +225,43 @@ mod tests {
         assert_eq!(vim.release, "1.el9");
         assert_eq!(vim.arch, "x86_64");
         assert_eq!(vim.epoch, 0);
+    }
+
+    /// RHEL 9 and 10 write the dnf form, and the yum path links to the
+    /// dnf file, so the mock serves the same content at both paths (mock
+    /// reads do not follow links): each lock is parsed once, with its name.
+    #[test]
+    fn a_dnf_versionlock_list_read_through_its_link_is_parsed_once() {
+        const LIST: &str = "# Added lock on Thu Nov 20\ncurl-0:7.76.1-44.el9_9.1.*\n";
+        let mock = MockExecutor::new()
+            .with_file("/etc/dnf/plugins/versionlock.list", LIST)
+            .with_file("/etc/yum/pluginconf.d/versionlock.list", LIST);
+
+        let locks = parse_version_locks(&mock);
+        let parsed: Vec<_> = locks
+            .iter()
+            .map(|l| {
+                (
+                    l.raw_pattern.as_str(),
+                    l.name.as_str(),
+                    l.epoch,
+                    l.version.as_str(),
+                    l.release.as_str(),
+                    l.arch.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            parsed,
+            [(
+                "curl-0:7.76.1-44.el9_9.1.*",
+                "curl",
+                0,
+                "7.76.1",
+                "44.el9_9.1",
+                "*"
+            )]
+        );
     }
 
     #[test]
