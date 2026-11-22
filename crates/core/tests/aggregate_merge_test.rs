@@ -2667,7 +2667,10 @@ fn test_merge_usersgroups_sections_dedup_by_name() {
         users: vec![serde_json::json!({
             "name": "alice",
             "uid": 1000,
-            "groups": ["wheel"]
+            "gid": 1000,
+            "supplementary_groups": ["wheel"],
+            "primary_group": "alice",
+            "group_gids": {"alice": 1000, "wheel": 10}
         })],
         groups: vec![serde_json::json!({
             "name": "devops",
@@ -2683,12 +2686,18 @@ fn test_merge_usersgroups_sections_dedup_by_name() {
             serde_json::json!({
                 "name": "alice",
                 "uid": 1000,
-                "groups": ["docker"]
+                "gid": 1000,
+                "supplementary_groups": ["docker"],
+                "primary_group": "alice",
+                "group_gids": {"alice": 1000, "docker": 975}
             }),
             serde_json::json!({
                 "name": "bob",
                 "uid": 1001,
-                "groups": ["wheel"]
+                "gid": 1001,
+                "supplementary_groups": ["wheel"],
+                "primary_group": "bob",
+                "group_gids": {"bob": 1001, "wheel": 10}
             }),
         ],
         groups: vec![serde_json::json!({
@@ -2712,11 +2721,18 @@ fn test_merge_usersgroups_sections_dedup_by_name() {
     // Users deduped by name: alice (merged groups), bob
     assert_eq!(result.users.len(), 2);
 
-    // alice's groups should be union: ["docker", "wheel"]
+    // alice's supplementary groups are the union, and every one of them
+    // keeps a recorded gid. The fields are the ones the collector writes:
+    // an older form of this test passed on a `groups` field it never does.
     let alice = result.users.iter().find(|u| u["name"] == "alice").unwrap();
-    let groups = alice["groups"].as_array().unwrap();
-    assert!(groups.contains(&serde_json::json!("wheel")));
-    assert!(groups.contains(&serde_json::json!("docker")));
+    assert_eq!(
+        alice["supplementary_groups"],
+        serde_json::json!(["docker", "wheel"])
+    );
+    assert_eq!(
+        alice["group_gids"],
+        serde_json::json!({"alice": 1000, "docker": 975, "wheel": 10})
+    );
 
     // Groups deduped: devops with merged members
     assert_eq!(result.groups.len(), 1);

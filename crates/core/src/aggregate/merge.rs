@@ -2765,12 +2765,18 @@ pub fn merge_usersgroups_sections(
         return None;
     }
 
+    // A user's supplementary groups are the union across hosts, and each
+    // group keeps the first-seen gid, as the user keeps its first-seen
+    // `uid` and `gid`. A host whose group has another gid is not
+    // reconciled here: the Containerfile refuses a user whose group's gid
+    // disagrees with an earlier user's.
     let users = merge_json_by_name(
         sections
             .iter()
             .filter_map(|s| s.as_ref().map(|s| &s.users))
             .collect(),
-        &["groups", "secondary_groups"],
+        &["supplementary_groups"],
+        &["group_gids"],
     );
     let groups = merge_json_by_name(
         sections
@@ -2778,6 +2784,7 @@ pub fn merge_usersgroups_sections(
             .filter_map(|s| s.as_ref().map(|s| &s.groups))
             .collect(),
         &["members"],
+        &[],
     );
 
     let sudoers_rules = dedup_strings(collect_string_lists(&sections, |s| &s.sudoers_rules));
@@ -2810,10 +2817,13 @@ pub fn merge_usersgroups_sections(
     })
 }
 
-/// Merge JSON objects by their `"name"` field, union-merging array fields.
+/// Merge JSON objects by their `"name"` field, union-merging array fields
+/// and object fields. An object field keeps every key, with the first-seen
+/// value for a key two objects share.
 fn merge_json_by_name(
     all_lists: Vec<&Vec<serde_json::Value>>,
     union_array_fields: &[&str],
+    union_object_fields: &[&str],
 ) -> Vec<serde_json::Value> {
     let mut by_name: HashMap<String, serde_json::Value> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
@@ -2846,6 +2856,22 @@ fn merge_json_by_name(
                         });
                         if let Some(obj) = existing.as_object_mut() {
                             obj.insert(field.to_string(), serde_json::Value::Array(merged));
+                        }
+                    }
+                }
+                for field in union_object_fields {
+                    let Some(new_obj) = item.get(*field).and_then(|v| v.as_object()) else {
+                        continue;
+                    };
+                    let Some(existing_obj) = existing.as_object_mut() else {
+                        continue;
+                    };
+                    let merged = existing_obj
+                        .entry(field.to_string())
+                        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                    if let Some(merged) = merged.as_object_mut() {
+                        for (key, value) in new_obj {
+                            merged.entry(key.clone()).or_insert_with(|| value.clone());
                         }
                     }
                 }
