@@ -29,7 +29,7 @@ pub struct AggregateArgs {
     pub output_dir: Option<PathBuf>,
 
     /// Output file path for the aggregate tarball
-    #[arg(long)]
+    #[arg(long, short = 'o')]
     pub output_file: Option<PathBuf>,
 
     /// Write JSON snapshot instead of tarball (to stdout, --output-file, or --output-dir)
@@ -589,6 +589,23 @@ mod tests {
             verbose: false,
             ack_sensitive: false,
         }
+    }
+
+    /// `scan` takes `-o` for its output file, so `aggregate` takes it too.
+    #[test]
+    fn short_o_sets_the_output_file() {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Wrapper {
+            #[command(flatten)]
+            args: AggregateArgs,
+        }
+        let parsed = Wrapper::try_parse_from(["aggregate", "-o", "/tmp/out.tar.gz", "/srv/scans"])
+            .expect("-o parses");
+        assert_eq!(
+            parsed.args.output_file,
+            Some(PathBuf::from("/tmp/out.tar.gz"))
+        );
     }
 
     #[test]

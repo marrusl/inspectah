@@ -84,7 +84,7 @@ replace it.
 | `--target-image <IMAGE>` | Override the target image reference for baseline comparison. |
 | `--output-dir <DIR>` | Output directory for the aggregate tarball. |
 | `-y, --yes` | Assume yes to all interactive prompts (for CI and automation). |
-| `--output-file <FILE>` | Output file path for the aggregate tarball. |
+| `-o, --output-file <FILE>` | Output file path for the aggregate tarball. |
 | `--json-only` | Write JSON snapshot instead of tarball (to stdout, `--output-file`, or `--output-dir`). |
 | `--strict` | Treat warnings as errors. |
 | `-v, --verbose` | Show per-host detail in output. |

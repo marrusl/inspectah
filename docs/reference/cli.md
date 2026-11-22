@@ -232,7 +232,7 @@ Usage: inspectah aggregate [OPTIONS] [INPUTS]...
 |------|------|---------|-------------|
 | `--target-image <IMAGE>` | string | none | Override the target image reference for baseline comparison |
 | `--output-dir <OUTPUT_DIR>` | path | none | Output directory for the aggregate tarball |
-| `--output-file <OUTPUT_FILE>` | path | none | Output file path for the aggregate tarball |
+| `-o, --output-file <OUTPUT_FILE>` | path | none | Output file path for the aggregate tarball |
 | `--json-only` | bool | `false` | Write JSON snapshot instead of tarball (to stdout, `--output-file`, or `--output-dir`) |
 | `--strict` | bool | `false` | Treat warnings as errors |
 | `-v, --verbose` | bool | `false` | Show per-host detail in output |

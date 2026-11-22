@@ -266,6 +266,16 @@ describe("a click sequence never posts a refused op (T8)", () => {
 });
 
 describe("the count text (spec § 7.2)", () => {
+  it("uses the singular for a repo with one package", () => {
+    const one = { package_count: 1, effective_member_count: 1 };
+    expect(repoCountText(repo({ ...one, effective_included: 1, carriage_included: 2 }))).toBe(
+      "1 of 1 package included",
+    );
+    expect(repoCountText(repo({ ...one, effective_included: 0 }))).toBe(
+      "1 package excluded",
+    );
+  });
+
   it("names members, then files only when some are left out", () => {
     expect(repoCountText(repo({}))).toBe("2 of 2 packages included");
     expect(repoCountText(repo({ carriage_included: 1 }))).toBe(

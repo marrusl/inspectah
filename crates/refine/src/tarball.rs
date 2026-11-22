@@ -82,7 +82,9 @@ fn extract_safe_with_budget(
     dest: &Path,
     stream_budget: u64,
 ) -> Result<(), RefineError> {
-    let file = std::fs::File::open(tarball_path)?;
+    let file = std::fs::File::open(tarball_path).map_err(|e| {
+        RefineError::TarballError(format!("cannot open {}: {e}", tarball_path.display()))
+    })?;
     let gz = flate2::read::GzDecoder::new(file);
     let (bounded, probe) = BudgetReader::new(gz, stream_budget);
     let mut archive = tar::Archive::new(bounded);
@@ -246,6 +248,31 @@ fn validate_provenance(snap: &InspectionSnapshot) -> Result<(), RefineError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The CLI prints an error with its whole source chain, so an open
+    /// failure must name the path and carry the OS error once, not as a
+    /// message and again as its source.
+    #[test]
+    fn missing_tarball_names_its_path_and_the_os_error_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no-such-scan.tar.gz");
+        let Err(err) = from_tarball(&missing) else {
+            panic!("a missing tarball must not load");
+        };
+
+        let mut chain = err.to_string();
+        let mut source = std::error::Error::source(&err);
+        while let Some(e) = source {
+            chain.push_str(&format!(": {e}"));
+            source = e.source();
+        }
+
+        assert!(
+            chain.contains(&missing.display().to_string()),
+            "names the path: {chain}"
+        );
+        assert_eq!(chain.matches("os error").count(), 1, "{chain}");
+    }
 
     #[test]
     fn validate_provenance_accepts_fully_redacted() {

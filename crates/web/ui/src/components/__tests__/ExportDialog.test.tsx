@@ -869,6 +869,28 @@ describe("ExportDialog", () => {
     ).toBeInTheDocument();
   });
 
+  it("uses the singular for one excluded package or config", () => {
+    render(
+      <ExportDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        stats={mockStats({
+          sections: [
+            { kind: "package", total: 10, included: 9, excluded: 1 },
+            { kind: "config", total: 5, included: 4, excluded: 1 },
+          ],
+        })}
+        generation={1}
+        sessionIsSensitive={false}
+        onViewUpdate={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(/1 package excluded, 1 config excluded/),
+    ).toBeInTheDocument();
+  });
+
   // The dialog's job is to say what export will actually do. Advisories
   // were counted among the exclusions, so it credited the user with
   // decisions the tool made. They are reported in the audit report but

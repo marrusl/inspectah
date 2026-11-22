@@ -49,10 +49,11 @@ export function repoSwitchChecked(repo: RepoGroupInfo): boolean {
 function memberCountText(repo: RepoGroupInfo): string {
   const { effective_included: included, effective_member_count: total } =
     repo;
+  const noun = total === 1 ? "package" : "packages";
   const base =
     included === 0
-      ? `${total} packages excluded`
-      : `${included} of ${total} packages included`;
+      ? `${total} ${noun} excluded`
+      : `${included} of ${total} ${noun} included`;
   return repo.effective_unlisted > 0
     ? `${base}, ${repo.effective_unlisted} not listed`
     : base;

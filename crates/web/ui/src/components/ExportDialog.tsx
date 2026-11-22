@@ -245,7 +245,9 @@ export function ExportDialog({
       <ModalBody>
         <Content>
           <p>
-            {excludedPackages} packages excluded, {excludedConfigs} configs
+            {excludedPackages}{" "}
+            {excludedPackages === 1 ? "package" : "packages"} excluded,{" "}
+            {excludedConfigs} {excludedConfigs === 1 ? "config" : "configs"}{" "}
             excluded
           </p>
           {advisoryFindings > 0 && (
