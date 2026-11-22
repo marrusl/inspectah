@@ -108,8 +108,16 @@ Two things the guard does **not** cover, deliberately:
 - **Still uncovered:** a file the export never stages *and* never
   references. Both guards read what is on disk or in the Containerfile,
   so content that disappears before either sees it is invisible to both.
-  `configtree.rs`'s `etc/containers/systemd/` prefix suppression is the
-  standing example.
+  The historical example is `configtree.rs`'s old
+  `etc/containers/systemd/` prefix suppression, which dropped every
+  configuration entry under the quadlet directory, drop-ins and stray
+  files included, until 2026-11-22. It is pinned now by two tests in
+  `copy_source_exists_test.rs` that name the files they expect rather
+  than reading the tree: `non_quadlet_files_under_the_quadlet_directory_are_carried_on_both_paths`
+  checks those files reach `config/` on both export paths, and
+  `an_excluded_quadlet_is_not_carried_back_as_configuration` checks a
+  quadlet excluded in refine is not staged again through its config row.
+  Any other loss of this kind still needs its own named-file test.
 
 ## The COPY invariant has two directions and they need different granularity
 
