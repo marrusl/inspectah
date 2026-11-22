@@ -335,12 +335,16 @@ const KEY_MATERIAL_MIN: usize = 64;
 
 /// How many base64 characters of key material make a private key when a
 /// private-key `END` marker closes the body: the smallest complete private
-/// key PEM carries. That is SEC1 (`EC PRIVATE KEY`) on the smallest curves
-/// OpenSSL offers, secp112r1 and secp112r2, whose private key is 14 bytes:
+/// key PEM carries. That is SEC1 (`EC PRIVATE KEY`) as OpenSSL 1.0.2's
+/// library writes it under `EC_PKEY_NO_PARAMETERS`, with neither curve
+/// parameters nor public key, and the private key written with
+/// `BN_num_bytes`, unpadded:
 ///
-/// - SEQUENCE header 2 + version 3 + private key 2 + 14 = 21 bytes, 28
-///   base64 characters, with neither curve parameters nor public key, as
-///   OpenSSL's library writes it under `EC_PKEY_NO_PARAMETERS`;
+/// - SEQUENCE header 2 + version 3 + private key header 2 + a nonzero
+///   one-byte private key 1 = 8 bytes, 12 base64 characters; an 11-byte
+///   private key is 18 bytes, 24 characters (`MBACAQEECwEjRWeJq83vASNF`);
+/// - padded to the curve, as later OpenSSL writes it, secp112r1's 14
+///   bytes give 21 bytes, 28 characters;
 /// - with the named curve, `[0]` 2 + OID 7 more: 30 bytes, 40 characters,
 ///   the smallest `openssl ec -no_public` writes (P-224 is 44 bytes, 60);
 /// - encrypted with RFC 1421 headers, 30 bytes pad to 32: 44 characters;
@@ -348,11 +352,10 @@ const KEY_MATERIAL_MIN: usize = 64;
 ///   PKCS#1 RSA key (OpenSSL generates 512 bits or more) or any OpenSSH
 ///   key: more.
 ///
-/// An OpenSSL before 1.1.0 dropped leading zero bytes of the private key,
-/// and two of them still encode in 28 characters. The longest text a
-/// closed marker pair holds in the controls this must not withhold (JSON
-/// and minified JavaScript delimiters, prose, templates) is 3 characters.
-const CLOSED_KEY_MATERIAL_MIN: usize = 28;
+/// The longest text a closed marker pair holds in the controls this must
+/// not withhold (JSON and minified JavaScript delimiters, prose,
+/// templates) is 3 characters.
+const CLOSED_KEY_MATERIAL_MIN: usize = 12;
 
 /// The run of dashes both PEM markers start with.
 const PEM_DASH_RUN: usize = PEM_DASHES.len();
@@ -2301,15 +2304,29 @@ mod tests {
 
     /// The same test key with its curve parameters dropped too, as
     /// OpenSSL's library writes SEC1 under `EC_PKEY_NO_PARAMETERS`: 21
-    /// bytes, 28 base64 characters, the smallest private key PEM carries.
+    /// bytes, 28 base64 characters.
     const SECP112R1_NO_PARAMETERS: &str = "-----BEGIN EC PRIVATE KEY-----\n\
          MBMCAQEEDjQhQBBXwaSzSB00/43A\n\
+         -----END EC PRIVATE KEY-----\n";
+
+    /// A synthetic SEC1 key as OpenSSL before 1.1.0 writes it with neither
+    /// curve parameters nor public key: the 11-byte scalar is not padded
+    /// to the curve's size, so 18 bytes, 24 base64 characters. Not a key
+    /// anyone holds.
+    const LEGACY_SHORT_SCALAR: &str = "-----BEGIN EC PRIVATE KEY-----\n\
+         MBACAQEECwEjRWeJq83vASNF\n\
+         -----END EC PRIVATE KEY-----\n";
+
+    /// The smallest SEC1 key a legacy writer produces: a nonzero one-byte
+    /// scalar, 8 bytes, 12 base64 characters. Not a key anyone holds.
+    const LEGACY_ONE_BYTE_SCALAR: &str = "-----BEGIN EC PRIVATE KEY-----\n\
+         MAYCAQEEAQE=\n\
          -----END EC PRIVATE KEY-----\n";
 
     /// The PEM structure decides, whatever surrounds the block: a key is a
     /// private-key `BEGIN` marker and at least 64 characters of base64
     /// lines, in any whitespace OpenSSL reads, wrapping, escaped or
-    /// quoted line form, however the block ends, or at least 28 when a
+    /// quoted line form, however the block ends, or at least 12 when a
     /// private-key `END` marker closes them; a marker with no key lines
     /// after it is text, however it is quoted and whatever an earlier
     /// marker left open, and so is a short body nothing closes.
@@ -2355,7 +2372,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" ")
         );
-        let short = key_material(28);
+        let short = key_material(12);
         let short_block = wrapped_key("EC PRIVATE KEY", &short, 64, "", "", "\n");
         let short_lines = |quote: &dyn Fn(&str) -> String, sep: &str| {
             short_block.lines().map(quote).collect::<Vec<_>>().join(sep)
@@ -2397,29 +2414,37 @@ mod tests {
                 "secp112r1 without parameters or public key",
                 SECP112R1_NO_PARAMETERS.to_string(),
             ),
-            ("closed 28 characters", short_block.clone()),
             (
-                "closed 28 characters, CRLF and indented",
+                "legacy SEC1 with an 11-byte scalar",
+                LEGACY_SHORT_SCALAR.to_string(),
+            ),
+            (
+                "legacy SEC1 with a one-byte scalar",
+                LEGACY_ONE_BYTE_SCALAR.to_string(),
+            ),
+            ("closed 12 characters", short_block.clone()),
+            (
+                "closed 12 characters, CRLF and indented",
                 wrapped_key("PRIVATE KEY", &short, 7, "  ", " ", "\r\n"),
             ),
             (
-                "closed 28 characters, JSON string",
+                "closed 12 characters, JSON string",
                 format!("{{\"k\": \"{}\"}}", short_block.replace('\n', "\\n")),
             ),
             (
-                "closed 28 characters, Python string per line",
+                "closed 12 characters, Python string per line",
                 short_lines(&|l| format!("    \"{l}\\n\""), "\n"),
             ),
             (
-                "closed 28 characters, array of lines",
+                "closed 12 characters, array of lines",
                 format!("[{}]", short_lines(&|l| format!("\"{l}\""), ", ")),
             ),
             (
-                "closed 28 characters, commented out",
+                "closed 12 characters, commented out",
                 wrapped_key("EC PRIVATE KEY", &short, 64, "# ", "", "\n"),
             ),
             (
-                "closed 28 characters on the marker's line",
+                "closed 12 characters on the marker's line",
                 format!(
                     "KEY=\"-----BEGIN EC PRIVATE KEY----- {short} -----END EC PRIVATE KEY-----\"\n"
                 ),
@@ -2505,8 +2530,8 @@ mod tests {
                 .into_bytes(),
             ),
             (
-                "closed 27 characters",
-                wrapped_key("EC PRIVATE KEY", &key_material(27), 64, "", "", "\n").into_bytes(),
+                "closed 11 characters",
+                wrapped_key("EC PRIVATE KEY", &key_material(11), 64, "", "", "\n").into_bytes(),
             ),
             (
                 "60 characters cut off",
@@ -2652,11 +2677,11 @@ mod tests {
             /// and trailing whitespace OpenSSL accepts, in any line form,
             /// with or without its `END` line, anywhere in a file, read in
             /// any buffer size, is a key. A key under 64 characters,
-            /// down to the 21 bytes of the smallest, is one with its
+            /// down to the 8 bytes of the smallest, is one with its
             /// `END` line.
             #[test]
             fn a_wrapped_key_is_a_key(
-                key in proptest::collection::vec(any::<u8>(), 21..1_200),
+                key in proptest::collection::vec(any::<u8>(), 8..1_200),
                 label in prop::sample::select(LABELS),
                 width in 1usize..=80,
                 lead in "[ \t]{0,6}",

@@ -1473,6 +1473,23 @@ const SECP112R1_NO_PUBLIC: &str = concat!(
     "-----END EC PRIVATE KEY-----\n"
 );
 
+/// A synthetic SEC1 key as OpenSSL before 1.1.0 writes it with neither
+/// curve parameters nor public key: an unpadded 11-byte scalar, 18 bytes,
+/// 24 base64 characters. Not a key anyone holds.
+const LEGACY_SHORT_SCALAR: &str = concat!(
+    "-----BEGIN EC PRIVATE KEY-----\n",
+    "MBACAQEECwEjRWeJq83vASNF\n",
+    "-----END EC PRIVATE KEY-----\n"
+);
+
+/// The smallest SEC1 key a legacy writer produces: a nonzero one-byte
+/// scalar, 8 bytes, 12 base64 characters. Not a key anyone holds.
+const LEGACY_ONE_BYTE_SCALAR: &str = concat!(
+    "-----BEGIN EC PRIVATE KEY-----\n",
+    "MAYCAQEEAQE=\n",
+    "-----END EC PRIVATE KEY-----\n"
+);
+
 /// An ordinary binary payload: not UTF-8, no credential.
 const ORDINARY_BINARY: &[u8] = b"\x7fELF\x02\x01\x01\x00\xff\xfe\x80 ordinary";
 
@@ -1507,8 +1524,9 @@ const MIB: usize = 1 << 20;
 /// read buffer; keys whose PEM body formatting OpenSSL accepts (form feed
 /// and vertical tab before line ends, one character a line with 64
 /// trailing spaces), a key in JSON after a quoted decoy marker and
-/// about 64 KiB of padding, and two real short EC keys written with no
-/// public key, under 64 base64 characters. And ordinary payloads that must ship
+/// about 64 KiB of padding, two real short EC keys written with no
+/// public key, under 64 base64 characters, and two legacy SEC1 encodings
+/// with short scalars, down to 12. And ordinary payloads that must ship
 /// unchanged: payloads over a MiB that hold PEM blocks or lead with
 /// indentation, and private-key markers with no key after them, in JSON,
 /// minified JavaScript, a binary and a script's last comment.
@@ -1580,6 +1598,14 @@ fn unmanaged_payloads() -> Vec<(&'static str, Vec<u8>)> {
         ("/opt/myapp/ff.pem", ff_vt.into_bytes()),
         ("/opt/myapp/rewrapped.pem", rewrapped.into_bytes()),
         ("/opt/myapp/p224.pem", P224_NO_PUBLIC.as_bytes().to_vec()),
+        (
+            "/opt/myapp/legacy-short.pem",
+            LEGACY_SHORT_SCALAR.as_bytes().to_vec(),
+        ),
+        (
+            "/opt/myapp/legacy-tiny.pem",
+            LEGACY_ONE_BYTE_SCALAR.as_bytes().to_vec(),
+        ),
         (
             "/opt/myapp/secp112r1.pem",
             SECP112R1_NO_PUBLIC.as_bytes().to_vec(),
@@ -1690,6 +1716,14 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
             ),
             ("/opt/myapp/ff.pem", MachineStateMember::PrivateKeyFile),
             ("/opt/myapp/late.conf", MachineStateMember::PrivateKeyFile),
+            (
+                "/opt/myapp/legacy-short.pem",
+                MachineStateMember::PrivateKeyFile
+            ),
+            (
+                "/opt/myapp/legacy-tiny.pem",
+                MachineStateMember::PrivateKeyFile
+            ),
             ("/opt/myapp/p224.pem", MachineStateMember::PrivateKeyFile),
             (
                 "/opt/myapp/rewrapped.pem",
@@ -1793,7 +1827,12 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
         );
     }
     assert_marker_absent(&all);
-    for key in [P224_NO_PUBLIC, SECP112R1_NO_PUBLIC] {
+    for key in [
+        P224_NO_PUBLIC,
+        SECP112R1_NO_PUBLIC,
+        LEGACY_SHORT_SCALAR,
+        LEGACY_ONE_BYTE_SCALAR,
+    ] {
         assert_absent(key.lines().nth(1).expect("a key line"), &all);
     }
 
