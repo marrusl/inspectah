@@ -160,14 +160,16 @@ characters, and one run of 64 counts anywhere (lines joined by spaces,
 or not at all). Lines of several words and text on the marker's own
 line count for nothing. A body holding `KEY_MATERIAL_MIN` (64) is a key
 however it ends, cut off included. One a private-key `END` marker
-closes is a key from `CLOSED_KEY_MATERIAL_MIN` (28), the last run
-before the marker counted too: the smallest whole key is SEC1 on
-secp112r1 with neither curve parameters nor public key, 21 bytes
-(`openssl ec -no_public` writes 40 characters there, 60 for P-224).
-Under 64 only the `END` marker tells a key from a template, so never
-drop either minimum: delimiter-only text, templates and prose hold at
-most 3 characters between markers. A test key needs 64 base64
-characters of key lines, or 28 and its `END` line. Never bring
+closes is a key from `CLOSED_KEY_MATERIAL_MIN` (12), the last run
+before the marker counted too: the smallest whole key is SEC1 as
+OpenSSL 1.0.2 writes it with neither curve parameters nor public key
+and the private key unpadded, 8 bytes for a one-byte private key (an
+11-byte one is 24 characters; secp112r1 padded to the curve is 28,
+`openssl ec -no_public` writes 40 there, 60 for P-224). Under 64 only
+the `END` marker tells a key from a template, so never raise the
+closed minimum back or drop either one: delimiter-only text, templates
+and prose hold at most 3 characters between markers. A test key needs
+64 base64 characters of key lines, or 12 and its `END` line. Never bring
 back an allowlist of body bytes or a body length limit: the first let
 neighbouring JSON count as a body and the second let padding and
 whitespace reset it. Never reintroduce a verdict from part of a file
