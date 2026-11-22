@@ -339,6 +339,7 @@ fn is_systemd_default_hostname(executor: &dyn Executor, kernel_name: &str) -> bo
 pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
     shadow_unit_owned_paths(snapshot);
     shadow_repo_owned_paths(snapshot);
+    crate::default_grub::settle_default_grub(snapshot);
 }
 
 /// A config file at the destination of an `rpm.repo_files` or

@@ -55,14 +55,14 @@ pub const MODERNIZATION_PATTERNS: &[ModernizationPattern] = &[
             counterpart_pattern: sysvinit_to_systemd_unit,
         },
         replacement: "systemd unit",
-        rationale: "SysVinit script with no systemd equivalent \u{2014} create a .service unit for image mode",
+        rationale: "SysVinit script with no systemd equivalent: create a .service unit for image mode",
         min_os_major: None,
     },
     ModernizationPattern {
         name: "xinetd_config",
         detection: DetectionRule::FileGlob("/etc/xinetd.d"),
         replacement: "systemd socket activation",
-        rationale: "xinetd is deprecated \u{2014} convert to systemd socket activation",
+        rationale: "xinetd is deprecated: convert to systemd socket activation",
         min_os_major: None,
     },
     // `/etc/anacrontab` is not in this catalog: an edit to it is an
@@ -74,19 +74,28 @@ pub const MODERNIZATION_PATTERNS: &[ModernizationPattern] = &[
     // into the image it changes nothing: bootc does not run
     // grub2-mkconfig, and kernel arguments come from kargs.d. The
     // advisory keeps the content visible and the file out of the export.
+    // This pass cannot see the running command line, so it marks the file
+    // on every host; the pipeline's cross-inspector pass
+    // (`settle_default_grub`) then keeps the advisory only where the file
+    // sets an argument the running kernel lacks, and never lets the file
+    // be carried.
     ModernizationPattern {
         name: "grub_defaults",
         detection: DetectionRule::FileExists(DEFAULT_GRUB_PATH),
         replacement: "bootc kargs.d",
-        rationale: "/etc/default/grub is not copied: an image-mode host does not regenerate its \
-             boot loader configuration from it. Put kernel arguments from GRUB_CMDLINE_LINUX that \
-             the image needs in a /usr/lib/bootc/kargs.d/*.toml file.",
+        rationale: DEFAULT_GRUB_RATIONALE,
         min_os_major: None,
     },
 ];
 
 /// The GRUB defaults file `grub2-mkconfig` reads on a package-mode host.
-const DEFAULT_GRUB_PATH: &str = "/etc/default/grub";
+pub const DEFAULT_GRUB_PATH: &str = "/etc/default/grub";
+
+/// The `/etc/default/grub` advisory when its kernel arguments could not be
+/// compared with the running ones.
+pub const DEFAULT_GRUB_RATIONALE: &str = "/etc/default/grub is not copied: an image-mode host \
+     does not regenerate its boot loader configuration from it. Put kernel arguments from \
+     GRUB_CMDLINE_LINUX that the image needs in a /usr/lib/bootc/kargs.d/*.toml file.";
 
 /// Extract the OS major version from a [`SourceSystem`]'s `version_id`.
 ///
@@ -172,6 +181,8 @@ mod tests {
 
     // -- GRUB defaults ---------------------------------------------------------
 
+    /// This pass marks the file on every host; the pipeline's
+    /// `settle_default_grub` narrows it against the running command line.
     #[test]
     fn default_grub_is_an_advisory_whenever_it_exists() {
         let exec =

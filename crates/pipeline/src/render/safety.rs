@@ -692,7 +692,7 @@ fn is_kernel_space(b: u8) -> bool {
 
 /// The kernel's parameter name comparison (`parameq`): `-` and `_` are
 /// the same character.
-fn kernel_name_eq(a: &str, b: &str) -> bool {
+pub(crate) fn kernel_name_eq(a: &str, b: &str) -> bool {
     let norm = |c: u8| if c == b'-' { b'_' } else { c };
     a.len() == b.len() && a.bytes().zip(b.bytes()).all(|(x, y)| norm(x) == norm(y))
 }

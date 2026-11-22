@@ -51,6 +51,18 @@ by splitting on whitespace or matching raw text:
   whitespace inside a UTF-8 character where `kernel_args` cannot split.
   It does not apply the shell filter: the file is TOML, and a retained
   argument is written in its original spelling through the escaper.
+- **The `/etc/default/grub` comparison** (`settle_default_grub` in
+  `crates/pipeline/src/default_grub.rs`) reads `GRUB_CMDLINE_LINUX` and
+  `GRUB_CMDLINE_LINUX_DEFAULT` with a reader for plain shell assignments,
+  then compares their `kernel_args` with the running ones by parsed name
+  and value, skipping boot loader names. It runs in
+  `finalize_cross_inspector`, not in the config inspector's modernization
+  pass: that pass runs beside the kernel and boot inspector and cannot
+  see its `/proc/cmdline`, while finalize has both sections and runs
+  before redaction, so the values compared are the host's. It also keeps
+  the file out of the export whatever the collector decided, so the
+  exclusion does not rest on the modernization pass, which is skipped
+  when the OS version does not parse.
 - **Redaction** (`redact_kernel_cmdline` in `redaction/engine.rs`) finds
   secrets with `kernel_cmdline_matches`, which detection (`scan_content`)
   uses too. Matching is per argument: every pattern searches each

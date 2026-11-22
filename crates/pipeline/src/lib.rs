@@ -1,5 +1,6 @@
 pub mod build;
 pub mod collect;
+mod default_grub;
 pub mod export_warning;
 pub mod orchestrate;
 pub mod redaction;

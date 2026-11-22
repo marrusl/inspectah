@@ -378,11 +378,13 @@ const DEFAULT_GRUB: &str = "GRUB_TIMEOUT=5\n\
      GRUB_CMDLINE_LINUX=\"rd.lvm.lv=rhel/root rhgb quiet transparent_hugepage=never audit=1\"\n";
 
 /// `/etc/default/grub` is a `%ghost` `%config` file of grub2-tools
-/// (`cng`, measured on Fedora 44, RHEL 9.8 and 10.2). The scan collects
-/// it with its content as an advisory that names kargs.d, and neither
-/// export copies it.
+/// (`cng`, measured on Fedora 44, RHEL 9.8 and 10.2). Its
+/// `GRUB_CMDLINE_LINUX` sets two arguments the running kernel
+/// ([`SysctlHost`]'s `/proc/cmdline`) lacks, so the scan collects it with
+/// its content as an advisory that names them, without their values, and
+/// kargs.d; neither export copies it.
 #[test]
-fn a_ghost_default_grub_is_an_advisory_and_never_copied() {
+fn a_ghost_default_grub_with_arguments_not_running_is_an_advisory_and_never_copied() {
     let snap = scan(
         sssd_host()
             .ghost("grub2-tools", "cng", "/etc/default/grub")
@@ -397,10 +399,48 @@ fn a_ghost_default_grub_is_an_advisory_and_never_copied() {
     match &grub.disposition {
         inspectah_core::types::FindingKind::Advisory { rationale, .. } => {
             assert!(rationale.contains("kargs.d"), "{rationale}");
+            assert!(
+                rationale.contains("does not carry them: transparent_hugepage, audit."),
+                "{rationale}"
+            );
+            assert!(!rationale.contains("never"), "no value: {rationale}");
+            assert!(!rationale.contains("audit=1"), "no value: {rationale}");
         }
         other => panic!("expected an advisory, got {other:?}"),
     }
 
+    for (path, tree) in both_exports(&snap) {
+        assert!(
+            !tree.path().join("config/etc/default/grub").exists(),
+            "{path}: /etc/default/grub is never copied"
+        );
+        assert!(
+            tree.path().join("config/etc/sssd/sssd.conf").exists(),
+            "{path}"
+        );
+    }
+}
+
+/// A `/etc/default/grub` whose kernel arguments all run now tells the
+/// user nothing: the running ones are carried in kargs.d. The scan keeps
+/// no row for it, and neither export copies it.
+#[test]
+fn a_ghost_default_grub_matching_the_running_kernel_is_not_reported_or_copied() {
+    let snap = scan(
+        sssd_host()
+            .file(
+                "/proc/cmdline",
+                "BOOT_IMAGE=/vmlinuz root=/dev/mapper/rhel-root ro rd.lvm.lv=rhel/root rhgb \
+                 quiet transparent_hugepage=never audit=1\n",
+            )
+            .ghost("grub2-tools", "cng", "/etc/default/grub")
+            .file("/etc/default/grub", DEFAULT_GRUB),
+    );
+
+    assert!(
+        entry(&snap, "/etc/default/grub").is_none(),
+        "no advisory and no row for a file that matches the running kernel"
+    );
     for (path, tree) in both_exports(&snap) {
         assert!(
             !tree.path().join("config/etc/default/grub").exists(),
