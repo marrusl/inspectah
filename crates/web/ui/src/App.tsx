@@ -349,9 +349,10 @@ function SingleHostApp({
           repoless_annotation: p.entry.repoless_annotation!,
           repoless_cached: p.entry.repoless_cached ?? false,
         }));
-      if (repolessEntries.length > 0) {
-        rpmUpload.initFromBackend(repolessEntries);
-      }
+      // Every view, even one with none: a package whose route a repo
+      // switch restored has no annotation any more, and its upload
+      // control must go with it.
+      rpmUpload.initFromBackend(repolessEntries);
     }
   }, [view.data?.packages]); // eslint-disable-line react-hooks/exhaustive-deps
 

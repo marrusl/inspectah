@@ -86,6 +86,50 @@ describe("a repo-owned Configuration row's link", () => {
   });
 });
 
+describe("a package whose repo the export no longer carries", () => {
+  it("offers the upload while the route is lost, and drops it once the repo is back", async () => {
+    // baseos excluded: site-tool stays included and loses its route. The
+    // view after the include is the scan's, where baseos is carried; the
+    // client keeps the newest generation, so it is numbered after.
+    const excluded = fixture("repos-excluded.view") as { generation: number };
+    const restored = fixture("repos.view") as { generation: number };
+    restored.generation = excluded.generation + 1;
+    serve(excluded, restored);
+    render(<App />);
+    await screen.findByRole("heading", { level: 2, name: "Packages" });
+    expect(
+      await screen.findByRole("button", {
+        name: "Upload RPM for site-tool.x86_64",
+      }),
+    ).toBeInTheDocument();
+
+    const baseos = await screen.findByTestId("repo-bar-row-baseos");
+    await userEvent.click(within(baseos).getByRole("switch"));
+    await waitFor(() =>
+      expect(posts).toContainEqual({
+        kind: "Op",
+        op: "SetInclude",
+        target: {
+          item_id: { kind: "Repo", key: { path: "baseos" } },
+          include: true,
+        },
+      }),
+    );
+    // The view the server answers with carries baseos again, so
+    // site-tool has no annotation and its row its checkbox back.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", {
+          name: "Upload RPM for site-tool.x86_64",
+        }),
+      ).toBeNull(),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "site-tool.x86_64" }),
+    ).toBeChecked();
+  });
+});
+
 describe("the preview of a package whose repo the export no longer carries", () => {
   it("shows the carriage-only FIXME naming the switch that restores it", () => {
     const { containerfile_preview } = fixture("repos-excluded.view") as {
