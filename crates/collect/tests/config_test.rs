@@ -1565,3 +1565,39 @@ cockpit-ws g '/etc/cockpit/disallowed-users'
     assert_eq!(withheld.len(), 1, "{:?}", output.warnings);
     assert!(withheld[0].starts_with("/etc/chrony.keys "), "{withheld:?}");
 }
+
+/// A FIFO, socket or device the unowned walk finds, or a link to one, is
+/// never opened: opening a FIFO with no writer blocks the scan.
+/// `with_special_file` registers paths whose `read_file` panics, and
+/// `myapp.service` sits where the unit-link test would read it.
+#[test]
+fn the_unowned_walk_never_opens_a_special_file() {
+    let exec = MockExecutor::new()
+        .with_dir(
+            "/etc",
+            vec!["myapp.fifo", "myapp-link", "systemd", "app.conf"],
+        )
+        .with_special_file("/etc/myapp.fifo")
+        .with_link("/etc/myapp-link", "myapp.fifo")
+        .with_dir("/etc/systemd", vec!["system"])
+        .with_dir("/etc/systemd/system", vec!["myapp.service"])
+        .with_special_file("/etc/systemd/system/myapp.service")
+        .with_file("/etc/app.conf", "setting=value\n");
+    let rpm_state = RpmState::default();
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("the inspector succeeds");
+    let SectionData::Config(section) = &output.section else {
+        panic!("expected a config section");
+    };
+    let paths: Vec<&str> = section.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, vec!["/etc/app.conf"]);
+}

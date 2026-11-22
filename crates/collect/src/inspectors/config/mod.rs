@@ -219,6 +219,11 @@ impl Inspector for ConfigInspector {
                     if is_rpm_owned_via_symlink(exec, rpm_state, &abs_path) {
                         continue;
                     }
+                    // Never open a FIFO, socket or device, before any
+                    // check below reads the file.
+                    if is_special_file(exec, &abs_path) {
+                        continue;
+                    }
                     // Skip excluded unowned
                     if is_excluded_unowned(exec, &abs_path) {
                         continue;
@@ -516,6 +521,23 @@ fn ghost_credential_warning(path: &str) -> Warning {
         inspector: "config".into(),
         message: format!("{path} {GHOST_CREDENTIAL_WITHHELD}"),
         ..Default::default()
+    }
+}
+
+/// Whether `path` is, or resolves through links to, a FIFO, socket or
+/// device. The walk lists every entry that is not a directory, and opening
+/// a FIFO with no writer blocks: the subprocess timeout does not cover file
+/// reads, so one such entry under `/etc` would hang the scan. A link that
+/// does not resolve is not special; the walk reports it as broken.
+fn is_special_file(exec: &dyn Executor, path: &str) -> bool {
+    let path = Path::new(path);
+    match exec.file_kind(path) {
+        Ok(FileKind::Special) => true,
+        Ok(FileKind::Symlink) => exec
+            .resolve_final_target(path)
+            .and_then(|target| exec.file_kind(&target))
+            .is_ok_and(|kind| matches!(kind, FileKind::Special)),
+        _ => false,
     }
 }
 
