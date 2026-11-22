@@ -91,8 +91,9 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // Generic password/credential in key=value config.
         // Covers password=, passwd=, db_password=, secret=, api_key=, token=,
         // credential=, private_key=, access_key=, secret_key=, *_key= (compound
-        // forms only — bare "key=" is too broad for config files), and
-        // SSSD's *_authtok= bind passwords.
+        // forms only, since bare "key=" is too broad for config files), and
+        // SSSD's *_authtok= bind passwords (whose full value the SSSD
+        // pattern below takes).
         // Uses (?:^|\b|_) instead of bare \b so compound forms like
         // iscsi_password= or db_password= are caught (underscore is a word
         // character, so \b alone misses mid-identifier boundaries).
