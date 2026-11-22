@@ -37,10 +37,13 @@ fn is_aws_key_byte(b: u8) -> bool {
 /// All compiled patterns. `LazyLock` ensures they compile exactly once.
 pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
     vec![
-        // PEM private key blocks (full BEGIN...END matching with dotall)
+        // PEM private key blocks (full BEGIN...END matching with dotall).
+        // Any label ending in PRIVATE KEY, as the machine-state class's
+        // whole-file key rule reads it: `PRIVATE KEY` (PKCS#8),
+        // `ENCRYPTED PRIVATE KEY`, `RSA`, `EC`, `DSA`, `OPENSSH`.
         SecretPattern {
             regex: Regex::new(
-                r"(?s)-----BEGIN\s+(?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----.*?-----END\s+(?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+                r"(?s)-----BEGIN\s+(?:[A-Z0-9]+ )*PRIVATE KEY-----.*?-----END\s+(?:[A-Z0-9]+ )*PRIVATE KEY-----",
             )
             .unwrap(),
             finding_kind: FindingKind::PrivateKey,

@@ -358,3 +358,32 @@ fn ghost_files_holding_a_credential_by_content_are_never_collected() {
         }
     }
 }
+
+/// A ghost configuration file with an encrypted private key inside it is
+/// configuration, not a key file, so it is collected; the key block is
+/// redacted in the snapshot and in both exports, and the settings around
+/// it survive.
+#[test]
+fn an_encrypted_key_inside_a_ghost_config_is_redacted_on_both_export_paths() {
+    let conf = format!("listen = 8443\n{ENCRYPTED_KEY_FILE}workers = 4\n");
+    let snap = scan(
+        SysctlHost::new()
+            .ghost("myapp", "cng", "/etc/myapp/tls.conf")
+            .file("/etc/myapp/tls.conf", &conf),
+    );
+
+    let tls = entry(&snap, "/etc/myapp/tls.conf").expect("the ghost config is collected");
+    assert!(!tls.content.contains("ghostkeymaterial"), "{}", tls.content);
+    assert!(
+        tls.content.contains("REDACTED_PRIVATEKEY_"),
+        "{}",
+        tls.content
+    );
+    for (path, tree) in both_exports(&snap) {
+        let staged = std::fs::read_to_string(tree.path().join("config/etc/myapp/tls.conf"))
+            .unwrap_or_else(|e| panic!("{path}: tls.conf is staged: {e}"));
+        assert!(!staged.contains("ghostkeymaterial"), "{path}: {staged}");
+        assert!(staged.contains("listen = 8443\n"), "{path}");
+        assert!(staged.contains("workers = 4\n"), "{path}");
+    }
+}

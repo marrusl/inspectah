@@ -4401,6 +4401,27 @@ baseurl = https://cdn.redhat.com
         );
     }
 
+    /// Every private-key label is redacted, the PKCS#8 encrypted and
+    /// plain ones included, and the key's base64 does not survive.
+    #[test]
+    fn test_pem_every_private_key_label_is_redacted() {
+        for label in [
+            "ENCRYPTED PRIVATE KEY",
+            "PRIVATE KEY",
+            "RSA PRIVATE KEY",
+            "EC PRIVATE KEY",
+        ] {
+            let input = format!(
+                "listen = 443\n-----BEGIN {label}-----\nMIIFsecretkeybody\n-----END {label}-----\nworkers = 4\n"
+            );
+            let result = redact_string(&input);
+            assert!(result.contains("REDACTED_PRIVATEKEY_"), "{label}: {result}");
+            assert!(!result.contains("MIIFsecretkeybody"), "{label}: {result}");
+            assert!(result.contains("listen = 443\n"), "{label}: {result}");
+            assert!(result.contains("workers = 4"), "{label}: {result}");
+        }
+    }
+
     #[test]
     fn test_pem_certificate_full_block() {
         let input = "-----BEGIN CERTIFICATE-----\nMIIDdzCCAl+gAwIBAgI...\nbase64data\n-----END CERTIFICATE-----";
