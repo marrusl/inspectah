@@ -1635,6 +1635,7 @@ mod tests {
             aggregate: None,
             gpgkey_references: Default::default(),
             shipped_by_base: None,
+            verified_base_owner: None,
             rejected: None,
         };
         let snapshot_with = |included: bool| {

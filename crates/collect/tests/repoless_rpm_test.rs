@@ -341,6 +341,7 @@ fn repo_file(path: &str, content: &str) -> RepoFile {
         aggregate: None,
         gpgkey_references: Default::default(),
         shipped_by_base: None,
+        verified_base_owner: None,
         rejected: None,
     }
 }

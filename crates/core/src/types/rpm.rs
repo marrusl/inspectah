@@ -220,6 +220,18 @@ pub struct RepoFile {
     /// lists, which the baseline does not carry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shipped_by_base: Option<String>,
+    /// For a repo file the base image has its own copy of: the package
+    /// whose name is in the baseline and which owns the path on the source
+    /// host, set at collection only when `rpm -Va` ran to the end and did
+    /// not report the file, as Fedora's `fedora-repos` owns `fedora.repo`.
+    /// The positive evidence the route-loss decision needs before it calls
+    /// a section the base image's to supply: an empty `rpm_va` alone also
+    /// follows a failed `rpm -Va`, which verified nothing. The file is
+    /// still carried as collected. `None` without a baseline, when
+    /// `rpm -Va` failed or did not run, for a modified or unowned file, for
+    /// a key, and in snapshots collected before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_base_owner: Option<String>,
     /// Set on a key the scan refused to store. Its `content` is a
     /// placeholder, and nothing stages it or counts it as a key in the
     /// image. `None` for a usable key and for a repo file.

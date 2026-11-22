@@ -482,7 +482,11 @@ impl Inspector for RpmInspector {
         //    baseline, or on a host `rpm -Va` does not run on or failed on,
         //    every key is carried, which is the safe answer: a missing key
         //    fails the build, a redundant copy does not.
+        //    The same evidence marks a repo file the base image ships its
+        //    own copy of, which the route-loss decision reads; on a host
+        //    where `rpm -Va` failed, no file is marked.
         let mut gpg_keys = supp.gpg_keys;
+        let mut repo_files = supp.repo_files;
         if let Some(baseline) = ctx.baseline_data
             && let Some(rpm_va) = &supp.rpm_va
         {
@@ -493,6 +497,12 @@ impl Inspector for RpmInspector {
                 .collect();
             repos::leave_out_keys_the_base_ships(
                 &mut gpg_keys,
+                &file_ownership,
+                rpm_va,
+                &base_packages,
+            );
+            repos::mark_repo_files_the_base_ships(
+                &mut repo_files,
                 &file_ownership,
                 rpm_va,
                 &base_packages,
@@ -543,7 +553,7 @@ impl Inspector for RpmInspector {
 
         // 9a. Normalize source_repo short names to full repo IDs so
         //     package tables and config trees use the same identifier.
-        source_repos::normalize_source_repos(&mut packages_added, &supp.repo_files);
+        source_repos::normalize_source_repos(&mut packages_added, &repo_files);
 
         // 10. Build RpmSection
         let section = RpmSection {
@@ -552,7 +562,7 @@ impl Inspector for RpmInspector {
             version_changes,
             rpm_va_complete: supp.rpm_va.is_some(),
             rpm_va: supp.rpm_va.unwrap_or_default(),
-            repo_files: supp.repo_files,
+            repo_files,
             gpg_keys,
             module_streams: supp.module_streams,
             version_locks: supp.version_locks,

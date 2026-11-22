@@ -263,9 +263,14 @@ of the two questions that ask it. Never resolve an id by walking
   stored definition enabled with a source, or no stored file defines it
   and the collector attributed the package to it before redaction), (2)
   the base image does not supply it (`base_supplies`: a default repo
-  file, or a file a baseline package owns unmodified per `rpm -Va`, as
+  file, or a file the collector marked `verified_base_owner`, as
   `fedora-repos` owns `fedora.repo`; a `company.repo` defining `[baseos]`
-  is not supplied by its name), and (3) the build's definition of that
+  is not supplied by its name). The mark is set at collection only when a
+  baseline package owns the file and an `rpm -Va` that ran to the end did
+  not report it. Never read an empty `rpm_va` as "unmodified": a failed
+  `rpm -Va` leaves it empty too (`rpm_va_complete` is not serialized), and
+  a replaced `fedora.repo` passed for the base image's. A fleet keeps the
+  mark only where every host has it. And (3) the build's definition of that
   exact spelling does not serve, a key counting only when dnf checks
   signatures for it. A package resolves exact spelling first, so `[site]`
   losing its key never demotes `[SITE]`'s package. It is not installed

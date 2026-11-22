@@ -431,8 +431,9 @@ impl InstallRepos {
 ///    package to it from the files as captured, before redaction, and
 ///    nothing the export copies can define it now.
 /// 2. **The base image does not supply it** ([`base_supplies`]): the
-///    host's definition is not in a default repo file, nor in a file a
-///    base image package owns unmodified, such as Fedora's `fedora.repo`.
+///    host's definition is not in a default repo file, nor in a file the
+///    collector verified a base image package owns unmodified, such as
+///    Fedora's `fedora.repo`.
 ///    A distro-named section alone proves nothing: a `company.repo`
 ///    defining `[baseos]` for an internal mirror is what the host
 ///    installed from, and the base image's own `baseos`, where it has
@@ -467,32 +468,27 @@ fn route_lost(rpm: &RpmSection, repos: &InstallRepos, section: &SectionId) -> bo
 ///
 /// - a default repo file (`is_default_repo`, `redhat.repo` among them),
 ///   which the subscription flow mounts at build time; or
-/// - a file a package the base image has (`baseline_package_names`) owns
-///   on the host (`file_ownership`) that `rpm -Va` did not report
-///   modified (`rpm_va`): Fedora's `fedora-repos` and its `fedora.repo`
-///   and `fedora-updates.repo`, CentOS Stream's `centos-stream-repos`.
-///   This is the evidence the scan reads to leave out a key the base image
-///   ships (`leave_out_keys_the_base_ships`), read from the snapshot. A
+/// - a file the collector marked base-owned and verified
+///   ([`RepoFile::verified_base_owner`]): a package the base image has owns
+///   it on the host, and an `rpm -Va` that ran to the end did not report
+///   it, as Fedora's `fedora-repos` owns `fedora.repo` and
+///   `fedora-updates.repo`. This is the evidence the scan reads to leave
+///   out a key the base image ships (`leave_out_keys_the_base_ships`). A
 ///   host copy someone changed, by enabling a section or adding one, is
 ///   reported by `rpm -Va` and is the host's own.
 ///
-/// Without a baseline nothing is known about the base image's packages,
-/// and only a default repo file counts.
+/// Only that positive mark counts. An empty `rpm_va` is also what a
+/// failed `rpm -Va` leaves, which verified nothing, so reading it as
+/// "unmodified" let a replaced `fedora.repo` pass for the base image's.
+/// Without a baseline, or after a failed `rpm -Va`, only a default repo
+/// file counts.
+///
+/// [`RepoFile::verified_base_owner`]: inspectah_core::types::rpm::RepoFile::verified_base_owner
 fn base_supplies(rpm: &RpmSection, path: &str) -> bool {
-    let Some(file) = rpm.repo_files.iter().find(|f| f.path == path) else {
-        return false;
-    };
-    if file.is_default_repo {
-        return true;
-    }
-    let Some(base) = rpm.baseline_package_names.as_ref() else {
-        return false;
-    };
-    !rpm.rpm_va.iter().any(|e| e.path == path)
-        && rpm
-            .file_ownership
-            .iter()
-            .any(|e| base.contains(&e.package_name) && e.paths.iter().any(|p| p == path))
+    rpm.repo_files
+        .iter()
+        .find(|f| f.path == path)
+        .is_some_and(|file| file.is_default_repo || file.verified_base_owner.is_some())
 }
 
 /// The commented `COPY`/`RUN` pair a pre-excluded cached RPM offers.
@@ -1612,9 +1608,15 @@ mod tests {
         enum Base {
             /// No baseline: nothing is known about the base image.
             Unknown,
-            /// `site-repos` owns `site.repo` and is in the base image.
-            Owns,
-            /// As `Owns`, and `rpm -Va` reports `site.repo` modified.
+            /// `site-repos` owns `site.repo` and is in the base image, and
+            /// a completed `rpm -Va` did not report the file: the
+            /// collector's mark.
+            OwnsVerified,
+            /// As `OwnsVerified`, but `rpm -Va` failed: `rpm_va` is empty
+            /// and nothing marked the file.
+            OwnsUnverified,
+            /// As `OwnsUnverified`, and `rpm -Va` reports `site.repo`
+            /// modified.
             OwnsModified,
         }
         struct Case {
@@ -1720,11 +1722,18 @@ mod tests {
                 true,
             ),
             case(
-                "dropped, a base image package owns it unmodified",
+                "dropped, a base image package owns it, verified unmodified",
                 vec![file("site.repo", &site(""), false)],
                 Some(key(true)),
-                Base::Owns,
+                Base::OwnsVerified,
                 false,
+            ),
+            case(
+                "dropped, a base image package owns it, verification failed",
+                vec![file("site.repo", &site(""), false)],
+                Some(key(true)),
+                Base::OwnsUnverified,
+                true,
             ),
             case(
                 "dropped, a base image package owns it, modified on the host",
@@ -1787,6 +1796,11 @@ mod tests {
                     path: "/etc/yum.repos.d/site.repo".into(),
                     ..Default::default()
                 }];
+            }
+            if matches!(c.base, Base::OwnsVerified) {
+                for file in &mut rpm.repo_files {
+                    file.verified_base_owner = Some("site-repos".into());
+                }
             }
             let repos = InstallRepos::of(&snap);
             let rpm = snap.rpm.as_ref().unwrap();

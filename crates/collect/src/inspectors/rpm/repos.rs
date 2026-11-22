@@ -112,6 +112,7 @@ pub fn collect_repo_files(exec: &dyn Executor, left_out: &mut Vec<String>) -> Ve
             aggregate: None,
             gpgkey_references: Default::default(),
             shipped_by_base: None,
+            verified_base_owner: None,
             rejected: None,
         });
     }
@@ -291,6 +292,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
                     aggregate: None,
                     gpgkey_references,
                     shipped_by_base: None,
+                    verified_base_owner: None,
                     rejected: None,
                 });
                 continue;
@@ -317,6 +319,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
             aggregate: None,
             gpgkey_references,
             shipped_by_base: None,
+            verified_base_owner: None,
             rejected: Some(rejection),
         });
     }
@@ -356,24 +359,51 @@ pub fn leave_out_keys_the_base_ships(
     rpm_va: &[RpmVaEntry],
     base_packages: &HashSet<&str>,
 ) {
-    let modified: HashSet<&str> = rpm_va.iter().map(|e| e.path.as_str()).collect();
-    for key in keys
-        .iter_mut()
-        .filter(|k| k.disposition.is_included() && !modified.contains(k.path.as_str()))
-    {
-        // The least name, so a file several base packages own gives one
-        // answer whatever order rpm listed them in.
-        let base_owner = file_ownership
-            .iter()
-            .filter(|e| base_packages.contains(e.package_name.as_str()))
-            .filter(|e| e.paths.contains(&key.path))
-            .map(|e| e.package_name.as_str())
-            .min();
-        if let Some(package) = base_owner {
+    for key in keys.iter_mut().filter(|k| k.disposition.is_included()) {
+        if let Some(package) = verified_base_owner(&key.path, file_ownership, rpm_va, base_packages)
+        {
             key.shipped_by_base = Some(package.to_string());
             key.disposition = FindingKind::excluded();
         }
     }
+}
+
+/// Record on each repo file the base image has its own copy of the package
+/// that ships it ([`RepoFile::verified_base_owner`]), by the evidence
+/// [`leave_out_keys_the_base_ships`] reads. Call it only with the report
+/// of an `rpm -Va` that ran to the end. The file is still carried.
+pub fn mark_repo_files_the_base_ships(
+    repo_files: &mut [RepoFile],
+    file_ownership: &[FileOwnershipEntry],
+    rpm_va: &[RpmVaEntry],
+    base_packages: &HashSet<&str>,
+) {
+    for file in repo_files.iter_mut() {
+        file.verified_base_owner =
+            verified_base_owner(&file.path, file_ownership, rpm_va, base_packages)
+                .map(str::to_owned);
+    }
+}
+
+/// The package the base image has that owns `path` on the host, when the
+/// complete `rpm -Va` report `rpm_va` does not name `path`. The least name,
+/// so a file several base packages own gives one answer whatever order rpm
+/// listed them in.
+fn verified_base_owner<'a>(
+    path: &str,
+    file_ownership: &'a [FileOwnershipEntry],
+    rpm_va: &[RpmVaEntry],
+    base_packages: &HashSet<&str>,
+) -> Option<&'a str> {
+    if rpm_va.iter().any(|e| e.path == path) {
+        return None;
+    }
+    file_ownership
+        .iter()
+        .filter(|e| base_packages.contains(e.package_name.as_str()))
+        .filter(|e| e.paths.iter().any(|p| p == path))
+        .map(|e| e.package_name.as_str())
+        .min()
 }
 
 fn is_default_repo(path: &str) -> bool {

@@ -1624,6 +1624,96 @@ fn t5_a_repo_the_base_image_supplies_keeps_its_route_when_its_file_is_dropped() 
     assert!(installs(&file, "htop"), "{file}");
 }
 
+/// Only a completed `rpm -Va` proves a base-owned repo file unmodified.
+/// `fedora-repos`, which the base image has, owns `fedora.repo`, whose
+/// content was replaced with an internal `[baseos]` naming a key the host
+/// lacks; `site-tool` came from it. When `rpm -Va` ran to the end and did
+/// not report the file, the base image's own copy supplies the section and
+/// the package installs by name; when it failed, was killed or reported
+/// the file, the definition is the host's, and both exports demote the
+/// package: the scan tarball, where the key is missing, and refine with
+/// `baseos` excluded, where the file is dropped too. The evidence survives
+/// reload, and a fleet keeps it only where every host recorded it.
+#[test]
+fn t5_only_a_completed_verification_proves_a_repo_file_the_base_images() {
+    const FEDORA: &str = "/etc/yum.repos.d/fedora.repo";
+    let replaced = "[baseos]\nbaseurl=https://mirror.corp.example/private/\nenabled=1\n\
+                    gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-corp\n";
+    let host = |va: Option<(&str, i32)>| {
+        let host = UnitHost::new()
+            .base_package("bash")
+            .base_package("fedora-repos")
+            .owned_file(FEDORA, replaced, "fedora-repos")
+            .package_from("site-tool", "baseos")
+            .enabled_repos(&["baseos"]);
+        match va {
+            Some((stdout, code)) => host.rpm_va(stdout, code),
+            None => host,
+        }
+    };
+    let modified = format!("S.5....T.  c {FEDORA}\n");
+    let killed = "S.5....T.  c /etc/other.conf\n";
+    /// `rpm -Va`'s stdout and exit code, when not a clean verify.
+    type Verify<'a> = Option<(&'a str, i32)>;
+    // `(what, rpm -Va's outcome, base-supplied)`.
+    let cases: [(&str, Verify, bool); 4] = [
+        ("verified, nothing modified", None, true),
+        ("rpm -Va failed with no output", Some(("", 2)), false),
+        ("rpm -Va killed partway", Some((killed, -1)), false),
+        ("rpm -Va reported the file", Some((&modified, 1)), false),
+    ];
+    for (what, va, supplied) in cases {
+        let snap = reload(&scan_finished(host(va)));
+        let file = rpm(&snap)
+            .repo_files
+            .iter()
+            .find(|f| f.path == FEDORA)
+            .unwrap();
+        assert_eq!(
+            file.verified_base_owner.as_deref(),
+            supplied.then_some("fedora-repos"),
+            "{what}: the evidence after reload"
+        );
+        let mut s = session(&snap);
+        s.apply(set_repo("baseos", false)).unwrap();
+        let refine = containerfile(export_session(&s).path());
+        for (via, file) in [
+            ("scan", containerfile(render_export(&snap).path())),
+            ("refine, baseos excluded", refine),
+        ] {
+            assert_eq!(
+                installs(&file, "site-tool"),
+                supplied,
+                "{what}, {via}:\n{file}"
+            );
+            assert_eq!(
+                file.contains("site-tool installs from repo baseos"),
+                !supplied,
+                "{what}, {via}:\n{file}"
+            );
+        }
+    }
+
+    // A fleet where one host verified the file and the other's `rpm -Va`
+    // failed: the fleet carries the host's copy, and the route is lost.
+    let (merged, _) = merge_snapshots(
+        vec![named(host(None), "h1"), named(host(Some(("", 2))), "h2")],
+        None,
+        None,
+    )
+    .unwrap();
+    let merged = reload(&merged);
+    assert!(
+        rpm(&merged)
+            .repo_files
+            .iter()
+            .filter(|f| f.path == FEDORA)
+            .all(|f| f.verified_base_owner.is_none())
+    );
+    let file = containerfile(render_export(&merged).path());
+    assert!(!installs(&file, "site-tool"), "fleet:\n{file}");
+}
+
 /// `[site]` and `[SITE]`, in separate files, are two repos: `[site]`
 /// names a local key the host lacks, `[SITE]` a remote one. Only the
 /// lower-case section's package loses its route, in both file orders,

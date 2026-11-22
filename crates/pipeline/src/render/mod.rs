@@ -343,9 +343,10 @@ mod tests {
             disposition: _,
             locked: _,
             aggregate: _,
-            gpgkey_references: _, // identifier: the literal spelling of `path`
-            shipped_by_base: _,   // identifier: an rpm package name
-            rejected: _,          // classification: a fixed enum
+            gpgkey_references: _,   // identifier: the literal spelling of `path`
+            shipped_by_base: _,     // identifier: an rpm package name
+            verified_base_owner: _, // identifier: an rpm package name
+            rejected: _,            // classification: a fixed enum
         } = RepoFile::default();
 
         // `units.drop_ins[]`.
