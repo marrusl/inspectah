@@ -192,10 +192,21 @@ fn run(inspector: &dyn Inspector, exec: &MockExecutor) -> InspectorOutput {
 }
 
 fn collect_users(exec: &MockExecutor, preserve_keys: bool) -> UserGroupSection {
-    let inspector = UsersGroupsInspector::with_options(UserGroupOptions {
-        preserve_ssh_keys: preserve_keys,
-        ..Default::default()
-    });
+    collect_users_with(
+        exec,
+        UserGroupOptions {
+            preserve_ssh_keys: preserve_keys,
+            ..Default::default()
+        },
+    )
+}
+
+/// The users section the collector records with `options`.
+pub(crate) fn collect_users_with(
+    exec: &MockExecutor,
+    options: UserGroupOptions,
+) -> UserGroupSection {
+    let inspector = UsersGroupsInspector::with_options(options);
     match run(&inspector, exec).section {
         SectionData::UsersGroups(section) => section,
         other => panic!("expected the users section, got {other:?}"),
@@ -538,8 +549,44 @@ fn u6_keys_comment() {
     assert!(!out.contains("SSH keys"), "{out}");
 }
 
+/// The hashes U7's host keeps in `/etc/shadow`.
+const ZED_HASH: &str = "$6$zedsalt$ZedHashForTheRefusedUser";
+const CAROL_HASH: &str = "$6$carolsalt$CarolHashForTheAcceptedUser";
+
+/// The export files that carry every included user's kept hash, whatever
+/// the Containerfile does with the user.
+const HASH_HOLDERS: [&str; 3] = [
+    "inspectah-users.ks",
+    "inspectah-users.toml",
+    "inspection-snapshot.json",
+];
+
+/// Every file under `root`, relative to it, whose content holds `needle`.
+fn files_containing(root: &Path, needle: &str) -> Vec<String> {
+    fn walk(dir: &Path, root: &Path, needle: &str, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("read the export") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                walk(&path, root, needle, out);
+            } else if std::fs::read(&path)
+                .expect("read a file")
+                .windows(needle.len())
+                .any(|w| w == needle.as_bytes())
+            {
+                let rel = path.strip_prefix(root).expect("under the root");
+                out.push(rel.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, needle, &mut out);
+    out.sort();
+    out
+}
+
 /// U7: a refusal costs the whole user, and the `/var` fragment does not
-/// name the refused account.
+/// name the refused account. The refused `zed` and the accepted `carol`
+/// both have a hash the scan kept: only `carol`'s reaches `chpasswd`.
 #[test]
 fn u7_refusals_and_the_plan() {
     let exec = with_var_lib(
@@ -552,15 +599,34 @@ fn u7_refusals_and_the_plan() {
                 ),
             )
             .with_file(
+                "/etc/shadow",
+                &format!(
+                    "zed:{ZED_HASH}:19000:0:99999:7:::\ncarol:{CAROL_HASH}:19000:0:99999:7:::\n"
+                ),
+            )
+            .with_file(
                 "/home/zed/.ssh/authorized_keys",
                 "ssh-ed25519 AAAAZed zed@host\n",
             ),
         &[("/var/lib/zed", "0700 1009 1009 zed UNKNOWN\n")],
     );
-    let users = collect_users(&exec, true);
+    let users = collect_users_with(
+        &exec,
+        UserGroupOptions {
+            preserve_ssh_keys: true,
+            preserve_password_hashes: true,
+            ..Default::default()
+        },
+    );
+    for (name, hash) in [("zed", ZED_HASH), ("carol", CAROL_HASH)] {
+        let user = users
+            .users
+            .iter()
+            .find(|u| u["name"] == name)
+            .unwrap_or_else(|| panic!("the collector records {name}"));
+        assert_eq!(user["password_hash"], hash, "the scan keeps {name}'s hash");
+    }
     let mut snap = useradd(users.clone(), &["zed", "carol"]);
-    snap.users_groups.as_mut().expect("users").users[0]["password_hash"] =
-        serde_json::json!("$6$salt$hash");
     snap.storage = Some(collect_storage(&exec));
 
     let out = section(&snap);
@@ -597,6 +663,32 @@ fn u7_refusals_and_the_plan() {
         !active(&var_conf).iter().any(|l| l.contains(" zed ")),
         "zed in an owner field: {var_conf}"
     );
+
+    // Only the accepted user's hash reaches `chpasswd`, and the refused
+    // user's is nowhere in the Containerfile, comments included.
+    let containerfile = std::fs::read_to_string(dir.path().join("Containerfile")).expect("read");
+    let chpasswd: Vec<&str> = containerfile
+        .lines()
+        .filter(|l| l.contains("chpasswd"))
+        .collect();
+    assert_eq!(
+        chpasswd,
+        vec![format!("RUN printf '%s\\n' 'carol:{CAROL_HASH}' | chpasswd -e").as_str()],
+        "{containerfile}"
+    );
+    assert!(!containerfile.contains(ZED_HASH), "{containerfile}");
+    // Outside the Containerfile, the hash is only where the scan keeps it
+    // for every included user: the snapshot, and the kickstart and
+    // blueprint fragments, which do not use the plan (they create `zed`
+    // there). Nothing the image build reads carries it.
+    assert_eq!(
+        files_containing(dir.path(), ZED_HASH),
+        HASH_HOLDERS,
+        "zed's hash outside the snapshot and the fragments"
+    );
+    let mut carol_files = HASH_HOLDERS.to_vec();
+    carol_files.insert(0, "Containerfile");
+    assert_eq!(files_containing(dir.path(), CAROL_HASH), carol_files);
 
     // The kickstart and blueprint fragments do not read the new fields.
     let mut without = snap.clone();

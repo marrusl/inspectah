@@ -26,4 +26,5 @@ mod selinux_scan_test;
 mod staged_writes_parity_test;
 mod sysctl_scan_test;
 mod unit_owner_evidence_test;
+mod users_password_export_test;
 mod warning_markdown_test;
