@@ -1896,6 +1896,43 @@ fn a_link_that_gives_files_a_member_spelling_is_inventoried() {
     assert_marker_nowhere(&snap);
 }
 
+/// Two private bind mounts of `/srv/view` at `/etc/insights-client/.a`
+/// and `.b`, with `/etc/myapp/registration.json` bind-mounted over the
+/// registration file in `.b` alone. Both views share `/srv/view`'s inode,
+/// so a walk that took `.a`'s listing for `.b`'s never saw the file
+/// mount, and the registration JSON reached the snapshot as an ordinary
+/// file. The mounts are modelled in the mock (real ones take root): each
+/// view has its own mount id and entries. The file is a withheld row, is
+/// never opened, and is in no artifact of either export.
+#[test]
+fn a_file_mounted_in_one_bind_view_is_inventoried() {
+    let registration = "/etc/myapp/registration.json";
+    let exec = SysctlHost::new()
+        .file("/srv/view/registration.json", "{}\n")
+        .file(registration, &format!("{{\"machine_id\": \"{MARKER}\"}}\n"))
+        .hard_link(
+            "/etc/insights-client/.a/registration.json",
+            "/srv/view/registration.json",
+        )
+        .hard_link("/etc/insights-client/.b/registration.json", registration)
+        .build()
+        .with_bind_mount("/etc/insights-client/.a", "/srv/view", 2)
+        .with_bind_mount("/etc/insights-client/.b", "/srv/view", 3);
+    let snap = reload(&scan_exec(&exec, std_inspectors()));
+    let row = withheld(&snap, registration).expect("the mounted file is withheld");
+    assert_eq!(row.member, MachineStateMember::InsightsState);
+    assert!(!has_entry(&snap, registration));
+    assert_never_opened(&exec, registration);
+    assert_marker_nowhere(&snap);
+    for root in [render_export(&snap), export_session(&session(&snap))] {
+        let files: Vec<(String, Vec<u8>)> = walkdir_files(root.path())
+            .into_iter()
+            .filter_map(|f| std::fs::read(&f).ok().map(|b| (f, b)))
+            .collect();
+        assert_marker_absent(&files);
+    }
+}
+
 /// With `--preserve subscription --ack-sensitive`, the subscription
 /// section's hostname is read through the gate, not its bypass: an
 /// `/etc/hostname` linked to an SSH host key leaves the hostname unset,

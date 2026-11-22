@@ -997,10 +997,10 @@ impl MachineStateScreen {
     /// Stats every host file a withheld rule matches, reading no file
     /// content. Each `Glob` and `Prefix` rule's tree is listed from the
     /// rule's own directory, by the raw bytes of each entry's name,
-    /// following directory links (each directory once per matching
-    /// state, so a link cycle ends) and keeping the logical spelling the
-    /// rule matches, and descending only where a match is still
-    /// possible. Where the listing cannot be completed the build records
+    /// following directory links (each directory once per mount and
+    /// matching state, so a link cycle ends; every time where the mount
+    /// is unknown) and keeping the logical spelling the rule matches, and
+    /// descending only where a match is still possible. Where the listing cannot be completed the build records
     /// a [`ScreenGap`] and stops. `BasenameSuffix` rules are
     /// not enumerated: that would take a walk of `/etc`, and a keytab
     /// linked under another name is caught by its header.
@@ -1033,9 +1033,13 @@ impl MachineStateScreen {
                 rule: *rule,
                 nfa,
                 member,
-                listed: HashMap::from([((meta.dev, meta.ino), vec![state.clone()])]),
+                listed: HashMap::new(),
                 budget: &mut budget,
             };
+            if let Some(mount) = exec.mount_id(Path::new(root)) {
+                walk.listed
+                    .insert((meta.dev, meta.ino, mount), vec![state.clone()]);
+            }
             let listed = walk.walk(
                 &mut screen.inodes,
                 exec,
@@ -1066,19 +1070,30 @@ impl MachineStateScreen {
     }
 }
 
+/// Which listing a directory shows: its `(dev, ino)` and the id of the
+/// mount it is reached on ([`HostRead::mount_id`]). Inode identity alone
+/// is not enough: two bind mounts of one directory share its inode, but a
+/// mount below one view need not be below the other, so their entries can
+/// differ. A mount shows one set of entries for one directory, so the
+/// three together name a listing.
+type ListingKey = (u64, u64, u64);
+
 /// One withheld rule's tree, being listed.
 struct RuleWalk<'b> {
     rule: PathMatch,
     nfa: RuleNfa,
     member: MachineStateMember,
-    /// Each directory listed so far, by `(dev, ino)`, with the matching
-    /// states it was listed under. A directory reached again under a
-    /// state one of these covers holds nothing the rule has not already
-    /// seen; under any other state it is listed again, since a link can
-    /// give the same files a spelling the rule matches (a `.state` link
-    /// back to `/etc/insights-client` makes `registration.json` there
-    /// `.state/registration.json`). States are finite, so link cycles end.
-    listed: HashMap<(u64, u64), Vec<MatchState>>,
+    /// Each directory listed so far, by [`ListingKey`], with the matching
+    /// states it was listed under. A directory reached again on the same
+    /// mount under a state one of these covers holds nothing the rule has
+    /// not already seen; under any other state it is listed again, since
+    /// a link can give the same files a spelling the rule matches (a
+    /// `.state` link back to `/etc/insights-client` makes
+    /// `registration.json` there `.state/registration.json`). States and
+    /// mounts are finite, so link cycles end. A directory whose mount is
+    /// unknown is never in here: it is listed every time it is reached,
+    /// and a cycle through it ends at [`SCREEN_MAX_DEPTH`] as a gap.
+    listed: HashMap<ListingKey, Vec<MatchState>>,
     budget: &'b mut usize,
 }
 
@@ -1152,11 +1167,13 @@ impl RuleWalk<'_> {
             if !below.alive_below() {
                 continue;
             }
-            let seen = self.listed.entry((meta.dev, meta.ino)).or_default();
-            if seen.iter().any(|listed| listed.covers(&below)) {
-                continue;
+            if let Some(mount) = exec.mount_id(&child_physical) {
+                let seen = self.listed.entry((meta.dev, meta.ino, mount)).or_default();
+                if seen.iter().any(|listed| listed.covers(&below)) {
+                    continue;
+                }
+                seen.push(below.clone());
             }
-            seen.push(below.clone());
             if depth == 0 {
                 return Err(gap(&child, ScreenGapCause::TooDeep));
             }

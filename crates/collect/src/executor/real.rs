@@ -467,12 +467,59 @@ impl HostRead for RealExecutor {
     fn open_read(&self, path: &Path) -> io::Result<Box<dyn io::Read + '_>> {
         Ok(Box::new(std::fs::File::open(path)?))
     }
+
+    fn mount_id(&self, path: &Path) -> Option<u64> {
+        mount_id_of(path)
+    }
+}
+
+/// The mount id the kernel reports for `path`: the `mnt_id` line of
+/// `/proc/self/fdinfo` for an `O_PATH` handle to it, which opens nothing
+/// for reading and needs no read permission. The kernel has written that
+/// line since Linux 3.15, so every supported RHEL has it, and reading it
+/// needs no libc wrapper: `statx` with `STATX_MNT_ID`, the other source,
+/// needs Linux 5.8 and has no binding in the libc crate for the static
+/// musl build.
+#[cfg(target_os = "linux")]
+fn mount_id_of(path: &Path) -> Option<u64> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let handle = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH)
+        .open(path)
+        .ok()?;
+    let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{}", handle.as_raw_fd())).ok()?;
+    info.lines()
+        .find_map(|line| line.strip_prefix("mnt_id:"))
+        .and_then(|id| id.trim().parse().ok())
+}
+
+/// No mount ids off Linux.
+#[cfg(not(target_os = "linux"))]
+fn mount_id_of(_path: &Path) -> Option<u64> {
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use inspectah_core::traits::executor::Executor;
+
+    /// A directory and its parent on one mount share a mount id; `/proc`
+    /// is a mount of its own; a path that does not exist has none.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mount_ids_come_from_the_kernel() {
+        let exec = RealExecutor::new();
+        let tmp = tempfile::tempdir().expect("a temp directory");
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        let dir = exec.mount_id(tmp.path()).expect("a mount id");
+        assert_eq!(exec.mount_id(&tmp.path().join("sub")), Some(dir));
+        let proc = exec.mount_id(Path::new("/proc")).expect("a mount id");
+        assert_ne!(exec.mount_id(Path::new("/")), Some(proc));
+        assert_eq!(exec.mount_id(&tmp.path().join("missing")), None);
+    }
 
     #[test]
     fn test_real_executor_host_root() {

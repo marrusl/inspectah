@@ -364,6 +364,75 @@ fn the_inventory_follows_directory_links_and_deep_trees() {
     }
 }
 
+/// The layout of two private bind mounts of one directory under
+/// `/etc/insights-client`, `.a` first and `.b` second, with a file bind
+/// mount over `registration.json` that only `.b` shows. Both views have
+/// `/srv/view`'s inode; making real mounts takes root, so the mock models
+/// them: each view lists its own entries and has its own mount id, and
+/// the file mount is a second name for `/etc/myapp/registration.json`.
+fn bind_views() -> MockExecutor {
+    MockExecutor::new()
+        .with_dir("/etc", vec!["insights-client", "myapp"])
+        .with_dir("/etc/insights-client", vec![".a", ".b"])
+        .with_dir("/srv/view", vec!["registration.json"])
+        .with_file("/srv/view/registration.json", "{}\n")
+        .with_bind_mount("/etc/insights-client/.a", "/srv/view", 2)
+        .with_dir("/etc/insights-client/.a", vec!["registration.json"])
+        .with_hard_link(
+            "/etc/insights-client/.a/registration.json",
+            "/srv/view/registration.json",
+        )
+        .with_bind_mount("/etc/insights-client/.b", "/srv/view", 3)
+        .with_dir("/etc/insights-client/.b", vec!["registration.json"])
+        .with_hard_link(
+            "/etc/insights-client/.b/registration.json",
+            "/etc/myapp/registration.json",
+        )
+        .with_dir("/etc/myapp", vec!["registration.json"])
+        .with_file(
+            "/etc/myapp/registration.json",
+            "{\"machine_id\": \"abc\"}\n",
+        )
+}
+
+/// One directory on two mounts is two listings: the inventory reuses a
+/// listing only for the same directory on the same mount, so the
+/// registration file only the later bind view shows is withheld under
+/// its own path, and never opened. Where mount ids cannot be read, no
+/// listing is reused: the views are both listed, and a link cycle ends
+/// at the depth limit, as a gap that stops the scan.
+#[test]
+fn bind_views_of_one_directory_are_listed_by_mount() {
+    for host in [bind_views(), bind_views().with_mount_ids_unknown()] {
+        let gate = ScreenedExecutor::new(&host);
+        assert_eq!(gate.gap(), None);
+        assert_eq!(
+            gate.screen("/etc/myapp/registration.json"),
+            Screened::Withheld(MachineStateMember::InsightsState)
+        );
+        let err = gate
+            .read_file(Path::new("/etc/myapp/registration.json"))
+            .expect_err("refused");
+        assert_eq!(refusal(&err), Some(MachineStateMember::InsightsState));
+        assert!(!host.was_read("/etc/myapp/registration.json"));
+    }
+
+    let cycle = MockExecutor::new()
+        .with_dir("/etc/insights-client", vec![".state", "registration.json"])
+        .with_link("/etc/insights-client/.state", "/etc/insights-client")
+        .with_file("/etc/insights-client/registration.json", "{}\n");
+    assert_eq!(ScreenedExecutor::new(&cycle).gap(), None);
+    let unknown = cycle.with_mount_ids_unknown();
+    let gate = ScreenedExecutor::new(&unknown);
+    let gap = gate
+        .gap()
+        .expect("a cycle with no mount ids ends at the depth limit");
+    assert!(
+        gap.dir.starts_with("/etc/insights-client/.state/.state"),
+        "{gap}"
+    );
+}
+
 /// Where the inventory cannot be completed, the gate fails closed: a tree
 /// deeper than the screen follows, a name that is not UTF-8 where a rule
 /// could match it, and a directory that cannot be listed in full each
@@ -563,7 +632,15 @@ impl inspectah_core::traits::executor::HostRead for RootedHost {
     fn open_read(&self, path: &Path) -> std::io::Result<Box<dyn std::io::Read + '_>> {
         Ok(Box::new(std::fs::File::open(self.on_disk(path))?))
     }
+
+    /// A temp directory holds no mounts: one id for every path in it.
+    fn mount_id(&self, _path: &Path) -> Option<u64> {
+        Some(TEMP_ROOT_MOUNT)
+    }
 }
+
+/// The one mount a [`RootedHost`]'s temp directory is on.
+const TEMP_ROOT_MOUNT: u64 = 1;
 
 /// Writes `content` at the host path `path` below `root`.
 fn put(root: &Path, path: &str, content: &[u8]) {

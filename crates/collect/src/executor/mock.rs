@@ -18,6 +18,10 @@ const DIRECTORY_MODE: u32 = 0o040_755;
 /// The one device every mock path is on.
 const MOCK_DEV: u64 = 1;
 
+/// The mount every mock path is on, unless it is below a bind mount
+/// ([`MockExecutor::with_bind_mount`]).
+pub const MOCK_ROOT_MOUNT: u64 = 1;
+
 /// Which read a [`ReadRecord`] logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadKind {
@@ -58,6 +62,14 @@ pub struct MockExecutor {
     /// executor does.
     raw_dir_entries: HashMap<String, Vec<std::ffi::OsString>>,
     links: HashMap<String, String>,
+    /// Bind mounts: each path here is a directory with the inode of the
+    /// directory it maps to, on a mount of its own with the id given. Its
+    /// entries are the ones registered at its own path, so two views of
+    /// one directory can list different files.
+    bind_mounts: HashMap<String, (String, u64)>,
+    /// Whether `mount_id` answers. Off, it returns `None` for every path,
+    /// as a host whose mount ids cannot be read does.
+    mount_ids_known: bool,
     /// Paths that are a FIFO, socket or device ([`FileKind::Special`]).
     /// Reading one panics: a collector must never open such a path.
     specials: HashSet<String>,
@@ -104,6 +116,8 @@ impl MockExecutor {
             dirs: HashMap::new(),
             raw_dir_entries: HashMap::new(),
             links: HashMap::new(),
+            bind_mounts: HashMap::new(),
+            mount_ids_known: true,
             specials: HashSet::new(),
             dangling_links: HashSet::new(),
             timeout_commands: HashMap::new(),
@@ -219,6 +233,24 @@ impl MockExecutor {
 
     pub fn with_link(mut self, path: &str, target: &str) -> Self {
         self.links.insert(path.to_string(), target.to_string());
+        self
+    }
+
+    /// Register `path` as a bind mount of the directory `source`, on the
+    /// mount `mount_id`: it has `source`'s inode, and lists what
+    /// [`with_dir`](Self::with_dir) registers at `path`, which may differ
+    /// from `source`'s own entries as a private bind mount's can. Every
+    /// path not below a bind mount is on mount [`MOCK_ROOT_MOUNT`].
+    pub fn with_bind_mount(mut self, path: &str, source: &str, mount_id: u64) -> Self {
+        self.bind_mounts
+            .insert(path.to_string(), (source.to_string(), mount_id));
+        self
+    }
+
+    /// `mount_id` returns `None` for every path, as on a host whose mount
+    /// ids cannot be read.
+    pub fn with_mount_ids_unknown(mut self) -> Self {
+        self.mount_ids_known = false;
         self
     }
 
@@ -515,11 +547,16 @@ impl Executor for MockExecutor {
             .values()
             .filter(|t| **t == canonical)
             .count() as u64;
+        // A bind mount is the directory it mounts.
+        let inode_of = self
+            .bind_mounts
+            .get(&canonical)
+            .map_or(canonical.as_str(), |(source, _)| source.as_str());
         Ok(FileMetadata {
             mode,
             size,
             dev: MOCK_DEV,
-            ino: mock_inode(&canonical),
+            ino: mock_inode(inode_of),
             nlink,
         })
     }
@@ -581,6 +618,22 @@ impl HostRead for MockExecutor {
         };
         self.log_read(path, ReadKind::Stream, bytes.len());
         Ok(Box::new(io::Cursor::new(bytes.clone())))
+    }
+
+    /// The id of the innermost bind mount the resolved path is at or
+    /// below, else [`MOCK_ROOT_MOUNT`]; `None` for every path after
+    /// [`with_mount_ids_unknown`](MockExecutor::with_mount_ids_unknown).
+    fn mount_id(&self, path: &Path) -> Option<u64> {
+        if !self.mount_ids_known {
+            return None;
+        }
+        let resolved = self.resolve(path, true).ok()?;
+        Some(
+            resolved
+                .ancestors()
+                .find_map(|dir| self.bind_mounts.get(dir.to_str()?).map(|(_, id)| *id))
+                .unwrap_or(MOCK_ROOT_MOUNT),
+        )
     }
 }
 

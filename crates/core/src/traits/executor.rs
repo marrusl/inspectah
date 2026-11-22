@@ -156,4 +156,12 @@ pub trait HostRead: Executor {
     /// The file, open for reading from its start. The caller reads it a
     /// buffer at a time, so a file of any length costs bounded memory.
     fn open_read(&self, path: &Path) -> io::Result<Box<dyn io::Read + '_>>;
+
+    /// The id of the mount `path` resolves into, when the host can say.
+    /// One directory, one `(dev, ino)`, can show different entries on
+    /// different mounts: two bind mounts of it differ wherever another
+    /// mount sits below one view and not the other. `None` when the id
+    /// cannot be read; the machine-state inventory then never takes one
+    /// listing of a directory for another.
+    fn mount_id(&self, path: &Path) -> Option<u64>;
 }

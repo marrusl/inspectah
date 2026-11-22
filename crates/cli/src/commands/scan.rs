@@ -1648,6 +1648,10 @@ VARIANT_ID="workstation"
                 "not found",
             ))
         }
+
+        fn mount_id(&self, _path: &std::path::Path) -> Option<u64> {
+            None
+        }
     }
 
     /// The scan's gate refuses to open on an inventory gap, before any
