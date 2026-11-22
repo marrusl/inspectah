@@ -237,7 +237,7 @@ fn host_mock() -> MockExecutor {
         .collect();
     let from_repo: String = HOST_PACKAGES
         .iter()
-        .map(|(name, _, repo)| format!("{name} {repo}\n"))
+        .map(|(name, arch, repo)| format!("{name} {arch} {repo}\n"))
         .collect();
     let rpm_owned: String = VAR_DIRS
         .iter()
@@ -256,7 +256,7 @@ fn host_mock() -> MockExecutor {
             ok(&rpm_qa),
         )
         .with_command_prefix(
-            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n",
+            "dnf repoquery --installed --queryformat %{name} %{arch} %{from_repo}\n",
             ok(&from_repo),
         )
         .with_command(

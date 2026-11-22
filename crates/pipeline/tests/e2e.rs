@@ -378,7 +378,7 @@ fn run_pipeline_keeps_an_unneeded_repoless_auto_package_out_of_the_class() {
         .collect();
     let from_repo: String = HOST
         .iter()
-        .map(|(name, repo)| format!("{name} {repo}\n"))
+        .map(|(name, repo)| format!("{name} x86_64 {repo}\n"))
         .collect();
     let exec = MockExecutor::new()
         .with_command(
@@ -386,7 +386,7 @@ fn run_pipeline_keeps_an_unneeded_repoless_auto_package_out_of_the_class() {
             ok(&rpm_qa),
         )
         .with_command_prefix(
-            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n",
+            "dnf repoquery --installed --queryformat %{name} %{arch} %{from_repo}\n",
             ok(&from_repo),
         )
         .with_command(

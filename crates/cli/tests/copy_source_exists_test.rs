@@ -365,13 +365,13 @@ fn populated_host_mock(cache_dir: &Path) -> MockExecutor {
         )
         // -- source repos and the repo-less scan -----------------------
         .with_command(
-            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
-            ok("bash baseos\n"),
+            "dnf repoquery --installed --queryformat %{name} %{arch} %{from_repo}\n bash",
+            ok("bash x86_64 baseos\n"),
         )
         .with_command(
-            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n \
+            "dnf repoquery --installed --queryformat %{name} %{arch} %{from_repo}\n \
              custom-tool nodejs openh264",
-            ok("custom-tool @commandline\nnodejs appstream\nopenh264 epel-cisco-openh264\n"),
+            ok("custom-tool x86_64 @commandline\nnodejs x86_64 appstream\nopenh264 x86_64 epel-cisco-openh264\n"),
         )
         .with_command(
             "dnf repolist --enabled -q",

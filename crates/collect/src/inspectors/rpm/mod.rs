@@ -2107,18 +2107,18 @@ mod tests {
             // Source repo attribution: probe is first package alphabetically (httpd),
             // then remaining in a single batch.
             .with_command(
-                "dnf repoquery --installed --queryformat %{name} %{from_repo}\n httpd",
+                "dnf repoquery --installed --queryformat %{name} %{arch} %{from_repo}\n httpd",
                 ExecResult {
                     exit_code: 0,
-                    stdout: "httpd rhel-9-appstream\n".into(),
+                    stdout: "httpd x86_64 rhel-9-appstream\n".into(),
                     stderr: String::new(),
                 },
             )
             .with_command(
-                "dnf repoquery --installed --queryformat %{name} %{from_repo}\n nodejs redis",
+                "dnf repoquery --installed --queryformat %{name} %{arch} %{from_repo}\n nodejs redis",
                 ExecResult {
                     exit_code: 0,
-                    stdout: "nodejs rhel-9-appstream\nredis epel\n".into(),
+                    stdout: "nodejs x86_64 rhel-9-appstream\nredis x86_64 epel\n".into(),
                     stderr: String::new(),
                 },
             );

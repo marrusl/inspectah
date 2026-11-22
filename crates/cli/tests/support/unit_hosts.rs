@@ -499,20 +499,19 @@ impl UnitHost {
                 )
                 .map(|nevra| format!("{nevra}\n"))
                 .collect();
-        // The query answers by name and the inspector keeps the first line
-        // for a name, so another architecture's repo is listed first: the
-        // `x86_64` package of that name is in the base image here, outside
-        // the added packages that answer is for.
+        // One `name arch repo` line per installed package. Another
+        // architecture's line comes first, as dnf may list it: the
+        // inspector keeps each architecture's own repo whatever the order.
         let source_repos: String = self
             .other_arches
             .iter()
-            .map(|o| format!("{} {}\n", o.name, o.repo))
+            .map(|o| format!("{} {} {}\n", o.name, o.arch, o.repo))
             .chain(self.packages.iter().map(|name| {
                 let repo = self
                     .package_repos
                     .get(name)
                     .map_or(PACKAGE_REPO, String::as_str);
-                format!("{name} {repo}\n")
+                format!("{name} x86_64 {repo}\n")
             }))
             .collect();
         let this = self.file(PRESET_FILE, &presets);

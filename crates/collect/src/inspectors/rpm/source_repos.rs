@@ -1,12 +1,20 @@
 //! Source repository attribution for RPM packages.
 //!
-//! Attributes each installed RPM to its source repository. Primary strategy uses
-//! `dnf repoquery --installed` in batches of 100. Fallback parses
-//! `rpm -qi` output for `From repo` / `Repository` lines.
+//! Attributes each installed RPM to its source repository, by `name.arch`.
+//! Primary strategy uses `dnf repoquery --installed` in batches of 100.
+//! Fallback parses `rpm -qi` output for `Name`, `Architecture` and
+//! `From repo` / `Repository` lines.
 //!
 //! `@System` and empty repo values are skipped — the downstream
 //! attention model correctly handles empty `source_repo` as Tier 3
 //! NeedsReview.
+//!
+//! A repo is never carried across architectures: a multilib host can
+//! have `libfoo.i686` from a repo and `libfoo.x86_64` from a local RPM
+//! path, and the repo of one says nothing about the other. A package whose
+//! record cannot be told apart from another architecture's, or whose
+//! architecture's records disagree, keeps an empty `source_repo`: its
+//! provenance is unknown, and nothing installs it by name.
 
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::repo::{
@@ -18,12 +26,74 @@ use std::collections::{HashMap, HashSet};
 /// Maximum number of package names per dnf/rpm invocation.
 const BATCH_SIZE: usize = 100;
 
+/// The `dnf repoquery --installed` format: name, arch and the repo dnf
+/// recorded at install time, one installed package per line.
+const SOURCE_REPO_QUERY_FORMAT: &str = "%{name} %{arch} %{from_repo}\n";
+
+/// What the queries recorded for one installed `name.arch`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Recorded {
+    /// Every record for it named this repo.
+    Repo(String),
+    /// Two records for it named different repos (installed versions from
+    /// different repos): which entry is which cannot be told.
+    Conflicting,
+}
+
+/// The repos the queries recorded, by `(name, arch)`.
+#[derive(Debug, Default)]
+struct SourceRepoRecords {
+    by_name_arch: HashMap<(String, String), Recorded>,
+    /// Names with a record that carried no architecture: such a record
+    /// cannot be told apart from another architecture's, so every entry
+    /// of the name is left unknown.
+    arch_unknown: HashSet<String>,
+}
+
+impl SourceRepoRecords {
+    /// Record `repo` for `name.arch`, or for `name` alone when `arch` is
+    /// `None`. A skipped value (`@System`, empty) records nothing.
+    fn record(&mut self, name: &str, arch: Option<&str>, repo: &str) {
+        if should_skip_repo(repo) {
+            return;
+        }
+        let Some(arch) = arch.filter(|a| !a.is_empty()) else {
+            self.arch_unknown.insert(name.to_string());
+            return;
+        };
+        self.by_name_arch
+            .entry((name.to_string(), arch.to_string()))
+            .and_modify(|seen| {
+                if *seen != Recorded::Repo(repo.to_string()) {
+                    *seen = Recorded::Conflicting;
+                }
+            })
+            .or_insert_with(|| Recorded::Repo(repo.to_string()));
+    }
+
+    /// The repo recorded for `pkg`'s own `name.arch`, or `None` when its
+    /// provenance is unknown.
+    fn repo_of(&self, pkg: &PackageEntry) -> Option<&str> {
+        if self.arch_unknown.contains(&pkg.name) {
+            return None;
+        }
+        match self
+            .by_name_arch
+            .get(&(pkg.name.clone(), pkg.arch.clone()))?
+        {
+            Recorded::Repo(repo) => Some(repo),
+            Recorded::Conflicting => None,
+        }
+    }
+}
+
 /// Populate `source_repo` on each package entry.
 ///
 /// 1. Collect unique package names.
 /// 2. Try `dnf repoquery --installed` (primary).
 /// 3. If dnf fails on the probe, fall back to `rpm -qi`.
-/// 4. Set `source_repo` on matching packages.
+/// 4. Set `source_repo` on each package from its own `name.arch` record
+///    ([`SourceRepoRecords::repo_of`]); one with none is left as it is.
 pub fn populate_source_repos(executor: &dyn Executor, packages: &mut [PackageEntry]) {
     let name_set: HashSet<String> = packages.iter().map(|p| p.name.clone()).collect();
     let mut names: Vec<&str> = name_set.iter().map(|s| s.as_str()).collect();
@@ -33,15 +103,15 @@ pub fn populate_source_repos(executor: &dyn Executor, packages: &mut [PackageEnt
         return;
     }
 
-    let mut repo_map: HashMap<String, String> = HashMap::new();
+    let mut records = SourceRepoRecords::default();
 
-    if !try_dnf_source_repo(executor, &names, &name_set, &mut repo_map) {
-        try_rpm_source_repo(executor, &names, &mut repo_map);
+    if !try_dnf_source_repo(executor, &names, &name_set, &mut records) {
+        try_rpm_source_repo(executor, &names, &name_set, &mut records);
     }
 
     for pkg in packages.iter_mut() {
-        if let Some(repo) = repo_map.get(&pkg.name) {
-            pkg.source_repo = repo.clone();
+        if let Some(repo) = records.repo_of(pkg) {
+            pkg.source_repo = repo.to_string();
         }
     }
 }
@@ -51,7 +121,8 @@ fn should_skip_repo(repo: &str) -> bool {
     repo.is_empty() || repo == "@System"
 }
 
-/// Primary strategy: `dnf repoquery --installed --queryformat "%{name} %{from_repo}\n"`.
+/// Primary strategy: `dnf repoquery --installed --queryformat
+/// "%{name} %{arch} %{from_repo}\n"`.
 ///
 /// Probes with the first package to detect whether dnf repoquery works.
 /// If the probe fails, returns false so the caller can try the fallback.
@@ -60,7 +131,7 @@ fn try_dnf_source_repo(
     executor: &dyn Executor,
     names: &[&str],
     name_set: &HashSet<String>,
-    repo_map: &mut HashMap<String, String>,
+    records: &mut SourceRepoRecords,
 ) -> bool {
     // Probe with the first package.
     let probe = executor.run(
@@ -69,14 +140,14 @@ fn try_dnf_source_repo(
             "repoquery",
             "--installed",
             "--queryformat",
-            "%{name} %{from_repo}\n",
+            SOURCE_REPO_QUERY_FORMAT,
             names[0],
         ],
     );
     if !probe.success() {
         return false;
     }
-    parse_dnf_repo_lines(&probe.stdout, name_set, repo_map);
+    parse_dnf_repo_lines(&probe.stdout, name_set, records);
 
     // Process remaining in batches.
     let mut i = 1;
@@ -86,13 +157,13 @@ fn try_dnf_source_repo(
             "repoquery",
             "--installed",
             "--queryformat",
-            "%{name} %{from_repo}\n",
+            SOURCE_REPO_QUERY_FORMAT,
         ];
         args.extend_from_slice(&names[i..end]);
 
         let result = executor.run("dnf", &args);
         if result.success() {
-            parse_dnf_repo_lines(&result.stdout, name_set, repo_map);
+            parse_dnf_repo_lines(&result.stdout, name_set, records);
         }
 
         i = end;
@@ -101,34 +172,40 @@ fn try_dnf_source_repo(
     true
 }
 
-/// Parse `dnf repoquery` output lines of the form `<name> <repo>`.
-fn parse_dnf_repo_lines(
-    stdout: &str,
-    name_set: &HashSet<String>,
-    repo_map: &mut HashMap<String, String>,
-) {
+/// Parse `dnf repoquery` output lines of the form `<name> <arch> <repo>`.
+///
+/// A line with an empty repo (`<name> <arch> `) records nothing; a line of
+/// two words, a name and a repo with no architecture, is a record that
+/// cannot be told apart from another architecture's.
+fn parse_dnf_repo_lines(stdout: &str, name_set: &HashSet<String>, records: &mut SourceRepoRecords) {
     for line in stdout.lines() {
-        let line = line.trim();
-        if let Some((name, repo)) = line.split_once(' ')
-            && name_set.contains(name)
-            && !should_skip_repo(repo)
-        {
-            repo_map
-                .entry(name.to_string())
-                .or_insert_with(|| repo.to_string());
+        let line = line.trim_start();
+        let mut fields = line.splitn(3, ' ');
+        let (Some(name), Some(second)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        if !name_set.contains(name) {
+            continue;
+        }
+        match fields.next() {
+            Some(repo) => records.record(name, Some(second), repo.trim()),
+            None => records.record(name, None, second.trim()),
         }
     }
 }
 
 /// Fallback strategy: `rpm -qi <pkg1> <pkg2> ...`.
 ///
-/// Parses multiline output looking for `Name :` and `From repo :` /
-/// `Repository :` lines. Correlates the repo value with the preceding
-/// name line.
+/// Parses multiline output looking for `Name :`, `Architecture :` and
+/// `From repo :` / `Repository :` lines, and correlates the repo value
+/// with the name and architecture of the record it is in. A record whose
+/// architecture is not printed before its repo cannot be told apart from
+/// another architecture's.
 fn try_rpm_source_repo(
     executor: &dyn Executor,
     names: &[&str],
-    repo_map: &mut HashMap<String, String>,
+    name_set: &HashSet<String>,
+    records: &mut SourceRepoRecords,
 ) {
     for chunk in names.chunks(BATCH_SIZE) {
         let mut args: Vec<&str> = vec!["-qi"];
@@ -140,20 +217,22 @@ fn try_rpm_source_repo(
         }
 
         let mut cur_name = String::new();
+        let mut cur_arch: Option<String> = None;
         for line in result.stdout.lines() {
-            if let Some(stripped) = line.strip_prefix("Name") {
-                if let Some((_, val)) = stripped.split_once(':') {
-                    cur_name = val.trim().to_string();
+            let Some((key, val)) = line.split_once(':') else {
+                continue;
+            };
+            let val = val.trim();
+            match key.trim() {
+                "Name" => {
+                    cur_name = val.to_string();
+                    cur_arch = None;
                 }
-            } else if (line.starts_with("From repo") || line.starts_with("Repository"))
-                && let Some((_, val)) = line.split_once(':')
-            {
-                let repo = val.trim();
-                if !cur_name.is_empty() && !should_skip_repo(repo) {
-                    repo_map
-                        .entry(cur_name.clone())
-                        .or_insert_with(|| repo.to_string());
+                "Architecture" => cur_arch = Some(val.to_string()),
+                "From repo" | "Repository" if name_set.contains(&cur_name) => {
+                    records.record(&cur_name, cur_arch.as_deref(), val);
                 }
+                _ => {}
             }
         }
     }
@@ -303,11 +382,28 @@ mod tests {
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::PackageState;
 
-    /// Helper: build a PackageEntry with just the name set.
+    /// The `dnf repoquery` query, before the package names.
+    const QUERY: &str = "dnf repoquery --installed --queryformat %{name} %{arch} %{from_repo}\n";
+
+    /// Helper: build an `x86_64` PackageEntry with just the name set.
     fn pkg(name: &str) -> PackageEntry {
+        pkg_arch(name, "x86_64")
+    }
+
+    /// Helper: build a PackageEntry with the name and arch set.
+    fn pkg_arch(name: &str, arch: &str) -> PackageEntry {
         PackageEntry {
             name: name.into(),
+            arch: arch.into(),
             state: PackageState::Added,
+            ..Default::default()
+        }
+    }
+
+    fn ok(stdout: &str) -> ExecResult {
+        ExecResult {
+            stdout: stdout.into(),
+            exit_code: 0,
             ..Default::default()
         }
     }
@@ -316,17 +412,17 @@ mod tests {
     fn test_populate_via_dnf_repoquery() {
         let exec = MockExecutor::new()
             .with_command(
-                "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
+                &format!("{QUERY} bash"),
                 ExecResult {
-                    stdout: "bash baseos\n".into(),
+                    stdout: "bash x86_64 baseos\n".into(),
                     exit_code: 0,
                     ..Default::default()
                 },
             )
             .with_command(
-                "dnf repoquery --installed --queryformat %{name} %{from_repo}\n glibc httpd",
+                &format!("{QUERY} glibc httpd"),
                 ExecResult {
-                    stdout: "glibc baseos\nhttpd appstream\n".into(),
+                    stdout: "glibc x86_64 baseos\nhttpd x86_64 appstream\n".into(),
                     exit_code: 0,
                     ..Default::default()
                 },
@@ -364,9 +460,9 @@ mod tests {
     #[test]
     fn test_dnf_system_repo_skipped() {
         let exec = MockExecutor::new().with_command(
-            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
+            &format!("{QUERY} bash"),
             ExecResult {
-                stdout: "bash @System\n".into(),
+                stdout: "bash x86_64 @System\n".into(),
                 exit_code: 0,
                 ..Default::default()
             },
@@ -384,9 +480,9 @@ mod tests {
     #[test]
     fn test_dnf_empty_repo_skipped() {
         let exec = MockExecutor::new().with_command(
-            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
+            &format!("{QUERY} bash"),
             ExecResult {
-                stdout: "bash \n".into(),
+                stdout: "bash x86_64 \n".into(),
                 exit_code: 0,
                 ..Default::default()
             },
@@ -403,7 +499,7 @@ mod tests {
         // dnf repoquery fails (exit code 1)
         let exec = MockExecutor::new()
             .with_command(
-                "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
+                &format!("{QUERY} bash"),
                 ExecResult {
                     exit_code: 1,
                     ..Default::default()
@@ -416,10 +512,12 @@ mod tests {
 Name        : bash
 Version     : 5.2.26
 Release     : 3.el9
+Architecture: x86_64
 From repo   : baseos
 Name        : httpd
 Version     : 2.4.57
 Release     : 5.el9
+Architecture: x86_64
 From repo   : appstream
 "
                     .into(),
@@ -454,7 +552,7 @@ From repo   : appstream
         // dnf fails, rpm -qi uses "Repository" instead of "From repo"
         let exec = MockExecutor::new()
             .with_command(
-                "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
+                &format!("{QUERY} bash"),
                 ExecResult {
                     exit_code: 127,
                     ..Default::default()
@@ -466,6 +564,7 @@ From repo   : appstream
                     stdout: "\
 Name        : bash
 Version     : 5.2.26
+Architecture: x86_64
 Repository  : baseos
 "
                     .into(),
@@ -484,7 +583,7 @@ Repository  : baseos
     fn test_empty_when_both_fail() {
         let exec = MockExecutor::new()
             .with_command(
-                "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
+                &format!("{QUERY} bash"),
                 ExecResult {
                     exit_code: 1,
                     ..Default::default()
@@ -519,9 +618,9 @@ Repository  : baseos
     fn test_dnf_unknown_package_in_output_ignored() {
         // dnf output includes a package name not in our set — should be ignored
         let exec = MockExecutor::new().with_command(
-            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
+            &format!("{QUERY} bash"),
             ExecResult {
-                stdout: "bash baseos\nunknown-pkg epel\n".into(),
+                stdout: "bash x86_64 baseos\nunknown-pkg x86_64 epel\n".into(),
                 exit_code: 0,
                 ..Default::default()
             },
@@ -534,23 +633,93 @@ Repository  : baseos
         // "unknown-pkg" is silently dropped because it's not in name_set
     }
 
+    /// Each architecture keeps its own repo, whichever dnf lists first:
+    /// `libvendor.i686` came from `appstream` and `libvendor.x86_64` from a
+    /// local RPM path.
     #[test]
-    fn test_duplicate_packages_first_repo_wins() {
-        // Two packages with the same name — first repo found wins
+    fn each_arch_keeps_its_own_repo() {
         let exec = MockExecutor::new().with_command(
-            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
-            ExecResult {
-                stdout: "bash baseos\nbash appstream\n".into(),
-                exit_code: 0,
-                ..Default::default()
-            },
+            &format!("{QUERY} libvendor"),
+            ok("libvendor i686 appstream\nlibvendor x86_64 @commandline\n"),
         );
 
-        let mut packages = vec![pkg("bash"), pkg("bash")];
+        let mut packages = vec![
+            pkg_arch("libvendor", "x86_64"),
+            pkg_arch("libvendor", "i686"),
+        ];
         populate_source_repos(&exec, &mut packages);
 
-        // Both should get "baseos" (first seen wins in repo_map)
-        assert!(packages.iter().all(|p| p.source_repo == "baseos"));
+        assert_eq!(packages[0].source_repo, "@commandline");
+        assert_eq!(packages[1].source_repo, "appstream");
+    }
+
+    /// What cannot be told apart is unknown: two records for one
+    /// `name.arch` that name different repos, and a record with no
+    /// architecture, which could be any entry of its name. A repeated
+    /// record that agrees is kept.
+    #[test]
+    fn a_record_that_cannot_be_told_apart_leaves_the_repo_unknown() {
+        let cases: [(&str, &str, &str); 4] = [
+            (
+                "conflicting",
+                "bash x86_64 baseos\nbash x86_64 appstream\n",
+                "",
+            ),
+            (
+                "agreeing",
+                "bash x86_64 baseos\nbash x86_64 baseos\n",
+                "baseos",
+            ),
+            ("no arch", "bash baseos\n", ""),
+            (
+                "no arch beside an arch",
+                "bash x86_64 baseos\nbash appstream\n",
+                "",
+            ),
+        ];
+        for (case, stdout, expected) in cases {
+            let exec = MockExecutor::new().with_command(&format!("{QUERY} bash"), ok(stdout));
+            let mut packages = vec![pkg("bash")];
+            populate_source_repos(&exec, &mut packages);
+            assert_eq!(packages[0].source_repo, expected, "{case}");
+        }
+    }
+
+    /// The `rpm -qi` fallback keeps each architecture's repo, and a record
+    /// whose architecture it does not print leaves its name unknown.
+    #[test]
+    fn the_rpm_fallback_keeps_each_arch_apart() {
+        let failed = ExecResult {
+            exit_code: 1,
+            ..Default::default()
+        };
+        let exec = MockExecutor::new()
+            .with_command(&format!("{QUERY} glibc"), failed)
+            .with_command(
+                "rpm -qi glibc libvendor",
+                ok("\
+Name        : glibc
+Version     : 2.34
+From repo   : baseos
+Name        : libvendor
+Architecture: i686
+From repo   : appstream
+Name        : libvendor
+Architecture: x86_64
+From repo   : @commandline
+"),
+            );
+
+        let mut packages = vec![
+            pkg("glibc"),
+            pkg_arch("libvendor", "x86_64"),
+            pkg_arch("libvendor", "i686"),
+        ];
+        populate_source_repos(&exec, &mut packages);
+
+        assert_eq!(packages[0].source_repo, "", "glibc's record has no arch");
+        assert_eq!(packages[1].source_repo, "@commandline");
+        assert_eq!(packages[2].source_repo, "appstream");
     }
 
     // --- normalize_source_repos tests ---

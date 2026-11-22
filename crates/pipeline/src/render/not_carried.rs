@@ -42,12 +42,14 @@
 //! or no repo at all serves, is not carried by default ([`owner_hold`]):
 //! it is [`AutoCarriage::HeldOwner`], excluded by default like an
 //! [`AutoCarriage::Unneeded`] package, and listed with its reason. So is
-//! one whose closure may need a package the host did not have. The
-//! operator can include it in refine; it then installs as any auto package
-//! the operator includes does. "May pull in" is its whole recorded
+//! one whose closure may need a package the host did not have, and one
+//! that may pull in a package from a repo this export does not carry,
+//! which follows refine's repo selection ([`hold_owners_losing_a_repo`]).
+//! The operator can include it in refine; it then installs as any auto
+//! package the operator includes does. "May pull in" is its whole recorded
 //! closure, every provider and branch included, and a requirement the
 //! collector could not read counts as pulling in every added package.
-//! Each of the three kinds, once excluded (by the default or by an
+//! Each of the four kinds, once excluded (by the default or by an
 //! operator), is listed as not carried.
 //!
 //! **A fleet keeps only leaves.** The aggregate merge drops every package
@@ -83,6 +85,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
+use inspectah_core::types::repo::{RepoTier, effective_definition, parse_repo_sections, repo_tier};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::units::{UnitName, UnitState, UnitStateChange};
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -315,6 +318,11 @@ pub enum OwnerHold {
     /// may need a package the host did not have
     /// (`RpmSection::unresolved_requirements`).
     Unresolved,
+    /// It, or a package installing it may pull in, was installed from a
+    /// repo the host enabled from a captured `.repo` file, and this export
+    /// does not carry that repo enabled ([`repos_lost_in_export`]): the
+    /// operator excluded it in refine, or its file is not staged.
+    RepoExcluded,
 }
 
 impl OwnerHold {
@@ -324,6 +332,7 @@ impl OwnerHold {
             Self::DisabledRepo => "needs a repo disabled on the host",
             Self::NoRepo => "needs a package no enabled repo serves",
             Self::Unresolved => "may need a package the host did not have",
+            Self::RepoExcluded => "needs a package from a repo excluded in this export",
         }
     }
 }
@@ -459,6 +468,7 @@ fn unit_owner_holds(snap: &InspectionSnapshot) -> HashMap<String, Option<OwnerHo
     let repos = InstallRepos::of(snap);
     let existing = ExistingHandling::of(rpm, &repos);
     let owners = enabled_units_by_owner(snap);
+    let lost = repos_lost_in_export(rpm, &repos);
     let added: HashMap<String, &PackageEntry> = rpm
         .packages_added
         .iter()
@@ -470,7 +480,7 @@ fn unit_owner_holds(snap: &InspectionSnapshot) -> HashMap<String, Option<OwnerHo
         .map(|pkg| (format!("{}.{}", pkg.name, pkg.arch), pkg))
         .filter(|(id, _)| auto.contains(id.as_str()) && !leaves.contains(id.as_str()))
         .map(|(id, pkg)| {
-            let hold = owner_hold(rpm, &repos, &added, pkg, &id);
+            let hold = owner_hold(rpm, &repos, &lost, &added, pkg, &id);
             (id, hold)
         })
         .collect()
@@ -493,7 +503,16 @@ fn unit_owner_holds(snap: &InspectionSnapshot) -> HashMap<String, Option<OwnerHo
 /// host did not have (`unresolved_requirements`: one no installed package
 /// satisfies in some branch, or one the collector could not read), the
 /// owner is [`OwnerHold::Unresolved`] (Mark Russell, 2026-11-21).
-/// [`OwnerHold::DisabledRepo`] wins over the others: it is the one the
+///
+/// When the owner, or a package in its closure, was installed from a repo
+/// this export does not carry enabled ([`repos_lost_in_export`]), the
+/// owner is [`OwnerHold::RepoExcluded`] (Mark Russell, 2026-11-21). The
+/// export decides it, so it follows refine's current selection: excluding
+/// a custom repo holds every owner that may pull in one of its packages,
+/// as one operand of an `or` among them, and including the repo again
+/// carries them. It wins over the
+/// others: until the repo is back, including the owner cannot make it
+/// installable. [`OwnerHold::DisabledRepo`] comes next: it is the one the
 /// operator can act on by including the owner in refine.
 ///
 /// A snapshot with no recorded closure for the owner, a hand-built one,
@@ -501,11 +520,22 @@ fn unit_owner_holds(snap: &InspectionSnapshot) -> HashMap<String, Option<OwnerHo
 fn owner_hold(
     rpm: &RpmSection,
     repos: &InstallRepos,
+    lost: &HashSet<String>,
     added: &HashMap<String, &PackageEntry>,
     pkg: &PackageEntry,
     id: &str,
 ) -> Option<OwnerHold> {
     let no_uploads = VerifiedUploads::new();
+    let closure = possible_closure(rpm, id);
+    let loses_its_repo = |entry: &PackageEntry| lost.contains(entry.source_repo.as_str());
+    if loses_its_repo(pkg)
+        || closure
+            .iter()
+            .filter_map(|dep| added.get(dep))
+            .any(|entry| loses_its_repo(entry))
+    {
+        return Some(OwnerHold::RepoExcluded);
+    }
     if matches!(
         route_for(rpm, repos, pkg, &no_uploads),
         PackageRoute::DisabledRepo(_)
@@ -518,7 +548,6 @@ fn owner_hold(
         .flatten()
         .map(String::as_str)
         .collect();
-    let closure = possible_closure(rpm, id);
     let mut hold = (unresolved.contains(id)
         || closure.iter().any(|dep| unresolved.contains(dep.as_str())))
     .then_some(OwnerHold::Unresolved);
@@ -533,6 +562,73 @@ fn owner_hold(
         }
     }
     hold
+}
+
+/// The repos a package from a captured custom repo cannot install from in
+/// this export, by section spelling: each section that a captured `.repo`
+/// file other than a default repo file defines, that the source host's
+/// dnf had enabled, and whose definition among the files the build has
+/// when it installs ([`InstallRepos::effective`]) is missing or disabled.
+///
+/// A distro repo, and a section a default repo file also defines, is
+/// never in it: the base image enables its own. Neither is a section the
+/// host had disabled, which [`OwnerHold::DisabledRepo`] covers. A repo is
+/// lost when the operator excludes it in refine and its file goes with it,
+/// or when the stager withholds the file; a file another included section
+/// keeps still carries the repo, and dnf can still fetch from it.
+fn repos_lost_in_export(rpm: &RpmSection, repos: &InstallRepos) -> HashSet<String> {
+    let host_files = || {
+        rpm.repo_files
+            .iter()
+            .map(|f| (f.path.as_str(), f.content.as_str()))
+    };
+    let default_ids: HashSet<String> = rpm
+        .repo_files
+        .iter()
+        .filter(|f| f.is_default_repo)
+        .flat_map(|f| parse_repo_sections(&f.content))
+        .map(|sec| sec.id.as_str().to_owned())
+        .collect();
+    rpm.repo_files
+        .iter()
+        .filter(|f| !f.is_default_repo)
+        .flat_map(|f| parse_repo_sections(&f.content))
+        .map(|sec| sec.id)
+        .filter(|id| {
+            !default_ids.contains(id.as_str())
+                && !matches!(repo_tier(id.as_str()), RepoTier::Distro)
+        })
+        .filter(|id| effective_definition(host_files(), id).is_some_and(|def| def.enabled))
+        .filter(|id| !repos.effective(id).is_some_and(|def| def.enabled))
+        .map(|id| id.as_str().to_owned())
+        .collect()
+}
+
+/// Exclude every included unit owner this export holds because it may
+/// pull in a package whose repo the export does not carry
+/// ([`OwnerHold::RepoExcluded`]), except the `name.arch` ids in `by_hand`,
+/// which the operator included explicitly.
+///
+/// The scan's defaults exclude such an owner with the other held ones
+/// ([`apply_scan_package_defaults`]). Refine sets its defaults when it
+/// opens a snapshot, before the operator excludes any repo, so it runs
+/// this over every projection: the owner is held while the repo is
+/// excluded and carried again once it is back. An owner the operator
+/// included by hand installs as any held owner they include does.
+pub fn hold_owners_losing_a_repo(snap: &mut InspectionSnapshot, by_hand: &HashSet<String>) {
+    let held: HashSet<String> = unit_owner_holds(snap)
+        .into_iter()
+        .filter(|(id, hold)| *hold == Some(OwnerHold::RepoExcluded) && !by_hand.contains(id))
+        .map(|(id, _)| id)
+        .collect();
+    let Some(rpm) = snap.rpm.as_mut() else {
+        return;
+    };
+    for pkg in &mut rpm.packages_added {
+        if pkg.disposition.is_included() && held.contains(&format!("{}.{}", pkg.name, pkg.arch)) {
+            pkg.disposition = FindingKind::excluded();
+        }
+    }
 }
 
 /// Which packages a fleet merge provably left out of the image, by name.
@@ -1647,6 +1743,91 @@ mod tests {
             names(&leaf_tree_only).is_empty(),
             "the leaf tree leaves out user-installed dependencies"
         );
+    }
+
+    /// Which repos a package installed by name loses in an export: a
+    /// host-enabled custom section the build's repo files no longer carry
+    /// enabled, and nothing else.
+    #[test]
+    fn a_repo_is_lost_only_when_the_export_drops_a_host_enabled_custom_section() {
+        use inspectah_core::types::rpm::RepoFile;
+        const VENDOR: &str = "[vendor]\nbaseurl=https://example.invalid/v\nenabled=1\n";
+        const OTHER: &str = "[other]\nbaseurl=https://example.invalid/o\nenabled=1\n";
+        let file = |name: &str, content: &str, include: bool, default: bool| RepoFile {
+            path: format!("/etc/yum.repos.d/{name}"),
+            content: content.into(),
+            is_default_repo: default,
+            disposition: FindingKind::from_bool(include),
+            ..Default::default()
+        };
+        let both = format!("{VENDOR}{OTHER}");
+        let cases: Vec<(&str, Vec<RepoFile>, &[&str])> = vec![
+            (
+                "carried",
+                vec![file("vendor.repo", VENDOR, true, false)],
+                &[],
+            ),
+            (
+                "excluded beside another custom file",
+                vec![
+                    file("vendor.repo", VENDOR, false, false),
+                    file("other.repo", OTHER, true, false),
+                ],
+                &["vendor"],
+            ),
+            (
+                "excluded, nothing else staged",
+                vec![file("vendor.repo", VENDOR, false, false)],
+                &["vendor"],
+            ),
+            (
+                "disabled on the host",
+                vec![
+                    file(
+                        "vendor.repo",
+                        &VENDOR.replace("enabled=1", "enabled=0"),
+                        false,
+                        false,
+                    ),
+                    file("other.repo", OTHER, true, false),
+                ],
+                &[],
+            ),
+            (
+                "a default repo file defines it too",
+                vec![
+                    file("vendor.repo", VENDOR, false, false),
+                    file("redhat.repo", VENDOR, false, true),
+                ],
+                &[],
+            ),
+            (
+                "a distro repo",
+                vec![file(
+                    "local.repo",
+                    &VENDOR.replace("[vendor]", "[appstream]"),
+                    false,
+                    false,
+                )],
+                &[],
+            ),
+            (
+                "a file another section keeps",
+                vec![file("both.repo", &both, true, false)],
+                &[],
+            ),
+        ];
+        for (case, repo_files, expected) in cases {
+            let mut snap = InspectionSnapshot::new();
+            snap.rpm = Some(RpmSection {
+                repo_files,
+                ..Default::default()
+            });
+            let rpm = snap.rpm.as_ref().expect("rpm section");
+            let lost = repos_lost_in_export(rpm, &InstallRepos::of(&snap));
+            let expected: HashSet<String> = expected.iter().map(|s| s.to_string()).collect();
+            assert_eq!(lost, expected, "{case}");
+        }
     }
 
     /// The not-carried notice: absent with no unit owners, singular for

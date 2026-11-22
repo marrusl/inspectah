@@ -3274,7 +3274,45 @@ impl RefineSession {
         // control off the annotation it sets.
         inspectah_pipeline::render::repo_enabling::demote_unserved_repo_enabling(&mut snap);
 
+        // A unit owner carried by default that may pull in a package from
+        // a repo this projection excludes is held on it, and carried again
+        // once the repo is back. The include decisions it reads are the
+        // projection's, as above; one the operator made by hand stands.
+        inspectah_pipeline::render::not_carried::hold_owners_losing_a_repo(
+            &mut snap,
+            &self.packages_included_by_hand(),
+        );
+
         snap
+    }
+
+    /// The `name.arch` ids of the packages whose last `SetInclude` in the
+    /// active op stack includes them: the ones the operator included by
+    /// hand.
+    fn packages_included_by_hand(&self) -> HashSet<String> {
+        let mut included = HashSet::new();
+        for entry in &self.timeline[..self.cursor] {
+            let ops: &[RefinementOp] = match entry {
+                TimelineEntry::Op(op) => std::slice::from_ref(op),
+                TimelineEntry::Batch { ops } => ops.as_slice(),
+                TimelineEntry::View(_) => continue,
+            };
+            for op in ops {
+                if let RefinementOp::SetInclude {
+                    item_id: ItemId::Package { name, arch },
+                    include,
+                } = op
+                {
+                    let id = canonical_package_id(name, arch);
+                    if *include {
+                        included.insert(id);
+                    } else {
+                        included.remove(&id);
+                    }
+                }
+            }
+        }
+        included
     }
 
     /// Compute the set of section IDs that are currently excluded based on the

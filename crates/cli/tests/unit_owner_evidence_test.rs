@@ -8,10 +8,12 @@
 //!
 //! - An enabled template instance credits its template's owner.
 //! - An owner that needs a repo the image does not enable, its own, a
-//!   dependency's (another architecture of a base-image package among
-//!   them), or none, or that may need a package the host did not have,
-//!   is not carried by default and is listed with the reason; included,
-//!   it installs as released. A carried owner's dependency keeps its
+//!   dependency's (another architecture of a base-image package, or of a
+//!   package from a repo, among them), or none, or that may need a
+//!   package the host did not have, is not carried by default and is
+//!   listed with the reason; included, it installs as released. So is
+//!   one that needs a package from a repo refine excludes, while it is
+//!   excluded. A carried owner's dependency keeps its
 //!   recorded `systemctl disable`, guarded.
 //! - An auto package the operator includes brings its dependencies: their
 //!   unit commands survive, guarded. It installs as released.
@@ -64,12 +66,13 @@ use inspectah_pipeline::render::not_carried::{
 use inspectah_pipeline::render::tarball::create_tarball;
 use inspectah_pipeline::validate::validate;
 use inspectah_refine::session::RefineSession;
+use inspectah_refine::types::{ItemId, RefinementOp};
 
 use crate::not_carried_parity_test::{
     Surfaces, export_session, export_warnings, ok, projected_not_carried, scan_export, set_package,
     surfaces_of, unpack,
 };
-use crate::unit_hosts::{UnitHost, acts, guarded_commands, guards};
+use crate::unit_hosts::{UnitHost, acts, guarded_commands, guards, systemctl_instructions};
 
 /// The repos the hosts enable.
 const ENABLED_REPOS: &str = "repo id    repo name\nappstream  AppStream\nbaseos     BaseOS\n";
@@ -95,10 +98,16 @@ fn base_host() -> UnitHost {
 /// `validate`, the baseline recorded, `redact`, then the dnf cache pass
 /// that marks a package from a disabled repo.
 fn collected(host: UnitHost) -> InspectionSnapshot {
+    collected_with_repos(host, ENABLED_REPOS)
+}
+
+/// [`collected`] on a host whose `dnf repolist --enabled` prints
+/// `enabled_repos`.
+fn collected_with_repos(host: UnitHost, enabled_repos: &str) -> InspectionSnapshot {
     let baseline = host.baseline();
     let exec: MockExecutor = host
         .build()
-        .with_command("dnf repolist --enabled -q", ok(ENABLED_REPOS))
+        .with_command("dnf repolist --enabled -q", ok(enabled_repos))
         .with_command_prefix("dnf repoquery --available", ok(""))
         .with_command("find /var/cache/dnf -name *.rpm -type f", ok(""));
     let inspectors: Vec<Box<dyn Inspector>> = vec![
@@ -470,6 +479,193 @@ fn another_arch_of_a_base_image_package_holds_its_owner() {
             "{repo}"
         );
         assert_agent_held(&run, repo, reason);
+    }
+}
+
+/// Neither architecture of `libvendor` is in the base image. `agent`
+/// requires `libvendor.so.1()(64bit)`, which only `libvendor.x86_64`
+/// provides, installed from a local RPM path; `libvendor.i686`, from
+/// `appstream`, provides only the 32-bit `libvendor.so.1`, and dnf lists
+/// its repo first. Source attribution is per `name.arch`, so the 64-bit
+/// library keeps `@commandline` and `agent` is held: no line names it and
+/// no command enables its unit.
+#[test]
+fn a_sibling_archs_repo_never_vouches_for_a_package() {
+    let host = agent_host(|h| {
+        h.package("agent")
+            .package_from("libvendor", "@commandline")
+            .provides("libvendor", "libvendor.so.1()(64bit)")
+            .package_arch("libvendor", "i686", "appstream", &["libvendor.so.1"])
+            .requires("agent", &["libvendor.so.1()(64bit)"])
+    });
+    let run = exports(host);
+    let rpm = run.snapshot.rpm.as_ref().expect("the rpm section");
+    let repo_of = |arch: &str| {
+        rpm.packages_added
+            .iter()
+            .find(|p| p.name == "libvendor" && p.arch == arch)
+            .map(|p| p.source_repo.as_str())
+    };
+    assert_eq!(repo_of("x86_64"), Some("@commandline"), "{rpm:?}");
+    assert_eq!(repo_of("i686"), Some("appstream"), "{rpm:?}");
+    assert_eq!(
+        rpm.dep_closures.as_ref().expect("closures")["agent.x86_64"],
+        ["libvendor.x86_64"]
+    );
+    assert_agent_held(&run, "64-bit libvendor from a local RPM", NO_REPO_HOLD);
+    assert_no_agent_command(&run);
+}
+
+/// Neither path runs any `systemctl` command for `agent.service`, plain or
+/// guarded: nothing installs `agent`.
+fn assert_no_agent_command(run: &Exports) {
+    for (label, surfaces) in &run.paths {
+        assert!(
+            !names_agent_unit(&surfaces.containerfile),
+            "{label}: no command names agent.service:\n{}",
+            surfaces.containerfile
+        );
+    }
+}
+
+/// Whether any `systemctl` instruction, plain or guarded, names
+/// `agent.service`.
+fn names_agent_unit(containerfile: &str) -> bool {
+    systemctl_instructions(containerfile)
+        .iter()
+        .any(|i| i.contains("agent.service"))
+}
+
+/// The host's enabled repos, the custom `vendor` among them.
+const VENDOR_ENABLED_REPOS: &str =
+    "repo id    repo name\nappstream  AppStream\nbaseos     BaseOS\nvendor     Vendor\n";
+
+/// The enabled custom repo `vendor`, carried with a source.
+const VENDOR_REPO: &str = "[vendor]\nname=Vendor\nbaseurl=https://example.invalid/vendor\n\
+     enabled=1\ngpgcheck=0\n";
+
+/// The reason a unit owner is held when a package it may pull in loses
+/// its repo in the export.
+const REPO_EXCLUDED_HOLD: &str = "needs a package from a repo excluded in this export";
+
+/// Where the host keeps the `vendor` repo.
+const VENDOR_REPO_PATH: &str = "/etc/yum.repos.d/vendor.repo";
+
+/// Excludes the configuration file at `path` through refine's toggle.
+fn exclude_config(session: &mut RefineSession, path: &str) {
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config { path: path.into() },
+            include: false,
+        })
+        .unwrap_or_else(|e| panic!("exclude config {path}: {e}"));
+}
+
+/// Sets the repo `id` to `include` through refine's repo toggle.
+fn set_repo(session: &mut RefineSession, id: &str, include: bool) {
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Repo { path: id.into() },
+            include,
+        })
+        .unwrap_or_else(|e| panic!("set repo {id} include={include}: {e}"));
+}
+
+/// `agent`, from `appstream`, requires `(vendor-runtime or helper)`. The
+/// host never had `vendor-runtime`; it has `helper`, which only the
+/// enabled custom repo `vendor` serves. With `helper` included and then
+/// `vendor` excluded in refine, along with the config entry that would
+/// still stage `vendor.repo` (a file either writer stages ships, and dnf
+/// can then fetch from it),
+/// neither operand can be fetched, so `agent` is held on that export,
+/// opened from the collected snapshot or the scan tarball, and on the
+/// scan path's render of what refine exports: only `app` is installed, no
+/// command names `agent.service`, and the notice gives the reason.
+/// Including `vendor` again carries `agent`.
+#[test]
+fn excluding_a_dependencys_repo_holds_its_owner() {
+    let host = agent_host(|h| {
+        h.file(VENDOR_REPO_PATH, VENDOR_REPO)
+            .package("agent")
+            .package_from("helper", "vendor")
+            .requires("agent", &["(vendor-runtime or helper)"])
+    });
+    let collected = collected_with_repos(host, VENDOR_ENABLED_REPOS);
+    let mut scanned = collected.clone();
+    apply_scan_package_defaults(&mut scanned);
+    let (block_line, notice_entry, _) = held_agent_surfaces(REPO_EXCLUDED_HOLD);
+
+    for (opened, snapshot) in [("collected", collected), ("scan tarball", scanned)] {
+        let mut session = RefineSession::new(snapshot);
+        // Refine leaves a dependency to dnf by default, and the repo
+        // toggle refuses a repo with nothing included: the operator
+        // includes `helper` first.
+        let helper_included = session
+            .snapshot_projected()
+            .rpm
+            .iter()
+            .flat_map(|rpm| &rpm.packages_added)
+            .any(|p| p.name == "helper" && p.disposition.is_included());
+        if !helper_included {
+            set_package(&mut session, "helper", "x86_64", true);
+        }
+        let carried = surfaces_of(&session);
+        assert!(
+            carried.install_names().iter().any(|n| n == "agent"),
+            "{opened}: vendor included, agent is carried:\n{}",
+            carried.containerfile
+        );
+
+        set_repo(&mut session, "vendor", false);
+        exclude_config(&mut session, VENDOR_REPO_PATH);
+        let refine = surfaces_of(&session);
+        let scan_dir = tempfile::tempdir().expect("tempdir");
+        scan_export(session.snapshot_projected(), scan_dir.path());
+        let scan = Surfaces::read(scan_dir.path());
+        for (label, surfaces) in [("refine", &refine), ("scan", &scan)] {
+            let ctx = format!("{opened}, {label}");
+            assert_eq!(
+                surfaces.install_names(),
+                ["app"],
+                "{ctx}: the install line is beta.6's:\n{}",
+                surfaces.containerfile
+            );
+            assert!(
+                !names_agent_unit(&surfaces.containerfile),
+                "{ctx}: no command names agent.service:\n{}",
+                surfaces.containerfile
+            );
+            assert!(
+                surfaces.not_carried_block().contains(&block_line.as_str()),
+                "{ctx}: {block_line:?}:\n{}",
+                surfaces.containerfile
+            );
+        }
+        let warnings = export_warnings(&session);
+        assert!(
+            warnings.iter().any(|w| w.text().contains(&notice_entry)),
+            "{opened}: {warnings:?}"
+        );
+
+        set_repo(&mut session, "vendor", true);
+        let restored = surfaces_of(&session);
+        assert_eq!(
+            restored.install_names(),
+            carried.install_names(),
+            "{opened}: including vendor again carries agent:\n{}",
+            restored.containerfile
+        );
+        assert!(
+            acts(&restored.containerfile, "enable", "agent.service"),
+            "{opened}:\n{}",
+            restored.containerfile
+        );
+        assert!(
+            !export_warnings(&session)
+                .iter()
+                .any(|w| w.text().contains(REPO_EXCLUDED_HOLD)),
+            "{opened}"
+        );
     }
 }
 
