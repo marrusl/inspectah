@@ -647,6 +647,136 @@ fn t6_a_repo_url_credential_reaches_no_snapshot_view_or_export() {
     }
 }
 
+/// A userinfo runs through every character RFC 3986 allows in it, so a
+/// comma in a `mirrorlist=` password, a single-URL option, does not end
+/// it, and neither does one in a URL of a `baseurl=` list. No part of
+/// either password reaches the snapshot JSON, the scan tree, refine's
+/// view or export, or a fleet aggregate and its config alternatives.
+#[test]
+fn t6_a_comma_in_a_url_password_leaks_nothing() {
+    const CRED: &str = "/etc/yum.repos.d/cred.repo";
+    let content = |list: &str| {
+        format!(
+            "[cred]\nname=Credentialed\nmirrorlist=https://build:orchid,92@repo.example.invalid/{list}\n\
+             baseurl=https://a.example.invalid/r,https://u:tulip,17@b.example.invalid/r\n\
+             enabled=1\ngpgcheck=0\n"
+        )
+    };
+    let host = |list: &str| {
+        base_host()
+            .file(CRED, &content(list))
+            .package_from("cred-tool", "cred")
+    };
+    let snap = scan_finished(host("list"));
+    let stored = &rpm(&snap)
+        .repo_files
+        .iter()
+        .find(|f| f.path == CRED)
+        .unwrap()
+        .content;
+    assert_eq!(
+        stored,
+        "[cred]\nname=Credentialed\nmirrorlist=https://REDACTED@repo.example.invalid/list\n\
+         baseurl=https://a.example.invalid/r,https://REDACTED@b.example.invalid/r\n\
+         enabled=1\ngpgcheck=0\n"
+    );
+
+    let loaded = reload(&snap);
+    let mut all = vec![(
+        "snapshot".to_string(),
+        serde_json::to_vec(&snap).expect("the snapshot serializes"),
+    )];
+    all.extend(tree_files(render_export(&loaded).path()));
+    all.extend(refine_artifacts(&session(&loaded)));
+
+    // A fleet whose hosts' copies differ: one representative, and the
+    // other copy as a config alternative.
+    let (merged, _) = merge_snapshots(
+        vec![named(host("list"), "h1"), named(host("other"), "h2")],
+        None,
+        None,
+    )
+    .unwrap();
+    let alternatives = merged
+        .config
+        .iter()
+        .flat_map(|c| &c.files)
+        .filter(|f| f.path == CRED)
+        .count();
+    assert_eq!(alternatives, 2, "two config alternatives");
+    all.push((
+        "aggregate".to_string(),
+        serde_json::to_vec(&merged).expect("the aggregate serializes"),
+    ));
+    all.extend(tree_files(render_export(&merged).path()));
+    all.extend(refine_artifacts(&session(&reload(&merged))));
+    for secret in ["orchid", "tulip", ",92@", ",17@"] {
+        assert_absent_from(secret, &all);
+    }
+}
+
+/// A `gpgkey=` reference that names no readable key is named in the
+/// scan's warning, which the snapshot holds before redaction runs, with
+/// its credential replaced: `file://keys:pass@host/KEY` reads as the
+/// path `keys:pass@host/KEY`, and a reference dnf's list split cut out
+/// of a userinfo with a comma in it is named `REDACTED` whole. No part of
+/// either credential reaches the snapshot JSON and its warnings, the scan
+/// tree's reports, or refine's view and export.
+#[test]
+fn t6_a_failed_key_reference_is_named_without_its_credential() {
+    const CRED: &str = "/etc/yum.repos.d/cred.repo";
+    const SPLIT: &str = "/etc/yum.repos.d/split.repo";
+    let host = base_host()
+        .file(
+            CRED,
+            "[cred]\nname=Credentialed\nbaseurl=https://repo.example.invalid/rpm/\nenabled=1\n\
+             gpgkey=file://keys:orchid92@keys.example.invalid/RPM-GPG-KEY\n",
+        )
+        .file(
+            SPLIT,
+            "[split]\nbaseurl=https://split.example.invalid/\n\
+             gpgkey=file://keys:tulip,17,x@keys.example.invalid/K\n",
+        )
+        .package_from("cred-tool", "cred");
+    let snap = scan_finished(host);
+    let warned = |repo: &str| -> Vec<&str> {
+        snap.warnings
+            .iter()
+            .filter(|w| w.message.contains(&format!("named in {repo} ")))
+            .map(|w| w.message.as_str())
+            .collect()
+    };
+    let cred = warned(CRED);
+    assert!(
+        cred.len() == 1
+            && cred[0].starts_with(
+                "GPG key REDACTED@keys.example.invalid/RPM-GPG-KEY named in \
+                 /etc/yum.repos.d/cred.repo was not collected: \
+                 REDACTED@keys.example.invalid/RPM-GPG-KEY could not be read."
+            ),
+        "{cred:?}"
+    );
+    let split = warned(SPLIT);
+    assert!(
+        !split.is_empty()
+            && split
+                .iter()
+                .all(|w| w.starts_with(&format!("GPG key REDACTED named in {SPLIT} "))),
+        "{split:?}"
+    );
+
+    let loaded = reload(&snap);
+    let mut all = vec![(
+        "snapshot".to_string(),
+        serde_json::to_vec(&snap).expect("the snapshot serializes"),
+    )];
+    all.extend(tree_files(render_export(&loaded).path()));
+    all.extend(refine_artifacts(&session(&loaded)));
+    for secret in ["orchid92", "tulip", ",17,", "17,x"] {
+        assert_absent_from(secret, &all);
+    }
+}
+
 /// A key file that is an OpenPGP secret key and nothing else is withheld
 /// by the read gate: no key entry, a withheld config row, the reason
 /// recorded, and its bytes nowhere.

@@ -1,5 +1,8 @@
 use super::dnf_vars::{DnfVars, ExpandError};
 use inspectah_core::machine_state;
+use inspectah_core::redaction::{
+    URL_USERINFO_PLACEHOLDER, scrub_reference_userinfo, url_userinfos,
+};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::repo::parse_repo_sections;
@@ -118,7 +121,9 @@ pub fn collect_repo_files(exec: &dyn Executor, left_out: &mut Vec<String>) -> Ve
     repo_files
 }
 
-/// Why a key that a repo file names was not collected.
+/// Why a key that a repo file names was not collected. Each path is the
+/// expanded path named for a diagnostic, with any credential in it
+/// replaced (`DiagnosticNames`), never one to read.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UnreadReason {
     /// Its dnf variables could not be expanded safely.
@@ -167,10 +172,52 @@ impl fmt::Display for UnreadReason {
     }
 }
 
+/// How a diagnostic names a reference or path read from one repo file's
+/// `gpgkey=` values, so no credential in the file reaches the text: a
+/// diagnostic is in the snapshot before redaction runs, and redaction
+/// does not read diagnostics.
+///
+/// A reference is named with its own userinfo replaced
+/// ([`scrub_reference_userinfo`]). A userinfo with a comma or whitespace
+/// in it is also cut by the list split dnf makes, so a fragment of it can
+/// be a reference of its own (`file://keys:pass` from
+/// `file://keys:pass,word@host/KEY`) that holds no `@` to recognize it
+/// by: a reference holding any piece of such a userinfo is named
+/// `REDACTED` whole.
+struct DiagnosticNames {
+    /// The non-empty pieces of every userinfo in the file that has a comma
+    /// or whitespace in it, split as dnf splits a list value.
+    cut: Vec<String>,
+}
+
+impl DiagnosticNames {
+    fn of(repo_content: &str) -> Self {
+        let cut = url_userinfos(repo_content)
+            .into_iter()
+            .filter(|u| u.contains(|c: char| c == ',' || c.is_whitespace()))
+            .flat_map(|u| u.split(|c: char| c == ',' || c.is_whitespace()))
+            .filter(|piece| !piece.is_empty())
+            .map(str::to_owned)
+            .collect();
+        Self { cut }
+    }
+
+    /// `text`, a reference or the path expanded from one, as a diagnostic
+    /// names it.
+    fn name(&self, text: &str) -> String {
+        if self.cut.iter().any(|piece| text.contains(piece.as_str())) {
+            return URL_USERINFO_PLACEHOLDER.to_owned();
+        }
+        scrub_reference_userinfo(text).into_owned()
+    }
+}
+
 /// A local key reference that produced no key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct UnreadGpgKey {
-    /// The reference as the repo file writes it, `file://` removed.
+    /// The reference as the repo file writes it, `file://` removed, named
+    /// with any credential in it replaced (`DiagnosticNames`): it is only
+    /// ever formatted into a warning.
     pub reference: String,
     pub reason: UnreadReason,
 }
@@ -201,6 +248,7 @@ pub struct GpgKeyScan {
 /// reference that yields no usable key is returned in `unread`.
 pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars) -> GpgKeyScan {
     let mut scan = GpgKeyScan::default();
+    let names = DiagnosticNames::of(repo_content);
 
     // Each section's final `gpgkey=` value, as the one parser reads it
     // (`parse_repo_sections`): ownership reads the same parse, so every
@@ -214,7 +262,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
             Ok(expanded) => expanded,
             Err(e) => {
                 scan.unread.push(UnreadGpgKey {
-                    reference: reference.to_string(),
+                    reference: names.name(reference),
                     reason: UnreadReason::Expand(e),
                 });
                 continue;
@@ -237,11 +285,12 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
             Ok(content) => content,
             Err(e) => {
                 if machine_state::refusal(&e).is_some() {
-                    scan.left_out.push(machine_state::left_out_reason(key_path));
+                    scan.left_out
+                        .push(machine_state::left_out_reason(&names.name(key_path)));
                 }
                 scan.unread.push(UnreadGpgKey {
-                    reference: reference.to_string(),
-                    reason: UnreadReason::Unreadable(key_path.to_string()),
+                    reference: names.name(reference),
+                    reason: UnreadReason::Unreadable(names.name(key_path)),
                 });
                 continue;
             }
@@ -265,16 +314,16 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
             Some(rejection) => rejection,
         };
         let reason = match rejection {
-            KeyRejection::NotPgp => UnreadReason::NotPgp(key_path.to_string()),
+            KeyRejection::NotPgp => UnreadReason::NotPgp(names.name(key_path)),
             KeyRejection::PrivateKeyMaterial => {
-                UnreadReason::PrivateKeyMaterial(key_path.to_string())
+                UnreadReason::PrivateKeyMaterial(names.name(key_path))
             }
         };
         // Include with a placeholder, so the snapshot says the key was
         // named, without leaking host file content into it.
         eprintln!("WARNING: gpgkey file {reason}, content redacted");
         scan.unread.push(UnreadGpgKey {
-            reference: reference.to_string(),
+            reference: names.name(reference),
             reason,
         });
         scan.keys.push(RepoFile {

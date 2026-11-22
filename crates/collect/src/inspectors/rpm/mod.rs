@@ -234,6 +234,8 @@ impl RpmInspector {
             .into_iter()
             .map(|(repo_path, u)| Warning {
                 inspector: "rpm".into(),
+                // The reference and the path in the reason were named
+                // with their credentials replaced when they were recorded.
                 message: format!(
                     "GPG key {} named in {repo_path} was not collected: {}. \
                      If the image enables a repo from that file, dnf cannot \

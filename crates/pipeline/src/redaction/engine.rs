@@ -1,4 +1,4 @@
-use inspectah_core::redaction::scrub_compose_secrets;
+use inspectah_core::redaction::{scrub_compose_secrets, scrub_url_userinfo};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::redaction::{
     Confidence, DetectionMethod, FindingKind, RedactionFinding, RedactionHint, RedactionKind,
@@ -12,7 +12,7 @@ use std::ops::Range;
 use std::sync::LazyLock;
 
 use crate::redaction::patterns::{PATTERNS, SECRET_GROUP, SecretPattern, scan_shadow};
-use crate::render::language_packages::{scrub_manifest_auth, scrub_url_auth};
+use crate::render::language_packages::scrub_manifest_auth;
 use inspectah_core::types::destination::Destination;
 
 /// Paths that are known false-positive sources for credential scanning.
@@ -47,27 +47,21 @@ fn is_repo_file_path(path: &str) -> bool {
     })
 }
 
-/// A URL in a `.repo` option value: a scheme, `://`, then everything up to
-/// whitespace or a comma, which is how dnf splits a `baseurl=`,
-/// `mirrorlist=`, `metalink=` or `gpgkey=` value into URLs.
-static REPO_URL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s,]+").expect("repo URL regex"));
-
-/// `text`, a `.repo` file or its Configuration row, with the credential in
-/// every URL's authority replaced by `REDACTED` ([`scrub_url_auth`]):
+/// `text`, a `.repo` file or its Configuration row, with the userinfo of
+/// every URL in it replaced by `REDACTED` ([`scrub_url_userinfo`]):
 /// `https://user:pass@host/` and `https://token@host/` both become
 /// `https://REDACTED@host/`, a placeholder the operator fills in with the
-/// credential at build time. Every URL of a value and of its continuation
-/// lines is one match. `None` when no URL held a credential.
+/// credential at build time. A userinfo runs through every character RFC
+/// 3986 allows in it, commas included, whichever option holds the URL.
+/// `None` when no URL held a credential.
 ///
 /// `PATTERNS` has no rule for a password in an arbitrary URL's authority,
 /// so without this an ordinary redacted scan kept a repo's password in
 /// both snapshot copies and in the staged `.repo` file.
 fn scrub_repo_urls(text: &str, path: &str) -> Option<(String, RedactionFinding)> {
-    let scrubbed = REPO_URL_RE.replace_all(text, |caps: &Captures| scrub_url_auth(&caps[0]));
-    if scrubbed == text {
+    let Cow::Owned(scrubbed) = scrub_url_userinfo(text) else {
         return None;
-    }
+    };
     let finding = RedactionFinding {
         path: path.to_string(),
         source: "repo_url_credential".into(),
@@ -82,7 +76,7 @@ fn scrub_repo_urls(text: &str, path: &str) -> Option<(String, RedactionFinding)>
         confidence: Some(Confidence::High),
         finding_kind: Some(FindingKind::Password),
     };
-    Some((scrubbed.into_owned(), finding))
+    Some((scrubbed, finding))
 }
 
 /// Returns true if `path` matches a known false-positive prefix.
@@ -3342,6 +3336,26 @@ baseurl = https://cdn.redhat.com
             ),
             "{:?}",
             snapshot.redaction_state
+        );
+
+        // A comma is userinfo, not a list separator, in every option.
+        let mut comma = InspectionSnapshot::new();
+        comma.rpm = Some(RpmSection {
+            repo_files: vec![RepoFile {
+                path: PATH.into(),
+                content: "[custom]\nmirrorlist=https://build:orchid,92@repo.example.invalid/list\n\
+                          baseurl=https://a.example.invalid/r,https://u:tulip,17@b.example.invalid/r\n"
+                    .into(),
+                disposition: SnapshotFindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        redact(&mut comma, &RedactOptions::default());
+        assert_eq!(
+            comma.rpm.as_ref().unwrap().repo_files[0].content,
+            "[custom]\nmirrorlist=https://REDACTED@repo.example.invalid/list\n\
+             baseurl=https://a.example.invalid/r,https://REDACTED@b.example.invalid/r\n"
         );
 
         // An ordinary config file's URLs are left to the generic patterns.

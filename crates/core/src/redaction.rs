@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ops::Range;
 
 /// How a key and its value are written on a single line.
@@ -320,9 +321,191 @@ pub fn scrub_compose_secrets(content: &str) -> String {
     result
 }
 
+/// What replaces the userinfo of a URL whose credential is scrubbed:
+/// `https://REDACTED@host/`, the place an operator supplies the
+/// credential at build time.
+pub const URL_USERINFO_PLACEHOLDER: &str = "REDACTED";
+
+/// The characters that end a URL's authority (RFC 3986 § 3.2). None of
+/// them may appear in userinfo, so the userinfo of a URL is everything
+/// from `://` to the last `@` before the first of them.
+const AUTHORITY_END: [char; 3] = ['/', '?', '#'];
+
+/// `text` with the userinfo of every URL in it replaced by
+/// [`URL_USERINFO_PLACEHOLDER`]: `https://user:pass@host/` and
+/// `https://token@host/` both become `https://REDACTED@host/`. Borrowed
+/// when no URL carries userinfo.
+///
+/// A URL begins at each `scheme://` on a line, and its authority runs to
+/// the first `/`, `?` or `#` after it or to the end of the line. Nothing
+/// else ends it: RFC 3986 allows commas, semicolons, `=`, `!`, `$`, `&`,
+/// quotes and parentheses in userinfo, so `https://build:orchid,92@host/`
+/// is one URL whose userinfo is `build:orchid,92`. That one rule serves
+/// every `.repo` option: `mirrorlist=` and `metalink=` hold one URL, and
+/// in a `baseurl=` or `gpgkey=` list each `scheme://` starts the next one,
+/// whether a comma or whitespace separates them, so splitting a value on
+/// commas first, which cut a password at its comma and left the rest in
+/// place, is never needed. Whitespace inside an authority is not RFC
+/// 3986, and is kept inside it, so a password with a space in it is
+/// replaced whole too, at the cost of a list entry whose host is followed
+/// by whitespace and a schemeless `x@y`.
+pub fn scrub_url_userinfo(text: &str) -> Cow<'_, str> {
+    let spans = url_userinfo_spans(text);
+    if spans.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut from = 0;
+    for span in spans {
+        out.push_str(&text[from..span.start]);
+        out.push_str(URL_USERINFO_PLACEHOLDER);
+        from = span.end;
+    }
+    out.push_str(&text[from..]);
+    Cow::Owned(out)
+}
+
+/// The userinfo of every URL in `text`, as [`scrub_url_userinfo`] finds
+/// it, for a caller that must know what a credential was: a diagnostic
+/// that names a fragment of a value dnf split at a comma inside one.
+pub fn url_userinfos(text: &str) -> Vec<&str> {
+    url_userinfo_spans(text)
+        .into_iter()
+        .map(|span| &text[span])
+        .collect()
+}
+
+/// Where each URL's userinfo is in `text`, in order: the one rule of
+/// [`scrub_url_userinfo`].
+fn url_userinfo_spans(text: &str) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    let mut pos = 0;
+    while let Some(found) = text[pos..].find("://") {
+        let sep = pos + found;
+        let line_start = text[..sep].rfind('\n').map_or(0, |i| i + 1);
+        let scheme_start = text[line_start..sep]
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')))
+            .map_or(line_start, |i| line_start + i + 1);
+        let is_url = text[scheme_start..sep]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic());
+        let authority = sep + 3;
+        let after = &text[authority..];
+        let end = after
+            .find(|c: char| AUTHORITY_END.contains(&c) || c == '\n' || c == '\r')
+            .unwrap_or(after.len());
+        if is_url && let Some(at) = after[..end].rfind('@') {
+            spans.push(authority..authority + at);
+        }
+        pos = authority;
+    }
+    spans
+}
+
+/// One repo or key reference, as a diagnostic may name it, with any
+/// credential in it replaced ([`scrub_url_userinfo`]). A `file://` value
+/// is also named with `file://` removed, so a reference written
+/// `file://keys:pass@host/KEY` reaches a message as `keys:pass@host/KEY`:
+/// a relative value whose first component holds an `@` has that
+/// component's userinfo replaced the same way. An absolute path is never
+/// touched.
+///
+/// Every warning, notice, degraded reason or error that formats a
+/// reference read from a repo file formats this instead, before any
+/// other text is built from it: a diagnostic is copied into the snapshot
+/// at collection, before redaction, and redaction does not read it.
+pub fn scrub_reference_userinfo(reference: &str) -> Cow<'_, str> {
+    if reference.contains("://") {
+        return scrub_url_userinfo(reference);
+    }
+    if reference.starts_with('/') {
+        return Cow::Borrowed(reference);
+    }
+    let end = reference.find(AUTHORITY_END).unwrap_or(reference.len());
+    match reference[..end].rfind('@') {
+        Some(at) => Cow::Owned(format!("{URL_USERINFO_PLACEHOLDER}{}", &reference[at..])),
+        None => Cow::Borrowed(reference),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every character RFC 3986 allows in userinfo stays inside it, so
+    /// the whole credential is replaced, in a single-URL option and in
+    /// a list, separated by commas or whitespace; the rest of each URL,
+    /// and a URL with no userinfo, is left as written.
+    #[test]
+    fn url_userinfo_is_replaced_whole_through_every_character_it_may_hold() {
+        let cases = [
+            (
+                "mirrorlist=https://build:orchid,92@repo.example.invalid/list",
+                "mirrorlist=https://REDACTED@repo.example.invalid/list",
+            ),
+            (
+                "metalink=https://u:a;b=c!d$e&f'g(h)i*j+k~l%40m@h.example/m?x=a@b",
+                "metalink=https://REDACTED@h.example/m?x=a@b",
+            ),
+            (
+                "baseurl=https://a.example/r,https://u:p,q@b.example/r https://c.example",
+                "baseurl=https://a.example/r,https://REDACTED@b.example/r https://c.example",
+            ),
+            (
+                "baseurl=https://u:p@a.example,https://v:w@b.example/",
+                "baseurl=https://REDACTED@a.example,https://REDACTED@b.example/",
+            ),
+            (
+                "baseurl=https://a.example,https://b.example/",
+                "baseurl=https://a.example,https://b.example/",
+            ),
+            (
+                "mirrorlist=https://u:two words@h.example/l",
+                "mirrorlist=https://REDACTED@h.example/l",
+            ),
+            (
+                "gpgkey=file://keys:orchid92@keys.example.invalid/K file:///etc/pki/rpm-gpg/K",
+                "gpgkey=file://REDACTED@keys.example.invalid/K file:///etc/pki/rpm-gpg/K",
+            ),
+            (
+                "proxy=ftp://u:p@[2001:db8::1]:21/x\n  https://h.example/?q=u@v#a@b\n",
+                "proxy=ftp://REDACTED@[2001:db8::1]:21/x\n  https://h.example/?q=u@v#a@b\n",
+            ),
+            (
+                "[copr:copr.fedorainfracloud.org:token:vendor]",
+                "[copr:copr.fedorainfracloud.org:token:vendor]",
+            ),
+            ("note: see ://u:p@x", "note: see ://u:p@x"),
+        ];
+        for (input, want) in cases {
+            assert_eq!(scrub_url_userinfo(input), want, "{input}");
+        }
+        assert!(matches!(
+            scrub_url_userinfo("baseurl=https://h.example/"),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    /// A reference a diagnostic names, with `file://` removed or not,
+    /// loses its userinfo; an absolute path is never touched.
+    #[test]
+    fn a_reference_named_in_a_diagnostic_loses_its_userinfo() {
+        for (input, want) in [
+            (
+                "keys:orchid92@keys.example.invalid/RPM-GPG-KEY",
+                "REDACTED@keys.example.invalid/RPM-GPG-KEY",
+            ),
+            (
+                "file://keys:orchid,92@keys.example.invalid/K",
+                "file://REDACTED@keys.example.invalid/K",
+            ),
+            ("/etc/pki/rpm-gpg/a@b", "/etc/pki/rpm-gpg/a@b"),
+            ("RPM-GPG-KEY-x", "RPM-GPG-KEY-x"),
+        ] {
+            assert_eq!(scrub_reference_userinfo(input), want, "{input}");
+        }
+    }
 
     #[test]
     fn scrub_compose_secrets_redacts_eq_style() {
