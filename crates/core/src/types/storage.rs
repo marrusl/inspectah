@@ -70,7 +70,9 @@ pub const USR_TMPFILES_PREFIX: &str = "/usr/lib/tmpfiles.d/";
 /// This is the one tmpfiles.d line parser: the collector's `/var`
 /// backing index and the export's account checks both read lines through
 /// it. Quoted fields are not unquoted, which only matters for a path
-/// holding whitespace; neither caller matches such a path.
+/// holding whitespace or an escape: the collector matches no such path,
+/// and the export's account check leaves out any line that quotes or
+/// escapes a field it reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TmpfilesEntry<'a> {
     /// The first character of the type field. The `+ ! - = ~ ^`

@@ -1,25 +1,32 @@
 //! Carried tmpfiles.d lines that name an account the image will not have.
 //!
 //! `systemd-tmpfiles` skips a line whose user or group it cannot resolve,
-//! and `systemd-tmpfiles-setup` counts that as success, so the path the
-//! line creates is silently missing on a deployed host. The export does
-//! not change such a line; it names it, in the Containerfile next to the
+//! and `systemd-tmpfiles-setup.service` accepts its exit status as
+//! success, so whatever the line does (create a path, set ownership on
+//! one) silently does not happen on a deployed host. The export does not
+//! change such a line; it names it, in the Containerfile next to the
 //! config `COPY` and in the audit report, so the operator can create the
 //! account or provision it.
 //!
 //! An account is named only when the export is sure the image lacks it:
 //! the scan recorded it as a local (non-system) account on the host, the
-//! users block does not create it, and no carried package is known to
-//! create it. A name the scan did not record is a system account the base
-//! or a package may provide, which the export cannot check, so it is not
-//! named. A numeric id and `-` are never named: tmpfiles resolves neither.
+//! users block does not create it, and no carried or base-image package
+//! is known to create it. A name the scan did not record is a system
+//! account the base or a package may provide, which the export cannot
+//! check, so it is not named. A numeric id and `-` are never named:
+//! tmpfiles resolves neither.
+//!
+//! A line whose leading fields use quoting or escapes is left out: the
+//! shared [`TmpfilesEntry`] parser splits on whitespace alone, so it
+//! would read a quoted path holding a space as two fields and take the
+//! mode for the user. The notice never guesses an owner field.
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::storage::{ETC_TMPFILES_PREFIX, TmpfilesEntry, USR_TMPFILES_PREFIX};
 use std::collections::{HashMap, HashSet};
 
 use super::configtree::staged_writes;
-use super::containerfile::collect_rpm_provided_accounts;
+use super::containerfile::rpm_provided_accounts;
 use super::language_packages::sanitize_for_comment;
 use super::md_literal::md_code;
 use super::users::ContainerfileUserPlan;
@@ -31,9 +38,21 @@ const CARRIED_TMPFILES_DIRS: [&str; 2] = [ETC_TMPFILES_PREFIX, USR_TMPFILES_PREF
 /// The only filename suffix systemd reads in a tmpfiles.d directory.
 const TMPFILES_SUFFIX: &str = ".conf";
 
-/// What the operator does about a named line.
-const REMEDY: &str = "Create the user in refine (useradd) or provision it, \
-                      or the path will not be created.";
+/// What the operator does about a named line, one Containerfile comment
+/// line each. The audit report joins them into one paragraph.
+const REMEDY: [&str; 3] = [
+    "Create each missing user or group (useradd in refine) or provision it, so",
+    "its line can run. Otherwise systemd-tmpfiles skips the line, and",
+    "systemd-tmpfiles-setup.service still reports success.",
+];
+
+/// The characters that quote or escape a tmpfiles.d field. The shared
+/// parser does not model them, so a line holding one in a field it reads
+/// is left out of the notice.
+const QUOTING_CHARS: [char; 3] = ['"', '\'', '\\'];
+
+/// The type, path, mode, user and group fields: the ones the notice reads.
+const OWNER_FIELDS: usize = 5;
 
 /// One carried tmpfiles.d line whose user or group the image lacks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +90,22 @@ struct ImageAccounts {
 
 impl ImageAccounts {
     fn of(snap: &InspectionSnapshot) -> Self {
-        let (package_accounts, replicated_packages) = collect_rpm_provided_accounts(snap);
+        // The carried packages and the base image's own, which create
+        // their accounts in the image whether or not they are carried.
+        let packages = snap
+            .rpm
+            .as_ref()
+            .map(|rpm| {
+                let carried = rpm
+                    .packages_added
+                    .iter()
+                    .filter(|p| p.disposition.is_included())
+                    .map(|p| p.name.clone());
+                let base = rpm.baseline_package_names.iter().flatten().cloned();
+                carried.chain(base).collect()
+            })
+            .unwrap_or_default();
+        let (package_accounts, replicated_packages) = rpm_provided_accounts(packages);
         let names = |rows: &[serde_json::Value]| -> HashSet<String> {
             rows.iter()
                 .filter_map(|r| r.get("name").and_then(|n| n.as_str()))
@@ -92,7 +126,8 @@ impl ImageAccounts {
         }
     }
 
-    /// A carried package is known to create the account `name`.
+    /// A carried or base-image package is known to create the account
+    /// `name`.
     fn package_creates(&self, name: &str) -> bool {
         self.package_accounts.contains_key(name) || self.replicated_packages.contains(name)
     }
@@ -125,6 +160,14 @@ fn named_account(field: Option<&str>) -> Option<&str> {
     (field != "-" && !is_numeric && !field.contains('%')).then_some(field)
 }
 
+/// Whether `line` quotes or escapes a field the notice reads, which the
+/// shared parser would split wrongly.
+fn has_quoting(line: &str) -> bool {
+    line.split_whitespace()
+        .take(OWNER_FIELDS)
+        .any(|field| field.contains(QUOTING_CHARS))
+}
+
 /// Whether the image's systemd reads `dest` as a tmpfiles.d fragment.
 fn is_tmpfiles_fragment(dest: &str) -> bool {
     CARRIED_TMPFILES_DIRS.iter().any(|dir| {
@@ -149,6 +192,9 @@ pub(crate) fn missing_owners(snap: &InspectionSnapshot) -> Vec<MissingOwner> {
     let mut out = Vec::new();
     for (dest, write) in fragments {
         for line in write.content.lines() {
+            if has_quoting(line) {
+                continue;
+            }
             let Some(entry) = TmpfilesEntry::parse(line) else {
                 continue;
             };
@@ -178,7 +224,7 @@ pub(crate) fn containerfile_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let mut lines = vec![
         String::new(),
         "# NOTE: these carried tmpfiles.d lines name an account this image does not".into(),
-        "# create. systemd-tmpfiles skips such a line at boot without failing.".into(),
+        "# create.".into(),
     ];
     for m in &missing {
         lines.push(format!(
@@ -188,7 +234,7 @@ pub(crate) fn containerfile_lines(snap: &InspectionSnapshot) -> Vec<String> {
             m.accounts(sanitize_for_comment)
         ));
     }
-    lines.push(format!("# {REMEDY}"));
+    lines.extend(REMEDY.iter().map(|l| format!("# {l}")));
     lines
 }
 
@@ -205,9 +251,7 @@ pub(crate) fn audit_lines(snap: &InspectionSnapshot) -> Vec<String> {
             missing.len()
         ),
         String::new(),
-        "systemd-tmpfiles skips each line below at boot without failing, \
-         because the image does not create the account it names."
-            .into(),
+        "Each line below names an account the image does not create.".into(),
         String::new(),
     ];
     for m in &missing {
@@ -219,7 +263,7 @@ pub(crate) fn audit_lines(snap: &InspectionSnapshot) -> Vec<String> {
         ));
     }
     lines.push(String::new());
-    lines.push(REMEDY.into());
+    lines.push(REMEDY.join(" "));
     lines.push(String::new());
     lines
 }
@@ -240,6 +284,24 @@ mod tests {
             (Some("app1"), Some("app1")),
         ] {
             assert_eq!(named_account(field), named, "{field:?}");
+        }
+    }
+
+    #[test]
+    fn a_quoted_or_escaped_owner_field_is_left_out() {
+        for (line, quoted) in [
+            ("d /var/lib/a 0750 appuser appgroup 30d", false),
+            ("d \"/var/lib/a b\" 0750 appuser appgroup 30d", true),
+            ("d '/var/lib/a b' 0750 appuser appgroup 30d", true),
+            ("d /var/lib/a\\x20b 0750 appuser appgroup 30d", true),
+            ("d /var/lib/a 0750 \"appuser\" appgroup -", true),
+            // Quoting past the group field is never read.
+            (
+                "f /var/lib/a 0640 appuser appgroup - \"hello world\"",
+                false,
+            ),
+        ] {
+            assert_eq!(has_quoting(line), quoted, "{line}");
         }
     }
 

@@ -2557,8 +2557,18 @@ pub(crate) fn collect_rpm_provided_accounts(
                 .collect()
         })
         .unwrap_or_default();
+    rpm_provided_accounts(replicated)
+}
 
-    let mut replicated = replicated;
+/// [`collect_rpm_provided_accounts`] over the package names in `packages`
+/// instead of the carried ones.
+pub(crate) fn rpm_provided_accounts(
+    packages: std::collections::HashSet<String>,
+) -> (
+    std::collections::HashMap<String, String>,
+    std::collections::HashSet<String>,
+) {
+    let mut replicated = packages;
     let mut accounts = std::collections::HashMap::new();
     for (pkg, provides) in KNOWN_PACKAGE_ACCOUNTS {
         match provides {

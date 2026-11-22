@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Exports name the provisioning steps a deployed machine owes**: when a keytab, registration or other machine-state file is left out, the Containerfile, the audit report, the README, the scan's output and the refine export's warnings name the step to run, such as `realm join` or `subscription-manager register`.
-- **Exports name `tmpfiles.d` lines whose account the image lacks**: a carried `tmpfiles.d` file whose line names a local user or group the image does not create, such as a user left on Skip, is listed in the Containerfile and the audit report with the path and the account. `systemd-tmpfiles` skips such a line at boot without failing, so the directory is never made. Create the user in refine (useradd) or provision it.
+- **Exports name `tmpfiles.d` lines whose account the image lacks**: a carried `tmpfiles.d` file whose line names a local user or group the image does not create, such as a user left on Skip, is listed in the Containerfile and the audit report with the path and the account. `systemd-tmpfiles` skips such a line at boot, and `systemd-tmpfiles-setup.service` still reports success. Create the account in refine (useradd) or provision it.
 
 ### Changed
 - **`secrets-review.md` is grouped per file**: each redacted file is a heading listing its redactions (line, finding, the placeholder that replaced it) and one line on how to supply the real value at deploy time, such as a mounted secret, a provisioning step or a build secret. A file that is also machine state names its provisioning step once. The refine export now writes the file too.
