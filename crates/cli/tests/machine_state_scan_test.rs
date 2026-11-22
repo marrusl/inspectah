@@ -1762,6 +1762,55 @@ fn members_below_directory_links_and_deep_trees_are_withheld() {
     assert_marker_nowhere(&snap);
 }
 
+/// A link back to its own directory changes what the rule matches below
+/// it: with `/etc/insights-client/.state -> .`, the registration JSON
+/// there is also `.state/registration.json`, an Insights state member,
+/// though its own name matches no rule. The inventory lists the
+/// directory again under the new matching state, so the physical file,
+/// the linked spelling and a hard link in `/etc/myapp` are all withheld,
+/// none is opened, and the JSON is in no artifact of either export.
+#[test]
+fn a_link_that_gives_files_a_member_spelling_is_inventoried() {
+    let exec = SysctlHost::new()
+        .file(
+            "/etc/insights-client/registration.json",
+            &format!("{{\"machine_id\": \"{MARKER}\"}}\n"),
+        )
+        .link("/etc/insights-client/.state", ".")
+        .hard_link(
+            "/etc/myapp/registration.json",
+            "/etc/insights-client/registration.json",
+        )
+        .build();
+    let gate = inspectah_core::machine_state::ScreenedExecutor::new(&exec);
+    assert_eq!(gate.gap(), None);
+    let spellings = [
+        "/etc/insights-client/registration.json",
+        "/etc/insights-client/.state/registration.json",
+        "/etc/myapp/registration.json",
+    ];
+    for path in spellings {
+        assert_eq!(
+            gate.screen(path),
+            inspectah_core::machine_state::Screened::Withheld(MachineStateMember::InsightsState),
+            "{path}"
+        );
+    }
+    let snap = reload(&scan_exec(&exec, std_inspectors()));
+    for path in [
+        "/etc/insights-client/registration.json",
+        "/etc/myapp/registration.json",
+    ] {
+        let row = withheld(&snap, path).unwrap_or_else(|| panic!("{path} is withheld"));
+        assert_eq!(row.member, MachineStateMember::InsightsState, "{path}");
+    }
+    for path in spellings {
+        assert!(!has_entry(&snap, path), "{path}");
+        assert_never_opened(&exec, path);
+    }
+    assert_marker_nowhere(&snap);
+}
+
 /// With `--preserve subscription --ack-sensitive`, the subscription
 /// section's hostname is read through the gate, not its bypass: an
 /// `/etc/hostname` linked to an SSH host key leaves the hostname unset,

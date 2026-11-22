@@ -727,13 +727,15 @@ impl MachineStateScreen {
             let RuleTarget::Withheld(member) = *target else {
                 continue;
             };
-            let root = match *rule {
+            let (root, nfa) = match *rule {
                 PathMatch::Exact(path) => {
                     screen.note(exec, Path::new(path), member);
                     continue;
                 }
-                PathMatch::Glob(pattern) => glob_dir(pattern),
-                PathMatch::Prefix(prefix) => prefix.trim_end_matches('/'),
+                PathMatch::Glob(pattern) => (glob_dir(pattern), RuleNfa::glob(pattern)),
+                PathMatch::Prefix(prefix) => {
+                    (prefix.trim_end_matches('/'), RuleNfa::prefix(prefix))
+                }
                 PathMatch::BasenameSuffix(_) => continue,
             };
             let Ok(meta) = exec.file_metadata(Path::new(root)) else {
@@ -742,14 +744,23 @@ impl MachineStateScreen {
             let physical = exec
                 .resolve_final_target(Path::new(root))
                 .unwrap_or_else(|_| PathBuf::from(root));
+            let state = nfa.read(&nfa.start(), format!("{root}/").chars().map(PathSym::Char));
             let mut walk = RuleWalk {
                 rule: *rule,
+                nfa,
                 member,
-                ancestors: vec![(meta.dev, meta.ino)],
+                listed: HashMap::from([((meta.dev, meta.ino), vec![state.clone()])]),
                 budget: &mut budget,
             };
-            if let Err(gap) = walk.walk(&mut screen.inodes, exec, root, &physical, SCREEN_MAX_DEPTH)
-            {
+            let listed = walk.walk(
+                &mut screen.inodes,
+                exec,
+                root,
+                &physical,
+                &state,
+                SCREEN_MAX_DEPTH,
+            );
+            if let Err(gap) = listed {
                 screen.gap = Some(gap);
                 break;
             }
@@ -774,23 +785,32 @@ impl MachineStateScreen {
 /// One withheld rule's tree, being listed.
 struct RuleWalk<'b> {
     rule: PathMatch,
+    nfa: RuleNfa,
     member: MachineStateMember,
-    /// The `(dev, ino)` of each directory on the current path, so a link
-    /// back to one of them is not followed again.
-    ancestors: Vec<(u64, u64)>,
+    /// Each directory listed so far, by `(dev, ino)`, with the matching
+    /// states it was listed under. A directory reached again under a
+    /// state one of these covers holds nothing the rule has not already
+    /// seen; under any other state it is listed again, since a link can
+    /// give the same files a spelling the rule matches (a `.state` link
+    /// back to `/etc/insights-client` makes `registration.json` there
+    /// `.state/registration.json`). States are finite, so link cycles end.
+    listed: HashMap<(u64, u64), Vec<MatchState>>,
     budget: &'b mut usize,
 }
 
 impl RuleWalk<'_> {
     /// Lists `physical`, the directory the logical path `logical` names,
-    /// noting each matching regular file's inode and descending into each
-    /// directory, linked or not, below which a match is still possible.
+    /// read under the rule's matching `state` after `logical/`, noting
+    /// each matching regular file's inode and descending into each
+    /// directory, linked or not, below which a match is still possible
+    /// and which has not been listed under a covering state.
     fn walk(
         &mut self,
         inodes: &mut HashMap<(u64, u64), MachineStateMember>,
         exec: &dyn Executor,
         logical: &str,
         physical: &Path,
+        state: &MatchState,
         depth: usize,
     ) -> Result<(), ScreenGap> {
         let member = self.member;
@@ -836,25 +856,118 @@ impl RuleWalk<'_> {
                 }
                 continue;
             }
-            let id = (meta.dev, meta.ino);
-            if !meta.is_directory()
-                || !may_match_below(self.rule, &format!("{child}/"))
-                || self.ancestors.contains(&id)
-            {
+            if !meta.is_directory() {
                 continue;
             }
+            let below = self
+                .nfa
+                .read(state, name.chars().chain(['/']).map(PathSym::Char));
+            if !below.alive_below() {
+                continue;
+            }
+            let seen = self.listed.entry((meta.dev, meta.ino)).or_default();
+            if seen.iter().any(|listed| listed.covers(&below)) {
+                continue;
+            }
+            seen.push(below.clone());
             if depth == 0 {
                 return Err(gap(&child, ScreenGapCause::TooDeep));
             }
             let next = exec
                 .resolve_final_target(&child_physical)
                 .unwrap_or(child_physical);
-            self.ancestors.push(id);
-            let listed = self.walk(inodes, exec, &child, &next, depth - 1);
-            self.ancestors.pop();
-            listed?;
+            self.walk(inodes, exec, &child, &next, &below, depth - 1)?;
         }
         Ok(())
+    }
+}
+
+/// One symbol of a path the rule automaton reads.
+#[derive(Debug, Clone, Copy)]
+enum PathSym {
+    Char(char),
+}
+
+/// A walked rule's pattern read as a nondeterministic automaton over a
+/// path's characters, with `*` matching any run and `?` one character,
+/// as [`glob_match_simple`] does. A `Prefix` rule is its prefix then `*`.
+struct RuleNfa {
+    pat: Vec<char>,
+}
+
+/// The pattern positions live after reading the start of a path; the
+/// last position is a whole match. Two paths reaching the same state
+/// match exactly the same continuations, and a state that is live
+/// wherever another is ([`covers`](Self::covers)) matches every
+/// continuation that one does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MatchState(Vec<bool>);
+
+impl MatchState {
+    /// Whether some longer path can still match: a live position short
+    /// of the end.
+    fn alive_below(&self) -> bool {
+        self.0[..self.0.len() - 1].iter().any(|&live| live)
+    }
+
+    /// Whether every position live in `other` is live here.
+    fn covers(&self, other: &Self) -> bool {
+        self.0
+            .iter()
+            .zip(&other.0)
+            .all(|(&mine, &theirs)| mine || !theirs)
+    }
+}
+
+impl RuleNfa {
+    /// A `Glob` rule's pattern.
+    fn glob(pattern: &str) -> Self {
+        Self {
+            pat: pattern.chars().collect(),
+        }
+    }
+
+    /// A `Prefix` rule: everything that starts with `prefix`.
+    fn prefix(prefix: &str) -> Self {
+        Self {
+            pat: prefix.chars().chain(['*']).collect(),
+        }
+    }
+
+    /// The state before any character.
+    fn start(&self) -> MatchState {
+        let mut live = vec![false; self.pat.len() + 1];
+        live[0] = true;
+        self.close(&mut live);
+        MatchState(live)
+    }
+
+    /// The state after reading `syms` from `state`.
+    fn read(&self, state: &MatchState, syms: impl IntoIterator<Item = PathSym>) -> MatchState {
+        let mut live = state.0.clone();
+        for sym in syms {
+            let mut next = vec![false; self.pat.len() + 1];
+            for i in (0..self.pat.len()).filter(|&i| live[i]) {
+                match (self.pat[i], sym) {
+                    ('*', _) => next[i] = true,
+                    ('?', _) => next[i + 1] = true,
+                    (p, PathSym::Char(c)) if p == c => next[i + 1] = true,
+                    _ => {}
+                }
+            }
+            self.close(&mut next);
+            live = next;
+        }
+        MatchState(live)
+    }
+
+    /// A `*` may match nothing: the position after a live `*` is live.
+    fn close(&self, live: &mut [bool]) {
+        for i in 0..self.pat.len() {
+            if live[i] && self.pat[i] == '*' {
+                live[i + 1] = true;
+            }
+        }
     }
 }
 
@@ -875,31 +988,9 @@ fn may_match_below(rule: PathMatch, start: &str) -> bool {
 /// Exact for [`match_glob`], whose other two cases are subsets of the
 /// whole-path match.
 fn glob_start_alive(pattern: &str, start: &str) -> bool {
-    let pat: Vec<char> = pattern.chars().collect();
-    let close = |live: &mut Vec<bool>| {
-        for i in 0..pat.len() {
-            if live[i] && pat[i] == '*' {
-                live[i + 1] = true;
-            }
-        }
-    };
-    let mut live = vec![false; pat.len() + 1];
-    live[0] = true;
-    close(&mut live);
-    for c in start.chars() {
-        let mut next = vec![false; pat.len() + 1];
-        for i in (0..pat.len()).filter(|&i| live[i]) {
-            match pat[i] {
-                '*' => next[i] = true,
-                '?' => next[i + 1] = true,
-                p if p == c => next[i + 1] = true,
-                _ => {}
-            }
-        }
-        close(&mut next);
-        live = next;
-    }
-    live[..pat.len()].iter().any(|&l| l)
+    let nfa = RuleNfa::glob(pattern);
+    nfa.read(&nfa.start(), start.chars().map(PathSym::Char))
+        .alive_below()
 }
 
 /// The directory a glob's fixed stem names: everything before the
