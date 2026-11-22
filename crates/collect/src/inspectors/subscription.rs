@@ -56,24 +56,27 @@ impl Inspector for SubscriptionInspector {
         ctx: &InspectionContext<'_>,
         _progress: &dyn ProgressSink,
     ) -> Result<InspectorOutput, InspectorError> {
-        // The one named bypass of the machine-state read gate: this
-        // section stores the entitlement and consumer certificates and
-        // keys on purpose (`--preserve subscription --ack-sensitive`),
-        // and is outside snapshot validation.
-        let exec = ctx
-            .executor
-            .bypass(inspectah_core::machine_state::ScreenBypass::SubscriptionSection);
         let mut section = SubscriptionSection::default();
         let mut warnings = Vec::new();
 
         // Populate source hostname for aggregate provenance.
         // InspectionContext has no hostname field -- read /etc/hostname via executor,
         // matching how collect.rs populates snapshot.meta["hostname"] (line 211).
-        section.source_hostname = exec
-            .read_file(Path::new(exec.host_root()).join("etc/hostname").as_path())
+        // Through the gate: the hostname is not subscription material, so a
+        // `/etc/hostname` linked to a key is refused and leaves it unset.
+        let gate = ctx.executor;
+        section.source_hostname = gate
+            .read_file(Path::new(gate.host_root()).join("etc/hostname").as_path())
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+
+        // The one named bypass of the machine-state read gate, for the
+        // subscription material alone: this section stores the
+        // entitlement and consumer certificates and keys on purpose
+        // (`--preserve subscription --ack-sensitive`), and is outside
+        // snapshot validation.
+        let exec = gate.bypass(inspectah_core::machine_state::ScreenBypass::SubscriptionSection);
 
         // 1. Entitlement certs
         collect_dir_pems(

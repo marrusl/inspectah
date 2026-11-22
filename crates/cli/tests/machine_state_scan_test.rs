@@ -1621,3 +1621,28 @@ fn members_below_directory_links_and_deep_trees_are_withheld() {
     }
     assert_marker_nowhere(&snap);
 }
+
+/// With `--preserve subscription --ack-sensitive`, the subscription
+/// section's hostname is read through the gate, not its bypass: an
+/// `/etc/hostname` linked to an SSH host key leaves the hostname unset,
+/// and neither the key nor an error quoting it is in the snapshot, whose
+/// subscription section validation does not check.
+#[test]
+fn the_subscription_hostname_is_read_through_the_gate() {
+    use inspectah_collect::inspectors::subscription::SubscriptionInspector;
+    let key = "/etc/ssh/ssh_host_ed25519_key";
+    let exec = SysctlHost::new()
+        .file(key, &openssh_key())
+        .link("/etc/hostname", key)
+        .build();
+    let mut inspectors = std_inspectors();
+    inspectors.push(Box::new(SubscriptionInspector::new()));
+    let snap = scan_exec(&exec, inspectors);
+    let subscription = snap.subscription.as_ref().expect("a subscription section");
+    assert_eq!(subscription.source_hostname, None);
+    assert_never_opened(&exec, key);
+    assert_never_opened(&exec, "/etc/hostname");
+    let json = serde_json::to_string(&snap).unwrap();
+    assert!(!json.contains("OPENSSH PRIVATE KEY"), "{json}");
+    assert_marker_nowhere(&snap);
+}
