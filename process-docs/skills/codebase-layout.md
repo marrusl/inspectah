@@ -89,9 +89,9 @@ only when the subscription is preserved), and the pipeline runs it through
   - `rpm/repoless.rs` — Repo-less RPM detection (empty/disabled repos) and dnf cache scanning
   - `rpm/dnf_vars.rs`: the host's dnf variables, used to expand `gpgkey=` paths in `rpm/repos.rs`
 - `config/`: the config files the image carries, from four branches in `mod.rs`: modified packaged files (`rpm -Va`), `%ghost` files, the unowned `/etc` walk (`walk.rs`) and orphans of removed packages
-  - `admit.rs`: the checks before any read of a candidate: `locate` (a path under a directory link is refused, and exclusions match the normalized spelling) and `readable` (never a FIFO, socket or device; a final link is read only to carried config under `/etc`). `capture_config` in `mod.rs` asks `readable` on every branch
+  - `admit.rs`: the checks before any read of a candidate: `locate` (a path under a directory link is admitted in both spellings, physical under `/etc` and both carried at their own path, and each branch's exclusions match both) and `readable` (never a FIFO, socket or device; a final link is read only to carried config under `/etc`). `capture_config` in `mod.rs` asks `readable` on every branch
   - `ghost.rs`: the `%ghost` branch: the file-flags query, `classify_ghost` (what is general config, a credential, machine state, another section's file, generated, deferred), the interim machine-state member list and the `authselect check`/`authselect test` parsing (see `ghost-config-files.md`)
-  - `audit_rules.rs`: whether `/etc/audit/audit.rules` is written by `augenrules` or loaded directly, from the audit units after `/etc` overrides and drop-ins
+  - `audit_rules.rs`: whether `/etc/audit/audit.rules` is written by `augenrules`: only when the audit loader units are exactly as packaged, decided by what is present in the unit search path, never by reading a unit
 - `units/`: `UnitsInspector`, which writes the `units` section for every unit kind
   - `mod.rs`: the inspector: `systemctl list-unit-files`, the name gate, masks, drop-ins, owners, state changes, mount findings, instances found from links, the install comparison and the default target
   - `resolve.rs`: the unit file systemd would load for a name, from `/etc/systemd/system` and the vendor directory, and the search-path refusal (`UNREAD_SEARCH_PATH`)

@@ -134,7 +134,7 @@ regular files.
 | `/etc/chrony.keys` | chrony `cg` | `cn`, not a ghost | absent | Credential | NTP authentication keys, `<id> <hash> HEX:<key>` |
 | `/etc/machine-id`, `/etc/hostname` | systemd `cng` | yes | yes | MachineState | § 5.2 members |
 | `/etc/authselect/{nsswitch.conf,system-auth,password-auth,fingerprint-auth,smartcard-auth,postlogin,dconf-db,dconf-locks}` | authselect-libs `g` | yes | yes | Generated | `authselect select` writes them again |
-| `/etc/audit/audit.rules` | audit(-rules) `cng` | yes | yes | AuditRules | `augenrules --load` writes it from `rules.d` with the packaged units; the admin's when the host loads it directly |
+| `/etc/audit/audit.rules` | audit(-rules) `cng` | yes | yes | AuditRules | `augenrules --load` writes it from `rules.d` with the units exactly as packaged; carried with a warning otherwise |
 | `/etc/avahi/etc/localtime` | avahi `g` | yes | yes | Generated | avahi's `%post` copies `/etc/localtime` into its chroot |
 | `/etc/crypto-policies/state/*` | crypto-policies `g` | yes | yes | Generated | written from `config` |
 | `/etc/crypto-policies/back-ends/nss.config` | crypto-policies `cmng` | yes | yes | Generated | the walk's back-ends glob |
@@ -171,22 +171,44 @@ walk, orphans, authselect's edited files) runs both:
 
 - **`locate`, before any rule is asked.** The path is normalized (`.`
   and repeated separators removed; a `..` is refused), and its directory
-  is resolved with `resolve_final_target`. If that is not the directory
-  as spelled, a directory above the file is a link and the path is
-  refused. With `/etc/app/state -> /etc`, `/etc/app/state/chrony.keys`
-  read `/etc/chrony.keys` as `Config` before this; the same held for
-  `machine-id`, `shadow` and a `/etc/yum.repos.d` alias. A packaged path
-  refused this way (ghost or `rpm -Va`) is a scan warning; a walked one
-  is skipped silently, since the walk reaches the file under its own
-  name. Refusing outright was chosen over resolving the path and applying
-  every exclusion twice: measured on `rhel9` and `rhel10`, 2026-11-21,
-  after drift runs, no packaged file lies under a directory link in
-  `/etc` (`find /etc -type l -xtype d` against `rpm -qa` file lists),
-  and every directory link there points out of `/etc` (`/etc/httpd/logs`,
+  is resolved with `resolve_final_target`. The result is a `Located`:
+  the requested spelling and the physical one (the resolved directory
+  plus the file name), equal when no directory above is a link. Under a
+  link, the path is refused when the physical file is outside `/etc`
+  (`AliasLeavesEtc`) or when `classify_ghost` does not call either
+  spelling `Config` (`AliasToWithheld`: key material, host identity, the
+  account databases, another section's file, a generated file). Every
+  branch then applies its own exclusions (ownership, `rpm -Va` paths,
+  `is_excluded_unowned`, dev artifacts, DHCP, the SELinux store) to both
+  spellings through `Located::spellings`. With `/etc/app/state -> /etc`,
+  `/etc/app/state/chrony.keys` read `/etc/chrony.keys` as `Config` before
+  the first version of this gate; the same held for `machine-id`,
+  `shadow` and a `/etc/yum.repos.d` alias, and all stay refused. A
+  packaged path refused this way (ghost or `rpm -Va`) is a scan warning
+  naming the path and the physical file; a walked one is skipped
+  silently.
+- **What passes is collected at the requested spelling**, the path the
+  application reads. With `/etc/httpd/conf.d -> ../httpd-live` and an
+  unowned `/etc/httpd-live/site.conf`, httpd reads
+  `/etc/httpd/conf.d/site.conf`, and refusing it, as the gate first did,
+  lost the active site configuration, because a directory link is
+  never a config entry and neither export recreates it. The walk reaches
+  both spellings, and **both are kept**: the image has no link joining
+  them, so each name the host had needs its own file. The copy is
+  deliberate; a reader of either name gets the host's content.
+- **The walk does not enter a link to a directory above it**
+  (`is_symlink_to_ancestor` in `walk.rs`). `/etc/app/state -> /etc`
+  would otherwise list all of `/etc` again under `/etc/app/state/`, and
+  again inside that, now that aliased spellings are admitted. A link to
+  a sibling (`conf.d -> ../httpd-live`) is entered.
+- Measured on `rhel9` and `rhel10`, 2026-11-21, after drift runs: no
+  packaged file lies under a directory link in `/etc` (`find /etc -type
+  l -xtype d` against `rpm -qa` file lists), and every directory link
+  there points out of `/etc` (`/etc/httpd/logs`,
   `/etc/swid/swidtags.d/redhat.com`, which the walk already skips) or at
   a directory the walk reaches by its own name (`/etc/ssl/certs`,
-  `/etc/yum/vars`, `/etc/xdg/systemd/user`). The scans of those hosts
-  held no config entry under any of them.
+  `/etc/yum/vars`, `/etc/xdg/systemd/user`). So on a stock host the
+  second spelling adds files only where an administrator made the link.
 - **`readable`, inside `capture_config`.** A regular file is read. A
   link is followed to its end: `/dev/null` is a mask, kept empty and
   never opened; a FIFO, socket or device is never opened; a regular file
@@ -198,7 +220,15 @@ walk, orphans, authselect's edited files) runs both:
   and the allowlist) is a `CrossTreeSymlink` advisory with no content.
 - **The reads that only decide** (DHCP detection over
   `system-connections`, the crypto policy, the anacrontab modernization
-  rule, the audit units) check `opens_without_blocking` first.
+  rule, the empty-unit-file mask test in `is_excluded_unowned`) go
+  through `may_read_to_decide`: the same `locate` and `readable` as a
+  capture, so a link or linked directory to key material or out of
+  `/etc` is never opened even though nothing read is kept. A warning
+  never quotes file content: the crypto policy's invalid-value warning
+  names `/etc/crypto-policies/config` and a fixed reason. Before this,
+  `/etc/crypto-policies/config -> /etc/chrony.keys` put the key's first
+  line in the warning, which reaches the snapshot, the README, the HTML
+  report and the audit report, and `redact()` does not scan warnings.
 - **`rpm -Va` decides the kind before it reads**: a metadata-only row is
   dropped before content capture, so a ghost FIFO with a `.M.......` row
   is never opened.
@@ -232,26 +262,46 @@ ships commented (its own comment and the RHEL 9 hardening guide,
 `rules.d` exists, since the output starts with a header line, and loads
 the old file unchanged when `rules.d` is missing.
 
-`source` reads both loader units the way systemd would: the `/etc`
-unit file or the packaged one, then drop-ins from `<unit>.d/` and
-`service.d/` in `/etc` and `/usr/lib` in file-name order, an `/etc` one
-hiding a packaged one of the same name, an empty assignment clearing the
-setting, a `/dev/null` unit masked. Then:
+**`source` does not read the units.** Parsing them, as it first did,
+missed effective overrides: dash-prefix drop-in directories (`audit-.service.d`
+applies to `audit-rules.service`), `/run`, hidden files, type-wide
+precedence, zero-length masks, quoted arguments (`"--check"`) and
+continued lines. Each was a case where the scan dropped a file the host
+loads. So the file is `Augenrules` (not collected) only when all of
+this holds, by presence alone:
 
-| Host | Class | Both exports |
-|---|---|---|
-| a start command runs `augenrules` (not `--check`) and `rules.d` is a directory | `Augenrules`: not collected | not staged; `rules.d` carries the rules |
-| no start command runs `augenrules`, one runs `auditctl -R /etc/audit/audit.rules` | `LoadedDirectly`: collected as `RpmOwnedModified` | staged under `config/etc/audit/`, copied by `COPY config/etc/ /etc/`, as are the `/etc` override or drop-in, which the walk collects |
-| anything else (no `rules.d`, a masked or missing loader, an unreadable unit or drop-in) | `Unknown`: collected | staged, and a scan warning names the file and the reason |
+- `/etc/audit/rules.d` is a directory;
+- at least one loader unit (`auditd.service`, `audit-rules.service`) is
+  in `/usr/lib/systemd/system/`, a regular file the file-flags query
+  lists (`GhostQuery::packaged_units`), with no `rpm -Va` row;
+- for both units, nothing else exists at `<dir>/<unit>` or at any
+  drop-in directory systemd reads for it (`<unit>.d`, each dash prefix,
+  `service.d`), in every directory of the system unit search path
+  (`systemd.unit(5)`: `/etc`, `/run`, `/usr/local/lib`, the control,
+  attached, transient and generator directories, and `/usr/lib` beyond
+  the packaged file). A drop-in directory counts whatever it holds;
+- no top-level link in those directories names a loader unit under
+  another name (an alias, whose drop-ins systemd also reads).
+
+Anything else is `Carried(Reason)`: collected, staged by both exports,
+and a scan warning names the file and the path found (or the check that
+could not run). Neither clean guest has a `service.d` directory under
+`/etc` or `/usr/lib` (§ the `service.d` search in
+`real-host-validation-runs.md`), so the stock layouts measured on 9.8
+and 10.2 are `Augenrules`. A release that ships a type-wide vendor
+drop-in (Fedora's `service.d/10-timeout-abort.conf`) would carry the
+file with a warning on every host; that is the intended side to err on.
 
 Carrying is the safe side: a carried file `augenrules` regenerates is
 only rewritten at the first audit start, while a dropped file the host
 loads directly leaves the image with no audit rules. Nothing sets the
 host's 0640 on the staged file, as nothing does for the `rules.d` files.
 
-**Not measured:** no host here was switched to direct loading, so the
-`LoadedDirectly` row rests on the packaged unit's own instructions and
-the unit-file reading above, not on a booted image.
+**Not measured:** no host here was switched to direct loading, and the
+`/run` and alias checks rest on `systemd.unit(5)`, not on a booted host.
+A host where `audit-rules` is removed on RHEL 10 has only the packaged
+`auditd.service`, which loads nothing, and is called `Augenrules`; the
+file is dropped there, but nothing on that host loads it either.
 
 ## authselect
 
