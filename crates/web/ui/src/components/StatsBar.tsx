@@ -288,8 +288,10 @@ export function StatsBar({
         >
           <ModalHeader title="Reset to defaults?" />
           <ModalBody>
-            Reset all items to analysis defaults? This will revert all
-            include/exclude changes you have made.
+            Reset every change you have made back to the analysis
+            defaults? This clears your include and exclude choices, your
+            user account choices and any password you set. Reset cannot be
+            undone.
           </ModalBody>
           <ModalFooter>
             <Button

@@ -351,6 +351,23 @@ describe("StatsBar reset pending guard", () => {
     expect(screen.getByRole("button", { name: "Export" })).toHaveFocus();
   });
 
+  /**
+   * Reset clears the whole timeline, so Undo cannot bring the work back,
+   * and it clears user and password choices as well as include and
+   * exclude ones. The confirm has to say both before the operator agrees.
+   */
+  it("says what reset clears and that it cannot be undone", () => {
+    const { callback } = heldCallback();
+    renderWithReset(callback);
+    openConfirm();
+
+    const modal = screen.getByTestId("reset-confirm-modal");
+    expect(modal).toHaveTextContent(/include and exclude choices/);
+    expect(modal).toHaveTextContent(/user account choices/);
+    expect(modal).toHaveTextContent(/password/);
+    expect(modal).toHaveTextContent(/cannot be undone/);
+  });
+
   it("returns focus to the trigger when reset is cancelled", async () => {
     const user = userEvent.setup();
     const { callback } = heldCallback();
