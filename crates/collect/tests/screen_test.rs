@@ -515,6 +515,72 @@ fn an_incomplete_inventory_leaves_a_gap_and_withholds_everything() {
     );
 }
 
+/// A name that is not UTF-8 leaves a gap only where the rule could match
+/// that entry: a regular file only when its whole path matches, a
+/// directory when a path below it could. Under `/etc/cockpit/ws-certs.d`,
+/// whose rule is `*.key`, a certificate and a readme with Latin-1 names
+/// leave none; a file whose name ends `.key` and any directory there do.
+/// Directly under `/etc`, a directory cannot spell the `krb5.keytab.`
+/// stem, so it leaves none.
+#[test]
+fn a_raw_name_leaves_a_gap_only_where_the_entry_could_match() {
+    let certs = "/etc/cockpit/ws-certs.d";
+    let cases: [(&str, MockExecutor, Option<&str>); 6] = [
+        (
+            "Latin-1 certificate",
+            MockExecutor::new()
+                .with_dir(certs, vec![])
+                .with_raw_dir_entry(certs, b"caf\xe9.crt"),
+            None,
+        ),
+        (
+            "readme",
+            MockExecutor::new()
+                .with_dir(certs, vec![])
+                .with_raw_dir_entry(certs, b"README\xff.txt"),
+            None,
+        ),
+        (
+            "key",
+            MockExecutor::new()
+                .with_dir(certs, vec![])
+                .with_raw_dir_entry(certs, b"caf\xe9.key"),
+            Some(certs),
+        ),
+        (
+            "directory below a wildcard",
+            MockExecutor::new()
+                .with_dir(certs, vec![])
+                .with_raw_subdir(certs, b"old\xe9"),
+            Some(certs),
+        ),
+        (
+            "directory under /etc",
+            MockExecutor::new()
+                .with_dir("/etc", vec![])
+                .with_raw_subdir("/etc", b"\xe9quipe.d"),
+            None,
+        ),
+        (
+            "file under a keytab directory",
+            MockExecutor::new()
+                .with_dir("/etc", vec!["krb5.keytab.d"])
+                .with_dir("/etc/krb5.keytab.d", vec![])
+                .with_raw_dir_entry("/etc/krb5.keytab.d", b"k\xff"),
+            Some("/etc/krb5.keytab.d"),
+        ),
+    ];
+    let wrong: Vec<String> = cases
+        .iter()
+        .filter_map(|(name, host, want)| {
+            let gate = ScreenedExecutor::new(host);
+            let got = gate.gap().map(|g| g.dir.clone());
+            (got.as_deref() != *want).then(|| format!("{name}: gap {got:?}, want {want:?}"))
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// A host whose `/` is a directory on disk: host paths map below `root`,
 /// and links resolve on disk, so the inventory lists real directory
 /// entries with their raw names. Runs no commands.
@@ -738,4 +804,25 @@ fn raw_names_on_disk_leave_a_gap_only_where_a_rule_could_match() {
         gate.screen("/etc/app.conf"),
         Screened::Withheld(_)
     ));
+
+    // Under `ws-certs.d`, whose rule is `*.key`: regular files whose names
+    // cannot end `.key` leave no gap; one ending `.key`, and a directory a
+    // longer path could match below, do.
+    let certs = |names: &[&[u8]], dir: Option<&[u8]>| {
+        let tmp = tempfile::tempdir().expect("a host root");
+        let on_disk = tmp.path().join("etc/cockpit/ws-certs.d");
+        std::fs::create_dir_all(&on_disk).unwrap();
+        for name in names {
+            std::fs::write(on_disk.join(std::ffi::OsStr::from_bytes(name)), CERT).unwrap();
+        }
+        if let Some(dir) = dir {
+            std::fs::create_dir(on_disk.join(std::ffi::OsStr::from_bytes(dir))).unwrap();
+        }
+        let host = RootedHost::new(tmp.path());
+        ScreenedExecutor::new(&host).gap().map(|g| g.dir.clone())
+    };
+    assert_eq!(certs(&[b"caf\xe9.crt", b"README\xff.txt"], None), None);
+    let certs_dir = Some("/etc/cockpit/ws-certs.d".to_string());
+    assert_eq!(certs(&[b"caf\xe9.crt", b"caf\xe9.key"], None), certs_dir);
+    assert_eq!(certs(&[b"caf\xe9.crt"], Some(b"old\xe9")), certs_dir);
 }

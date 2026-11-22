@@ -1137,11 +1137,12 @@ impl RuleWalk<'_> {
                 .ok_or_else(|| gap(logical, ScreenGapCause::TooManyEntries))?;
             // A name that is not UTF-8 has no spelling the rule's string
             // can match or the gate can name, so it is decided from its
-            // bytes: a gap where the rule could match it or below it,
-            // else nothing. A UTF-8 name, a literal U+FFFD included, is an
-            // ordinary name.
+            // bytes and what the entry is: a gap where the rule matches a
+            // regular file's whole path, or could match a path below a
+            // directory; else nothing. A UTF-8 name, a literal U+FFFD
+            // included, is an ordinary name.
             let Some(name) = raw.to_str() else {
-                if self.nfa.read(state, raw_name_syms(&raw)).any_live() {
+                if self.raw_entry_could_match(exec, physical, &raw, state) {
                     return Err(gap(logical, ScreenGapCause::NameNotUtf8));
                 }
                 continue;
@@ -1183,6 +1184,35 @@ impl RuleWalk<'_> {
             self.walk(inodes, exec, &child, &next, &below, depth - 1)?;
         }
         Ok(())
+    }
+}
+
+impl RuleWalk<'_> {
+    /// Whether the rule could match the entry `raw`, a name that is not
+    /// UTF-8 in `physical` read under `state`: a regular file only when
+    /// its whole path matches, a directory when some path below it
+    /// could. An entry that cannot be statted (a dangling link) names no
+    /// file, as for a UTF-8 name; nor does anything else.
+    fn raw_entry_could_match(
+        &self,
+        exec: &dyn HostRead,
+        physical: &Path,
+        raw: &OsStr,
+        state: &MatchState,
+    ) -> bool {
+        let Ok(meta) = exec.file_metadata(&physical.join(raw)) else {
+            return false;
+        };
+        let syms = raw_name_syms(raw);
+        if meta.is_regular() {
+            self.nfa.read(state, syms).accepts()
+        } else if meta.is_directory() {
+            self.nfa
+                .read(state, syms.into_iter().chain([PathSym::Char('/')]))
+                .alive_below()
+        } else {
+            false
+        }
     }
 }
 
@@ -1233,9 +1263,9 @@ impl MatchState {
         self.0[..self.0.len() - 1].iter().any(|&live| live)
     }
 
-    /// Whether the path read so far, or some longer one, can match.
-    fn any_live(&self) -> bool {
-        self.0.iter().any(|&live| live)
+    /// Whether the path read so far matches.
+    fn accepts(&self) -> bool {
+        self.0.last().copied().unwrap_or(false)
     }
 
     /// Whether every position live in `other` is live here.
@@ -1882,47 +1912,49 @@ mod tests {
 
     /// A raw name is matched by its bytes: a run that is not UTF-8 equals
     /// no pattern character but a wildcard matches it.
+    /// A raw name is read with each invalid run as a symbol only a
+    /// wildcard takes. As a regular file it matters only when the rule
+    /// matches its whole path; as a directory, when a path below it could
+    /// match: a Latin-1 certificate under the `*.key` rule's directory is
+    /// no match as a file, but a directory of that name could hold one.
     #[test]
     fn a_raw_name_could_match_only_where_a_wildcard_takes_it() {
         use std::os::unix::ffi::OsStrExt;
-        let cases: &[(PathMatch, &str, &[u8], bool)] = &[
+        let keytab = Glob("/etc/krb5.keytab.*");
+        let private = Prefix("/etc/pki/tls/private/");
+        let insights = Glob("/etc/insights-client/.*");
+        let cockpit = Glob("/etc/cockpit/ws-certs.d/*.key");
+        let certs = "/etc/cockpit/ws-certs.d/";
+        // (rule, directory, name, matches as a file, could match below as a directory)
+        let cases: &[(PathMatch, &str, &[u8], bool, bool)] = &[
+            (keytab, "/etc/", b"\xe9quipe.conf", false, false),
+            (keytab, "/etc/", b"krb5.keytab.\xff", true, true),
+            (keytab, "/etc/", b"krb5\xff", false, false),
+            (private, "/etc/pki/tls/private/", b"k\xff.pem", true, true),
             (
-                Glob("/etc/krb5.keytab.*"),
-                "/etc/",
-                b"\xe9quipe.conf",
-                false,
-            ),
-            (
-                Glob("/etc/krb5.keytab.*"),
-                "/etc/",
-                b"krb5.keytab.\xff",
-                true,
-            ),
-            (Glob("/etc/krb5.keytab.*"), "/etc/", b"krb5\xff", false),
-            (
-                Prefix("/etc/pki/tls/private/"),
-                "/etc/pki/tls/private/",
-                b"k\xff.pem",
-                true,
-            ),
-            (
-                Glob("/etc/insights-client/.*"),
+                insights,
                 "/etc/insights-client/",
                 b"\xffstate",
                 false,
+                false,
             ),
-            (
-                Glob("/etc/insights-client/.*"),
-                "/etc/insights-client/",
-                b".\xff",
-                true,
-            ),
+            (insights, "/etc/insights-client/", b".\xff", true, true),
+            (cockpit, certs, b"caf\xe9.crt", false, true),
+            (cockpit, certs, b"README\xff.txt", false, true),
+            (cockpit, certs, b"caf\xe9.key", true, true),
         ];
-        for (rule, dir, name, want) in cases {
+        for (rule, dir, name, file, below) in cases {
             let nfa = nfa(*rule);
             let at = state(*rule, dir);
-            let read = nfa.read(&at, raw_name_syms(OsStr::from_bytes(name)));
-            assert_eq!(read.any_live(), *want, "{rule:?} {dir} {name:?}");
+            let syms = raw_name_syms(OsStr::from_bytes(name));
+            let read = nfa.read(&at, syms.iter().copied());
+            assert_eq!(read.accepts(), *file, "{rule:?} {dir} {name:?} as a file");
+            let under = nfa.read(&at, syms.into_iter().chain([PathSym::Char('/')]));
+            assert_eq!(
+                under.alive_below(),
+                *below,
+                "{rule:?} {dir} {name:?} as a directory"
+            );
         }
     }
 

@@ -61,6 +61,9 @@ pub struct MockExecutor {
     /// `read_dir` and `read_dir_strict` their lossy decoding, as the real
     /// executor does.
     raw_dir_entries: HashMap<String, Vec<std::ffi::OsString>>,
+    /// The raw entries that are directories, by the bytes of their full
+    /// path. Every other raw entry is a regular file.
+    raw_subdirs: HashSet<Vec<u8>>,
     links: HashMap<String, String>,
     /// Bind mounts: each path here is a directory with the inode of the
     /// directory it maps to, on a mount of its own with the id given. Its
@@ -115,6 +118,7 @@ impl MockExecutor {
             read_log: Mutex::new(Vec::new()),
             dirs: HashMap::new(),
             raw_dir_entries: HashMap::new(),
+            raw_subdirs: HashSet::new(),
             links: HashMap::new(),
             bind_mounts: HashMap::new(),
             mount_ids_known: true,
@@ -220,8 +224,9 @@ impl MockExecutor {
         self
     }
 
-    /// Add an entry whose name is the raw bytes `name`, which need not be
-    /// UTF-8, to the listing of the registered directory `path`.
+    /// Add a regular file whose name is the raw bytes `name`, which need
+    /// not be UTF-8, to the listing of the registered directory `path`.
+    /// `file_metadata` reports it as an empty regular file.
     pub fn with_raw_dir_entry(mut self, path: &str, name: &[u8]) -> Self {
         use std::os::unix::ffi::OsStrExt;
         self.raw_dir_entries
@@ -229,6 +234,47 @@ impl MockExecutor {
             .or_default()
             .push(std::ffi::OsStr::from_bytes(name).to_os_string());
         self
+    }
+
+    /// As [`with_raw_dir_entry`](Self::with_raw_dir_entry), for an empty
+    /// directory.
+    pub fn with_raw_subdir(mut self, path: &str, name: &[u8]) -> Self {
+        use std::os::unix::ffi::OsStrExt;
+        let full = Path::new(path).join(std::ffi::OsStr::from_bytes(name));
+        self.raw_subdirs
+            .insert(full.as_os_str().as_bytes().to_vec());
+        self.with_raw_dir_entry(path, name)
+    }
+
+    /// The metadata of a raw entry, by its full path's bytes: a path that
+    /// is not UTF-8 names no other registered file.
+    fn raw_metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = path.as_os_str().as_bytes();
+        let listed = path.parent().and_then(|dir| {
+            self.raw_dir_entries
+                .get(dir.to_str()?)?
+                .iter()
+                .find(|name| Some(name.as_os_str()) == path.file_name())
+        });
+        if listed.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                path.display().to_string(),
+            ));
+        }
+        let mode = if self.raw_subdirs.contains(bytes) {
+            DIRECTORY_MODE
+        } else {
+            DEFAULT_FILE_MODE
+        };
+        Ok(FileMetadata {
+            mode,
+            size: 0,
+            dev: MOCK_DEV,
+            ino: mock_inode(&String::from_utf8_lossy(bytes)),
+            nlink: 1,
+        })
     }
 
     pub fn with_link(mut self, path: &str, target: &str) -> Self {
@@ -520,6 +566,9 @@ impl Executor for MockExecutor {
     /// inode, and each other registered path has its own. Only a
     /// registered file, error-injected file or directory has metadata.
     fn file_metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        if path.to_str().is_none() {
+            return self.raw_metadata(path);
+        }
         let physical = self.resolve(path, true)?;
         let key = physical.to_str().unwrap_or("").to_string();
         if let Some(&error_kind) = self.file_errors.get(&key)
