@@ -478,6 +478,30 @@ pub fn dhcp_connection_paths(exec: &dyn Executor) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Collect case 15: the silent lists hold noise only. No exact entry
+    /// is a class member, and no class rule's path is one a retained glob
+    /// or prefix would hide from the walk. `BasenameSuffix` rules are
+    /// exempt by design: a `.keytab` in a silent directory reaches the
+    /// collector through the orphan branch.
+    #[test]
+    fn the_silent_lists_hold_no_machine_state_member() {
+        use inspectah_core::machine_state::{PathMatch, RULES, classify_path};
+        for path in UNOWNED_EXCLUDE_EXACT {
+            assert_eq!(classify_path(path), None, "{path} is a class member");
+        }
+        for (rule, _) in RULES {
+            let path = match *rule {
+                PathMatch::Exact(p) | PathMatch::Prefix(p) => p.to_string(),
+                PathMatch::Glob(g) => g.replace('*', "x"),
+                PathMatch::BasenameSuffix(_) => continue,
+            };
+            assert!(
+                !is_excluded_unowned_path(&path),
+                "{path}: a silent list hides a class rule's path"
+            );
+        }
+    }
     use crate::executor::mock::MockExecutor;
 
     // ---- Test 10: test_is_excluded_unowned_exact ----

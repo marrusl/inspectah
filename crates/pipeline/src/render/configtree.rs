@@ -1536,6 +1536,36 @@ pub fn write_env_files(snap: &InspectionSnapshot, output_dir: &Path) -> Result<(
 }
 
 #[cfg(test)]
+mod machine_state_tests {
+    use super::Destination;
+    use inspectah_core::machine_state::normal_path;
+
+    /// Collect case 15: the class's lexical pass and the export's agree,
+    /// so a path is one path to the classifier and to the stager.
+    #[test]
+    fn normal_path_agrees_with_destination() {
+        for path in [
+            "/etc/ssh/ssh_host_ed25519_key",
+            "etc/ssh/ssh_host_ed25519_key",
+            "/etc/ssh/./ssh_host_ed25519_key",
+            "/etc//ssh/ssh_host_ed25519_key",
+            "/etc/machine-id/",
+            "/etc/../etc/machine-id",
+            "/etc/x\ny",
+            "/etc/x\0",
+            "//",
+            "",
+        ] {
+            assert_eq!(
+                Destination::new(path).ok().map(|d| d.as_str().to_string()),
+                normal_path(path),
+                "{path:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use inspectah_core::types::FindingKind;
