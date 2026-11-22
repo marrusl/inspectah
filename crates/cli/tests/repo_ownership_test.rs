@@ -572,6 +572,61 @@ fn t3_a_rejected_keys_bytes_reach_no_snapshot_view_or_export() {
     assert_absent_from(PRIVATE_MATERIAL, &all);
 }
 
+/// A credential in a repo URL is replaced in the authority on every
+/// path a redacted scan writes: both snapshot copies, the scan tree, the
+/// refine view and the refine export. What is left of each URL is the
+/// host's, with `REDACTED` where the operator supplies the credential.
+#[test]
+fn t6_a_repo_url_credential_reaches_no_snapshot_view_or_export() {
+    const CRED: &str = "/etc/yum.repos.d/cred.repo";
+    let content = "[cred]\nname=Credentialed\n\
+                   baseurl=https://build:orchid92@repo.example.invalid/rpm/\n\
+                   \x20 https://mirror.example.invalid/rpm/,https://build:orchid92@alt.example.invalid/rpm/\n\
+                   mirrorlist=https://ml:violet55@mirrors.example.invalid/list\n\
+                   enabled=1\n\
+                   gpgkey=https://keys:tulip17@keys.example.invalid/RPM-GPG-KEY-cred\n";
+    let host = base_host()
+        .file(CRED, content)
+        .package_from("cred-tool", "cred");
+    let snap = scan_finished(host);
+    let carried = "[cred]\nname=Credentialed\n\
+                   baseurl=https://REDACTED@repo.example.invalid/rpm/\n\
+                   \x20 https://mirror.example.invalid/rpm/,https://REDACTED@alt.example.invalid/rpm/\n\
+                   mirrorlist=https://REDACTED@mirrors.example.invalid/list\n\
+                   enabled=1\n\
+                   gpgkey=https://REDACTED@keys.example.invalid/RPM-GPG-KEY-cred\n";
+    let repo = rpm(&snap)
+        .repo_files
+        .iter()
+        .find(|f| f.path == CRED)
+        .unwrap();
+    assert_eq!(repo.content, carried);
+    assert_eq!(config_row(&snap, CRED).unwrap().content, carried);
+    assert!(
+        snap.redactions
+            .iter()
+            .any(|r| r.path == CRED && r.pattern == "url_credential")
+    );
+
+    let loaded = reload(&snap);
+    let tree = render_export(&loaded);
+    assert_eq!(staged(tree.path(), CRED).as_deref(), Some(carried));
+    let mut all = vec![(
+        "snapshot".to_string(),
+        serde_json::to_vec(&snap).expect("the snapshot serializes"),
+    )];
+    all.extend(tree_files(tree.path()));
+    let s = session(&loaded);
+    assert_eq!(
+        staged(export_session(&s).path(), CRED).as_deref(),
+        Some(carried)
+    );
+    all.extend(refine_artifacts(&s));
+    for secret in ["orchid92", "violet55", "tulip17"] {
+        assert_absent_from(secret, &all);
+    }
+}
+
 /// A key file that is an OpenPGP secret key and nothing else is withheld
 /// by the read gate: no key entry, a withheld config row, the reason
 /// recorded, and its bytes nowhere.

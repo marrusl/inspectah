@@ -717,8 +717,9 @@ const AUTHORITY_TERMINATORS: [char; 3] = ['/', '?', '#'];
 
 /// Scrub embedded auth credentials from a URL string.
 /// Replaces `://user:pass@host` with `://REDACTED@host` and
-/// `://token@host` with `://REDACTED@host`.
-fn scrub_url_auth(url: &str) -> String {
+/// `://token@host` with `://REDACTED@host`. The redaction pass applies it
+/// to the URLs in `.repo` files too.
+pub(crate) fn scrub_url_auth(url: &str) -> String {
     // Find the authority section: everything between :// and the end of
     // the authority. If there's no ://, or no @ in the authority, the URL
     // has no embedded auth.

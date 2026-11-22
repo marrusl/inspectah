@@ -57,6 +57,19 @@ test for a new warning puts a sentinel credential in the host value and
 asserts it is absent from every file of both exports and from refine's
 view and sections.
 
+## A credential in a URL authority has no generic pattern
+
+`PATTERNS` matches the PostgreSQL, MongoDB, Redis and JDBC URL forms
+only, so `https://user:pass@host/` passes the generic pass untouched.
+Every place that holds URLs a host can embed a credential in needs a
+dedicated scrub in `redact()`: manifests use `scrub_manifest_auth`, proxy
+lines `mask_proxy_credentials`, and `.repo` files and their Configuration
+rows `scrub_repo_urls`, which applies `scrub_url_auth` to every URL of a
+value (split on whitespace and commas, as dnf splits it), continuation
+lines included. A repo URL's credential becomes `REDACTED` in the
+authority, so the operator can see where to supply it. A raw
+(`--no-redaction`) scan keeps it, by design.
+
 ## Search forward from the key, never from the start of the line
 
 This was the single defect behind eight separate credential leaks

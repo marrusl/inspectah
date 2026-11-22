@@ -12,7 +12,8 @@ use std::ops::Range;
 use std::sync::LazyLock;
 
 use crate::redaction::patterns::{PATTERNS, SECRET_GROUP, SecretPattern, scan_shadow};
-use crate::render::language_packages::scrub_manifest_auth;
+use crate::render::language_packages::{scrub_manifest_auth, scrub_url_auth};
+use inspectah_core::types::destination::Destination;
 
 /// Paths that are known false-positive sources for credential scanning.
 /// Files under these prefixes use keywords like "password", "auth", and
@@ -30,6 +31,44 @@ const URL_AUTH_REDACTED_MARKER: &str = "://REDACTED@";
 /// of a secret value. Same job as `URL_AUTH_REDACTED_MARKER`: that scrubber
 /// also rewrites content it did not scrub, so the marker is the signal.
 const COMPOSE_REDACTED_MARKER: &str = "<REDACTED>";
+
+/// A URL in a `.repo` option value: a scheme, `://`, then everything up to
+/// whitespace or a comma, which is how dnf splits a `baseurl=`,
+/// `mirrorlist=`, `metalink=` or `gpgkey=` value into URLs.
+static REPO_URL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s,]+").expect("repo URL regex"));
+
+/// `text`, a `.repo` file or its Configuration row, with the credential in
+/// every URL's authority replaced by `REDACTED` ([`scrub_url_auth`]):
+/// `https://user:pass@host/` and `https://token@host/` both become
+/// `https://REDACTED@host/`, a placeholder the operator fills in with the
+/// credential at build time. Every URL of a value and of its continuation
+/// lines is one match. `None` when no URL held a credential.
+///
+/// `PATTERNS` has no rule for a password in an arbitrary URL's authority,
+/// so without this an ordinary redacted scan kept a repo's password in
+/// both snapshot copies and in the staged `.repo` file.
+fn scrub_repo_urls(text: &str, path: &str) -> Option<(String, RedactionFinding)> {
+    let scrubbed = REPO_URL_RE.replace_all(text, |caps: &Captures| scrub_url_auth(&caps[0]));
+    if scrubbed == text {
+        return None;
+    }
+    let finding = RedactionFinding {
+        path: path.to_string(),
+        source: "repo_url_credential".into(),
+        kind: RedactionKind::Inline,
+        pattern: "url_credential".into(),
+        remediation: "Remove the credential from the repo URL; supply it to the build \
+                      as a secret instead of baking it into the image"
+            .to_string(),
+        line: None,
+        replacement: None,
+        detection_method: DetectionMethod::Pattern,
+        confidence: Some(Confidence::High),
+        finding_kind: Some(FindingKind::Password),
+    };
+    Some((scrubbed.into_owned(), finding))
+}
 
 /// Returns true if `path` matches a known false-positive prefix.
 /// Handles both absolute and relative path forms.
@@ -1182,10 +1221,24 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // Taken before the config pass scrubs anything: the sysctl pass needs
     // the text as read to know whether a config entry is the same copy.
     let config_originals = config_originals_at_sysctl_paths(snapshot);
+    // A `.repo` file's Configuration row holds the same URLs as its repo
+    // inventory entry, and both reach the snapshot.
+    let repo_files: HashSet<Destination> = snapshot
+        .rpm
+        .iter()
+        .flat_map(|rpm| &rpm.repo_files)
+        .filter_map(|f| Destination::new(&f.path).ok())
+        .collect();
 
     // Scan config file contents
     if let Some(ref mut config) = snapshot.config {
         for file in &mut config.files {
+            if Destination::new(&file.path).is_ok_and(|d| repo_files.contains(&d))
+                && let Some((scrubbed, finding)) = scrub_repo_urls(&file.content, &file.path)
+            {
+                file.content = scrubbed;
+                all_findings.push(finding);
+            }
             let findings = scan_content(&file.content, &file.path);
             if !findings.is_empty() {
                 let mut content = file.content.clone();
@@ -1211,6 +1264,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // Scan repo file contents for embedded credentials
     if let Some(ref mut rpm) = snapshot.rpm {
         for repo_file in &mut rpm.repo_files {
+            if let Some((scrubbed, finding)) = scrub_repo_urls(&repo_file.content, &repo_file.path)
+            {
+                repo_file.content = scrubbed;
+                all_findings.push(finding);
+            }
             let findings = scan_content(&repo_file.content, &repo_file.path);
             if !findings.is_empty() {
                 let mut content = repo_file.content.clone();
@@ -3104,6 +3162,80 @@ baseurl = https://cdn.redhat.com
             !snapshot.redactions.is_empty(),
             "redactions must contain findings from repo file"
         );
+    }
+
+    /// A credential in any URL of a `.repo` file, and of its Configuration
+    /// row, is replaced in the authority, whatever option holds it, however
+    /// many URLs a value lists and across continuation lines. The rest of
+    /// each URL, and a URL with no credential, is left as written.
+    #[test]
+    fn test_redact_scrubs_credentials_in_repo_urls() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::rpm::{RepoFile, RpmSection};
+        const PATH: &str = "/etc/yum.repos.d/custom.repo";
+        let content = "[custom]\n\
+            baseurl=https://build:orchid92@repo.example.invalid/rpm/\n\
+            \x20 https://mirror.example.invalid/rpm/, ftp://ftpuser:tulip17@ftp.example.invalid/rpm/\n\
+            mirrorlist=https://ml-user:violet55@mirrors.example.invalid/list?arch=x86_64\n\
+            metalink=https://ghp_0123456789abcdefghijklmnopqrstuvwxyzAB@meta.example.invalid/m\n\
+            gpgkey=https://keys:p@ss@keys.example.invalid/RPM-GPG-KEY file:///etc/pki/rpm-gpg/K\n";
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.rpm = Some(RpmSection {
+            repo_files: vec![RepoFile {
+                path: PATH.into(),
+                content: content.into(),
+                disposition: SnapshotFindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        snapshot.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "etc/yum.repos.d//custom.repo".into(),
+                content: content.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        redact(&mut snapshot, &RedactOptions::default());
+        let expected = "[custom]\n\
+            baseurl=https://REDACTED@repo.example.invalid/rpm/\n\
+            \x20 https://mirror.example.invalid/rpm/, ftp://REDACTED@ftp.example.invalid/rpm/\n\
+            mirrorlist=https://REDACTED@mirrors.example.invalid/list?arch=x86_64\n\
+            metalink=https://REDACTED@meta.example.invalid/m\n\
+            gpgkey=https://REDACTED@keys.example.invalid/RPM-GPG-KEY file:///etc/pki/rpm-gpg/K\n";
+        assert_eq!(
+            snapshot.rpm.as_ref().unwrap().repo_files[0].content,
+            expected
+        );
+        assert_eq!(snapshot.config.as_ref().unwrap().files[0].content, expected);
+        let repo_findings = snapshot
+            .redactions
+            .iter()
+            .filter(|f| f.pattern == "url_credential")
+            .count();
+        assert_eq!(repo_findings, 2, "{:?}", snapshot.redactions);
+        assert!(
+            matches!(
+                snapshot.redaction_state,
+                Some(RedactionState::FullyRedacted { .. })
+            ),
+            "{:?}",
+            snapshot.redaction_state
+        );
+
+        // An ordinary config file's URLs are left to the generic patterns.
+        let mut other = InspectionSnapshot::new();
+        other.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/app.conf".into(),
+                content: "url=https://example.invalid/\n".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        redact(&mut other, &RedactOptions::default());
+        assert!(other.redactions.is_empty());
     }
 
     #[test]

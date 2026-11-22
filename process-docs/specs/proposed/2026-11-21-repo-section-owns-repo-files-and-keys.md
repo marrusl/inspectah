@@ -439,6 +439,8 @@ An aggregate's export gives § 6.5's notice for the key instead, with this one's
 
 When no redaction finding names the file, the cause reads `its [section] headers were changed after the scan`.
 
+**A credential in a repo URL.** `PATTERNS` has no rule for a password in an arbitrary URL's authority, so `baseurl=https://build:<password>@repo.example/` kept its password in `rpm.repo_files`, in the file's Configuration row and in the staged `.repo` file. `redact` replaces the userinfo of every URL in a repo file and in a Configuration row at a repo file's destination with `REDACTED` (`https://REDACTED@repo.example/`), through the manifest scrubber's `scrub_url_auth`: `baseurl`, `mirrorlist`, `metalink` and remote `gpgkey=` values alike, each URL of a value and its continuation lines. The rest of the URL is left as written, as the place the operator supplies the credential. A local `gpgkey=file://` reference has no authority and is never touched, so this cannot cost a key its owner.
+
 `<repo files>` are the paths of `snapshot.redactions` findings whose destination is in `rpm.repo_files`, shortened as § 6.5's host list is. In a single-host snapshot, redaction is the only stage after collection that rewrites repo content, so it is the only cause of a key with no owner there; for a snapshot another version wrote, where no redaction finding names a repo file, the clause reads `a gpgkey= reference that named it was changed after the scan`. Making redaction skip `gpgkey=` values is not this spec's call: a remote key URL can carry a real token, and the redaction rules are their own spec's.
 
 ## 7. The refine half (frontend)
