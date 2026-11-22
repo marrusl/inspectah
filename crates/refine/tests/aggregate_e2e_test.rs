@@ -41,6 +41,7 @@ fn make_e2e_snapshot() -> InspectionSnapshot {
         ..Default::default()
     };
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             // /etc/app/main.conf — variant A (3 hosts, Selected)
             ConfigFileEntry {

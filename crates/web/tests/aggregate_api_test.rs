@@ -364,6 +364,7 @@ fn aggregate_state_with_variants() -> Arc<AppState> {
         section_host_counts: BTreeMap::new(),
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: "/etc/app/config.conf".into(),
@@ -545,6 +546,7 @@ async fn aggregate_diff_422_binary() {
         section_host_counts: BTreeMap::new(),
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: "/etc/binary.conf".into(),

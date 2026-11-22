@@ -1223,6 +1223,7 @@ mod tests {
             let pkg = from_repo("r", exact("r"));
             let mut snap = snapshot_with(&pkg, files);
             snap.config = Some(inspectah_core::types::config::ConfigSection {
+                withheld: Vec::new(),
                 files: config
                     .into_iter()
                     .map(|(path, content)| config_entry(path, content))
@@ -1280,6 +1281,7 @@ mod tests {
             );
             snap.rpm.as_mut().expect("an rpm section").gpg_keys = vec![key];
             snap.config = Some(inspectah_core::types::config::ConfigSection {
+                withheld: Vec::new(),
                 files: config
                     .into_iter()
                     .map(|(path, content)| config_entry(path, content))

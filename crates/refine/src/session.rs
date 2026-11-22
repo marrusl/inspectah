@@ -6034,6 +6034,7 @@ mod tests {
         // The custom tuned profile is plain config now (§ 3.5), so it
         // travels under config/etc/ rather than a tuned/ promoted root.
         snap.config = Some(inspectah_core::types::config::ConfigSection {
+            withheld: Vec::new(),
             files: vec![inspectah_core::types::config::ConfigFileEntry {
                 path: "/etc/tuned/my-profile/tuned.conf".into(),
                 category: inspectah_core::types::config::ConfigCategory::Tuned,
@@ -6460,6 +6461,7 @@ mod tests {
         let failure = FindingKind::advisory(AdvisoryType::ContentNotCaptured, "permission denied");
         let mut snap = InspectionSnapshot {
             config: Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![
                     ConfigFileEntry {
                         path: "/etc/crypttab".into(),
@@ -6667,7 +6669,10 @@ mod tests {
                 default_target: None,
                 enabled_on_any_host: Vec::new(),
             }),
-            config: Some(ConfigSection { files: vec![] }),
+            config: Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             ..Default::default()
         };
 
@@ -7714,7 +7719,10 @@ mod tests {
             ],
             ..Default::default()
         });
-        snap.config = Some(ConfigSection { files: vec![] });
+        snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
+            files: vec![],
+        });
 
         let session = RefineSession::new(snap);
         let view = session.view();
@@ -7798,7 +7806,10 @@ mod tests {
             ],
             ..Default::default()
         });
-        snap.config = Some(ConfigSection { files: vec![] });
+        snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
+            files: vec![],
+        });
 
         let session = RefineSession::new(snap);
         let view = session.view();
@@ -7856,7 +7867,10 @@ mod tests {
             ],
             ..Default::default()
         });
-        snap.config = Some(ConfigSection { files: vec![] });
+        snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
+            files: vec![],
+        });
 
         let mut session = RefineSession::new(snap);
 
@@ -8758,6 +8772,7 @@ mod tests {
 
         let mut snap = test_snapshot();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![
                 entry(
                     ADVISORY_CONFIG_PATH,
@@ -9624,6 +9639,7 @@ mod tests {
                 let path = case(&s);
                 let snap = InspectionSnapshot {
                     config: Some(ConfigSection {
+                        withheld: Vec::new(),
                         files: vec![ConfigFileEntry {
                             path: path.clone(),
                             content: PWNED.into(),

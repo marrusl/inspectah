@@ -771,6 +771,10 @@ fn render_sysctl_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
                     UnknownInput::RedactedFile { file } => {
                         fill(REDACTED_FILE_LINE, &[("path", &md_code(&file.path()))])
                     }
+                    UnknownInput::WithheldFile { file } => fill(
+                        super::sysctl_report::WITHHELD_FILE_LINE,
+                        &[("path", &md_code(&file.path()))],
+                    ),
                     UnknownInput::RedactedRuntime { key } => {
                         fill(REDACTED_RUNTIME_LINE, &[("key", &md_code(key.as_str()))])
                     }
@@ -1508,6 +1512,7 @@ mod tests {
 
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![
                 ConfigFileEntry {
                     path: "/etc/init.d/legacy-app".into(),
@@ -1801,6 +1806,7 @@ mod tests {
 
         // Add config file with variant conflict
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![
                 ConfigFileEntry {
                     path: "/etc/app.conf".into(),

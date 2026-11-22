@@ -175,6 +175,7 @@ fn symlink(path: String, target: String) -> UnmanagedFile {
 fn with_config_file(path: &str) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: path.into(),
             content: "x=1\n".into(),

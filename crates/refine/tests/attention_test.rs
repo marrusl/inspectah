@@ -235,6 +235,7 @@ fn test_no_repo_always_investigate() {
 fn config_modified_gets_site() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
@@ -254,6 +255,7 @@ fn config_modified_gets_site() {
 fn config_rpm_default_gets_baseline() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/logrotate.conf".into(),
             kind: ConfigFileKind::RpmOwnedDefault,
@@ -269,6 +271,7 @@ fn config_rpm_default_gets_baseline() {
 fn sensitive_path_adds_annotation() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/ssh/custom_config".into(),
             kind: ConfigFileKind::Unowned,
@@ -289,6 +292,7 @@ fn sensitive_path_adds_annotation() {
 fn sensitive_path_annotation_on_modified_too() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/ssh/sshd_config".into(),
             kind: ConfigFileKind::RpmOwnedModified,
@@ -316,6 +320,7 @@ fn empty_snapshot_returns_empty() {
 fn unresolved_hints_surface_as_investigate() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/config".into(),
             kind: ConfigFileKind::RpmOwnedModified,
@@ -346,6 +351,7 @@ fn unresolved_hints_surface_as_investigate() {
 fn fully_redacted_snapshot_no_hint_tags() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/config".into(),
             kind: ConfigFileKind::RpmOwnedModified,
@@ -366,6 +372,7 @@ fn fully_redacted_snapshot_no_hint_tags() {
 fn make_snap_with_config(path: &str, kind: ConfigFileKind) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: path.into(),
             kind,

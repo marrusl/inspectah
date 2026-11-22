@@ -2208,6 +2208,7 @@ mod finalize_tests {
             ..Default::default()
         });
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: DROP_IN.into(),
                 disposition,
@@ -2266,6 +2267,7 @@ mod finalize_tests {
             ..Default::default()
         });
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: FULL_SHADOW.into(),
                 disposition: FindingKind::included(),
@@ -2295,6 +2297,7 @@ mod finalize_tests {
                 ..Default::default()
             });
             snap.config = Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![ConfigFileEntry {
                     path,
                     disposition: FindingKind::included(),
@@ -2324,6 +2327,7 @@ mod finalize_tests {
             ..Default::default()
         });
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: String::new(),
                 disposition: FindingKind::included(),

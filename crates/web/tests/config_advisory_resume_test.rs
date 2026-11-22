@@ -25,6 +25,7 @@ const AUTOSAVE_SCHEMA_VERSION: u32 = 3;
 fn advisory_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: ADVISORY_PATH.into(),
             kind: ConfigFileKind::Unowned,

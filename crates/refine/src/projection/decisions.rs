@@ -732,7 +732,10 @@ mod tests {
                 ],
                 ..Default::default()
             }),
-            config: Some(ConfigSection { files: vec![] }),
+            config: Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             ..Default::default()
         };
         snap.schema_version = inspectah_core::snapshot::SCHEMA_VERSION;

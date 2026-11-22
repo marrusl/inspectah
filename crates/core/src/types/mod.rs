@@ -6,6 +6,7 @@ pub use finding::{AdvisoryType, FindingKind, ShadowType};
 pub mod containers;
 pub mod group_render;
 pub mod kernelboot;
+pub mod machine_state;
 pub mod network;
 pub mod nonrpm;
 pub mod os;

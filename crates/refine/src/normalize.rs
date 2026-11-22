@@ -504,6 +504,7 @@ mod tests {
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             config: Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![ConfigFileEntry {
                     path: "/etc/init.d/legacy-app".into(),
                     kind: ConfigFileKind::Unowned,
@@ -930,7 +931,10 @@ mod tests {
         use inspectah_core::types::config::ConfigSection;
         InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
-            config: Some(ConfigSection { files }),
+            config: Some(ConfigSection {
+                withheld: Vec::new(),
+                files,
+            }),
             ..Default::default()
         }
     }
@@ -1060,6 +1064,7 @@ mod tests {
                 ..Default::default()
             }),
             config: Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![
                     ConfigFileEntry {
                         path: "/etc/crypttab".into(),

@@ -32,6 +32,7 @@ fn single_host_snapshot() -> InspectionSnapshot {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
@@ -71,6 +72,7 @@ fn aggregate_snapshot_with_variants() -> InspectionSnapshot {
 
     // Replace config with Selected + Alternative variants
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),

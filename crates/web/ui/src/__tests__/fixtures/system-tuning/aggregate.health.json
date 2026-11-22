@@ -16,7 +16,7 @@
     "os_id": "rhel",
     "os_name": "Red Hat Enterprise Linux",
     "os_version": "9.4",
-    "schema_version": 30,
+    "schema_version": 31,
     "system_type": "package-mode"
   },
   "policy": {

@@ -1101,6 +1101,7 @@ mod tests {
                 ..Default::default()
             }),
             config: Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![
                     CfgEntry {
                         path: "/etc/yum.repos.d/rpmfusion-free.repo".into(),
@@ -1148,6 +1149,7 @@ mod tests {
                 ..Default::default()
             }),
             config: Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![CfgEntry {
                     path: "/etc/yum.repos.d/epel.repo".into(),
                     disposition: FindingKind::included(),
@@ -1522,6 +1524,7 @@ mod tests {
                 }],
             }),
             config: Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![ConfigFileEntry {
                     path: "/etc/httpd/conf/httpd.conf".into(),
                     disposition: FindingKind::included(),
@@ -1665,7 +1668,10 @@ mod anaconda_classification {
             Some(vec!["glibc".into()]),
             vec![anaconda_pkg("grub2-efi-aa64-cdboot"), anaconda_pkg("httpd")],
             Some(empty_service_section()),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![],
         );
         let result = classify_packages(&snap);
@@ -1700,7 +1706,10 @@ mod anaconda_classification {
                 ..Default::default()
             }],
             Some(empty_service_section()),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![],
         );
         let result = classify_packages(&snap);
@@ -1737,7 +1746,10 @@ mod anaconda_classification {
                 ..Default::default()
             }],
             Some(empty_service_section()),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![],
         );
         let result = classify_packages(&snap);
@@ -1757,7 +1769,10 @@ mod anaconda_classification {
             Some(vec!["glibc".into()]),
             vec![local],
             Some(empty_service_section()),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![],
         );
         let result = classify_packages(&snap);
@@ -1799,6 +1814,7 @@ mod anaconda_classification {
                 enabled_on_any_host: Vec::new(),
             }),
             Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![ConfigFileEntry {
                     path: "/etc/firewalld/zones/custom.xml".into(),
                     kind: ConfigFileKind::RpmOwnedModified,
@@ -1832,6 +1848,7 @@ mod anaconda_classification {
             vec![anaconda_pkg("sudo")],
             Some(empty_service_section()),
             Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![ConfigFileEntry {
                     path: "/etc/sudoers".into(),
                     kind: ConfigFileKind::RpmOwnedModified,
@@ -1869,7 +1886,10 @@ mod anaconda_classification {
                 anaconda_pkg("biosdevname"),
             ],
             Some(empty_service_section()),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![FileOwnershipEntry {
                 package_name: "dummy".into(),
                 paths: vec!["/etc/dummy".into()],
@@ -1908,7 +1928,10 @@ mod anaconda_classification {
             Some(vec!["glibc".into()]),
             vec![anaconda_pkg("cronie"), anaconda_pkg("audit")],
             Some(empty_service_section()),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![FileOwnershipEntry {
                 package_name: "dummy".into(),
                 paths: vec!["/etc/dummy".into()],
@@ -1959,7 +1982,10 @@ mod anaconda_classification {
             Some(vec!["glibc".into()]),
             vec![anaconda_pkg("firewalld")],
             Some(empty_service_section()),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![], // empty file_ownership
         );
         let result = classify_packages(&snap);
@@ -1981,7 +2007,10 @@ mod anaconda_classification {
             Some(vec!["glibc".into()]),
             vec![httpd],
             Some(empty_service_section()),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![],
         );
         let result = classify_packages(&snap);
@@ -2010,7 +2039,10 @@ mod anaconda_classification {
             Some(vec!["glibc".into()]),
             packages.clone(),
             Some(empty_service_section()),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![FileOwnershipEntry {
                 package_name: "dummy".into(),
                 paths: vec!["/dummy".into()],
@@ -2023,7 +2055,10 @@ mod anaconda_classification {
             Some(vec!["glibc".into()]),
             packages.clone(),
             Some(empty_service_section()),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![FileOwnershipEntry {
                 package_name: "dummy".into(),
                 paths: vec!["/dummy".into()],
@@ -2039,7 +2074,10 @@ mod anaconda_classification {
             Some(vec!["glibc".into()]),
             packages.clone(),
             Some(empty_service_section()),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![FileOwnershipEntry {
                 package_name: "dummy".into(),
                 paths: vec!["/dummy".into()],
@@ -2128,7 +2166,10 @@ mod anaconda_classification {
                 default_target: None,
                 enabled_on_any_host: Vec::new(),
             }),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![FileOwnershipEntry {
                 package_name: "dummy".into(),
                 paths: vec!["/dummy".into()],
@@ -2189,7 +2230,10 @@ mod anaconda_classification {
                 default_target: None,
                 enabled_on_any_host: Vec::new(),
             }),
-            Some(ConfigSection { files: vec![] }),
+            Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![],
+            }),
             vec![FileOwnershipEntry {
                 package_name: "dummy".into(),
                 paths: vec!["/dummy".into()],
@@ -2596,6 +2640,7 @@ mod tuned_classification {
                 ..Default::default()
             }),
             config: Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![
                     ConfigFileEntry {
                         path: "/etc/tuned/my-custom-profile/tuned.conf".to_string(),

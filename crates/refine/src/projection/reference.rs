@@ -1813,6 +1813,7 @@ mod tests {
         let snap = InspectionSnapshot {
             kernel_boot: None,
             config: Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![ConfigFileEntry {
                     path: "/etc/modprobe.d/myapp.conf".into(),
                     category: ConfigCategory::KernelModule,
@@ -1890,6 +1891,7 @@ mod tests {
         let snap = InspectionSnapshot {
             kernel_boot: Some(KernelBootSection::default()),
             config: Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![
                     entry(
                         "/etc/modules-load.d/br_netfilter.conf",
@@ -3068,6 +3070,7 @@ mod tests {
         let snap = InspectionSnapshot {
             selinux: Some(SelinuxSection::default()),
             config: Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![
                     ConfigFileEntry {
                         path: "/etc/audit/rules.d/custom.rules".into(),

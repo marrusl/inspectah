@@ -652,6 +652,7 @@ fn redaction_state_set_after_engine() {
 
     // Plant content with a secret that the redaction engine will detect
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/config".into(),
             content: "db_password = s3cretP@ss\n".into(),

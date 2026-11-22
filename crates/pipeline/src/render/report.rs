@@ -1633,6 +1633,10 @@ fn unknown_input_runs(input: &UnknownInput) -> Vec<serde_json::Value> {
         UnknownInput::RedactedFile { file } => {
             sysctl_runs(REDACTED_FILE_LINE, &[("path", Hole::Value(&file.path()))])
         }
+        UnknownInput::WithheldFile { file } => sysctl_runs(
+            super::sysctl_report::WITHHELD_FILE_LINE,
+            &[("path", Hole::Value(&file.path()))],
+        ),
         UnknownInput::RedactedRuntime { key } => {
             sysctl_runs(REDACTED_RUNTIME_LINE, &[("key", Hole::Value(key.as_str()))])
         }
@@ -1791,6 +1795,7 @@ mod tests {
 
         let mut snap = test_snapshot();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![
                 ConfigFileEntry {
                     path: ADVISORY_PATH.into(),
@@ -2297,6 +2302,7 @@ mod tests {
     fn test_report_contains_config_section() {
         let mut snap = test_snapshot();
         snap.config = Some(inspectah_core::types::config::ConfigSection {
+            withheld: Vec::new(),
             files: vec![inspectah_core::types::config::ConfigFileEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 kind: inspectah_core::types::config::ConfigFileKind::RpmOwnedModified,
@@ -2319,6 +2325,7 @@ mod tests {
     fn test_report_config_table_columns() {
         let mut snap = test_snapshot();
         snap.config = Some(inspectah_core::types::config::ConfigSection {
+            withheld: Vec::new(),
             files: vec![inspectah_core::types::config::ConfigFileEntry {
                 path: "/etc/sysctl.conf".into(),
                 kind: inspectah_core::types::config::ConfigFileKind::Unowned,
@@ -2350,6 +2357,7 @@ mod tests {
     fn test_report_config_shows_package_column_when_present() {
         let mut snap = test_snapshot();
         snap.config = Some(inspectah_core::types::config::ConfigSection {
+            withheld: Vec::new(),
             files: vec![inspectah_core::types::config::ConfigFileEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),
                 kind: inspectah_core::types::config::ConfigFileKind::RpmOwnedModified,
@@ -2369,7 +2377,10 @@ mod tests {
     #[test]
     fn test_report_empty_config_shows_empty_state() {
         let mut snap = test_snapshot();
-        snap.config = Some(inspectah_core::types::config::ConfigSection { files: vec![] });
+        snap.config = Some(inspectah_core::types::config::ConfigSection {
+            withheld: Vec::new(),
+            files: vec![],
+        });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
             html.contains("(0)"),
@@ -3586,6 +3597,7 @@ mod tests {
         });
 
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/sysconfig/network".into(),
                 content: "NETWORKING=yes".into(),

@@ -59,6 +59,7 @@ fn test_snapshot() -> InspectionSnapshot {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
@@ -1295,6 +1296,7 @@ fn export_allowlist_includes_unmanaged_root() {
     // Build a snapshot with unmanaged files
     let mut snap = test_snapshot();
     snap.unmanaged_files = Some(UnmanagedFileSection {
+        withheld: Vec::new(),
         items: vec![UnmanagedFile {
             path: "/opt/myapp/server".into(),
             size: 1024,
@@ -1348,6 +1350,7 @@ fn export_prunes_excluded_unmanaged_files() {
     // Build a snapshot with two unmanaged files, one include:false
     let mut snap = test_snapshot();
     snap.unmanaged_files = Some(UnmanagedFileSection {
+        withheld: Vec::new(),
         items: vec![
             UnmanagedFile {
                 path: "/opt/app/included".into(),

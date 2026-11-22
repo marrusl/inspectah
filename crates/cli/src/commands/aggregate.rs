@@ -638,6 +638,25 @@ mod tests {
         );
     }
 
+    /// A schema-30 host tarball carries its keytab as ordinary config. The
+    /// aggregate loader refuses it by version, so no host's credential
+    /// reaches the merge.
+    #[test]
+    fn schema_30_snapshot_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let json: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../testdata/fixtures/snapshot/schema-30-keytab-carried.json"
+        ))
+        .unwrap();
+        let tarball = make_test_tarball(dir.path(), "host-a.tar.gz", &json);
+
+        let err = load_snapshot_from_tarball(&tarball).expect_err("schema 30 is refused");
+        assert!(
+            format!("{err:#}").contains("unsupported schema version: 30"),
+            "expected the schema refusal, got: {err:#}"
+        );
+    }
+
     /// A schema-27 host tarball holds services only, under `services`:
     /// every socket and timer state the host had is absent from it with
     /// nothing to say so. The aggregate loader refuses it, and the merge
@@ -743,13 +762,13 @@ mod tests {
     /// distinct hostnames to avoid the duplicate-hostname error.
     fn make_aggregate_pair(dir: &Path) -> (PathBuf, PathBuf) {
         let json_a = serde_json::json!({
-            "schema_version": 30,
+            "schema_version": 31,
             "meta": {"hostname": "host-a.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
         });
         let json_b = serde_json::json!({
-            "schema_version": 30,
+            "schema_version": 31,
             "meta": {"hostname": "host-b.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
@@ -833,7 +852,7 @@ mod tests {
 
         // Create one normal snapshot and one sensitive snapshot
         let json_normal = serde_json::json!({
-            "schema_version": 30,
+            "schema_version": 31,
             "meta": {"hostname": "host-normal.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -841,7 +860,7 @@ mod tests {
         });
 
         let json_sensitive = serde_json::json!({
-            "schema_version": 30,
+            "schema_version": 31,
             "meta": {"hostname": "host-sensitive.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -891,7 +910,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let json_sensitive = serde_json::json!({
-            "schema_version": 30,
+            "schema_version": 31,
             "meta": {"hostname": "host-a.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -902,7 +921,7 @@ mod tests {
         });
 
         let json_b = serde_json::json!({
-            "schema_version": 30,
+            "schema_version": 31,
             "meta": {"hostname": "host-b.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},

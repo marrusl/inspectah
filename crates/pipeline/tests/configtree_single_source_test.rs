@@ -51,6 +51,7 @@ const SNIPPET_DEST: &str = "config/etc/modules-load.d/driftify.conf";
 fn snapshot_with(disposition: FindingKind, content: &str) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: SNIPPET_PATH.to_string(),
             category: ConfigCategory::KernelModule,
@@ -169,7 +170,10 @@ fn staged_snapshot(
     drop_ins: Vec<SystemdDropIn>,
 ) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
-    snap.config = Some(ConfigSection { files });
+    snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
+        files,
+    });
     if !drop_ins.is_empty() {
         snap.units = Some(UnitSection {
             drop_ins,

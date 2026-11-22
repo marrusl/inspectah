@@ -102,6 +102,7 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
 fn snapshot_with_config_files() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),
@@ -754,6 +755,7 @@ fn pam_and_audit_travel_through_the_config_tree() {
 
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![pam.clone(), audit_rule.clone()],
     });
 
@@ -788,6 +790,7 @@ fn pam_and_audit_travel_through_the_config_tree() {
     // the one the export carries and the one the report names.
     let mut flipped = InspectionSnapshot::new();
     flipped.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 disposition: FindingKind::included(),
@@ -829,6 +832,7 @@ fn pam_and_audit_travel_through_the_config_tree() {
 fn a_custom_tuned_profile_is_copied_as_plain_config() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/tuned/myapp/tuned.conf".into(),
             kind: ConfigFileKind::Unowned,

@@ -200,6 +200,7 @@ fn test_cmdline_password_redacted() {
 fn test_dracut_config_secret_scanned() {
     let mut snapshot = InspectionSnapshot::new();
     snapshot.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/dracut.conf.d/iscsi.conf".into(),
             category: ConfigCategory::Initramfs,
@@ -231,6 +232,7 @@ fn test_dracut_config_secret_scanned() {
 fn test_modprobe_config_secret_scanned() {
     let mut snapshot = InspectionSnapshot::new();
     snapshot.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/modprobe.d/custom.conf".into(),
             category: ConfigCategory::KernelModule,
@@ -260,6 +262,7 @@ fn test_modprobe_config_secret_scanned() {
 fn test_tuned_profile_secret_scanned() {
     let mut snapshot = InspectionSnapshot::new();
     snapshot.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/tuned/custom/tuned.conf".into(),
             category: ConfigCategory::Tuned,
@@ -325,6 +328,7 @@ fn test_secrets_review_reports_all_findings() {
         ..Default::default()
     });
     snapshot.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/dracut.conf.d/net.conf".into(),
             category: ConfigCategory::Initramfs,
@@ -392,6 +396,7 @@ fn test_clean_surfaces_no_false_positives() {
         ..Default::default()
     });
     snapshot.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/dracut.conf.d/lvm.conf".into(),
             category: ConfigCategory::Initramfs,
@@ -443,6 +448,7 @@ fn test_mount_unit_source_scrubbed_in_its_config_entry_only() {
     };
     let mut snapshot = InspectionSnapshot::new();
     snapshot.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: path.into(),
             content: format!(

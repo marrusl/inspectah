@@ -2349,6 +2349,7 @@ mod tests {
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             unmanaged_files: Some(UnmanagedFileSection {
+                withheld: Vec::new(),
                 items: vec![UnmanagedFile {
                     path: "/opt/splunk/bin/splunkd".to_string(),
                     size: 52_000_000,
@@ -2403,6 +2404,7 @@ mod tests {
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             unmanaged_files: Some(UnmanagedFileSection {
+                withheld: Vec::new(),
                 items: vec![UnmanagedFile {
                     path: "/opt/app/server".to_string(),
                     size: 10_000,
@@ -2472,6 +2474,7 @@ mod tests {
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             unmanaged_files: Some(UnmanagedFileSection {
+                withheld: Vec::new(),
                 items: vec![UnmanagedFile {
                     path: "/opt/app/server".to_string(),
                     size: 10_000,
@@ -3005,6 +3008,7 @@ mod tests {
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             unmanaged_files: Some(UnmanagedFileSection {
+                withheld: Vec::new(),
                 items: vec![
                     UnmanagedFile {
                         path: "/opt/app/server".to_string(),
@@ -3121,6 +3125,7 @@ mod tests {
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             unmanaged_files: Some(UnmanagedFileSection {
+                withheld: Vec::new(),
                 items: vec![UnmanagedFile {
                     path: "/opt/app/server".to_string(),
                     size: 1_000_000,

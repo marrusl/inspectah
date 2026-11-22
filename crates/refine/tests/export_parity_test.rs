@@ -109,6 +109,7 @@ fn containerfile_unmanaged_copy_paths_match_export_layout() {
     // Build a snapshot with unmanaged files (include: true).
     let mut snap = InspectionSnapshot::new();
     snap.unmanaged_files = Some(UnmanagedFileSection {
+        withheld: Vec::new(),
         items: vec![
             UnmanagedFile {
                 path: "/opt/splunk/bin/splunkd".into(),
@@ -325,6 +326,7 @@ fn excluded_items_absent_from_both_containerfile_and_export() {
     // a repoless RPM (include: false).
     let mut snap = InspectionSnapshot::new();
     snap.unmanaged_files = Some(UnmanagedFileSection {
+        withheld: Vec::new(),
         items: vec![UnmanagedFile {
             path: "/opt/excluded/binary".into(),
             size: 1024,

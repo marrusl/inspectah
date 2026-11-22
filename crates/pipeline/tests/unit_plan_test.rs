@@ -1787,6 +1787,7 @@ fn vendor(unit: &str) -> UnitFragment {
 fn units_snapshot(changes: Vec<UnitStateChange>, files: Vec<(&str, &str)>) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: files
             .into_iter()
             .map(|(path, content)| ConfigFileEntry {
@@ -3569,6 +3570,7 @@ fn offering_everywhere(path: &str, content: &str) -> InspectionSnapshot {
     let spellings = t33_spellings(path);
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: spellings
             .iter()
             .map(|p| ConfigFileEntry {

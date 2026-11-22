@@ -38,6 +38,9 @@ pub enum UnknownInput {
     OutsideLink { file: SysctlFileRef, target: String },
     /// A surviving file whose content redaction changed.
     RedactedFile { file: SysctlFileRef },
+    /// A surviving file the read gate withheld as a machine-state member:
+    /// systemd-sysctl reads it, inspectah did not.
+    WithheldFile { file: SysctlFileRef },
     /// A key in `redacted_runtime`.
     RedactedRuntime { key: SysctlKey },
 }
@@ -138,6 +141,9 @@ impl SysctlSection {
                     target: target.clone(),
                 }),
                 SysctlFileBody::Read { redacted: true, .. } => Some(UnknownInput::RedactedFile {
+                    file: file.file_ref(),
+                }),
+                SysctlFileBody::Withheld { .. } => Some(UnknownInput::WithheldFile {
                     file: file.file_ref(),
                 }),
                 SysctlFileBody::Read { .. } | SysctlFileBody::Mask => None,
@@ -243,9 +249,9 @@ impl SysctlSection {
                 let name = etc.name.clone();
                 match etc.body {
                     SysctlFileBody::Mask => VendorReplacement::Masks { name },
-                    SysctlFileBody::OutsideLink { .. } | SysctlFileBody::Read { .. } => {
-                        VendorReplacement::Shadows { name }
-                    }
+                    SysctlFileBody::OutsideLink { .. }
+                    | SysctlFileBody::Withheld { .. }
+                    | SysctlFileBody::Read { .. } => VendorReplacement::Shadows { name },
                 }
             })
             .collect();
@@ -916,6 +922,7 @@ mod tests {
                 entry("/etc/sysctl.d/90-tuning.conf"),
                 entry(SYSCTL_CONF_LINK),
             ],
+            withheld: Vec::new(),
         };
         assert_eq!(
             s.carriage(Some(&config)),
@@ -948,6 +955,7 @@ mod tests {
         );
         let config = ConfigSection {
             files: vec![entry("/etc/hosts"), entry(SYSCTL_CONF)],
+            withheld: Vec::new(),
         };
         assert_eq!(
             s.carriage(Some(&config)),
@@ -977,6 +985,7 @@ mod tests {
         );
         let config = ConfigSection {
             files: vec![entry("/etc/sysctl-site.conf"), entry(SYSCTL_CONF)],
+            withheld: Vec::new(),
         };
         assert_eq!(
             s.carriage(Some(&config)),
@@ -1009,6 +1018,7 @@ mod tests {
         );
         let config = ConfigSection {
             files: vec![entry("/run/sysctl.d/20-run.conf")],
+            withheld: Vec::new(),
         };
         assert_eq!(
             s.carriage(Some(&config)),

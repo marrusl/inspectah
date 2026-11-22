@@ -1516,6 +1516,7 @@ mod tests {
     fn snapshot_with_config(path: &str, content: &str) -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: path.to_string(),
                 content: content.to_string(),
@@ -1634,6 +1635,7 @@ mod tests {
     fn test_kernel_directories_copied_as_plain_config() {
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![
                 ConfigFileEntry {
                     path: "/etc/modprobe.d/blacklist.conf".to_string(),
@@ -1839,6 +1841,7 @@ mod tests {
         assert!(!dir.path().join("config/usr/lib/systemd/system").exists());
 
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: ["myjob.timer", "myjob.service"]
                 .into_iter()
                 .map(|file| ConfigFileEntry {
@@ -1943,6 +1946,7 @@ mod tests {
     fn test_excluded_files_not_materialized() {
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/excluded.conf".to_string(),
                 content: "secret".to_string(),
@@ -1967,6 +1971,7 @@ mod tests {
             ..Default::default()
         });
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/NetworkManager/system-connections/eth0.nmconnection".to_string(),
                 content: "[connection]".to_string(),
@@ -1988,6 +1993,7 @@ mod tests {
     fn test_quadlet_prefix_excluded_from_config() {
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/containers/systemd/myapp.container".to_string(),
                 content: "[Container]".to_string(),
@@ -2076,6 +2082,7 @@ mod tests {
         // Also add the same path as a config file entry to verify the
         // svc_paths exclusion catches it in the config files loop too.
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/systemd/system/sshd.service.d/override.conf".to_string(),
                 content: "[Service]\nPermitRootLogin=no".to_string(),
@@ -2121,6 +2128,7 @@ mod tests {
         });
         // Also add the same path as a config file to verify exclusion
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![
                 ConfigFileEntry {
                     path: "/etc/containers/systemd/myapp.container".to_string(),
@@ -2259,6 +2267,7 @@ mod tests {
         let snapshot_with = |disposition: FindingKind| {
             let mut snap = InspectionSnapshot::new();
             snap.config = Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![ConfigFileEntry {
                     path: "/etc/sysctl.d/99-custom.conf".to_string(),
                     category: ConfigCategory::Sysctl,
@@ -2301,6 +2310,7 @@ mod tests {
     fn test_tuned_profile_copied_as_plain_config() {
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![
                 ConfigFileEntry {
                     path: "/etc/tuned/my-profile/tuned.conf".to_string(),

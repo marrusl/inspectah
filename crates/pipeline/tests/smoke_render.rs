@@ -119,6 +119,7 @@ fn snapshot_all_sections() -> InspectionSnapshot {
     snap.storage = snapshot_with_storage().storage;
     snap.kernel_boot = snapshot_with_kernelboot().kernel_boot;
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/modules-load.d/br_netfilter.conf".into(),
             category: ConfigCategory::KernelModule,
@@ -282,6 +283,7 @@ fn kernelboot_containerfile_names_no_sysctl() {
 fn kernelboot_configs_in_config_tree() {
     let mut snap = snapshot_with_kernelboot();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: "/etc/modules-load.d/br_netfilter.conf".into(),

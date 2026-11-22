@@ -239,6 +239,7 @@ fn test_no_secrets_in_any_artifact() {
 
     // Overlay a config section with the planted secret
     let config = ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/config".to_string(),
             content: secret.to_string(),

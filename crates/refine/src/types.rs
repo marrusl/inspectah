@@ -551,6 +551,10 @@ impl SectionStats {
                 // shadowed to inventory during collection -- so the bucket
                 // choice is load-bearing, not theoretical.
                 FindingKind::Advisory { .. } | FindingKind::Inventory => stats.advisory += 1,
+                // The Config section's caller partitions machine-state rows
+                // out before counting, so they never reach a bucket there;
+                // anywhere else they are display-only, like advisories.
+                FindingKind::MachineState { .. } => stats.advisory += 1,
             }
         }
         stats

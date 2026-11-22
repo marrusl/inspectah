@@ -75,6 +75,7 @@ fn multi_variant_path_zone_uses_most_divergent_variant() {
     // This surfaces the decision: the user must choose among variants.
     let mut snap = make_aggregate_snapshot(5);
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: "/etc/app/main.conf".into(),
@@ -118,6 +119,7 @@ fn zone_for_partial_path_is_divergent() {
     // Proves non-trivial classification still works with sum approach.
     let mut snap = make_aggregate_snapshot(5);
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/app/rare.conf".into(),
             disposition: FindingKind::included(),
@@ -212,6 +214,7 @@ fn variants_changed_net_zero_is_clean() {
     let hash_b = ContentHash::from_content(content_b.as_bytes());
 
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: "/etc/httpd/conf/httpd.conf".into(),

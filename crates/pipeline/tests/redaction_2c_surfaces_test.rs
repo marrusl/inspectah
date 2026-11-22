@@ -26,6 +26,7 @@ use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 fn test_redaction_config_content_password() {
     let mut snapshot = InspectionSnapshot::new();
     snapshot.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/db.conf".into(),
             content: "host=localhost\npassword=cfg_secret_42\nport=5432\n".into(),
@@ -62,6 +63,7 @@ fn test_redaction_config_content_password() {
 fn test_redaction_config_content_api_key() {
     let mut snapshot = InspectionSnapshot::new();
     snapshot.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/myapp/cloud.conf".into(),
             content: "region=us-east-1\napi_key=AKIAIOSFODNN7EXAMPLE\n".into(),
@@ -423,6 +425,7 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
 
     // Config file with password
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: "/etc/myapp/db.conf".into(),

@@ -1081,7 +1081,7 @@ fn redact_sysctl_section(
     for file in &mut section.files {
         let path = file.path();
         match &mut file.body {
-            SysctlFileBody::Mask => {}
+            SysctlFileBody::Mask | SysctlFileBody::Withheld { .. } => {}
             SysctlFileBody::OutsideLink { target } => {
                 findings.extend(scan_and_redact_field(target, &path, registry));
             }
@@ -2145,6 +2145,7 @@ mod tests {
     fn test_snapshot_with_known_secrets() -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/myapp/config".to_string(),
                 content: "db_password = s3cretP@ss\n".to_string(),
@@ -2293,6 +2294,7 @@ baseurl = https://cdn.redhat.com
     fn test_redact_leaves_stock_rhsm_conf_parseable() {
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/rhsm/rhsm.conf".to_string(),
                 content: STOCK_RHSM_CONF.to_string(),
@@ -2381,6 +2383,7 @@ baseurl = https://cdn.redhat.com
         let content = STOCK_RHSM_CONF.replace("proxy_password =\n", "proxy_password = hunter2\n");
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/rhsm/rhsm.conf".to_string(),
                 content: content.clone(),
@@ -3542,6 +3545,7 @@ baseurl = https://cdn.redhat.com
         let mut snapshot = InspectionSnapshot::new();
         // Put a real password in the config file so the regex pass fires
         snapshot.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/myapp/config".to_string(),
                 content: "password = s3cretP@ss\n".to_string(),
@@ -3921,6 +3925,7 @@ baseurl = https://cdn.redhat.com
         // Hash-commented line must be preserved through the full redact() path.
         let mut snapshot = InspectionSnapshot::new();
         snapshot.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/myapp/config".to_string(),
                 content: "# password=old_value\npassword=real".to_string(),
@@ -4086,6 +4091,7 @@ baseurl = https://cdn.redhat.com
         // Full redact() path: comment line untouched, real line mutated.
         let mut snapshot = InspectionSnapshot::new();
         snapshot.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/myapp/config".to_string(),
                 content: "# password=old\npassword=real".to_string(),
@@ -4234,6 +4240,7 @@ baseurl = https://cdn.redhat.com
         // First line has false-positive value, second has a real secret.
         let mut snapshot = InspectionSnapshot::new();
         snapshot.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/myapp/config".to_string(),
                 content: "passwd: files\ndb_password=real".to_string(),
@@ -4736,7 +4743,7 @@ baseurl = https://cdn.redhat.com
     fn test_connection_string_in_snapshot_redact() {
         // Full redact() path: connection string in a config file
         let mut snapshot = InspectionSnapshot::new();
-        snapshot.config = Some(ConfigSection {
+        snapshot.config = Some(ConfigSection { withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/myapp/db.conf".to_string(),
                 content: "MONGO=mongodb://admin:s3cret@mongo:27017/db\nPG=postgresql://u:pass@pg:5432/db\nREDIS=redis://:tok@redis:6379\n".to_string(),
@@ -5170,6 +5177,7 @@ baseurl = https://cdn.redhat.com
         use inspectah_core::types::sysctl::{SysctlDir, SysctlFile};
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: SYSCTL_APP_CONF.to_string(),
                 content: config.to_string(),
@@ -5286,6 +5294,7 @@ baseurl = https://cdn.redhat.com
     fn config_snapshot(path: &str, content: &str) -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: path.to_string(),
                 content: content.to_string(),

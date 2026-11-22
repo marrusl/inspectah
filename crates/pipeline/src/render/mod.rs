@@ -576,6 +576,9 @@ mod tests {
         fn _classify_sysctl_file_body(body: SysctlFileBody) {
             match body {
                 SysctlFileBody::Mask => {} // no fields
+                SysctlFileBody::Withheld {
+                    member: _, // exempt: an enum name
+                } => {}
                 SysctlFileBody::OutsideLink {
                     target: _, // scrubbed: one line under the entry's path
                 } => {}
@@ -663,6 +666,7 @@ mod tests {
         // scrubbed by the config pass; the finding below has no copy.
         let mount_unit = "/etc/systemd/system/srv-data.mount";
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![
                 ConfigFileEntry {
                     path: "/etc/myapp/app.conf".into(),
@@ -1001,6 +1005,7 @@ mod tests {
     fn test_containerfile_copy_lines_match_config_tree() {
         let mut snap = test_snapshot();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![
                 ConfigFileEntry {
                     path: "/etc/httpd/conf/httpd.conf".into(),

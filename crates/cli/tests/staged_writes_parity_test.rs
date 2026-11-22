@@ -38,6 +38,7 @@ fn entry(path: &str, content: &str) -> ConfigFileEntry {
 fn snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             entry(WORKER_CHILD, "[Service]\n"),
             entry(WORKER_UNIT, "[Unit]\n"),
@@ -172,6 +173,7 @@ fn child_of(path: &str) -> String {
 fn units_snapshot(files: &[&str], with: fn(&mut InspectionSnapshot)) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: files.iter().map(|p| entry(p, "[Service]\n")).collect(),
     });
     with(&mut snap);

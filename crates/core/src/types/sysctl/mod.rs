@@ -141,7 +141,9 @@ impl SysctlFile {
     pub fn lines(&self) -> Vec<SysctlLine> {
         match &self.body {
             SysctlFileBody::Read { content, .. } => parse_sysctl_lines(content),
-            SysctlFileBody::Mask | SysctlFileBody::OutsideLink { .. } => Vec::new(),
+            SysctlFileBody::Mask
+            | SysctlFileBody::OutsideLink { .. }
+            | SysctlFileBody::Withheld { .. } => Vec::new(),
         }
     }
 }
@@ -155,6 +157,11 @@ pub enum SysctlFileBody {
     /// A symlink whose final target is outside `/etc` and the four
     /// directories. Not read; still shadows by name.
     OutsideLink { target: String },
+    /// A file the read gate refused as a machine-state member. Not read;
+    /// still shadows by name, as an outside link does.
+    Withheld {
+        member: crate::types::machine_state::MachineStateMember,
+    },
     /// A file that was read. `link_target` is the final target when the
     /// entry is a symlink (`99-sysctl.conf` -> `/etc/sysctl.conf`).
     /// `redacted` is set when the redaction pass replaced anything in

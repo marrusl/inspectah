@@ -42,6 +42,7 @@ fn make_variant_snapshot(
         ..Default::default()
     };
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: path.into(),
@@ -96,6 +97,7 @@ fn make_single_variant_snapshot(
         ..Default::default()
     };
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: path.into(),
             content: content.into(),
@@ -1152,6 +1154,7 @@ fn edit_variant_based_on_hash_from_different_item_rejected() {
         ..Default::default()
     };
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             // Path A
             ConfigFileEntry {

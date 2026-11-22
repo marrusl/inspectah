@@ -1,0 +1,19 @@
+{
+  "schema_version": 30,
+  "config": {
+    "files": [
+      {
+        "path": "/etc/krb5.keytab",
+        "kind": "unowned",
+        "category": "other",
+        "content": "synthetic text keytab fixture, not a key\n",
+        "rpm_va_flags": null,
+        "package": null,
+        "diff_against_rpm": null,
+        "disposition": {"kind": "actionable", "include": true},
+        "variant_selection": "Only",
+        "aggregate": null
+      }
+    ]
+  }
+}

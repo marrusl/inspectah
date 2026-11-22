@@ -1177,6 +1177,7 @@ fn test_merge_config_sections_files_with_variants() {
             content: "ServerName h1".into(),
             ..Default::default()
         }],
+        withheld: Vec::new(),
     };
     let s2 = ConfigSection {
         files: vec![ConfigFileEntry {
@@ -1184,6 +1185,7 @@ fn test_merge_config_sections_files_with_variants() {
             content: "ServerName h2".into(),
             ..Default::default()
         }],
+        withheld: Vec::new(),
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
     let result = merge_config_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();

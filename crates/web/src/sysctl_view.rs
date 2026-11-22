@@ -134,6 +134,7 @@ fn unknown_input(input: UnknownInput) -> UnknownInputDto {
             target,
         },
         UnknownInput::RedactedFile { file } => UnknownInputDto::RedactedFile { path: file.path() },
+        UnknownInput::WithheldFile { file } => UnknownInputDto::WithheldFile { path: file.path() },
         UnknownInput::RedactedRuntime { key } => UnknownInputDto::RedactedRuntime {
             key: key.as_str().to_owned(),
         },
@@ -224,6 +225,7 @@ fn file(row: FileRow) -> SysctlFileDto {
             FileRowBody::Read { link_target } => SysctlFileBodyDto::Read { link_target },
             FileRowBody::Mask => SysctlFileBodyDto::Mask,
             FileRowBody::OutsideLink { target } => SysctlFileBodyDto::OutsideLink { target },
+            FileRowBody::Withheld => SysctlFileBodyDto::Withheld,
         },
         config_path: row.config_path,
     }

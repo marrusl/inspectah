@@ -429,6 +429,10 @@ pub enum UnknownInputDto {
     RedactedFile {
         path: String,
     },
+    /// A machine-state file the scan did not read.
+    WithheldFile {
+        path: String,
+    },
     /// `key` is the canonical `SysctlKey`.
     RedactedRuntime {
         key: String,
@@ -544,9 +548,15 @@ pub struct SysctlFileDto {
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SysctlFileBodyDto {
-    Read { link_target: Option<String> },
+    Read {
+        link_target: Option<String>,
+    },
     Mask,
-    OutsideLink { target: String },
+    OutsideLink {
+        target: String,
+    },
+    /// A machine-state file the scan did not read.
+    Withheld,
 }
 
 /// A classified tuned profile selection, projected for the view response.

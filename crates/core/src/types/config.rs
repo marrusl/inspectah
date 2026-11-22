@@ -111,6 +111,9 @@ impl ConfigFileEntry {
 pub struct ConfigSection {
     #[serde(default)]
     pub files: Vec<ConfigFileEntry>,
+    /// Machine-state files whose content the snapshot does not hold.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub withheld: Vec<super::machine_state::WithheldConfigEntry>,
 }
 
 #[cfg(test)]
@@ -128,6 +131,7 @@ mod tests {
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let json = serde_json::to_string(&section).unwrap();
         let parsed: ConfigSection = serde_json::from_str(&json).unwrap();

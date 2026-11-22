@@ -330,6 +330,7 @@ fn test_merge_section_host_counts() {
             content: "x".into(),
             ..Default::default()
         }],
+        withheld: Vec::new(),
     });
 
     let s2 = make_snap("host-b");
@@ -396,6 +397,7 @@ fn test_merge_config_variants_flow_through() {
             content: "version_a".into(),
             ..Default::default()
         }],
+        withheld: Vec::new(),
     });
 
     let mut s2 = make_snap("host-b");
@@ -405,6 +407,7 @@ fn test_merge_config_variants_flow_through() {
             content: "version_b".into(),
             ..Default::default()
         }],
+        withheld: Vec::new(),
     });
 
     let (merged, _) = merge_snapshots(vec![s1, s2], None, None).unwrap();

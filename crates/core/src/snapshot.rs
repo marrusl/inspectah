@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 30;
+pub const SCHEMA_VERSION: u32 = 31;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -130,7 +130,14 @@ impl InspectionSnapshot {
     /// persistent change missing. Only a re-scan reads the store. Schema
     /// 30 also adds `selinux.disabled_modules` and, for a fleet aggregate,
     /// `selinux.boolean_conflicts`.
-    const MIN_SCHEMA: u32 = 30;
+    ///
+    /// Schema 31 adds the machine-state class: `FindingKind::MachineState`,
+    /// `config.withheld`, `unmanaged_files.withheld` and the sysctl body
+    /// `withheld`. An older payload parses, but its host keytab, SSH host
+    /// keys or IQN are ordinary config entries the export copies into the
+    /// image, or were dropped by a silent list with nothing to say so.
+    /// Only a re-scan classifies them.
+    const MIN_SCHEMA: u32 = 31;
 
     /// Loads a snapshot of exactly this schema version.
     ///
@@ -268,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_future_version_rejected() {
-        let json = r#"{"schema_version": 31, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let json = r#"{"schema_version": 32, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
         assert!(
             result.is_err(),

@@ -47,6 +47,7 @@ fn test_snapshot() -> InspectionSnapshot {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
@@ -872,6 +873,7 @@ fn test_session_baseline_available_in_stats() {
 fn test_tier1_configs_not_in_containerfile() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: "/etc/default.conf".into(),
@@ -2003,6 +2005,7 @@ fn shadowed_drop_in_snapshot() -> InspectionSnapshot {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: SHADOWED_DROP_IN.into(),
             kind: ConfigFileKind::Unowned,
@@ -2639,7 +2642,10 @@ mod unit_rows {
         drop_ins: Vec<SystemdDropIn>,
     ) -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
-        snap.config = Some(ConfigSection { files });
+        snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
+            files,
+        });
         snap.units = Some(UnitSection {
             state_changes: changes,
             drop_ins,

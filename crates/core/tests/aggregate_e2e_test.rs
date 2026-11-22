@@ -75,7 +75,10 @@ fn with_configs(snap: &mut InspectionSnapshot, files: &[(&str, &str)]) {
             ..Default::default()
         })
         .collect();
-    snap.config = Some(ConfigSection { files: entries });
+    snap.config = Some(ConfigSection {
+        files: entries,
+        withheld: Vec::new(),
+    });
 }
 
 /// Add a services section with the given unit names (all enabled).

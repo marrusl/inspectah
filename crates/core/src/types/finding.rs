@@ -1,3 +1,4 @@
+use super::machine_state::CarriableMember;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -14,6 +15,14 @@ pub enum FindingKind {
     /// Containerfile output and non-toggleable across all interactive
     /// surfaces. Used for network findings.
     Inventory,
+    /// A configuration file that belongs to one machine. Excluded by
+    /// default; `include` is true only after an operator override. Only a
+    /// carriable member can be named here, so a credential cannot be
+    /// included.
+    MachineState {
+        member: CarriableMember,
+        include: bool,
+    },
 }
 
 impl Default for FindingKind {
@@ -54,15 +63,36 @@ impl FindingKind {
     /// Merge-safe include setter: preserves Advisory and Inventory semantics.
     /// Only Actionable findings have their include flag changed; Advisory and
     /// Inventory findings are non-toggleable and pass through unchanged.
+    ///
+    /// A machine-state finding keeps its variant: only its `include`
+    /// changes, and only when the member is overridable.
     pub fn with_include(&self, val: bool) -> Self {
         match self {
             Self::Advisory { .. } | Self::Inventory => self.clone(),
-            _ => Self::from_bool(val),
+            Self::MachineState { member, .. } => {
+                if member.override_level() == super::machine_state::OverrideLevel::Never {
+                    self.clone()
+                } else {
+                    Self::MachineState {
+                        member: *member,
+                        include: val,
+                    }
+                }
+            }
+            Self::Actionable { .. } => Self::from_bool(val),
         }
     }
 
     pub fn is_included(&self) -> bool {
-        matches!(self, Self::Actionable { include: true })
+        matches!(
+            self,
+            Self::Actionable { include: true } | Self::MachineState { include: true, .. }
+        )
+    }
+
+    /// Whether this is a machine-state class row.
+    pub fn is_machine_state(&self) -> bool {
+        matches!(self, Self::MachineState { .. })
     }
 
     pub fn is_advisory(&self) -> bool {
@@ -159,6 +189,33 @@ mod tests {
         // No additional fields — unit variant
         assert!(!json.contains("include"));
         assert!(!json.contains("advisory_type"));
+    }
+
+    #[test]
+    fn machine_state_round_trips_and_toggles_in_place() {
+        let kind = FindingKind::MachineState {
+            member: CarriableMember::IscsiInitiatorName,
+            include: false,
+        };
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"machine_state","member":"iscsi_initiator_name","include":false}"#
+        );
+        assert_eq!(serde_json::from_str::<FindingKind>(&json).unwrap(), kind);
+        assert!(!kind.is_included());
+        assert!(kind.is_machine_state());
+        assert!(!kind.is_advisory() && !kind.is_inventory());
+        let on = kind.with_include(true);
+        assert!(on.is_included());
+        assert!(on.is_machine_state());
+        assert_eq!(on.with_include(false), kind);
+    }
+
+    #[test]
+    fn a_credential_cannot_be_a_machine_state_disposition() {
+        let json = r#"{"kind":"machine_state","member":"kerberos_keytab","include":true}"#;
+        assert!(serde_json::from_str::<FindingKind>(json).is_err());
     }
 
     #[test]

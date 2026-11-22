@@ -3303,6 +3303,7 @@ mod tests {
             key.shipped_by_base = shipped_by_base.map(String::from);
             rpm.gpg_keys = vec![key];
             snap.config = Some(inspectah_core::types::config::ConfigSection {
+                withheld: Vec::new(),
                 files: vec![inspectah_core::types::config::ConfigFileEntry {
                     path: "/etc/pki/rpm-gpg/KEY-epel/stray".into(),
                     content: "x\n".into(),
@@ -3347,6 +3348,7 @@ mod tests {
                 .collect();
             if stray {
                 snap.config = Some(inspectah_core::types::config::ConfigSection {
+                    withheld: Vec::new(),
                     files: vec![inspectah_core::types::config::ConfigFileEntry {
                         path: STRAY.into(),
                         content: "x\n".into(),
@@ -6025,6 +6027,7 @@ RUN dnf install -y \
             ..Default::default()
         });
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/tuned/my-profile/tuned.conf".into(),
                 category: ConfigCategory::Tuned,
@@ -6063,6 +6066,7 @@ RUN dnf install -y \
             ..Default::default()
         });
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/tuned/my-profile/tuned.conf".into(),
                 category: ConfigCategory::Tuned,
@@ -7912,6 +7916,7 @@ RUN dnf install -y \
         // Both units carried as included config entries: neither
         // artifact mentions the directories at all.
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: ["rsyslog.service", "dnf-makecache.service"]
                 .iter()
                 .map(|unit| ConfigFileEntry {

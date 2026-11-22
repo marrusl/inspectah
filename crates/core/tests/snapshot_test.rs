@@ -127,6 +127,25 @@ fn schema_29_snapshot_is_refused() {
     }
 }
 
+/// A schema-30 snapshot, the last before the machine-state class: its
+/// unowned `/etc/krb5.keytab` is an ordinary included config entry with
+/// content, which the export copies into the image. The other production
+/// loaders' refusal tests read the same fixture file with `include_str!`.
+const SCHEMA_30_SNAPSHOT: &str =
+    include_str!("../../../testdata/fixtures/snapshot/schema-30-keytab-carried.json");
+
+/// Schema 30 is the last version without the machine-state class: a
+/// host's keytab, SSH host keys or IQN are carried as ordinary config, or
+/// dropped by a silent list with nothing to say so. The payload parses,
+/// so the version gate is what refuses it.
+#[test]
+fn schema_30_snapshot_is_refused() {
+    match InspectionSnapshot::load(SCHEMA_30_SNAPSHOT) {
+        Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 30),
+        other => panic!("expected UnsupportedVersion(30), got {other:?}"),
+    }
+}
+
 /// A persistent boolean is `{"name", "value"}` on the wire, `value` a bool.
 #[test]
 fn selinux_boolean_wire_form() {
@@ -823,15 +842,15 @@ fn expected_keys(keys: &[&str]) -> BTreeSet<String> {
     keys.iter().map(|k| (*k).to_string()).collect()
 }
 
-/// The snapshot format guard: schema 30 and the key sets of the package
+/// The snapshot format guard: schema 31 and the key sets of the package
 /// and unit structs are pinned. Serde ignores unknown fields and
 /// defaults missing ones, so a field added, renamed or removed with
 /// `#[serde(default)]` passes every round-trip test; this one fails
 /// instead. Every `skip_serializing_if` field is set to a non-default
 /// value so it appears.
 #[test]
-fn schema_30_format_guard_pins_package_and_unit_keys() {
-    assert_eq!(SCHEMA_VERSION, 30);
+fn schema_31_format_guard_pins_package_and_unit_keys() {
+    assert_eq!(SCHEMA_VERSION, 31);
 
     let package = PackageEntry {
         locked: true,

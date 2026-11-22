@@ -184,6 +184,7 @@ fn base_snapshot() -> InspectionSnapshot {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![config_file(
             "/etc/tmpfiles.d/appone.conf",
             ConfigFileKind::Unowned,
@@ -325,6 +326,7 @@ fn run_fragments_are_provisioned_whatever_the_config_decision() {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![config_file(
             "/run/tmpfiles.d/runapp.conf",
             ConfigFileKind::Unowned,
@@ -371,6 +373,7 @@ fn units_follow_their_unit_file_and_rpm_owner() {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![config_file(
             "/etc/systemd/system/myapp.service",
             ConfigFileKind::Unowned,
@@ -400,7 +403,10 @@ fn units_follow_their_unit_file_and_rpm_owner() {
         "/var/lib/myapp",
         &["/usr/lib/systemd/system/myapp.service"],
     );
-    snap.config = Some(ConfigSection { files: Vec::new() });
+    snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
+        files: Vec::new(),
+    });
     snap.rpm = Some(RpmSection {
         packages_added: vec![package("myapp", true)],
         file_ownership: vec![FileOwnershipEntry {
@@ -447,6 +453,7 @@ fn a_vendor_unit_rescues_the_directory_only_when_it_declares_it() {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![config_file(
             "/etc/systemd/system/myapp.service",
             ConfigFileKind::Unowned,
@@ -532,6 +539,7 @@ fn excluded_etc_unit_with_owner(owner_path: &str) -> InspectionSnapshot {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![config_file(
             "/etc/systemd/system/myapp.service",
             ConfigFileKind::Unowned,
@@ -755,6 +763,7 @@ fn crond_full_shadow_snapshot(shadow_included: bool) -> InspectionSnapshot {
     shadow_row.disposition = FindingKind::inventory();
     shadow_row.shadowed_by = Some(ConfigShadow::Units);
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![shadow_row],
     });
     snap.rpm = Some(RpmSection {
@@ -1368,6 +1377,7 @@ fn a_carryable_backed_verdict_beats_another_hosts_unbacked() {
         "0755",
     );
     backed.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![config_file(
             "/etc/tmpfiles.d/shared.conf",
             ConfigFileKind::Unowned,
@@ -1376,6 +1386,7 @@ fn a_carryable_backed_verdict_beats_another_hosts_unbacked() {
     });
     let mut unbacked = fleet_host("host-a", VarDirBacking::Unbacked, "0700");
     unbacked.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![config_file(
             "/etc/tmpfiles.d/shared.conf",
             ConfigFileKind::Unowned,

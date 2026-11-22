@@ -489,6 +489,7 @@ fn the_trust_gate_reads_the_config_defaults_refine_settles() {
     ] {
         let mut snap = snapshot(REPO_ID, Some((DISABLED_WITH_SOURCE, true)));
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: format!("{REPO_PATH}/stray"),
                 content: "x\n".into(),

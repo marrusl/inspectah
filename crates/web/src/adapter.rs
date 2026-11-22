@@ -641,7 +641,11 @@ fn context_decision(
             include: *include,
             locked,
         }),
-        FindingKind::Advisory { .. } | FindingKind::Inventory => None,
+        // A machine-state row is decided in the view's own
+        // `machine_state` list, never on a reference row.
+        FindingKind::Advisory { .. }
+        | FindingKind::Inventory
+        | FindingKind::MachineState { .. } => None,
     }
 }
 
@@ -1987,6 +1991,7 @@ mod tests {
             };
             let mut snap = InspectionSnapshot::new();
             snap.config = Some(ConfigSection {
+                withheld: Vec::new(),
                 files: vec![
                     entry(
                         ADVISORY_PATH,
@@ -2629,6 +2634,7 @@ mod tests {
 
         let mut snap = InspectionSnapshot::new();
         snap.unmanaged_files = Some(UnmanagedFileSection {
+            withheld: Vec::new(),
             items: vec![
                 UnmanagedFile {
                     path: "/opt/splunk/bin/splunkd".into(),

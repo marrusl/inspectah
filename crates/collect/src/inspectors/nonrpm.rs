@@ -2162,6 +2162,7 @@ pub fn scan_unmanaged_files(
         usr_entries,
         total_size,
         total_count,
+        withheld: Vec::new(),
     }
 }
 
@@ -4639,6 +4640,7 @@ mod tests {
             }],
             total_size: 0,
             total_count: 0,
+            withheld: Vec::new(),
         };
         let json = serde_json::to_string(&section).unwrap();
         let deser: UnmanagedFileSection = serde_json::from_str(&json).unwrap();

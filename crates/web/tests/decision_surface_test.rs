@@ -376,6 +376,7 @@ fn group_installed(export: &Export) -> bool {
 fn kernel_and_storage_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: DRIFTIFY_CONF.into(),

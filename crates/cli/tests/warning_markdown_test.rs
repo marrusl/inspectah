@@ -212,6 +212,7 @@ fn audit_host_paths_render_literally() {
     let host = || HOSTILE_PATH.to_string();
     let config = |kind| InspectionSnapshot {
         config: Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: host(),
                 kind,

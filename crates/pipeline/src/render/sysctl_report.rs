@@ -46,6 +46,8 @@ pub const OUTSIDE_LINK_LINE: &str = "{path} links to {target}, outside `/etc` an
 /// Item 2, `Unknown`: a surviving file redaction changed.
 pub const REDACTED_FILE_LINE: &str =
     "{path} held text that redaction replaced, so what it sets is not known.";
+/// Item 2, `Unknown`: a surviving file the read gate withheld.
+pub const WITHHELD_FILE_LINE: &str = "{path} is a machine-state file whose contents were not captured, so what it sets is not known.";
 /// Item 2, `Unknown`: a runtime value redaction removed.
 pub const REDACTED_RUNTIME_LINE: &str =
     "The running value of {key} held text that redaction removed.";
@@ -265,9 +267,15 @@ pub struct FileRow {
 /// What a collected file is, without its content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileRowBody {
-    Read { link_target: Option<String> },
+    Read {
+        link_target: Option<String>,
+    },
     Mask,
-    OutsideLink { target: String },
+    OutsideLink {
+        target: String,
+    },
+    /// A machine-state file the scan did not read.
+    Withheld,
 }
 
 /// The sysctl report of `snap`.
@@ -420,6 +428,7 @@ pub fn sysctl_report(snap: &InspectionSnapshot) -> SysctlReport {
                 SysctlFileBody::OutsideLink { target } => FileRowBody::OutsideLink {
                     target: target.clone(),
                 },
+                SysctlFileBody::Withheld { .. } => FileRowBody::Withheld,
             };
             FileRow {
                 file: file_ref,
@@ -453,7 +462,9 @@ pub fn line_link_target(snap: &InspectionSnapshot, at: &SysctlLineRef) -> Option
         .find(|file| file.dir == at.dir && file.name == at.name)
         .and_then(|file| match &file.body {
             SysctlFileBody::Read { link_target, .. } => link_target.clone(),
-            SysctlFileBody::Mask | SysctlFileBody::OutsideLink { .. } => None,
+            SysctlFileBody::Mask
+            | SysctlFileBody::OutsideLink { .. }
+            | SysctlFileBody::Withheld { .. } => None,
         })
 }
 

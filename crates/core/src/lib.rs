@@ -1,5 +1,6 @@
 pub mod aggregate;
 pub mod baseline;
+pub mod machine_state;
 pub mod pipeline;
 pub mod redaction;
 pub mod rpm_filename;

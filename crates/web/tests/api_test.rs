@@ -49,6 +49,7 @@ fn test_state() -> Arc<AppState> {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/httpd/conf/httpd.conf".into(),
             kind: ConfigFileKind::RpmOwnedModified,
@@ -691,6 +692,7 @@ fn units_view_state() -> Arc<AppState> {
         enabled_on_any_host: Vec::new(),
     });
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: FULL_SHADOW_PATH.into(),
             kind: ConfigFileKind::Unowned,
@@ -1477,6 +1479,7 @@ async fn an_unmanaged_file_at_a_unit_path_is_withheld_on_its_row() {
     };
     let mut snap = InspectionSnapshot::new();
     snap.unmanaged_files = Some(UnmanagedFileSection {
+        withheld: Vec::new(),
         items: vec![
             file(UNIT_PATH, FindingKind::included()),
             file(DOTTED_UNIT_PATH, FindingKind::included()),
@@ -1610,6 +1613,7 @@ const ADVISORY_CONFIG_PATH: &str = "/etc/init.d/legacy-app";
 fn advisory_state() -> Arc<AppState> {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: ADVISORY_CONFIG_PATH.into(),
             kind: ConfigFileKind::Unowned,
@@ -2206,6 +2210,7 @@ fn rich_snapshot() -> InspectionSnapshot {
     // The kernel module config is a `config.files` entry; the Kernel &
     // Boot section points at it.
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: "/etc/modules-load.d/custom.conf".into(),
             kind: ConfigFileKind::Unowned,
@@ -3404,7 +3409,10 @@ fn locked_package_state() -> Arc<AppState> {
         default_target: None,
         enabled_on_any_host: Vec::new(),
     });
-    snap.config = Some(ConfigSection { files: vec![] });
+    snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
+        files: vec![],
+    });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
     })
@@ -5511,6 +5519,7 @@ fn withheld_lands_on_the_included_variant_rows_only() {
     };
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             variant("[Unit]\n", VariantSelection::Selected),
             variant("", VariantSelection::Alternative),

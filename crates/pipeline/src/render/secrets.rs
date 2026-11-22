@@ -272,6 +272,7 @@ mod tests {
         use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/app/app.conf".to_string(),
                 content: "[db]\n  password = hunter2\n# note\nAKIAABCDEFGHIJKLMNOP\n".to_string(),
@@ -292,6 +293,7 @@ mod tests {
         use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/app/app.conf".to_string(),
                 content: "password = hunter2\n".to_string(),

@@ -69,7 +69,10 @@ mod tests {
 
     fn snap_with_configs(files: Vec<ConfigFileEntry>) -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
-        snap.config = Some(ConfigSection { files });
+        snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
+            files,
+        });
         snap
     }
 

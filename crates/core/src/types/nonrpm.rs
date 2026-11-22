@@ -207,6 +207,10 @@ pub struct UnmanagedFileSection {
     /// Total number of cataloged files
     #[serde(default)]
     pub total_count: usize,
+    /// Files the read gate withheld: aliases or hard links of a withheld
+    /// machine-state member, or whole-file credentials. Never in `items`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub withheld: Vec<super::machine_state::WithheldUnmanagedEntry>,
 }
 
 #[cfg(test)]
@@ -311,6 +315,7 @@ mod tests {
             usr_entries: Vec::new(),
             total_size: 1024,
             total_count: 1,
+            withheld: Vec::new(),
         };
         let json = serde_json::to_string(&section).unwrap();
         let deser: UnmanagedFileSection = serde_json::from_str(&json).unwrap();

@@ -219,6 +219,7 @@ mod tests {
         let total_count = items.len();
         InspectionSnapshot {
             unmanaged_files: Some(UnmanagedFileSection {
+                withheld: Vec::new(),
                 items,
                 usr_entries: Vec::new(),
                 total_size,

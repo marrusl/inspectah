@@ -1613,7 +1613,10 @@ pub fn merge_config_sections(
         hostnames,
     );
 
-    Some(ConfigSection { files })
+    Some(ConfigSection {
+        files,
+        withheld: Vec::new(),
+    })
 }
 
 /// Merge service sections from multiple hosts.
@@ -2391,6 +2394,7 @@ pub fn merge_unmanaged_file_sections(
         usr_entries: Vec::new(),
         total_size,
         total_count,
+        withheld: Vec::new(),
     })
 }
 
@@ -2863,6 +2867,7 @@ mod tests {
         // Aggregate prevalence should be 2/3.
         let host_a_cfg = ConfigSection {
             files: vec![], // web-01 has no chrony.conf
+            withheld: Vec::new(),
         };
         let host_b_cfg = ConfigSection {
             files: vec![ConfigFileEntry {
@@ -2871,6 +2876,7 @@ mod tests {
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
+            withheld: Vec::new(),
         };
         let host_c_cfg = ConfigSection {
             files: vec![ConfigFileEntry {
@@ -2879,6 +2885,7 @@ mod tests {
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
+            withheld: Vec::new(),
         };
 
         let hostnames = vec!["web-01".into(), "web-02".into(), "web-03".into()];
@@ -2962,6 +2969,7 @@ mod tests {
             .map(|o| {
                 Some(ConfigSection {
                     files: vec![observed_entry(*o)],
+                    withheld: Vec::new(),
                 })
             })
             .collect();
@@ -3756,6 +3764,7 @@ mod tests {
             usr_entries: Vec::new(),
             total_size: 52_000_000,
             total_count: 1,
+            withheld: Vec::new(),
         });
         let section_b = Some(UnmanagedFileSection {
             items: vec![UnmanagedFile {
@@ -3768,6 +3777,7 @@ mod tests {
             usr_entries: Vec::new(),
             total_size: 52_000_000,
             total_count: 1,
+            withheld: Vec::new(),
         });
 
         let merged = merge_unmanaged_file_sections(
@@ -3805,6 +3815,7 @@ mod tests {
             usr_entries: Vec::new(),
             total_size: 52_000_000,
             total_count: 1,
+            withheld: Vec::new(),
         });
         let section_b = Some(UnmanagedFileSection {
             items: vec![UnmanagedFile {
@@ -3817,6 +3828,7 @@ mod tests {
             usr_entries: Vec::new(),
             total_size: 52_000_000,
             total_count: 1,
+            withheld: Vec::new(),
         });
 
         let merged = merge_unmanaged_file_sections(
@@ -3854,6 +3866,7 @@ mod tests {
             usr_entries: Vec::new(),
             total_size: 10_000,
             total_count: 1,
+            withheld: Vec::new(),
         });
         let section_b = Some(UnmanagedFileSection {
             items: vec![UnmanagedFile {
@@ -3865,6 +3878,7 @@ mod tests {
             usr_entries: Vec::new(),
             total_size: 10_000,
             total_count: 1,
+            withheld: Vec::new(),
         });
 
         let merged = merge_unmanaged_file_sections(
@@ -3899,12 +3913,14 @@ mod tests {
             usr_entries: Vec::new(),
             total_size: 10_000,
             total_count: 1,
+            withheld: Vec::new(),
         });
         let section_b = Some(UnmanagedFileSection {
             items: vec![],
             usr_entries: Vec::new(),
             total_size: 0,
             total_count: 0,
+            withheld: Vec::new(),
         });
 
         let merged = merge_unmanaged_file_sections(

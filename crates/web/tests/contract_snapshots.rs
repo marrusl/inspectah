@@ -186,6 +186,7 @@ fn contract_snapshot() -> InspectionSnapshot {
     // The audit rule and the PAM config are `config.files` entries (§ 3.6);
     // Security & Access Control carries a pointer row for each.
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![
             ConfigFileEntry {
                 path: "/etc/audit/rules.d/10-custom.rules".into(),
@@ -424,6 +425,7 @@ fn a_locked_excluded_config_pointer_row_decides_as_config() {
     const MODPROBE: &str = "/etc/modprobe.d/driftify.conf";
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
+        withheld: Vec::new(),
         files: vec![ConfigFileEntry {
             path: MODPROBE.into(),
             kind: ConfigFileKind::Unowned,
@@ -486,6 +488,7 @@ fn excluding_the_tmpfiles_fragment_turns_a_carried_var_dir_into_an_advisory_row(
     let var_dir_snapshot = |fragment_included: bool| {
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
             files: vec![ConfigFileEntry {
                 path: "/etc/tmpfiles.d/appone.conf".into(),
                 kind: ConfigFileKind::Unowned,
