@@ -1656,6 +1656,14 @@ fn config_section_lines(
         lines.extend(section("Configuration Files", cfg_body));
     }
 
+    // Provisioning: the steps a machine deployed from the image owes for
+    // the machine-state files left out. Comments only, so it needs no COPY
+    // and stands whatever else the export holds.
+    lines.extend(section(
+        "Provisioning",
+        super::machine_state::containerfile_lines(snap),
+    ));
+
     // CA trust anchors
     if let Some(config) = &snap.config {
         let has_ca = config.files.iter().any(|f| {

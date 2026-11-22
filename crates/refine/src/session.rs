@@ -4621,6 +4621,18 @@ pub fn render_refine_export(
     if let Some(notice) = not_carried_notice(snap) {
         warnings.insert(0, notice);
     }
+    // The machine-state notices follow it, ahead of any failure: the
+    // left-out count and owed steps, then one per `warn` override.
+    let first_failure = warnings
+        .iter()
+        .position(|w| w.kind() != inspectah_pipeline::export_warning::ExportWarningKind::Notice)
+        .unwrap_or(warnings.len());
+    for (i, notice) in inspectah_pipeline::render::machine_state::export_notices(snap)
+        .into_iter()
+        .enumerate()
+    {
+        warnings.insert(first_failure + i, notice);
+    }
 
     // 2e. Extract payload files from source tarball for unmanaged files
     //     and repo-less RPMs. These were bundled at scan time and must be

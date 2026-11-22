@@ -3621,7 +3621,8 @@ fn offering_everywhere(path: &str, content: &str) -> InspectionSnapshot {
 
 /// T33, the stager: `/etc/machine-id`, offered by every section that can
 /// name it and in every spelling, is never a write. Every offer is
-/// withheld as `MachineId`, one entry per offer: the guard runs before
+/// withheld as `MachineState` naming the machine-id member, one entry per
+/// offer: the guard runs before
 /// offers of one destination are deduplicated, so offers with one content
 /// do not collapse into one write and keep their reason each. The FIXME
 /// text says why. Control: `/etc/machine-info`, offered the same ways, is
@@ -3629,8 +3630,12 @@ fn offering_everywhere(path: &str, content: &str) -> InspectionSnapshot {
 /// unmanaged section's to copy).
 #[test]
 fn t33_the_stager_never_writes_the_machine_id() {
+    use inspectah_core::types::machine_state::MachineStateMember;
     use inspectah_pipeline::render::configtree::{Destination, StagedFileKind, WithheldWhy};
     let machine_id = Destination::new("/etc/machine-id").expect("a destination");
+    let why_machine_id = WithheldWhy::MachineState {
+        member: MachineStateMember::MachineId,
+    };
     let snap = offering_everywhere("/etc/machine-id", "uninitialized\n");
     let staged = staged_writes(&snap);
     assert!(
@@ -3642,7 +3647,7 @@ fn t33_the_stager_never_writes_the_machine_id() {
     let mut kinds: Vec<StagedFileKind> = Vec::new();
     for (dest, kind, why) in &staged.withheld {
         assert_eq!(dest, &machine_id, "{kind:?}");
-        assert_eq!(why, &WithheldWhy::MachineId, "{kind:?}");
+        assert_eq!(why, &why_machine_id, "{kind:?}");
         kinds.push(*kind);
     }
     kinds.sort();
@@ -3655,9 +3660,9 @@ fn t33_the_stager_never_writes_the_machine_id() {
     .concat();
     expected.sort();
     assert_eq!(kinds, expected, "one withheld entry per offer");
-    assert_eq!(WithheldWhy::MachineId.name(), "MachineId");
+    assert_eq!(why_machine_id.name(), "MachineState");
     assert_eq!(
-        WithheldWhy::MachineId.describe(&machine_id),
+        why_machine_id.describe(&machine_id),
         "the image keeps the base image's empty /etc/machine-id, which is what makes first \
          boot keep the rendered unit states; the source host's machine identity is not copied"
     );

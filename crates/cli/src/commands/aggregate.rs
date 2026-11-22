@@ -280,6 +280,9 @@ fn run_aggregate(args: &AggregateArgs) -> Result<()> {
     if let Some(notice) = not_carried_notice(&merged) {
         eprintln!("{notice}");
     }
+    for notice in inspectah_pipeline::render::machine_state::export_notices(&merged) {
+        eprintln!("{notice}");
+    }
 
     Ok(())
 }

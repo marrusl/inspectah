@@ -7195,7 +7195,7 @@ fn t33_the_machine_id_is_never_staged() {
                     matches!(
                         row_withheld(&refine, route, row),
                         Some(inspectah_refine::projection::WithheldView::Withheld { ref why, .. })
-                            if why == "MachineId"
+                            if why == "MachineState"
                     ),
                     "{label}, row {row:?}: {:?}",
                     row_withheld(&refine, route, row)
@@ -7249,10 +7249,10 @@ fn t33_a_host_scan_records_no_machine_id() {
 }
 
 /// An imported snapshot's unmanaged-files section that offers
-/// `/etc/machine-id`: the shared decision withholds it as `MachineId`
+/// `/etc/machine-id`: the shared decision withholds it as `MachineState`
 /// before the scan bundles a payload, before refine extracts one, and
 /// before render, so no `COPY` names it, the Containerfile names it in a
-/// FIXME, and refine's unmanaged row shows `withheld` with `MachineId`.
+/// FIXME, and refine's unmanaged row shows `withheld` with `MachineState`.
 /// Control: an unmanaged `/etc/machine-info` is copied.
 #[test]
 fn t33_an_unmanaged_machine_id_is_withheld() {
@@ -7297,7 +7297,7 @@ fn t33_an_unmanaged_machine_id_is_withheld() {
             && matches!(
                 &v.withheld,
                 inspectah_refine::projection::WithheldView::Withheld { why, .. }
-                    if why == "MachineId"
+                    if why == "MachineState"
             )),
         "{views:?}"
     );

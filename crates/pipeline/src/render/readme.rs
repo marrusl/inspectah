@@ -269,6 +269,10 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     );
     lines.push(String::new());
 
+    // The provisioning steps the machine-state files owe, as the audit
+    // report gives them.
+    lines.extend(super::machine_state::provisioning_markdown(snap));
+
     // SELinux file contexts
     //
     // § 4 asks the README to repeat the block's restored-data `restorecon`

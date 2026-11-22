@@ -15,9 +15,11 @@
 //! - Flatpak manifests + provisioning service
 //! - Non-RPM env files
 
+use inspectah_core::machine_state;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderError;
 use inspectah_core::types::config::AUTHSELECT_CONF_PATH;
+use inspectah_core::types::machine_state::MachineStateMember;
 use inspectah_core::types::units::{UNIT_TYPE_SUFFIXES, UnitName};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -148,10 +150,13 @@ pub enum WithheldWhy {
     /// files after the unit state section, outside this decision, so it
     /// would be a second writer of a unit path.
     UnmanagedUnitPath,
-    /// The destination is [`MACHINE_ID_PATH`]. The image keeps the base
-    /// image's empty file, which is what makes first boot keep the
-    /// rendered unit states (§ 10.1, § 10.2 "Never the machine-id").
-    MachineId,
+    /// The destination is a machine-state class member's file: its path
+    /// classifies to a withheld rule, it is a `config.withheld` path, or
+    /// the offered content is a keytab or a whole-file private key. For
+    /// the machine-id, the image keeps the base image's empty file, which
+    /// is what makes first boot keep the rendered unit states (§ 10.1,
+    /// § 10.2 "Never the machine-id").
+    MachineState { member: MachineStateMember },
 }
 
 /// How the collected unit a generated unit's name collides with is known
@@ -177,7 +182,7 @@ impl WithheldWhy {
             Self::Conflict { .. } => "Conflict",
             Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
             Self::UnmanagedUnitPath => "UnmanagedUnitPath",
-            Self::MachineId => "MachineId",
+            Self::MachineState { .. } => "MachineState",
         }
     }
 
@@ -216,7 +221,14 @@ impl WithheldWhy {
                 unit.as_str()
             ),
             Self::UnmanagedUnitPath => UNMANAGED_UNIT_PATH.to_owned(),
-            Self::MachineId => MACHINE_ID_KEPT.to_owned(),
+            Self::MachineState {
+                member: MachineStateMember::MachineId,
+            } => MACHINE_ID_KEPT.to_owned(),
+            Self::MachineState { member } => format!(
+                "a machine-state file ({}) belongs to one host; its contents are left out of \
+                 the configuration",
+                member.as_str()
+            ),
         }
     }
 }
@@ -231,7 +243,7 @@ const UNMANAGED_UNIT_PATH: &str = "an unmanaged file is not written under /etc/s
 /// machine-id").
 pub const MACHINE_ID_PATH: &str = "/etc/machine-id";
 
-/// [`WithheldWhy::MachineId`]'s text.
+/// [`WithheldWhy::MachineState`]'s text for the machine-id.
 const MACHINE_ID_KEPT: &str = "the image keeps the base image's empty /etc/machine-id, which is \
      what makes first boot keep the rendered unit states; the source host's machine identity is \
      not copied";
@@ -252,9 +264,24 @@ pub fn unmanaged_unit_path(path: &str) -> bool {
     })
 }
 
-/// Whether `dest` is [`MACHINE_ID_PATH`], however the path was spelled.
-fn is_machine_id(dest: &Destination) -> bool {
-    dest.as_str() == MACHINE_ID_PATH
+/// The withheld machine-state member an offer at `dest` holding `content`
+/// is: by the class rule for its path, by a `config.withheld` row at it,
+/// or by its content. A carriable member is not withheld here: an
+/// included one is an operator's override, which ships the captured file.
+fn withheld_member(
+    dest: &Destination,
+    content: &str,
+    withheld_rows: &std::collections::BTreeMap<String, MachineStateMember>,
+) -> Option<MachineStateMember> {
+    if let Some(machine_state::RuleTarget::Withheld(member)) =
+        machine_state::classify_path(dest.as_str())
+    {
+        return Some(member);
+    }
+    withheld_rows
+        .get(dest.as_str())
+        .copied()
+        .or_else(|| machine_state::credential_content(content.as_bytes()))
 }
 
 /// The one decision on whether an unmanaged file is withheld, and why: a
@@ -264,8 +291,8 @@ fn is_machine_id(dest: &Destination) -> bool {
 /// does not extract it, and the Containerfile copies or links nothing for
 /// it.
 pub fn unmanaged_withheld(path: &str) -> Option<WithheldWhy> {
-    if Destination::new(path).is_ok_and(|dest| is_machine_id(&dest)) {
-        Some(WithheldWhy::MachineId)
+    if let Some(machine_state::RuleTarget::Withheld(member)) = machine_state::classify_path(path) {
+        Some(WithheldWhy::MachineState { member })
     } else if unmanaged_unit_path(path) {
         Some(WithheldWhy::UnmanagedUnitPath)
     } else {
@@ -946,15 +973,20 @@ fn generated_name_collisions(
 ///    unit is a mask, and is withheld as `ZeroLengthUnitFile` whichever
 ///    section offered it (§ 10.2 rule 1).
 ///
-/// Between 1 and 2, an offer whose destination is [`MACHINE_ID_PATH`] is
-/// withheld as `MachineId`, whichever section offered it and before any
-/// offer of one destination yields to another or is deduplicated, so
-/// every offering row keeps its reason (§ 10.2 "Never the machine-id").
+/// Between 1 and 2, an offer at a machine-state file is withheld as
+/// `MachineState`, whichever section offered it and before any offer of
+/// one destination yields to another or is deduplicated, so every offering
+/// row keeps its reason: a destination a withheld class rule names (the
+/// machine-id among them, § 10.2 "Never the machine-id"), one a
+/// `config.withheld` row names, or content that is a keytab or a
+/// whole-file private key. This serves renders that write no snapshot,
+/// such as refine's Containerfile preview; both export paths also refuse
+/// such a snapshot before writing anything.
 ///
 /// An included unmanaged file whose path is under `/etc/systemd/system`
 /// ([`unmanaged_unit_path`]) is listed in `withheld` as
-/// `UnmanagedUnitPath`, and one at the machine-id as `MachineId`
-/// ([`unmanaged_withheld`]). It is not one of this decision's offers: the
+/// `UnmanagedUnitPath`, and one at a withheld class path as
+/// `MachineState` ([`unmanaged_withheld`]). It is not one of this decision's offers: the
 /// unmanaged-files section writes its own files, and leaves that one out.
 ///
 /// Everything else is written. [`write_config_tree`] writes `writes` and
@@ -963,6 +995,12 @@ fn generated_name_collisions(
 /// decision.
 pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
     let owned = owned_elsewhere(snap);
+    let withheld_rows: std::collections::BTreeMap<String, MachineStateMember> = snap
+        .config
+        .iter()
+        .flat_map(|config| &config.withheld)
+        .filter_map(|row| Some((Destination::new(&row.path).ok()?.0, row.member)))
+        .collect();
     let mut out = StagedWrites::default();
     let mut resolved = Vec::new();
     for offer in offers(snap) {
@@ -974,10 +1012,10 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
             }
         };
         // Before any offer of one destination yields to another, so every
-        // offer of the machine-id keeps its own reason.
-        if is_machine_id(&dest) {
+        // offer of a machine-state file keeps its own reason.
+        if let Some(member) = withheld_member(&dest, &offer.content, &withheld_rows) {
             out.withheld
-                .push((dest, offer.kind, WithheldWhy::MachineId));
+                .push((dest, offer.kind, WithheldWhy::MachineState { member }));
             continue;
         }
         if offer.kind == StagedFileKind::ConfigFile

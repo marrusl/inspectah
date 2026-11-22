@@ -916,3 +916,219 @@ fn units_with_drop_in(path: &str, content: &str) -> serde_json::Value {
     })
     .unwrap()
 }
+
+/// The refine export's `x-export-warnings` entries for `snap`.
+fn refine_export_warnings(snap: &InspectionSnapshot) -> Vec<String> {
+    let session = session(snap);
+    let packed = tempfile::tempdir().expect("tempdir");
+    session
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&packed.path().join("export.tar.gz"))
+        .expect("the export writes")
+        .into_iter()
+        .map(|w| w.to_string())
+        .collect()
+}
+
+/// Collect case 19: a host whose only finding is its keytab stages no
+/// config tree and no config `COPY`, and every provisioning surface names
+/// `realm join` on both export paths, the Containerfile without paths.
+/// With the Insights state as well, each step appears once on each.
+#[test]
+fn a_keytab_only_host_gets_every_provisioning_surface() {
+    let keytab_only = scan_with(
+        SysctlHost::new().file_bytes("/etc/krb5.keytab", &binary_keytab()),
+        std_inspectors(),
+    );
+    for (via, tree) in [
+        ("scan export", render_export(&keytab_only)),
+        ("refine export", export_session(&session(&keytab_only))),
+    ] {
+        let staged: Vec<_> = walkdir_files(&tree.path().join("config"));
+        assert!(
+            !staged.iter().any(|p| p.contains("etc/")),
+            "{via}: no config tree for /etc: {staged:?}"
+        );
+        let cf = std::fs::read_to_string(tree.path().join("Containerfile")).unwrap();
+        assert!(!cf.contains("COPY config/etc/"), "{via}:\n{cf}");
+        let provisioning: Vec<&str> = cf
+            .lines()
+            .skip_while(|l| *l != "# === Provisioning ===")
+            .take_while(|l| !l.is_empty())
+            .collect();
+        assert_eq!(
+            provisioning,
+            vec![
+                "# === Provisioning ===",
+                "# Not in the image: this host's identity. At provisioning:",
+                "#   realm join (or ipa-client-install, adcli join)",
+            ],
+            "{via}:\n{cf}"
+        );
+        let audit = std::fs::read_to_string(tree.path().join("audit-report.md")).unwrap();
+        assert!(audit.contains("## Provisioning steps"), "{via}");
+        assert!(
+            audit.contains("`ipa-client-install, realm join or adcli join`: `/etc/krb5.keytab`"),
+            "{via}:\n{audit}"
+        );
+        assert!(audit.contains("#### Machine state (1)"), "{via}");
+        assert!(audit.contains("contents not captured"), "{via}");
+    }
+    let readme =
+        std::fs::read_to_string(render_export(&keytab_only).path().join("README.md")).unwrap();
+    assert!(readme.contains("## Provisioning steps"), "{readme}");
+    let warnings = refine_export_warnings(&keytab_only);
+    assert!(
+        warnings.contains(
+            &"Notice: 1 machine-state file left out. At provisioning: realm join.".to_string()
+        ),
+        "{warnings:?}"
+    );
+
+    let with_insights = scan_with(
+        SysctlHost::new()
+            .file_bytes("/etc/krb5.keytab", &binary_keytab())
+            .file("/etc/insights-client/machine-id", "abc\n")
+            .file("/etc/rhsm/facts/insights-client.facts", "{}\n"),
+        std_inspectors(),
+    );
+    let tree = render_export(&with_insights);
+    let cf = std::fs::read_to_string(tree.path().join("Containerfile")).unwrap();
+    assert_eq!(cf.matches("#   realm join").count(), 1);
+    assert_eq!(cf.matches("#   insights-client --register").count(), 1);
+    let audit = std::fs::read_to_string(tree.path().join("audit-report.md")).unwrap();
+    assert_eq!(
+        audit
+            .matches("- `insights-client --register or rhc connect`")
+            .count(),
+        1
+    );
+    let warnings = refine_export_warnings(&with_insights);
+    assert!(
+        warnings.contains(
+            &"Notice: 3 machine-state files left out. At provisioning: realm join, \
+              insights-client --register."
+                .to_string()
+        ),
+        "{warnings:?}"
+    );
+}
+
+/// Collect case 20: a snapshot built in process, never loaded, with a
+/// host key at an odd spelling as an included entry, an included ordinary
+/// path holding a key, and an included drop-in at a `config.withheld`
+/// path. The stager withholds all three as machine-state files and the
+/// Containerfile preview names them; both export paths refuse the snapshot
+/// and write nothing.
+#[test]
+fn the_render_guard_withholds_and_the_writers_refuse() {
+    use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+    use inspectah_core::types::units::{SystemdDropIn, UnitSection};
+    use inspectah_pipeline::render::configtree::{WithheldWhy, staged_writes};
+    let drop_in_path = "/etc/systemd/system/app.service.d/k.conf";
+    let snap = InspectionSnapshot {
+        config: Some(ConfigSection {
+            files: vec![
+                ConfigFileEntry {
+                    path: "/etc/ssh/./ssh_host_ed25519_key".into(),
+                    content: "host key text".into(),
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: "/etc/myapp/server.pem".into(),
+                    content: encrypted_key(),
+                    ..Default::default()
+                },
+            ],
+            withheld: vec![WithheldConfigEntry {
+                path: drop_in_path.into(),
+                kind: ConfigFileKind::Unowned,
+                package: None,
+                member: MachineStateMember::PrivateKeyFile,
+                mode: None,
+                size: None,
+                aggregate: None,
+            }],
+        }),
+        units: Some(UnitSection {
+            drop_ins: vec![SystemdDropIn {
+                unit: "app.service".into(),
+                path: drop_in_path.into(),
+                content: "[Service]\nEnvironment=A=1\n".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        ..InspectionSnapshot::new()
+    };
+    let staged = staged_writes(&snap);
+    let withheld: Vec<(&str, &WithheldWhy)> = staged
+        .withheld
+        .iter()
+        .map(|(dest, _, why)| (dest.as_str(), why))
+        .collect();
+    for (path, member) in [
+        (
+            "/etc/ssh/ssh_host_ed25519_key",
+            MachineStateMember::SshHostKey,
+        ),
+        ("/etc/myapp/server.pem", MachineStateMember::PrivateKeyFile),
+        (drop_in_path, MachineStateMember::PrivateKeyFile),
+    ] {
+        assert!(
+            withheld.contains(&(path, &WithheldWhy::MachineState { member })),
+            "{path}: {withheld:?}"
+        );
+    }
+    let preview =
+        inspectah_pipeline::render::containerfile::render_containerfile(&snap, None, None);
+    for path in [
+        "/etc/ssh/ssh_host_ed25519_key",
+        "/etc/myapp/server.pem",
+        drop_in_path,
+    ] {
+        assert!(
+            preview
+                .lines()
+                .any(|l| l.starts_with("# FIXME") && l.contains(path) && l.contains("not copied")),
+            "{path}:\n{preview}"
+        );
+    }
+    let out = tempfile::tempdir().unwrap();
+    assert!(
+        inspectah_pipeline::render::render_all(
+            &snap,
+            &inspectah_core::traits::renderer::RenderContext { target: None },
+            out.path()
+        )
+        .is_err()
+    );
+    assert!(std::fs::read_dir(out.path()).unwrap().next().is_none());
+    let tarball = out.path().join("export.tar.gz");
+    assert!(
+        inspectah_refine::session::render_refine_export(&snap, &tarball, None, None, None, None)
+            .is_err()
+    );
+    assert!(!tarball.exists());
+}
+
+/// Every file under `dir`, as a path string; empty when it is absent.
+fn walkdir_files(dir: &std::path::Path) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(d) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                files.push(path.display().to_string());
+            }
+        }
+    }
+    files
+}

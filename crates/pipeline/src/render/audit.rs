@@ -364,6 +364,9 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         }
     }
 
+    // Provisioning steps owed for the machine-state files left out.
+    lines.extend(super::machine_state::provisioning_markdown(snap));
+
     // Redactions
     if !snap.redactions.is_empty() {
         lines.push("## Redactions".into());
@@ -612,6 +615,17 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
             }
             lines.push(String::new());
         }
+    }
+
+    // Machine state: every class row, carriable and withheld, and every
+    // withheld unmanaged file, whether or not any file is carried.
+    let machine_state = super::machine_state::audit_table(snap);
+    if !machine_state.is_empty() {
+        if snap.config.as_ref().is_none_or(|c| c.files.is_empty()) {
+            lines.push("### Configuration Files".into());
+            lines.push(String::new());
+        }
+        lines.extend(machine_state);
     }
 
     // Kernel & Boot: always present, because the sysctl explanation says

@@ -962,6 +962,10 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
             if let Some(notice) = not_carried_notice(&snapshot) {
                 eprintln!("{notice}");
             }
+            // The machine-state notice follows: enum text and a count.
+            for notice in inspectah_pipeline::render::machine_state::export_notices(&snapshot) {
+                eprintln!("{notice}");
+            }
             Ok(outcome)
         }
         Err(e) => {
@@ -2271,6 +2275,31 @@ VARIANT_ID="workstation"
     /// path is spelled. Controls: an ordinary file is copied byte for byte,
     /// and an ordinary symlink is recreated, so the bundler does bundle
     /// both kinds when the destination is allowed.
+    #[test]
+    fn bundling_fails_on_a_file_the_gate_now_withholds() {
+        use inspectah_core::types::FindingKind;
+        use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};
+        let host = inspectah_collect::executor::mock::MockExecutor::new()
+            .with_dir("/etc/pki/tls/private", vec!["server.key"])
+            .with_file(
+                "/etc/pki/tls/private/server.key",
+                "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n",
+            )
+            .with_hard_link("/opt/app/k", "/etc/pki/tls/private/server.key");
+        let gate = inspectah_core::machine_state::ScreenedExecutor::new(&host);
+        let items = vec![UnmanagedFile {
+            path: "/opt/app/k".into(),
+            file_type: FileType::Config,
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }];
+        let render = tempfile::tempdir().expect("a render directory");
+        let err = bundle_unmanaged_files(&items, render.path(), &gate)
+            .expect_err("a withheld file fails the scan");
+        assert!(err.to_string().contains("/opt/app/k"), "{err}");
+        assert!(!render.path().join("unmanaged").exists());
+    }
+
     #[test]
     fn bundling_writes_no_payload_under_the_unit_directory() {
         use inspectah_core::types::FindingKind;

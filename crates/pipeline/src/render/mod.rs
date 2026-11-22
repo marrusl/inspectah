@@ -18,6 +18,7 @@ pub mod comment;
 pub mod configtree;
 pub mod containerfile;
 pub mod kickstart;
+pub mod machine_state;
 pub mod md_literal;
 pub mod readme;
 pub mod report;
