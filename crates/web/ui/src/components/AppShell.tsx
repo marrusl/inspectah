@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Page } from "@patternfly/react-core";
 import { useKeyboard } from "../hooks/useKeyboard";
 import { StatsBar } from "./StatsBar";
@@ -253,6 +253,20 @@ export function AppShell({
     [onSearchNavigate],
   );
 
+  // The Export dialog's machine-state link reveals the block in
+  // Configuration. A section query would filter its rows away, and when
+  // Configuration is already the active section nothing else clears it.
+  const handleReviewMachineState = useMemo(
+    () =>
+      onReviewMachineState
+        ? () => {
+            setFilterClearCounter((c) => c + 1);
+            onReviewMachineState();
+          }
+        : undefined,
+    [onReviewMachineState],
+  );
+
   useKeyboard({
     onUndo,
     onRedo,
@@ -340,7 +354,7 @@ export function AppShell({
         machineStateRows={machineStateRows}
         machineStateSteps={machineStateSteps}
         machineStateNotices={machineStateNotices}
-        onReviewMachineState={onReviewMachineState}
+        onReviewMachineState={handleReviewMachineState}
       />
     </Page>
   );

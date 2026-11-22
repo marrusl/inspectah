@@ -86,3 +86,40 @@ describe("machine-state rows in GlobalSearch", () => {
     );
   });
 });
+
+describe("the Export dialog's machine-state link", () => {
+  it("clears a Configuration query before it reveals the block", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const nav = await screen.findByRole("navigation", { name: "Sections" });
+    await user.click(
+      await within(nav).findByRole("link", { name: /^Configuration Files / }),
+    );
+    await screen.findByRole("heading", { level: 2, name: "Config Files" });
+
+    // A query that matches the sysctl config and no machine-state row.
+    await user.keyboard("/");
+    const search = await screen.findByLabelText("Filter section items");
+    await user.type(search, "sysctl");
+    expect(screen.queryByTestId(`machine-state-row-${KEYTAB}`)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Export" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Review machine state" }),
+    );
+
+    // Configuration was already the active section; the query is cleared
+    // all the same, so the block opens with every row.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^Machine state/ }),
+      ).toHaveAttribute("aria-expanded", "true"),
+    );
+    expect(screen.getByLabelText("Filter section items")).toHaveValue("");
+    expect(
+      await screen.findByTestId(`machine-state-row-${KEYTAB}`),
+    ).toBeVisible();
+    expect(screen.getByTestId(`machine-state-row-${HOSTNAME}`)).toBeVisible();
+  });
+});
