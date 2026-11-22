@@ -9,7 +9,11 @@ import type {
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 import type { UseAggregateDiffResult } from "../../hooks/useAggregateDiff";
 import { ZoneGroup } from "./ZoneGroup";
-import { AggregateItemRow, itemDisplayName } from "./AggregateItemRow";
+import {
+  AggregateItemRow,
+  decidesHere,
+  itemDisplayName,
+} from "./AggregateItemRow";
 import { VariantView } from "./VariantView";
 import { ItemDetailPane } from "./ItemDetailPane";
 
@@ -35,6 +39,10 @@ export interface AggregateSectionContentProps {
   onSelectVariant?: (itemId: ItemId, hash: string) => void;
   /** Diff hook for variant comparison. */
   diffHook?: UseAggregateDiffResult;
+  /** Owning repo per repo-owned path (see AggregateItemRow). */
+  repoOwners?: ReadonlyMap<string, string>;
+  /** Reveal a repo's row under Repositories, in Packages. */
+  onNavigateToRepo?: (sectionId: string) => void;
 }
 
 /**
@@ -104,6 +112,8 @@ export function AggregateSectionContent({
   expandedItemId,
   onSelectVariant,
   diffHook,
+  repoOwners,
+  onNavigateToRepo,
 }: AggregateSectionContentProps) {
   const [forceExpandZone, setForceExpandZone] = useState<string | null>(null);
   const [revealCounter, setRevealCounter] = useState(0);
@@ -181,6 +191,8 @@ export function AggregateSectionContent({
     ack,
     onExpandVariant,
     sectionId: section.id,
+    repoOwners,
+    onNavigateToRepo,
   };
 
   const isItemExpanded = (item: AggregateItem) =>
@@ -205,7 +217,7 @@ export function AggregateSectionContent({
               />
               {expanded &&
                 hasVariants &&
-                isDecisionSection &&
+                decidesHere(item, isDecisionSection) &&
                 onSelectVariant &&
                 diffHook && (
                   <VariantView
@@ -216,7 +228,9 @@ export function AggregateSectionContent({
                     sectionId={section.id}
                   />
                 )}
-              {expanded && !hasVariants && isDecisionSection && (
+              {expanded &&
+                !hasVariants &&
+                decidesHere(item, isDecisionSection) && (
                 <ItemDetailPane item={item} sectionId={section.id} />
               )}
             </div>
@@ -255,7 +269,7 @@ export function AggregateSectionContent({
           <AggregateItemRow item={item} {...rowProps} isExpanded={expanded} />
           {expanded &&
             hasVariants &&
-            isDecisionSection &&
+            decidesHere(item, isDecisionSection) &&
             onSelectVariant &&
             diffHook && (
               <VariantView
@@ -266,7 +280,7 @@ export function AggregateSectionContent({
                 sectionId={section.id}
               />
             )}
-          {expanded && !hasVariants && isDecisionSection && (
+          {expanded && !hasVariants && decidesHere(item, isDecisionSection) && (
             <ItemDetailPane item={item} sectionId={section.id} />
           )}
         </div>

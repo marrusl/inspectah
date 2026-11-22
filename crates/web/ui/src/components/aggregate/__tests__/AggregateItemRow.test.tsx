@@ -681,4 +681,92 @@ describe("AggregateItemRow", () => {
       expect(formatSize(1500000000)).toBe("1.4 GB");
     });
   });
+
+  describe("a row another section decides", () => {
+    const variants = {
+      count: 2,
+      selected: "abc123",
+      options: [
+        { hash: "abc123", hosts: ["h1"], host_count: 1, selected: true },
+        { hash: "def456", hosts: ["h2"], host_count: 1, selected: false },
+      ],
+    };
+
+    it("offers no switch or variant control, only the count", async () => {
+      const onExpandVariant = vi.fn();
+      const item = makeItem({
+        item_id: { kind: "Config", key: { path: "/etc/yum.repos.d/a.repo" } },
+        shadowed_by: "repositories",
+        variants,
+      });
+      render(
+        <AggregateItemRow
+          item={item}
+          isDecisionSection={true}
+          onToggle={vi.fn()}
+          ack={defaultAck}
+          onExpandVariant={onExpandVariant}
+          repoOwners={new Map([["/etc/yum.repos.d/a.repo", "a"]])}
+          onNavigateToRepo={vi.fn()}
+        />,
+      );
+      expect(screen.queryByRole("switch")).toBeNull();
+      expect(screen.queryByRole("button", { name: /variants/ })).toBeNull();
+      expect(screen.getByText("2 variants")).toBeInTheDocument();
+      await userEvent.click(screen.getByTestId("aggregate-item-row"));
+      expect(onExpandVariant).not.toHaveBeenCalled();
+    });
+
+    it("follows its repo link without opening the row, by mouse or Enter", async () => {
+      const onExpandVariant = vi.fn();
+      const onNavigateToRepo = vi.fn();
+      const item = makeItem({
+        item_id: { kind: "Config", key: { path: "/etc/yum.repos.d/a.repo" } },
+        shadowed_by: "repositories",
+      });
+      render(
+        <AggregateItemRow
+          item={item}
+          isDecisionSection={true}
+          onToggle={vi.fn()}
+          ack={defaultAck}
+          onExpandVariant={onExpandVariant}
+          repoOwners={new Map([["/etc/yum.repos.d/a.repo", "a"]])}
+          onNavigateToRepo={onNavigateToRepo}
+        />,
+      );
+      const link = screen.getByRole("button", { name: "Go to repo a" });
+      await userEvent.click(link);
+      link.focus();
+      await userEvent.keyboard("{Enter}");
+      expect(onNavigateToRepo).toHaveBeenCalledTimes(2);
+      expect(onNavigateToRepo).toHaveBeenCalledWith("a");
+      expect(onExpandVariant).not.toHaveBeenCalled();
+    });
+
+    it("names the units section for a drop-in's file, with no repo link", () => {
+      const item = makeItem({
+        item_id: {
+          kind: "Config",
+          key: { path: "/etc/systemd/system/x.service.d/override.conf" },
+        },
+        shadowed_by: "units",
+      });
+      render(
+        <AggregateItemRow
+          item={item}
+          isDecisionSection={true}
+          onToggle={vi.fn()}
+          ack={defaultAck}
+          repoOwners={new Map()}
+          onNavigateToRepo={vi.fn()}
+        />,
+      );
+      expect(screen.queryByRole("switch")).toBeNull();
+      expect(screen.getByTestId("shadow-owner-badge")).toHaveTextContent(
+        "Controlled in Systemd units",
+      );
+      expect(screen.queryByTestId("shadow-owner-link")).toBeNull();
+    });
+  });
 });

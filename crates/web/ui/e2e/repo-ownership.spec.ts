@@ -242,3 +242,78 @@ test.describe("A Configuration row a repo owns", () => {
     expect(results.violations).toEqual([]);
   });
 });
+
+// The fleet view of the same rows, from the `repos-aggregate` recording:
+// repo `custom` owns a .repo file and a key, and both Configuration rows
+// carry `shadowed_by: "repositories"`.
+test.describe("A fleet Configuration row a repo owns", () => {
+  const CUSTOM_REPO = "/etc/yum.repos.d/custom.repo";
+  let opPosts: number;
+
+  test.beforeEach(async ({ page }) => {
+    await applyMockApi(page, "aggregate-3", {
+      "/api/aggregate/view": path.join(
+        RECORDED,
+        "repos-aggregate.aggregate-view.json",
+      ),
+    });
+    opPosts = 0;
+    await page.route("**/api/op", (route) => {
+      opPosts++;
+      return route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "no op expected" }),
+      });
+    });
+    await page.goto("/");
+    await expect(
+      page.getByTestId("aggregate-app").locator(".inspectah-statsbar"),
+    ).toBeVisible();
+    await page
+      .getByTestId("aggregate-sidebar")
+      .getByText("Configuration Files")
+      .click();
+  });
+
+  test.afterEach(async ({ page }) => {
+    await clearMocks(page);
+  });
+
+  function row(page: import("@playwright/test").Page, configPath: string) {
+    return page.locator(
+      `[data-item-id='${JSON.stringify({ key: { path: configPath }, kind: "Config" })}']`,
+    );
+  }
+
+  test("is read-only and reveals its repo's switch", async ({ page }) => {
+    const custom = row(page, CUSTOM_REPO);
+    await expect(custom).toBeVisible();
+    await expect(custom.getByRole("switch")).toHaveCount(0);
+    await expect(custom.getByTestId("shadow-owner-badge")).toHaveText(
+      "Decided under Repositories",
+    );
+    await custom.click();
+    await expect(page.getByTestId("item-detail-pane")).toHaveCount(0);
+
+    await custom.getByRole("button", { name: "Go to repo custom" }).click();
+    await expect(
+      page.getByTestId("repo-bar-row-custom").getByRole("switch"),
+    ).toBeFocused();
+    expect(opPosts).toBe(0);
+  });
+
+  test("has no axe violations at a narrow desktop width", async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 900 });
+    await expect(row(page, CUSTOM_REPO)).toBeVisible();
+    // Every fleet row is a `role="row"` outside any grid, holding the
+    // prevalence badge's button, which predates these rows: the two
+    // structure rules fail on any fleet row. Left out here, reported, not
+    // fixed here.
+    const results = await new AxeBuilder({ page })
+      .include('[data-testid="aggregate-section"]')
+      .disableRules(["aria-required-parent", "aria-required-children"])
+      .analyze();
+    expect(results.violations).toEqual([]);
+  });
+});

@@ -22,6 +22,9 @@ const PACKAGES_SECTION_ID = "packages";
  *  `DECIDED_UNDER_REPOSITORIES` summary uses the same words. */
 export const DECIDED_UNDER_REPOSITORIES = "Decided under Repositories";
 
+/** The label of a row a Service Drop-ins row decides (spec § 7 string 26). */
+export const CONTROLLED_IN_SYSTEMD_UNITS = "Controlled in Systemd units";
+
 /**
  * Where a shadowed config file's include decision actually lives.
  *
@@ -66,7 +69,7 @@ export function resolveShadowOwner(
     const owner = dropins.find((d) => d.config_paths.includes(entry.path));
     return {
       // Spec § 7 string 26: the units section's name (§ 6.14).
-      label: "Controlled in Systemd units",
+      label: CONTROLLED_IN_SYSTEMD_UNITS,
       state: owner
         ? {
             text: owner.include ? "Owner included" : "Owner excluded",

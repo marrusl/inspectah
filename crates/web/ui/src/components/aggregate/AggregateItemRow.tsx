@@ -1,12 +1,17 @@
-import { Label, Switch } from "@patternfly/react-core";
+import { Button, Label, Switch } from "@patternfly/react-core";
 import type {
   AggregateItem,
+  ConfigShadow,
   ItemId,
   LanguagePackageMetadata,
   UnmanagedFileMetadata,
 } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 import { PrevalenceBadge } from "../PrevalenceBadge";
+import {
+  CONTROLLED_IN_SYSTEMD_UNITS,
+  DECIDED_UNDER_REPOSITORIES,
+} from "../shadowOwner";
 
 export interface AggregateItemRowProps {
   item: AggregateItem;
@@ -18,6 +23,30 @@ export interface AggregateItemRowProps {
   isExpanded?: boolean;
   /** Section ID from the parent AggregateSection — drives metadata rendering. */
   sectionId?: string;
+  /**
+   * The repo whose switch decides each repo-owned path: the first owner,
+   * by section id, that has a switch. A path with none gets no link.
+   */
+  repoOwners?: ReadonlyMap<string, string>;
+  /** Reveal a repo's row under Repositories, in Packages. */
+  onNavigateToRepo?: (sectionId: string) => void;
+}
+
+const SHADOW_LABELS: Record<ConfigShadow, string> = {
+  repositories: DECIDED_UNDER_REPOSITORIES,
+  units: CONTROLLED_IN_SYSTEMD_UNITS,
+};
+
+/**
+ * Whether this row decides its own item. A row another section decides
+ * (`shadowed_by`) is inventory: the server refuses its include, variant
+ * and edit ops, so it offers none of them.
+ */
+export function decidesHere(
+  item: AggregateItem,
+  isDecisionSection: boolean,
+): boolean {
+  return isDecisionSection && item.shadowed_by === undefined;
 }
 
 /* ---- Section metadata helpers ---- */
@@ -128,11 +157,19 @@ export function AggregateItemRow({
   onExpandVariant,
   isExpanded = false,
   sectionId,
+  repoOwners,
+  onNavigateToRepo,
 }: AggregateItemRowProps) {
   const name = itemDisplayName(item.item_id);
   const { count, total } = item.prevalence;
   const hasVariants = item.variants != null && item.variants.count > 1;
   const locked = item.locked === true;
+  const decides = decidesHere(item, isDecisionSection);
+  const shadow = item.shadowed_by;
+  const owningRepo =
+    shadow === "repositories" && item.item_id.kind === "Config"
+      ? (repoOwners?.get(item.item_id.key.path) ?? null)
+      : null;
 
   const handleToggle = () => {
     if (locked) return;
@@ -141,17 +178,17 @@ export function AggregateItemRow({
 
   const handleVariantClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (isDecisionSection) onExpandVariant?.(item.item_id);
+    if (decides) onExpandVariant?.(item.item_id);
   };
 
   const handleRowClick = () => {
-    if (isDecisionSection) onExpandVariant?.(item.item_id);
+    if (decides) onExpandVariant?.(item.item_id);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      if (isDecisionSection) onExpandVariant?.(item.item_id);
+      if (decides) onExpandVariant?.(item.item_id);
     } else if (e.key === "Escape" && isExpanded) {
       e.preventDefault();
       onExpandVariant?.(item.item_id); // toggle close
@@ -235,16 +272,17 @@ export function AggregateItemRow({
 
   return (
     <div
-      className={`aggregate-item-row${locked ? " aggregate-item-row--locked" : ""}`}
+      className={`aggregate-item-row${locked ? " aggregate-item-row--locked" : ""}${shadow ? " aggregate-item-row--readonly" : ""}`}
       data-testid="aggregate-item-row"
       data-item-id={JSON.stringify(item.item_id)}
       data-locked={locked ? "true" : undefined}
+      data-shadowed-by={shadow}
       onClick={handleRowClick}
       onKeyDown={handleKeyDown}
       role="row"
       tabIndex={0}
     >
-      {isDecisionSection && (
+      {decides && (
         <div
           className="aggregate-item-row__toggle"
           onClick={(e) => e.stopPropagation()}
@@ -274,9 +312,37 @@ export function AggregateItemRow({
         </Label>
       )}
 
+      {shadow && (
+        <Label
+          color="purple"
+          isCompact
+          data-testid="shadow-owner-badge"
+          className="aggregate-item-row__shadow-owner"
+        >
+          {SHADOW_LABELS[shadow]}
+        </Label>
+      )}
+
+      {owningRepo !== null && onNavigateToRepo && (
+        <Button
+          variant="link"
+          isInline
+          data-testid="shadow-owner-link"
+          onClick={(e) => {
+            e.stopPropagation();
+            onNavigateToRepo(owningRepo);
+          }}
+          // The row's own Enter and Space handler would cancel the
+          // button's activation.
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          Go to repo {owningRepo}
+        </Button>
+      )}
+
       <PrevalenceBadge count={count} total={total} suffix="hosts" />
 
-      {hasVariants && isDecisionSection && (
+      {hasVariants && decides && (
         <button
           className="aggregate-item-row__variants"
           onClick={handleVariantClick}
@@ -292,7 +358,7 @@ export function AggregateItemRow({
           </span>
         </button>
       )}
-      {hasVariants && !isDecisionSection && (
+      {hasVariants && !decides && (
         <span className="aggregate-item-row__variants aggregate-item-row__variants--readonly">
           {item.variants!.count} variants
         </span>

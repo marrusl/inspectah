@@ -470,24 +470,91 @@ describe("RepoBar's Switch in AggregateApp reads the decision and the members", 
       screen.getByText("2 packages excluded, excluded in refine"),
     ).toBeInTheDocument();
   });
+});
 
-  it("states an inventory refusal on a configuration row as information", async () => {
-    const fake = makeFakeApi(makeView(makeVendorRepo()));
-    wireFake(fake);
+// The fleet's Configuration rows for a repo's file and key, from the
+// `repos-aggregate` session of
+// `crates/web/tests/system_tuning_fixtures_test.rs`: both carry
+// `shadowed_by: "repositories"`, and repo `custom` owns both.
+const RECORDED = import.meta.glob<{ default: AggregateViewResponse }>(
+  "../../../__tests__/fixtures/system-tuning/repos-aggregate.aggregate-view.json",
+  { eager: true },
+);
+
+function recordedFleetView(): AggregateViewResponse {
+  const [entry] = Object.values(RECORDED);
+  if (!entry) throw new Error("no recorded repos-aggregate view");
+  return structuredClone(entry.default);
+}
+
+describe("A fleet Configuration row a repo decides", () => {
+  const PATHS = [
+    "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom",
+    "/etc/yum.repos.d/custom.repo",
+  ];
+
+  function configRow(path: string): HTMLElement {
+    const row = screen
+      .getAllByTestId("aggregate-item-row")
+      .find(
+        (el) =>
+          el.getAttribute("data-item-id") ===
+          JSON.stringify({ key: { path }, kind: "Config" }),
+      );
+    if (!row) throw new Error(`no row for ${path}`);
+    return row;
+  }
+
+  async function openConfiguration() {
+    mockFetchAggregateView.mockImplementation(() =>
+      Promise.resolve(recordedFleetView()),
+    );
     renderAggregateApp();
     await waitForContent();
+    fireEvent.click(
+      within(screen.getByTestId("aggregate-sidebar")).getByText(
+        "Configuration Files",
+      ),
+    );
+    await waitFor(() => expect(configRow(PATHS[1])).toBeInTheDocument());
+  }
 
-    mockApplyOp.mockRejectedValueOnce(
-      new ApiError(422, {
-        error:
-          "inventory finding is not toggleable: /etc/yum.repos.d/vendor.repo",
+  it("is read-only, says the repo section decides it, and sends no op", async () => {
+    await openConfiguration();
+    const opsBefore = mockApplyOp.mock.calls.length;
+
+    for (const path of PATHS) {
+      const row = configRow(path);
+      expect(row).toHaveAttribute("data-shadowed-by", "repositories");
+      expect(within(row).queryByRole("switch")).toBeNull();
+      expect(within(row).queryByRole("checkbox")).toBeNull();
+      expect(within(row).getByTestId("shadow-owner-badge")).toHaveTextContent(
+        "Decided under Repositories",
+      );
+      expect(
+        within(row).getByRole("button", { name: "Go to repo custom" }),
+      ).toBeInTheDocument();
+
+      // Neither a click nor Enter nor Space opens the row.
+      fireEvent.click(row);
+      fireEvent.keyDown(row, { key: "Enter" });
+      fireEvent.keyDown(row, { key: " " });
+    }
+    expect(screen.queryByTestId("item-detail-pane")).toBeNull();
+    expect(mockApplyOp.mock.calls.length).toBe(opsBefore);
+    expect(screen.queryByTestId("aggregate-op-notice")).toBeNull();
+  });
+
+  it("reveals the repo's switch under Repositories", async () => {
+    await openConfiguration();
+    fireEvent.click(
+      within(configRow(PATHS[0])).getByRole("button", {
+        name: "Go to repo custom",
       }),
     );
-    fireEvent.click(screen.getByRole("switch"));
-    const notice = await screen.findByTestId("aggregate-op-notice");
-    expect(notice).toHaveTextContent(
-      "Nothing was changed: /etc/yum.repos.d/vendor.repo is decided by the section that owns it, not by this row.",
+    const repoRow = await screen.findByTestId("repo-bar-row-custom");
+    await waitFor(() =>
+      expect(within(repoRow).getByRole("switch")).toHaveFocus(),
     );
-    expect(screen.getByTestId("aggregate-content")).toBeInTheDocument();
   });
 });

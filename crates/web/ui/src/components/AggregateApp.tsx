@@ -19,6 +19,7 @@ import type {
   RefinementOp,
   RefineStats,
   ReferenceSection,
+  RepoGroupInfo,
   LanguagePackageMetadata,
   UnmanagedFileMetadata,
 } from "../api/types";
@@ -47,6 +48,8 @@ import { AggregateSectionContent } from "./aggregate/AggregateSection";
 import { itemDisplayName } from "./aggregate/AggregateItemRow";
 import { RepoBar } from "./RepoBar";
 import {
+  REPO_ROW_TESTID_PREFIX,
+  hasRepoSwitch,
   inventoryRefusalText,
   repoFailure,
   type RepoFailure,
@@ -166,6 +169,36 @@ export function buildAggregateSearchSections(
       };
     }),
   }));
+}
+
+/**
+ * The repo whose switch decides each path a repo owns: the first owner, by
+ * section id, that has a switch, as the single-host row's link picks it
+ * (`owningSwitch`). Joined on the server's `owns` spellings as given.
+ */
+function buildRepoOwners(repos: RepoGroupInfo[]): Map<string, string> {
+  const owners = new Map<string, string>();
+  const withSwitch = repos
+    .filter(hasRepoSwitch)
+    .sort((a, b) =>
+      a.section_id < b.section_id ? -1 : a.section_id > b.section_id ? 1 : 0,
+    );
+  for (const repo of withSwitch) {
+    for (const path of repo.owns) {
+      if (!owners.has(path)) owners.set(path, repo.section_id);
+    }
+  }
+  return owners;
+}
+
+/** The repo row under Repositories for `sectionId`, compared as a string:
+ *  a section id is host data, never built into a selector. */
+function repoRow(sectionId: string): HTMLElement | null {
+  const testId = `${REPO_ROW_TESTID_PREFIX}${sectionId}`;
+  for (const el of document.querySelectorAll<HTMLElement>("[data-testid]")) {
+    if (el.getAttribute("data-testid") === testId) return el;
+  }
+  return null;
 }
 
 /** Build the correct RefinementOp for a aggregate item toggle. */
@@ -426,6 +459,34 @@ export function AggregateApp({
     },
     [handleSelectSection],
   );
+
+  // A repo-owned Configuration row's link: open Packages and focus the
+  // repo's switch under Repositories, or its row when it has none.
+  const repoOwners = useMemo(
+    () => buildRepoOwners(view?.repo_groups ?? []),
+    [view],
+  );
+  const [repoReveal, setRepoReveal] = useState<string | undefined>(undefined);
+  const handleNavigateToRepo = useCallback(
+    (sectionId: string) => {
+      setRepoReveal(sectionId);
+      handleSelectSection("packages");
+    },
+    [handleSelectSection],
+  );
+  // Declared after the section-change focus, so on a section change this
+  // timer runs after that one and its focus stands.
+  useEffect(() => {
+    if (repoReveal === undefined || activeSection !== "packages") return;
+    const timer = setTimeout(() => {
+      const row = repoRow(repoReveal);
+      if (!row) return;
+      setRepoReveal(undefined);
+      row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      (row.querySelector<HTMLElement>("input[role='switch']") ?? row).focus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [repoReveal, activeSection, view]);
 
   // --- Dismissed conflict state (bridges PackageList → RepoBar) ---
   const [dismissedCount, setDismissedCount] = useState(0);
@@ -767,6 +828,8 @@ export function AggregateApp({
                       expandedItemId={expandedItemId}
                       onSelectVariant={handleSelectVariant}
                       diffHook={diffHook}
+                      repoOwners={repoOwners}
+                      onNavigateToRepo={handleNavigateToRepo}
                     />
                     {activeSection === "system_tuning" && (
                       <SysctlPanel sysctl={aggregateView.sysctl} />

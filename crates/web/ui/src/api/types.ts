@@ -1563,6 +1563,12 @@ export interface AggregateItem {
    * Track C T12 reads this to render variant diff views.
    */
   variant_payload?: Record<string, unknown>;
+  /**
+   * Set on a Configuration row another section decides, as the single-host
+   * config row carries it; absent on every other row. The server refuses
+   * an include, variant or edit op on such a row, so it offers none.
+   */
+  shadowed_by?: ConfigShadow;
 }
 
 export interface AggregateZoneGroup {
