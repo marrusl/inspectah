@@ -402,7 +402,8 @@ const MAX_REDUNDANT_RESCANS_PER_LINE: usize = 4;
 
 /// Collect regex matches from `content` for a single `pat`, filtering out:
 /// - Matches on comment lines (`#`, plus `;` / `//` where `path` uses them)
-/// - Password-pattern matches whose value is a known NSS/PAM token
+/// - Matches whose value is a known NSS/PAM token, for a pattern with
+///   `filter_nss_pam_tokens` set
 /// - PasswordHash matches when `path` is a shadow file
 ///
 /// Every pattern goes through this one path, with or without a
@@ -575,9 +576,10 @@ fn eligible_match(
     // change the text around one (see
     // `test_a_second_pass_is_not_guaranteed_to_return_the_same_text`).
 
-    // Filter 2: skip Password matches whose value is a known
-    // NSS/PAM false-positive token
-    if pat.finding_kind == FindingKind::Password && is_false_positive_value(text) {
+    // Filter 2: skip matches whose value is a known NSS/PAM
+    // false-positive token, for the patterns that ask for it
+    // (`SecretPattern::filter_nss_pam_tokens`)
+    if pat.filter_nss_pam_tokens && is_false_positive_value(text) {
         return None;
     }
 
@@ -4121,6 +4123,41 @@ baseurl = https://cdn.redhat.com
     }
 
     // --- False-positive value filtering tests (Gap 4) ---
+
+    /// SSSD's `*_authtok` value is the whole rest of the line. Spaces,
+    /// tabs and quotes stay inside it, a value spelled like an NSS word
+    /// is still a password, and the key, `=` and `_type` setting stay.
+    #[test]
+    fn test_sssd_authtok_value_is_redacted_whole() {
+        let input = "[domain/a]\nldap_default_authtok_type = password\nldap_default_authtok = Bind Secret Tail\n\
+                     [domain/b]\nldap_default_authtok =\tTab\tSecret \n\
+                     [domain/c]\nldap_default_authtok = \"Quoted Secret\"\n\
+                     [domain/d]\nldap_default_authtok = files\n\
+                     [domain/e]\n# ldap_default_authtok = commented\n";
+        let result = redact_string(input);
+        for secret in ["Bind", "Secret", "Tail", "Tab", "Quoted", "files"] {
+            assert!(!result.contains(secret), "{secret} survived: {result}");
+        }
+        assert!(
+            result.contains("ldap_default_authtok_type = password\n"),
+            "{result}"
+        );
+        assert!(
+            result.contains("# ldap_default_authtok = commented\n"),
+            "{result}"
+        );
+        assert_eq!(
+            result
+                .matches("ldap_default_authtok = REDACTED_PASSWORD_")
+                .count(),
+            3,
+            "{result}"
+        );
+        assert!(
+            result.contains("ldap_default_authtok =\tREDACTED_PASSWORD_"),
+            "{result}"
+        );
+    }
 
     #[test]
     fn test_nsswitch_false_positive_no_finding() {

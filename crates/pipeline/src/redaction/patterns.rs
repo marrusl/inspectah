@@ -16,6 +16,12 @@ pub(crate) struct SecretPattern {
     /// the content the match came from. A match it refuses is not a
     /// finding. `None` accepts every match.
     pub accept: Option<fn(&str, &Captures<'_>) -> bool>,
+    /// Whether a match whose secret is a known NSS or PAM word (`files`,
+    /// `sss`, `required`) is dropped as a false positive. True for the
+    /// generic `password:` patterns, which `nsswitch.conf` and PAM
+    /// stacks match by accident; false for a key that only ever holds a
+    /// secret, where `files` is as good a password as any.
+    pub filter_nss_pam_tokens: bool,
 }
 
 /// Name of the capture group holding the secret itself.
@@ -47,6 +53,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             )
             .unwrap(),
             finding_kind: FindingKind::PrivateKey,
+            filter_nss_pam_tokens: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -59,6 +66,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             )
             .unwrap(),
             finding_kind: FindingKind::Certificate,
+            filter_nss_pam_tokens: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -74,6 +82,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             )
             .unwrap(),
             finding_kind: FindingKind::PasswordHash,
+            filter_nss_pam_tokens: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -100,6 +109,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             )
             .unwrap(),
             finding_kind: FindingKind::Password,
+            filter_nss_pam_tokens: true,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -119,6 +129,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
                 })
             }),
             finding_kind: FindingKind::AwsKey,
+            filter_nss_pam_tokens: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
                         remediation: "Rotate the AWS access key and use IAM roles",
@@ -137,6 +148,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         SecretPattern {
             regex: Regex::new(r"jdbc:[a-z]+://(?P<secret>[^\r\n]*(?:@|password=[^&\s])\S*)").unwrap(),
             finding_kind: FindingKind::JdbcPassword,
+            filter_nss_pam_tokens: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -155,6 +167,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         SecretPattern {
             regex: Regex::new(r"postgres(?:ql)?://[^:\r\n]+:(?P<secret>[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::PostgresPassword,
+            filter_nss_pam_tokens: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -164,6 +177,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         SecretPattern {
             regex: Regex::new(r"mongodb(?:\+srv)?://[^:\r\n]+:(?P<secret>[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::MongodbPassword,
+            filter_nss_pam_tokens: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -173,6 +187,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         SecretPattern {
             regex: Regex::new(r"redis://:(?P<secret>[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::RedisPassword,
+            filter_nss_pam_tokens: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -182,6 +197,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         SecretPattern {
             regex: Regex::new(r"(?i)(?:PrivateKey|PreSharedKey)[ \t]*=[ \t]*(?P<secret>[A-Za-z0-9+/]{43}=)").unwrap(),
             finding_kind: FindingKind::WireguardKey,
+            filter_nss_pam_tokens: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -191,6 +207,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         SecretPattern {
             regex: Regex::new(r"(?i)(?:psk|wpa-psk|wifi\.psk)[ \t]*=[ \t]*(?P<secret>\S+)").unwrap(),
             finding_kind: FindingKind::WifiPsk,
+            filter_nss_pam_tokens: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -215,6 +232,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             )
             .unwrap(),
             finding_kind: FindingKind::Password,
+            filter_nss_pam_tokens: true,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -242,11 +260,32 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             )
             .unwrap(),
             finding_kind: FindingKind::Password,
+            filter_nss_pam_tokens: true,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
             remediation:
                 "Use environment variables or a secrets manager instead of inline passwords",
+        },
+        // SSSD credential settings (`ldap_default_authtok` and any other
+        // `*_authtok`). SSSD's INI value is the rest of the line after
+        // `=`, spaces, tabs and quotes included, so the secret runs to the
+        // last non-blank character, where the generic pattern above stops
+        // at the first blank. Anchored at the start of the line, so a
+        // commented-out line is not matched, and the key must end in
+        // `authtok`, so `ldap_default_authtok_type` is not. Any value is a
+        // password here, so the NSS and PAM word filter does not apply.
+        SecretPattern {
+            regex: Regex::new(
+                r"(?im)^[ \t]*[a-z0-9_]*authtok[ \t]*=[ \t]*(?P<secret>[^\r\n]*[^ \t\r\n])",
+            )
+            .unwrap(),
+            finding_kind: FindingKind::Password,
+            filter_nss_pam_tokens: false,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Confidence::High,
+            accept: None,
+            remediation: "Provision the SSSD bind password on the deployed host instead of carrying it",
         },
     ]
 });
@@ -485,6 +524,7 @@ mod tests {
     const WIFI_PSK: usize = 10;
     const JSON_PASSWORD: usize = 11;
     const QUOTED_PASSWORD: usize = 12;
+    const SSSD_AUTHTOK: usize = 13;
 
     #[test]
     fn test_key_value_patterns_never_cross_a_newline() {
@@ -507,6 +547,12 @@ mod tests {
             (QUOTED_PASSWORD, "password:\n'hunter2'".into()),
             (WIREGUARD_KEY, format!("PrivateKey =\n{wg_key}")),
             (WIREGUARD_KEY, format!("PrivateKey\n= {wg_key}")),
+            (SSSD_AUTHTOK, "ldap_default_authtok =\n[domain/b]".into()),
+            (
+                SSSD_AUTHTOK,
+                "ldap_default_authtok = \t \nid_provider = ldap".into(),
+            ),
+            (SSSD_AUTHTOK, "ldap_default_authtok\n= secret".into()),
         ];
         for (idx, text) in &cases {
             assert!(
@@ -522,6 +568,7 @@ mod tests {
             (JSON_PASSWORD, "\"password\": \"hunter2".into()),
             (QUOTED_PASSWORD, "password: \"hunter2".into()),
             (WIREGUARD_KEY, format!("PrivateKey = {wg_key}")),
+            (SSSD_AUTHTOK, "ldap_default_authtok = secret".into()),
         ];
         for (idx, text) in &same_line {
             assert!(

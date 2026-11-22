@@ -387,3 +387,76 @@ fn an_encrypted_key_inside_a_ghost_config_is_redacted_on_both_export_paths() {
         assert!(staged.contains("workers = 4\n"), "{path}");
     }
 }
+
+/// Four LDAP domains whose bind passwords hold what the generic
+/// `password=` pattern mishandles: spaces, a tab, quotes, and a password
+/// spelled like an NSS source.
+const SSSD_AWKWARD_PASSWORDS: &str = "\
+[sssd]
+domains = a, b, c, d
+services = nss, pam
+
+[domain/a]
+id_provider = ldap
+ldap_default_authtok_type = password
+ldap_default_authtok = Bind Secret Tail
+
+[domain/b]
+id_provider = ldap
+ldap_default_authtok =\tTabbed\tWord
+
+[domain/c]
+id_provider = ldap
+ldap_default_authtok = \"Quoted Phrase\"
+
+[domain/d]
+id_provider = ldap
+ldap_default_authtok = files
+";
+
+/// Each SSSD bind password is redacted whole, from the collected ghost
+/// file to both exports: no word of any of them survives, every line
+/// keeps its key, and the file keeps its line count.
+#[test]
+fn sssd_bind_passwords_are_redacted_whole_on_both_export_paths() {
+    let snap = scan(
+        SysctlHost::new()
+            .ghost("sssd-common", "cng", "/etc/sssd/sssd.conf")
+            .file("/etc/sssd/sssd.conf", SSSD_AWKWARD_PASSWORDS),
+    );
+    let sssd = entry(&snap, "/etc/sssd/sssd.conf").expect("the ghost sssd.conf is collected");
+
+    let mut texts = vec![("snapshot".to_string(), sssd.content.clone())];
+    for (path, tree) in both_exports(&snap) {
+        let staged = std::fs::read_to_string(tree.path().join("config/etc/sssd/sssd.conf"))
+            .unwrap_or_else(|e| panic!("{path}: sssd.conf is staged: {e}"));
+        texts.push((path.to_string(), staged));
+    }
+    for (where_, text) in texts {
+        for word in [
+            "Bind", "Secret", "Tail", "Tabbed", "Word", "Quoted", "Phrase",
+        ] {
+            assert!(!text.contains(word), "{where_}: {word} survived:\n{text}");
+        }
+        assert!(
+            !text.contains("ldap_default_authtok = files"),
+            "{where_}: the NSS-word password survived:\n{text}"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|l| l.starts_with("ldap_default_authtok ="))
+                .count(),
+            4,
+            "{where_}:\n{text}"
+        );
+        assert!(
+            text.contains("ldap_default_authtok_type = password\n"),
+            "{where_}"
+        );
+        assert_eq!(
+            text.lines().count(),
+            SSSD_AWKWARD_PASSWORDS.lines().count(),
+            "{where_}"
+        );
+    }
+}
