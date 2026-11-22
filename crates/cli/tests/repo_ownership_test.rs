@@ -11,16 +11,19 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::unit_hosts::{
-    UnitHost, export_session, reload, render_export, scan, scan_finished, scan_finished_raw,
-    scan_unredacted, session,
+    UnitHost, export_session, reload, render_export, run_pipeline, scan, scan_finished,
+    scan_finished_raw, scan_unredacted, session,
 };
 use inspectah_core::aggregate::merge_snapshots;
-use inspectah_core::repo_ownership::{check_repo_ownership, repo_ownership, settle_repo_ownership};
+use inspectah_core::repo_ownership::{
+    OwnedKind, check_repo_ownership, repo_ownership, settle_repo_ownership,
+};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::ConfigShadow;
 use inspectah_core::types::destination::Destination;
 use inspectah_core::types::rpm::KeyRejection;
+use inspectah_pipeline::export_warning::{ExportWarning, ExportWarningKind};
 use inspectah_refine::repo_index::RepoIndex;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{
@@ -169,6 +172,15 @@ fn set_package(name: &str, include: bool) -> RefinementOp {
         },
         include,
     }
+}
+
+/// The warnings the refine export of `s` gives.
+fn export_warnings(s: &RefineSession) -> Vec<ExportWarning> {
+    let packed = tempfile::tempdir().unwrap();
+    s.export_plan(s.generation())
+        .unwrap()
+        .render(&packed.path().join("x.tar.gz"))
+        .unwrap()
 }
 
 /// What an export tree stages under `config/` at `path`.
@@ -358,6 +370,14 @@ fn t3_the_repo_switch_is_the_one_control() {
                     .lines()
                     .any(|l| l.starts_with("# FIXME") && l.contains(path)),
                 "nothing written twice or withheld:\n{file}"
+            );
+            let failures: Vec<_> = export_warnings(&s)
+                .into_iter()
+                .filter(|w| w.kind() == ExportWarningKind::Failure)
+                .collect();
+            assert!(
+                failures.is_empty(),
+                "{repo} include={include}: {failures:?}"
             );
             // Only repo ops moved repo dispositions: every entry that
             // differs from the scan's is one a repo op reaches.
@@ -989,7 +1009,16 @@ fn t5_a_disabled_repo_with_an_enablerepo_install_keeps_a_shared_key() {
             .any(|p| p.name == "pd" && p.disposition.is_included()),
         "a carriage-only switch never moves members"
     );
-    assert!(staged(export_session(&s).path(), "/etc/yum.repos.d/d.repo").is_none());
+    let tree = export_session(&s);
+    assert!(staged(tree.path(), "/etc/yum.repos.d/d.repo").is_none());
+    let file = containerfile(tree.path());
+    assert!(
+        !file
+            .lines()
+            .any(|l| !l.trim_start().starts_with('#') && l.contains("--enablerepo=d")),
+        "no active install enables d once its file is gone:\n{file}"
+    );
+    assert!(!installs(&file, "pd"), "{file}");
 }
 
 /// Whether `containerfile` names `name` on an install line: an
@@ -1237,8 +1266,10 @@ fn named(host: UnitHost, name: &str) -> InspectionSnapshot {
 }
 
 /// After every fleet case: the invariants hold on the merged snapshot and
-/// on it reloaded, and every config entry at a repo destination is
-/// decided under Repositories.
+/// on it reloaded, every config entry at a repo destination is decided
+/// under Repositories, and excluding every repo with a control, in sorted
+/// order and in reverse, leaves every carriable entry out of the refine
+/// export.
 fn assert_fleet_invariants(merged: &InspectionSnapshot) {
     check_repo_ownership(merged).expect("merged");
     let reloaded = reload(merged);
@@ -1259,6 +1290,35 @@ fn assert_fleet_invariants(merged: &InspectionSnapshot) {
     let mut again = merged.clone();
     settle_repo_ownership(&mut again);
     assert_eq!(&again, merged, "settling twice changes nothing");
+
+    let sorted: Vec<String> = ownership
+        .sections()
+        .into_iter()
+        .map(|s| s.as_str().to_owned())
+        .collect();
+    let reversed: Vec<String> = sorted.iter().rev().cloned().collect();
+    for order in [sorted, reversed] {
+        let mut s = session(&reloaded);
+        for id in &order {
+            if s.repo_state(id).control != RepoControl::None {
+                s.apply(set_repo(id, false))
+                    .unwrap_or_else(|e| panic!("excluding {id} in {order:?}: {e}"));
+            }
+        }
+        let tree = export_session(&s);
+        for (kind, list) in [
+            (OwnedKind::RepoFile, &rpm(merged).repo_files),
+            (OwnedKind::GpgKey, &rpm(merged).gpg_keys),
+        ] {
+            for entry in list.iter().filter(|e| ownership.carriable(kind, e)) {
+                assert!(
+                    staged(tree.path(), &entry.path).is_none(),
+                    "{} after excluding {order:?}",
+                    entry.path
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -1318,6 +1378,40 @@ fn t7_a_key_whose_content_differs_between_hosts_gets_the_line() {
         ))),
         "{file}"
     );
+}
+
+/// An unmodified, RPM-owned `epel.repo` that two `epel-release` versions
+/// put on two hosts: no config walk records it, and the export still says
+/// which hosts' version it does not copy.
+#[test]
+fn t7_an_unmodified_rpm_owned_repo_file_that_differs_gets_the_line() {
+    let host = |base: &str| {
+        UnitHost::new()
+            .base_package("bash")
+            .owned_file(
+                EPEL_REPO,
+                &format!("[epel]\nmetalink=https://{base}.example/epel\nenabled=1\n"),
+                "epel-release",
+            )
+            .package("epel-release")
+    };
+    let (merged, _) = merge_snapshots(
+        vec![named(host("one"), "h1"), named(host("two"), "h2")],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_fleet_invariants(&merged);
+    assert!(
+        config_row(&merged, EPEL_REPO).is_none(),
+        "no config walk row"
+    );
+    let file = containerfile(render_export(&merged).path());
+    let line = format!(
+        "# {EPEL_REPO}: the export copies the version 1 of 2 hosts with this file have; a \
+         different version is on h2"
+    );
+    assert!(file.lines().any(|l| l == line), "{file}");
 }
 
 /// The config rows of a fleet repo file are read-only: every config op on
@@ -1384,13 +1478,14 @@ fn t7_fleet_config_variants_of_a_repo_file_are_read_only() {
     }
 }
 
-/// Correlated keys over three hosts: every representative names A, so B,
-/// which every host collected, has no owner, is never staged, and the
-/// export names it.
-#[test]
-fn t7_a_key_no_copied_version_names_is_left_out_and_named() {
-    const A: &str = "/etc/pki/rpm-gpg/A";
-    const B: &str = "/etc/pki/rpm-gpg/B";
+const CORR_A: &str = "/etc/pki/rpm-gpg/A";
+const CORR_B: &str = "/etc/pki/rpm-gpg/B";
+
+/// Three hosts, named `names`, whose `x.repo`, `y.repo` and `z.repo` each
+/// name key A on two hosts and key B on the third, a different third host
+/// for each file: every representative names A, and B, which every host
+/// collected, has no owner.
+fn correlated_hosts(names: [&str; 3]) -> Vec<InspectionSnapshot> {
     let repo = |id: &str, key: &str| {
         format!("[{id}]\nbaseurl=https://{id}.example/\nenabled=1\ngpgkey=file://{key}\n")
     };
@@ -1400,16 +1495,42 @@ fn t7_a_key_no_copied_version_names_is_left_out_and_named() {
             .file("/etc/yum.repos.d/x.repo", &repo("x", x))
             .file("/etc/yum.repos.d/y.repo", &repo("y", y))
             .file("/etc/yum.repos.d/z.repo", &repo("z", z))
-            .file(A, PGP)
-            .file(B, PGP)
+            .file(CORR_A, PGP)
+            .file(CORR_B, PGP)
     };
-    let hosts = || {
-        vec![
-            named(host(B, A, A), "h1"),
-            named(host(A, B, A), "h2"),
-            named(host(A, A, B), "h3"),
-        ]
-    };
+    vec![
+        named(host(CORR_B, CORR_A, CORR_A), names[0]),
+        named(host(CORR_A, CORR_B, CORR_A), names[1]),
+        named(host(CORR_A, CORR_A, CORR_B), names[2]),
+    ]
+}
+
+/// What a merge decided for each repo file and key, without the host
+/// names its prevalence records.
+fn repo_decisions(snap: &InspectionSnapshot) -> Vec<(String, String, bool)> {
+    rpm(snap)
+        .repo_files
+        .iter()
+        .chain(&rpm(snap).gpg_keys)
+        .map(|e| {
+            (
+                e.path.clone(),
+                e.content.clone(),
+                e.disposition.is_included(),
+            )
+        })
+        .collect()
+}
+
+/// Correlated keys over three hosts: every representative names A, so B,
+/// which every host collected, has no owner, is never staged, and the
+/// export names it. Neither the order the hosts are given in nor the
+/// order of their names changes what the merge decides.
+#[test]
+fn t7_a_key_no_copied_version_names_is_left_out_and_named() {
+    const B: &str = CORR_B;
+    const A: &str = CORR_A;
+    let hosts = || correlated_hosts(["h1", "h2", "h3"]);
     let (merged, _) = merge_snapshots(hosts(), None, None).unwrap();
     assert_fleet_invariants(&merged);
     let mut rotated = hosts();
@@ -1417,6 +1538,11 @@ fn t7_a_key_no_copied_version_names_is_left_out_and_named() {
     let (merged_rotated, _) = merge_snapshots(rotated, None, None).unwrap();
     assert_eq!(merged.rpm, merged_rotated.rpm);
     assert_eq!(merged.config, merged_rotated.config);
+    // The same layouts under names that sort the other way round.
+    let (renamed, _) =
+        merge_snapshots(correlated_hosts(["zeta", "mid", "alpha"]), None, None).unwrap();
+    assert_fleet_invariants(&renamed);
+    assert_eq!(repo_decisions(&renamed), repo_decisions(&merged));
 
     let b = rpm(&merged).gpg_keys.iter().find(|k| k.path == B).unwrap();
     assert!(!b.disposition.is_included());
@@ -1601,6 +1727,31 @@ fn t9_load_refuses_each_violation() {
     assert!(err.to_string().contains("no repo records it"), "{err}");
 }
 
+/// The correlated aggregate's ownerless key, made included in its JSON, is
+/// refused at load as a key no repo op can carry.
+#[test]
+fn t9_load_refuses_an_included_key_no_copied_version_names() {
+    let (merged, _) = merge_snapshots(correlated_hosts(["h1", "h2", "h3"]), None, None).unwrap();
+    let json = serde_json::to_value(&merged).unwrap();
+    InspectionSnapshot::load(&json.to_string()).expect("the unedited aggregate loads");
+    let i = json["rpm"]["gpg_keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|k| k["path"] == CORR_B)
+        .unwrap();
+    let mut included = json.clone();
+    included["rpm"]["gpg_keys"][i]["disposition"] =
+        serde_json::to_value(FindingKind::included()).unwrap();
+    let err = InspectionSnapshot::load(&included.to_string()).unwrap_err();
+    assert!(
+        err.to_string().contains(&format!(
+            "{CORR_B}: a repo file or key no repo op can carry is included"
+        )),
+        "{err}"
+    );
+}
+
 /// A key the scan refused cannot come back through edited JSON: dropping
 /// its `rejected` marker leaves a placeholder recorded as a usable key,
 /// and putting the refused bytes back into the key or its config row is
@@ -1692,8 +1843,24 @@ fn t10_a_key_whose_reference_redaction_rewrote_is_left_out_and_named() {
     );
     assert!(shadowed_by_repositories(&collected, KEY));
 
-    // Redaction and finish_scan.
+    // Redaction and finish_scan, and run_pipeline, which runs the same
+    // sequence in one call, decide the same.
     let snap = scan_finished(host());
+    let no_base = || {
+        UnitHost::new()
+            .file(
+                VEND,
+                &format!("[vend]\nbaseurl=https://vend.example/\nenabled=1\ngpgkey=file://{KEY}\n"),
+            )
+            .file(KEY, PGP)
+            .package_from("pkg", "vend")
+    };
+    let piped = run_pipeline(no_base());
+    let sequenced = scan_finished(no_base());
+    assert_eq!(piped.rpm, sequenced.rpm);
+    assert_eq!(piped.config, sequenced.config);
+    assert_eq!(piped.redactions, sequenced.redactions);
+    check_repo_ownership(&piped).expect("run_pipeline settles after redaction");
     let vend = rpm(&snap)
         .repo_files
         .iter()
@@ -1773,11 +1940,20 @@ fn t10_a_key_whose_reference_redaction_rewrote_is_left_out_and_named() {
             cause: NoOwnerCause::Fleet { .. }
         }
     ));
+    let combined = format!(
+        "{KEY} is not copied: no version of a repo file that the export copies names it. h1, h2 \
+         have it because a different version of a repo file names it there. Review the redacted \
+         reference; if it named this key, restore it and add the key to the image yourself."
+    );
+    let warnings = export_warnings(&s);
+    assert!(
+        warnings.iter().any(|w| w.text() == combined),
+        "{warnings:?}"
+    );
 
-    // Without redaction, the key stays included and owned.
-    let mut raw = scan_unredacted(host());
-    raw.redaction_state = Some(inspectah_core::types::redaction::RedactionState::Raw);
-    settle_repo_ownership(&mut raw);
+    // Without redaction (`--no-redaction` through finish_scan), the key
+    // stays included and owned.
+    let raw = scan_finished_raw(host());
     assert!(
         rpm(&raw)
             .gpg_keys

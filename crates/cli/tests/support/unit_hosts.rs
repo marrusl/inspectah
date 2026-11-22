@@ -963,6 +963,30 @@ pub fn scan_finished(host: UnitHost) -> InspectionSnapshot {
     snapshot
 }
 
+/// `orchestrate::run_pipeline` over `host`, the scan sequence in one call:
+/// the same inspectors, no baseline, its export rendered into a tempdir.
+pub fn run_pipeline(host: UnitHost) -> InspectionSnapshot {
+    let exec = host.build();
+    let inspectors: Vec<Box<dyn Inspector>> = vec![
+        Box::new(RpmInspector::new()),
+        Box::new(ConfigInspector::new()),
+        Box::new(UnitsInspector::new()),
+        Box::new(ScheduledTasksInspector::new()),
+    ];
+    let out = tempfile::tempdir().expect("tempdir");
+    let dir = out.path().join("export");
+    std::fs::create_dir_all(&dir).expect("the export directory");
+    inspectah_pipeline::orchestrate::run_pipeline(
+        &pkg_source(),
+        &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        &inspectors,
+        &dir,
+        "host",
+    )
+    .expect("the pipeline runs")
+    .0
+}
+
 /// The whole scan path with `--no-redaction`: `collect()`, `validate`,
 /// the snapshot marked raw, then `finish_scan` over the same host.
 pub fn scan_finished_raw(host: UnitHost) -> InspectionSnapshot {
