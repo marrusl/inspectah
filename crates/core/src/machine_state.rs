@@ -318,25 +318,26 @@ pub fn is_whole_file_private_key(content: &str) -> bool {
 }
 
 /// How many bytes the unmanaged payload check reads at a time. Its memory
-/// is this buffer and two PEM labels of at most [`PEM_LABEL_MAX`] bytes,
-/// whatever the file's length.
+/// is this buffer, one PEM label of at most [`PEM_LABEL_MAX`] bytes and a
+/// few counters, whatever the file's length.
 pub const PAYLOAD_READ_CHUNK: usize = 64 * 1024;
 
 /// The longest PEM label [`PemKeyFinder`] reads. RFC 7468's labels, and
 /// every private-key label, are far shorter.
 const PEM_LABEL_MAX: usize = 64;
 
-/// The most bytes [`PemKeyFinder`] follows between a private-key `BEGIN`
-/// line and its `END` line. A 16384-bit RSA key in PEM is about 13 KiB.
-const KEY_BODY_MAX: usize = 64 * 1024;
-
-/// The fewest base64 characters a body needs to be a key. A body with
-/// none, such as a `BEGIN` line directly followed by its `END` line in a
-/// template, is a placeholder that holds no key material.
-const KEY_BODY_MIN_BASE64: usize = 1;
+/// How many base64 characters of key material make a private key. The
+/// smallest private key PEM carries, an Ed25519 or X25519 key in PKCS#8
+/// (48 bytes), is 64 base64 characters; every other key is longer. Fewer
+/// after a marker is a template, a placeholder or text that quotes the
+/// marker.
+const KEY_MATERIAL_MIN: usize = 64;
 
 /// The run of dashes both PEM markers start with.
 const PEM_DASH_RUN: usize = PEM_DASHES.len();
+
+/// The hex digits of a `\uXXXX` escape.
+const UNICODE_ESCAPE_DIGITS: u8 = 4;
 
 /// The credential member an unmanaged payload is by its bytes, read from
 /// `reader` to its end, binary-safe and in bounded memory
@@ -373,46 +374,39 @@ pub fn payload_credential(reader: &mut dyn io::Read) -> io::Result<Option<Machin
         .then_some(MachineStateMember::PrivateKeyFile))
 }
 
-/// Finds a PEM private-key block anywhere in a byte stream fed to it a
-/// buffer at a time, so a block split across two buffers is still one
-/// block.
+/// Finds a PEM private key anywhere in a byte stream fed to it a buffer at
+/// a time; its state carries across buffers, so a block split between two
+/// is still one block.
 ///
-/// A block is a `-----BEGIN <label>-----` marker whose label ends with
-/// `PRIVATE KEY` (plain, encrypted, RSA, EC, DSA and OpenSSH keys alike),
-/// at any position in a line, then a body holding base64
-/// ([`KEY_BODY_MIN_BASE64`]), then the `END` marker with
-/// a private-key label, or the end of the stream: a cut-off key is a key.
-/// The body may hold only bytes a key body holds in a PEM file or
-/// embedded in text ([`is_key_body_byte`]): indentation, as in a YAML
-/// block scalar, `\n` escapes and quotes, as in JSON, and RFC 1421
-/// headers. Any other byte ends the candidate, so a `BEGIN` marker
-/// quoted in source code or prose followed by anything else is not a key.
-/// A certificate, CRL or parameters block is not a candidate at all.
+/// Two readers run over every byte. The first looks for a
+/// `-----BEGIN <label>-----` marker whose label ends with `PRIVATE KEY`
+/// (plain, encrypted, RSA, EC, DSA and OpenSSH keys alike), at any
+/// position in a line and whatever came before it, so no earlier text can
+/// hide a later marker. Each such marker starts a fresh [`KeyBody`], which
+/// reads what follows as a PEM body and counts its key material. A body
+/// holding [`KEY_MATERIAL_MIN`] base64 characters is a key, however it
+/// ends: at its `END` line, at another marker, at text that is not body,
+/// or at the end of the stream, so a cut-off key is a key. A marker
+/// followed by anything else, such as a delimiter quoted in JSON, source
+/// code, a binary or prose, is not. A certificate, CRL or parameters
+/// block is never a candidate.
 #[derive(Debug, Default)]
 pub struct PemKeyFinder {
-    state: KeyFind,
+    begin: BeginScan,
+    body: Option<KeyBody>,
     found: bool,
 }
 
-/// Where [`PemKeyFinder`] is in the stream.
+/// Where the `BEGIN` reader is in the stream.
 #[derive(Debug)]
-enum KeyFind {
-    /// Outside any candidate: how many bytes of [`PEM_BEGIN`] match.
+enum BeginScan {
+    /// How many bytes of [`PEM_BEGIN`] match.
     Seek(usize),
     /// Reading a `BEGIN` marker's label, and the dashes that close it.
-    BeginLabel(LabelRead),
-    /// Inside a private-key body.
-    Body {
-        len: usize,
-        base64: usize,
-        /// How many bytes of [`PEM_END`] match.
-        end: usize,
-        /// The `END` marker's label, once the marker matched.
-        end_label: Option<LabelRead>,
-    },
+    Label(LabelRead),
 }
 
-impl Default for KeyFind {
+impl Default for BeginScan {
     fn default() -> Self {
         Self::Seek(0)
     }
@@ -458,13 +452,13 @@ impl LabelRead {
 }
 
 impl PemKeyFinder {
-    /// Feeds the next bytes of the stream; true once a private-key block
-    /// has been found.
+    /// Feeds the next bytes of the stream; true once a private key has
+    /// been found.
     pub fn feed(&mut self, bytes: &[u8]) -> bool {
         let mut rest = bytes;
         while !self.found && !rest.is_empty() {
-            // Outside a candidate, skip to the next dash at once.
-            if let KeyFind::Seek(0) = self.state {
+            // Outside any body and any marker, skip to the next dash.
+            if self.body.is_none() && matches!(self.begin, BeginScan::Seek(0)) {
                 match rest.iter().position(|&b| b == b'-') {
                     Some(at) => rest = &rest[at..],
                     None => break,
@@ -476,93 +470,51 @@ impl PemKeyFinder {
         self.found
     }
 
-    /// Whether the stream held a private-key block, the stream having
-    /// ended: a body still open at the end is a cut-off key.
+    /// Whether the stream held a private key, the stream having ended:
+    /// a body still open at the end is a cut-off key when it holds enough
+    /// key material, its last line included.
     pub fn finish(&self) -> bool {
-        self.found
-            || matches!(self.state, KeyFind::Body { base64, .. } if base64 >= KEY_BODY_MIN_BASE64)
+        self.found || self.body.as_ref().is_some_and(KeyBody::is_key_at_end)
     }
 
     fn step(&mut self, b: u8) {
-        self.state = match std::mem::take(&mut self.state) {
-            KeyFind::Seek(k) => KeyFind::Seek(marker_step(PEM_BEGIN.as_bytes(), k, b)),
-            KeyFind::BeginLabel(mut read) => match read.step(b) {
-                LabelStep::More => KeyFind::BeginLabel(read),
-                LabelStep::Closed if read.is_private_key() => KeyFind::Body {
-                    len: 0,
-                    base64: 0,
-                    end: 0,
-                    end_label: None,
-                },
-                // The closing dashes may open the next marker.
-                LabelStep::Closed => KeyFind::Seek(PEM_DASH_RUN),
-                LabelStep::Invalid => KeyFind::Seek(marker_step(PEM_BEGIN.as_bytes(), 0, b)),
-            },
-            KeyFind::Body {
-                len,
-                base64,
-                end,
-                end_label,
-            } => self.body_step(b, len + 1, base64, end, end_label),
-        };
-        if let KeyFind::Seek(k) = self.state
-            && k == PEM_BEGIN.len()
-        {
-            self.state = KeyFind::BeginLabel(LabelRead::default());
+        if let Some(body) = &mut self.body {
+            match body.step(b) {
+                BodyStep::More => {}
+                BodyStep::Key => {
+                    self.found = true;
+                    return;
+                }
+                BodyStep::Ended => self.body = None,
+            }
+        }
+        if self.begin_step(b) {
+            self.body = Some(KeyBody::default());
         }
     }
 
-    fn body_step(
-        &mut self,
-        b: u8,
-        len: usize,
-        mut base64: usize,
-        end: usize,
-        end_label: Option<LabelRead>,
-    ) -> KeyFind {
-        if !is_key_body_byte(b) || len > KEY_BODY_MAX {
-            return KeyFind::Seek(marker_step(PEM_BEGIN.as_bytes(), 0, b));
-        }
-        if let Some(mut read) = end_label {
-            return match read.step(b) {
-                LabelStep::More => KeyFind::Body {
-                    len,
-                    base64,
-                    end: 0,
-                    end_label: Some(read),
-                },
-                LabelStep::Closed => {
-                    self.found = read.is_private_key() && base64 >= KEY_BODY_MIN_BASE64;
-                    KeyFind::Seek(PEM_DASH_RUN)
+    /// Feeds `b` to the `BEGIN` reader; true when it closed a private-key
+    /// marker.
+    fn begin_step(&mut self, b: u8) -> bool {
+        let begin = PEM_BEGIN.as_bytes();
+        let (next, opened) = match std::mem::take(&mut self.begin) {
+            BeginScan::Seek(k) => (marker_step(begin, k, b), false),
+            BeginScan::Label(mut read) => match read.step(b) {
+                LabelStep::More => {
+                    self.begin = BeginScan::Label(read);
+                    return false;
                 }
-                // Not an `END` line after all: still body.
-                LabelStep::Invalid => KeyFind::Body {
-                    len,
-                    base64: base64 + usize::from(is_base64_byte(b)),
-                    end: marker_step(PEM_END.as_bytes(), 0, b),
-                    end_label: None,
-                },
-            };
-        }
-        let end = marker_step(PEM_END.as_bytes(), end, b);
-        if end == PEM_END.len() {
-            return KeyFind::Body {
-                len,
-                base64,
-                end: 0,
-                end_label: Some(LabelRead::default()),
-            };
-        }
-        // A byte that may belong to an `END` marker is not counted.
-        if end == 0 && is_base64_byte(b) {
-            base64 += 1;
-        }
-        KeyFind::Body {
-            len,
-            base64,
-            end,
-            end_label: None,
-        }
+                // The closing dashes may open the next marker.
+                LabelStep::Closed => (PEM_DASH_RUN, read.is_private_key()),
+                LabelStep::Invalid => (marker_step(begin, 0, b), false),
+            },
+        };
+        self.begin = if next == begin.len() {
+            BeginScan::Label(LabelRead::default())
+        } else {
+            BeginScan::Seek(next)
+        };
+        opened
     }
 }
 
@@ -583,18 +535,346 @@ fn is_base64_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')
 }
 
-/// A byte a private-key body holds, in a PEM file or embedded in other
-/// text: base64; whitespace and line ends, so indentation as in a YAML
-/// block scalar; RFC 1421 header text (`Proc-Type: 4,ENCRYPTED`,
-/// `DEK-Info: AES-256-CBC,...`); and the escapes, quotes and comment
-/// marks that carry a key in JSON, YAML, a shell script or source code
-/// (`\n`, `"`, `'`, `#`).
-fn is_key_body_byte(b: u8) -> bool {
-    is_base64_byte(b)
-        || matches!(
-            b,
-            b' ' | b'\t' | b'\r' | b'\n' | b'\\' | b'"' | b'\'' | b',' | b':' | b'-' | b'#'
-        )
+/// The text after a private-key `BEGIN` marker, read as a PEM body in
+/// constant memory.
+///
+/// A body is lines. A line ends at a line feed or carriage return, at an
+/// escaped one (`\n`, `\r`, `\u000a`), or where one quoted string ends and
+/// the next begins, as in a JSON array of lines. Escapes are decoded
+/// first (`\n`, `\r`, `\t`, `\f`, `\v`, `\/`, escaped quotes, `\uXXXX`,
+/// and runs of backslashes, so a doubly escaped string reads the same),
+/// and every byte at or below ASCII space other than a line end is
+/// whitespace, as OpenSSL strips it. Each line is:
+///
+/// - a lead: whitespace, one opening quote, `#` comment marks;
+/// - then nothing, base64, or, before any key line, an RFC 1421 header
+///   (`Proc-Type: 4,ENCRYPTED`, `DEK-Info: AES-256-CBC,...`);
+/// - then whitespace, and after a closing quote one `,`, `+` or `;`, as a
+///   string list or concatenation writes it.
+///
+/// Any other byte, a dash included, ends the body: an `END` line ends it
+/// like anything else. A line that is one run of base64 counts its
+/// characters as key material; a run of 64 base64 characters counts
+/// anywhere, so a key whose lines were joined by spaces or not at all is
+/// still a key. A line of several words counts for nothing, and neither
+/// does text on the marker's own line short of such a run, so prose and
+/// quoted delimiters never add up to a key.
+#[derive(Debug)]
+struct KeyBody {
+    /// Base64 characters on the key lines so far.
+    material: usize,
+    /// The base64 characters in the current run.
+    run: usize,
+    /// Still on the `BEGIN` marker's own line, whose text is not a key
+    /// line.
+    begin_line: bool,
+    /// No line with content yet: an RFC 1421 header line may come.
+    headers_open: bool,
+    /// What the current line adds to `material` when it ends, once its
+    /// content is over.
+    line_material: usize,
+    escape: Escape,
+    line: Line,
+}
+
+impl Default for KeyBody {
+    fn default() -> Self {
+        Self {
+            material: 0,
+            run: 0,
+            begin_line: true,
+            headers_open: true,
+            line_material: 0,
+            escape: Escape::None,
+            line: Line::Content {
+                clean: false,
+                space: false,
+                header: Header::No,
+            },
+        }
+    }
+}
+
+/// Where a [`KeyBody`] is in an escape.
+#[derive(Debug, Clone, Copy)]
+enum Escape {
+    None,
+    /// After one or more backslashes.
+    Backslash,
+    /// After `\u`: how many hex digits have been read, and their value.
+    Unicode {
+        digits: u8,
+        value: u32,
+    },
+}
+
+/// Where a [`KeyBody`] is in a line.
+#[derive(Debug, Clone, Copy)]
+enum Line {
+    /// Before the line's content. `quoted` once an opening quote was read.
+    Lead { quoted: bool },
+    /// In the line's content. `clean` while the content is one run of
+    /// base64 from the lead on; `space` after whitespace inside it.
+    Content {
+        clean: bool,
+        space: bool,
+        header: Header,
+    },
+    /// After a closing quote. `sep` once a separator was read.
+    Trail { sep: bool },
+}
+
+/// Whether a line's content may be an RFC 1421 header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Header {
+    /// Letters, digits and dashes from the lead on: a header name so far.
+    Name,
+    /// After the name's colon.
+    Value,
+    No,
+}
+
+/// One body symbol, its escape decoded.
+#[derive(Debug, Clone, Copy)]
+enum Sym {
+    Break,
+    Space,
+    Quote,
+    Byte(u8),
+}
+
+/// What one byte did to a [`KeyBody`].
+enum BodyStep {
+    More,
+    /// The body holds a key.
+    Key,
+    /// A byte no body holds: the body is over and was not a key.
+    Ended,
+}
+
+impl Sym {
+    fn of(b: u8) -> Self {
+        match b {
+            b'\n' | b'\r' => Self::Break,
+            b'"' | b'\'' | b'`' => Self::Quote,
+            0..=b' ' => Self::Space,
+            _ => Self::Byte(b),
+        }
+    }
+}
+
+impl KeyBody {
+    fn step(&mut self, b: u8) -> BodyStep {
+        match self.unescape(b) {
+            Some(Some(sym)) => self.read(sym),
+            Some(None) => BodyStep::More,
+            None => BodyStep::Ended,
+        }
+    }
+
+    /// The symbol `b` completes: `Some(None)` inside an escape, `None`
+    /// for an escape no body holds.
+    fn unescape(&mut self, b: u8) -> Option<Option<Sym>> {
+        let sym = match self.escape {
+            Escape::None if b == b'\\' => {
+                self.escape = Escape::Backslash;
+                return Some(None);
+            }
+            Escape::None => Sym::of(b),
+            Escape::Backslash => {
+                self.escape = Escape::None;
+                match b {
+                    b'\\' => {
+                        self.escape = Escape::Backslash;
+                        return Some(None);
+                    }
+                    b'u' => {
+                        self.escape = Escape::Unicode {
+                            digits: 0,
+                            value: 0,
+                        };
+                        return Some(None);
+                    }
+                    b'n' | b'r' | b'\n' | b'\r' => Sym::Break,
+                    b't' | b'f' | b'v' => Sym::Space,
+                    b'/' | b'"' | b'\'' | b'`' => Sym::of(b),
+                    _ => return None,
+                }
+            }
+            Escape::Unicode { digits, value } => {
+                self.escape = Escape::None;
+                let digit = char::from(b).to_digit(16)?;
+                let value = value * 16 + digit;
+                if digits + 1 < UNICODE_ESCAPE_DIGITS {
+                    self.escape = Escape::Unicode {
+                        digits: digits + 1,
+                        value,
+                    };
+                    return Some(None);
+                }
+                match u8::try_from(value) {
+                    Ok(v) if v.is_ascii() && v != b'\\' => Sym::of(v),
+                    _ => return None,
+                }
+            }
+        };
+        Some(Some(sym))
+    }
+
+    fn read(&mut self, sym: Sym) -> BodyStep {
+        if let Sym::Break = sym {
+            return self.end_line(Line::Lead { quoted: false });
+        }
+        match self.line {
+            Line::Lead { quoted } => match sym {
+                Sym::Space | Sym::Byte(b'#') => BodyStep::More,
+                Sym::Quote if !quoted => {
+                    self.line = Line::Lead { quoted: true };
+                    BodyStep::More
+                }
+                // An empty string.
+                Sym::Quote => self.close_content(),
+                Sym::Byte(b) => {
+                    let name = self.headers_open && b.is_ascii_alphanumeric();
+                    self.line = Line::Content {
+                        clean: true,
+                        space: false,
+                        header: if name { Header::Name } else { Header::No },
+                    };
+                    self.content(b)
+                }
+                Sym::Break => unreachable!("handled above"),
+            },
+            Line::Content { header, .. } => match sym {
+                Sym::Space => {
+                    if let Line::Content { space, header, .. } = &mut self.line {
+                        *space = true;
+                        if *header == Header::Name {
+                            *header = Header::No;
+                        }
+                    }
+                    BodyStep::More
+                }
+                Sym::Quote if header != Header::Value => self.close_content(),
+                Sym::Quote => BodyStep::Ended,
+                Sym::Byte(b) => self.content(b),
+                Sym::Break => unreachable!("handled above"),
+            },
+            Line::Trail { sep } => match sym {
+                Sym::Space => BodyStep::More,
+                // The next quoted string: a new line.
+                Sym::Quote => self.end_line(Line::Lead { quoted: true }),
+                Sym::Byte(b',' | b'+' | b';') if !sep => {
+                    self.line = Line::Trail { sep: true };
+                    BodyStep::More
+                }
+                Sym::Byte(_) => BodyStep::Ended,
+                Sym::Break => unreachable!("handled above"),
+            },
+        }
+    }
+
+    /// A byte of the current line's content.
+    fn content(&mut self, b: u8) -> BodyStep {
+        let Line::Content {
+            clean,
+            space,
+            header,
+        } = &mut self.line
+        else {
+            unreachable!("called in a line's content");
+        };
+        if *header == Header::Value {
+            return if b.is_ascii_alphanumeric() || matches!(b, b'-' | b',') {
+                BodyStep::More
+            } else {
+                BodyStep::Ended
+            };
+        }
+        if is_base64_byte(b) {
+            if *space {
+                // Whitespace inside the line: words, not one run.
+                *clean = false;
+                *space = false;
+                self.run = 0;
+            }
+            if *header == Header::Name && !b.is_ascii_alphanumeric() {
+                *header = Header::No;
+            }
+            self.run = self.run.saturating_add(1);
+            return if self.run >= KEY_MATERIAL_MIN {
+                BodyStep::Key
+            } else {
+                BodyStep::More
+            };
+        }
+        match (b, *header) {
+            (b'-', Header::Name) => {
+                *clean = false;
+                self.run = 0;
+                BodyStep::More
+            }
+            (b':', Header::Name) => {
+                *header = Header::Value;
+                BodyStep::More
+            }
+            _ => BodyStep::Ended,
+        }
+    }
+
+    /// What the current line adds to the key material when it ends.
+    fn line_adds(&self) -> usize {
+        match self.line {
+            Line::Lead { .. } => 0,
+            Line::Content { clean, header, .. } => {
+                if clean && !self.begin_line && header != Header::Value {
+                    self.run
+                } else {
+                    0
+                }
+            }
+            Line::Trail { .. } => self.line_material,
+        }
+    }
+
+    /// The line's content is over at a closing quote.
+    fn close_content(&mut self) -> BodyStep {
+        self.line_material = self.line_adds();
+        self.note_content();
+        self.line = Line::Trail { sep: false };
+        BodyStep::More
+    }
+
+    /// A line with content other than a header closes the header block.
+    fn note_content(&mut self) {
+        if let Line::Content { header, .. } = self.line
+            && header != Header::Value
+            && !self.begin_line
+        {
+            self.headers_open = false;
+        }
+    }
+
+    /// The current line ends; `next` is where the next one starts.
+    fn end_line(&mut self, next: Line) -> BodyStep {
+        self.material = self.material.saturating_add(self.line_adds());
+        self.note_content();
+        self.begin_line = false;
+        self.run = 0;
+        self.line_material = 0;
+        self.line = next;
+        if self.material >= KEY_MATERIAL_MIN {
+            BodyStep::Key
+        } else {
+            BodyStep::More
+        }
+    }
+
+    /// Whether the body is a key, the stream ending here: its last line
+    /// counts as ended.
+    fn is_key_at_end(&self) -> bool {
+        self.material.saturating_add(self.line_adds()) >= KEY_MATERIAL_MIN
+    }
 }
 
 /// The label of a `-----BEGIN <label>-----` or `-----END <label>-----`
@@ -1841,5 +2121,338 @@ mod tests {
             );
         }
         assert_eq!(judge(key.as_bytes(), 1), Some(M::PrivateKeyFile));
+    }
+
+    /// Deterministic base64 text of `chars` characters, ending `=` padded
+    /// like a real body. Not a real key.
+    fn key_material(chars: usize) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut text: String = (0..chars)
+            .map(|i| char::from(ALPHABET[(i * 7 + i / 3) % ALPHABET.len()]))
+            .collect();
+        text.replace_range(chars - 2.., "==");
+        text
+    }
+
+    /// `material` wrapped `width` characters a line, each line led by
+    /// `lead`, ended by `trail` and `eol`, between private-key markers
+    /// labelled `label`.
+    fn wrapped_key(
+        label: &str,
+        material: &str,
+        width: usize,
+        lead: &str,
+        trail: &str,
+        eol: &str,
+    ) -> String {
+        let mut text = format!("{lead}-----BEGIN {label}-----{eol}");
+        for line in material.as_bytes().chunks(width) {
+            text.push_str(lead);
+            text.push_str(std::str::from_utf8(line).expect("ASCII"));
+            text.push_str(trail);
+            text.push_str(eol);
+        }
+        text.push_str(&format!("{lead}-----END {label}-----{eol}"));
+        text
+    }
+
+    /// The PEM structure decides, whatever surrounds the block: a key is a
+    /// private-key `BEGIN` marker and at least 64 characters of base64
+    /// lines, in any whitespace OpenSSL reads, wrapping, escaped or
+    /// quoted line form, however the block ends; a marker with no key
+    /// lines after it is text, however it is quoted and whatever an
+    /// earlier marker left open.
+    #[test]
+    fn the_verdict_follows_the_pem_structure() {
+        let material = key_material(1_600);
+        let one_line = format!("-----BEGIN PRIVATE KEY-----\n{}\n", key_material(64));
+        let mut ff_vt = wrapped_key("PRIVATE KEY", &material, 64, "", "", "\n");
+        ff_vt = ff_vt
+            .replacen('\n', "\x0c\n", 2)
+            .replacen("==\n", "==\x0b\n", 1);
+        let key_json = wrapped_key("PRIVATE KEY", &material, 64, "", "", "\n").replace('\n', "\\n");
+        let decoy = |padding: usize| {
+            format!(
+                "{{\"header\":\"-----BEGIN PRIVATE KEY-----\",\"padding\":\"{}\",\"key\":\"{key_json}\"}}",
+                "A".repeat(padding)
+            )
+        };
+        let python = format!(
+            "KEY = (\n{}\n)\n",
+            wrapped_key("PRIVATE KEY", &material, 64, "", "", "\n")
+                .lines()
+                .map(|l| format!("    \"{l}\\n\""))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let array = format!(
+            "[{}]",
+            wrapped_key("PRIVATE KEY", &material, 64, "", "", "\n")
+                .lines()
+                .map(|l| format!("\"{l}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let dotnet = key_json.replace('+', "\\u002B").replace('/', "\\/");
+        let commented = wrapped_key("RSA PRIVATE KEY", &material, 64, "# ", "", "\n");
+        let space_joined = format!(
+            "KEY=\"-----BEGIN PRIVATE KEY----- {} -----END PRIVATE KEY-----\"\n",
+            material
+                .as_bytes()
+                .chunks(64)
+                .map(|c| std::str::from_utf8(c).unwrap())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+
+        let keys: Vec<(&str, String)> = vec![
+            ("form feed and vertical tab before line ends", ff_vt),
+            (
+                "one character a line, 64 trailing spaces",
+                wrapped_key("RSA PRIVATE KEY", &material, 1, "", &" ".repeat(64), "\n"),
+            ),
+            (
+                "trailing control bytes OpenSSL strips",
+                wrapped_key("EC PRIVATE KEY", &material, 64, "", "\x00\x01\x1f ", "\r\n"),
+            ),
+            ("the smallest key, one line", one_line),
+            ("JSON string", format!("{{\"k\": \"{key_json}\"}}")),
+            (
+                "JSON with \\u and \\/ escapes",
+                format!("{{\"k\": \"{dotnet}\"}}"),
+            ),
+            ("Python string per line", python),
+            ("array of lines", array),
+            ("commented out", commented),
+            ("lines joined by spaces", space_joined),
+            (
+                "cut off by another marker",
+                format!(
+                    "-----BEGIN PRIVATE KEY-----\n{}\n-----BEGIN CERTIFICATE-----\nMII=\n",
+                    key_material(128)
+                ),
+            ),
+        ];
+        let mut padded: Vec<(String, String)> = Vec::new();
+        for padding in (65_480..=65_560).step_by(4).chain([0, 1, 131_000]) {
+            padded.push((format!("decoy padding {padding}"), decoy(padding)));
+        }
+        let mut wrong = Vec::new();
+        for (name, text) in keys
+            .iter()
+            .map(|(n, t)| (n.to_string(), t.clone()))
+            .chain(padded)
+        {
+            for read in [PAYLOAD_READ_CHUNK, 13] {
+                if judge(text.as_bytes(), read) != Some(M::PrivateKeyFile) {
+                    wrong.push(format!("{name}, {read}-byte reads: not a key"));
+                }
+            }
+        }
+
+        let mut binary =
+            b"\x7fELF\x02\x01\x00\x00-----BEGIN PRIVATE KEY-----\x00-----END PRIVATE KEY-----\x00"
+                .to_vec();
+        binary.extend_from_slice(b"\xff\xfe-----BEGIN PRIVATE KEY-----\n\x00\x02\x7fELF\x00");
+        let text: Vec<(&str, Vec<u8>)> = vec![
+            (
+                "delimiter-only JSON",
+                br#"{"begin":"-----BEGIN PRIVATE KEY-----","end":"-----END PRIVATE KEY-----"}"#.to_vec(),
+            ),
+            (
+                "minified JS variables",
+                br#"var a="-----BEGIN PRIVATE KEY-----",b="-----END PRIVATE KEY-----";"#.to_vec(),
+            ),
+            (
+                "minified JS object",
+                br#"e.exports={begin:"-----BEGIN PRIVATE KEY-----",end:"-----END PRIVATE KEY-----"};"#.to_vec(),
+            ),
+            (
+                "minified JS wrapping a variable",
+                br#"return"-----BEGIN PRIVATE KEY-----\n"+t+"\n-----END PRIVATE KEY-----\n"}"#.to_vec(),
+            ),
+            (
+                "JS array of markers",
+                br#"["-----BEGIN PRIVATE KEY-----","-----END PRIVATE KEY-----"]"#.to_vec(),
+            ),
+            ("binary resource", binary),
+            (
+                "comment at the end of a script",
+                b"#!/bin/sh\nopenssl pkey -in \"$1\"\n# \"-----BEGIN PRIVATE KEY-----\" is a delimiter".to_vec(),
+            ),
+            (
+                "unquoted comment at the end",
+                b"# -----BEGIN PRIVATE KEY----- is a delimiter\n".to_vec(),
+            ),
+            (
+                "prose between markers",
+                b"# -----BEGIN PRIVATE KEY-----\n# The key goes between these markers\n\
+                  # and must be base64 encoded, one line after another\n# -----END PRIVATE KEY-----\n"
+                    .to_vec(),
+            ),
+            (
+                "shell template",
+                b"cat <<EOF\n-----BEGIN PRIVATE KEY-----\n${KEY}\n-----END PRIVATE KEY-----\nEOF\n".to_vec(),
+            ),
+            (
+                "decoy padding then text",
+                format!(
+                    "{{\"header\":\"-----BEGIN PRIVATE KEY-----\",\"padding\":\"{}\"}}\n{}",
+                    "A".repeat(65_500),
+                    "B".repeat(100)
+                )
+                .into_bytes(),
+            ),
+        ];
+        for (name, bytes) in &text {
+            for read in [PAYLOAD_READ_CHUNK, 13] {
+                if judge(bytes, read).is_some() {
+                    wrong.push(format!("{name}, {read}-byte reads: a key"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    mod pem_properties {
+        use super::super::*;
+        use proptest::prelude::*;
+
+        const LABELS: &[&str] = &[
+            "PRIVATE KEY",
+            "ENCRYPTED PRIVATE KEY",
+            "RSA PRIVATE KEY",
+            "EC PRIVATE KEY",
+            "DSA PRIVATE KEY",
+            "OPENSSH PRIVATE KEY",
+        ];
+
+        fn base64(bytes: &[u8]) -> String {
+            const ALPHABET: &[u8] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut out = String::new();
+            for chunk in bytes.chunks(3) {
+                let n = chunk
+                    .iter()
+                    .enumerate()
+                    .fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+                for i in 0..4 {
+                    if i <= chunk.len() {
+                        out.push(char::from(ALPHABET[(n >> (18 - 6 * i) & 63) as usize]));
+                    } else {
+                        out.push('=');
+                    }
+                }
+            }
+            out
+        }
+
+        /// How a generated key's lines are written.
+        #[derive(Debug, Clone, Copy)]
+        enum Form {
+            /// Real line ends, LF or CRLF.
+            Plain,
+            /// A JSON string: `\n` escapes.
+            Json,
+            /// One quoted string per line, as Python or C concatenates them.
+            Quoted,
+        }
+
+        fn whitespace() -> impl Strategy<Value = String> {
+            proptest::collection::vec(
+                prop::sample::select(vec![" ", "\t", "\x0b", "\x0c", "\x00"]),
+                0..8,
+            )
+            .prop_map(|w| w.concat())
+        }
+
+        fn text_without_markers() -> impl Strategy<Value = String> {
+            "[a-zA-Z0-9 .,;:!?(){}<>\\n]{0,200}"
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// A key of any size, wrapped at any width, with any leading
+            /// and trailing whitespace OpenSSL accepts, in any line form,
+            /// with or without its `END` line, anywhere in a file, read in
+            /// any buffer size, is a key.
+            #[test]
+            fn a_wrapped_key_is_a_key(
+                key in proptest::collection::vec(any::<u8>(), 48..1_200),
+                label in prop::sample::select(LABELS),
+                width in 1usize..=80,
+                lead in "[ \t]{0,6}",
+                trail in whitespace(),
+                crlf in any::<bool>(),
+                form in prop::sample::select(vec![Form::Plain, Form::Json, Form::Quoted]),
+                end in any::<bool>(),
+                prefix in text_without_markers(),
+                suffix in text_without_markers(),
+                read in 1usize..=4_096,
+            ) {
+                let material = base64(&key);
+                let mut lines = vec![format!("-----BEGIN {label}-----")];
+                for chunk in material.as_bytes().chunks(width) {
+                    lines.push(std::str::from_utf8(chunk).expect("base64").to_string());
+                }
+                if end {
+                    lines.push(format!("-----END {label}-----"));
+                }
+                let eol = if crlf { "\r\n" } else { "\n" };
+                let block = match form {
+                    Form::Plain => lines
+                        .iter()
+                        .map(|l| format!("{lead}{l}{trail}{eol}"))
+                        .collect::<String>(),
+                    Form::Json => format!(
+                        "{{\"key\": \"{}\"}}",
+                        lines.iter().map(|l| format!("{l}{}\\n", " ".repeat(trail.len()))).collect::<String>()
+                    ),
+                    Form::Quoted => lines
+                        .iter()
+                        .map(|l| format!("{lead}\"{l}\\n\"{eol}"))
+                        .collect::<String>(),
+                };
+                let text = format!("{prefix}\n{block}{suffix}");
+                let mut finder = PemKeyFinder::default();
+                let found = text.as_bytes().chunks(read).any(|c| finder.feed(c)) || finder.finish();
+                prop_assert!(found, "{text:?}");
+            }
+
+            /// Text holding private-key markers but no base64 line between
+            /// them, on one line or many, is not a key.
+            #[test]
+            fn markers_around_text_are_not_a_key(
+                label in prop::sample::select(LABELS),
+                words in proptest::collection::vec(
+                    ("[a-zA-Z0-9]{1,12}", prop::sample::select(vec![" ", ". ", ", ", "! ", "(", ")", "<", ">", "@", "&", "*", "%", "$", ":", ";", "_", "~", "|", "[", "]", "{", "}"])),
+                    0..40,
+                ),
+                lines in proptest::collection::vec(
+                    ("[ \t]{0,4}", prop::sample::select(vec!["", "# "]), "[a-zA-Z0-9]{1,12}", prop::sample::select(vec![" ", ".", "!", "(", "<", "@", "&", "*", "%", "_", "~", "|", ":", ","]), "[a-zA-Z0-9 ]{1,40}"),
+                    0..20,
+                ),
+                many in any::<bool>(),
+                end in any::<bool>(),
+                prefix in text_without_markers(),
+                suffix in text_without_markers(),
+                read in 1usize..=4_096,
+            ) {
+                let filler = if many {
+                    lines
+                        .iter()
+                        .map(|(lead, hash, first, sep, rest)| format!("\n{lead}{hash}{first}{sep}{rest}"))
+                        .collect::<String>()
+                } else {
+                    words.iter().map(|(w, sep)| format!("{w}{sep}")).collect::<String>()
+                };
+                let end = if end { format!("-----END {label}-----") } else { String::new() };
+                let text = format!("{prefix}-----BEGIN {label}-----{filler}\n{end}{suffix}");
+                let mut finder = PemKeyFinder::default();
+                let found = text.as_bytes().chunks(read).any(|c| finder.feed(c)) || finder.finish();
+                prop_assert!(!found, "{text:?}");
+            }
+        }
     }
 }

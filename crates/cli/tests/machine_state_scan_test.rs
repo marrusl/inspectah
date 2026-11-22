@@ -36,7 +36,9 @@ const MARKER: &str = "MSKEYMARKER0123456789";
 /// -topk8` writes it, carrying [`MARKER`]. Not a real key.
 fn encrypted_key() -> String {
     format!(
-        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHDBOBgkqhkiG9w0B{MARKER}\n\
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\n\
+         MIIFHDBOBgkqhkiG9w0BBQ0wQTApBgkqhkiG9w0BBQwwHAQIAgICCAIBAQAEggTI\n\
+         MIIFHDBOBgkqhkiG9w0B{MARKER}\n\
          -----END ENCRYPTED PRIVATE KEY-----\n"
     )
 }
@@ -1441,7 +1443,9 @@ fn withheld_rows_are_never_overridable_in_refine() {
 /// real key.
 fn openssh_key() -> String {
     format!(
-        "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA{MARKER}\n\
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n\
+         b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n\
+         b3BlbnNzaC1rZXktdjEAAAAA{MARKER}\n\
          -----END OPENSSH PRIVATE KEY-----\n"
     )
 }
@@ -1477,8 +1481,13 @@ const MIB: usize = 1 << 20;
 /// every `/opt` directory renders a directory `COPY`. Then keys only a
 /// read to the end of the file finds: indented in a YAML block scalar,
 /// after more than a MiB of text, and split across the payload check's
-/// read buffer; and ordinary payloads over a MiB that hold PEM blocks or
-/// lead with indentation, which must ship unchanged.
+/// read buffer; keys whose PEM body formatting OpenSSL accepts (form feed
+/// and vertical tab before line ends, one character a line with 64
+/// trailing spaces), and a key in JSON after a quoted decoy marker and
+/// about 64 KiB of padding. And ordinary payloads that must ship
+/// unchanged: payloads over a MiB that hold PEM blocks or lead with
+/// indentation, and private-key markers with no key after them, in JSON,
+/// minified JavaScript, a binary and a script's last comment.
 fn unmanaged_payloads() -> Vec<(&'static str, Vec<u8>)> {
     let yaml = format!(
         "server:\n  port: 8443\ntls:\n  private_key: |\n{}  verify: true\n",
@@ -1505,7 +1514,30 @@ fn unmanaged_payloads() -> Vec<(&'static str, Vec<u8>)> {
         "  \"item\": [1, 2, 3],\n".repeat(MIB / 21 + 1)
     );
     let spaced = format!(" {{\"items\":[{}]}}\n", ["0"; 600_000].join(","));
-    vec![
+    // A form feed and a vertical tab before line ends, which OpenSSL strips.
+    let ff_vt = pem_key("PRIVATE KEY", "")
+        .replacen('\n', "\x0c\n", 2)
+        .replacen("\n-----END", "\x0b\n-----END", 1);
+    // A real-sized body rewrapped one base64 character a line, each line
+    // padded with 64 spaces: far longer than any body limit.
+    let rewrapped = format!(
+        "-----BEGIN RSA PRIVATE KEY-----\n{}-----END RSA PRIVATE KEY-----\n",
+        format!("MIIEowIBAAKCAQEA{MARKER}")
+            .repeat(45)
+            .chars()
+            .map(|c| format!("{c}{}\n", " ".repeat(64)))
+            .collect::<String>()
+    );
+    let delimiters =
+        br#"{"begin":"-----BEGIN PRIVATE KEY-----","end":"-----END PRIVATE KEY-----"}"#.to_vec();
+    let script =
+        b"#!/bin/sh\nopenssl pkey -in \"$1\"\n# \"-----BEGIN PRIVATE KEY-----\" is a delimiter"
+            .to_vec();
+    let minified = br#"function p(t){return"-----BEGIN PRIVATE KEY-----\n"+t+"\n-----END PRIVATE KEY-----\n"}var a="-----BEGIN PRIVATE KEY-----",b="-----END PRIVATE KEY-----";"#.to_vec();
+    let mut resource = ORDINARY_BINARY.to_vec();
+    resource
+        .extend_from_slice(b"\x00-----BEGIN PRIVATE KEY-----\x00-----END PRIVATE KEY-----\x00\xff");
+    let mut payloads = vec![
         ("/opt/app/app.conf", b"a = 1\n".to_vec()),
         ("/opt/app/run", ORDINARY_BINARY.to_vec()),
         ("/opt/myapp/client.kt", binary_keytab()),
@@ -1521,7 +1553,39 @@ fn unmanaged_payloads() -> Vec<(&'static str, Vec<u8>)> {
         ("/opt/data/compact.json", spaced.into_bytes()),
         ("/srv/data/id_ed25519", openssh_key().into_bytes()),
         ("/srv/data/readme.txt", b"data\n".to_vec()),
-    ]
+        ("/opt/myapp/ff.pem", ff_vt.into_bytes()),
+        ("/opt/myapp/rewrapped.pem", rewrapped.into_bytes()),
+        ("/opt/app/delimiters.json", delimiters),
+        ("/opt/app/check.sh", script),
+        ("/opt/app/bundle.min.js", minified),
+        ("/opt/app/resource.bin", resource),
+    ];
+    for padding in DECOY_PADDINGS {
+        payloads.push((decoy_path(padding), decoy(padding).into_bytes()));
+    }
+    payloads
+}
+
+/// Padding lengths for [`decoy`], around the 64 KiB body limit an
+/// earlier payload check had: below it the decoy's candidate ran out
+/// inside the real key's `BEGIN` marker.
+const DECOY_PADDINGS: [usize; 5] = [65_400, 65_480, 65_500, 65_514, 65_520];
+
+/// Where the decoy with `padding` lives: the names are leaked so the
+/// payload table can hold `&'static str` paths.
+fn decoy_path(padding: usize) -> &'static str {
+    Box::leak(format!("/opt/myapp/decoy-{padding}.json").into_boxed_str())
+}
+
+/// Compact JSON whose first property quotes a private-key `BEGIN` marker,
+/// then `padding` bytes of base64 letters, then a real key as a JSON
+/// string: the earlier marker must not hide the later key.
+fn decoy(padding: usize) -> String {
+    format!(
+        "{{\"header\":\"-----BEGIN PRIVATE KEY-----\",\"padding\":\"{}\",\"key\":\"{}\"}}",
+        "A".repeat(padding),
+        pem_key("PRIVATE KEY", "").replace('\n', "\\n")
+    )
 }
 
 /// The scan command's unmanaged path over `exec`: the collectors, then
@@ -1575,7 +1639,32 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
             ("/opt/myapp/client.kt", MachineStateMember::KerberosKeytab),
             ("/opt/myapp/client.pem", MachineStateMember::PrivateKeyFile),
             ("/opt/myapp/config.yaml", MachineStateMember::PrivateKeyFile),
+            (
+                "/opt/myapp/decoy-65400.json",
+                MachineStateMember::PrivateKeyFile
+            ),
+            (
+                "/opt/myapp/decoy-65480.json",
+                MachineStateMember::PrivateKeyFile
+            ),
+            (
+                "/opt/myapp/decoy-65500.json",
+                MachineStateMember::PrivateKeyFile
+            ),
+            (
+                "/opt/myapp/decoy-65514.json",
+                MachineStateMember::PrivateKeyFile
+            ),
+            (
+                "/opt/myapp/decoy-65520.json",
+                MachineStateMember::PrivateKeyFile
+            ),
+            ("/opt/myapp/ff.pem", MachineStateMember::PrivateKeyFile),
             ("/opt/myapp/late.conf", MachineStateMember::PrivateKeyFile),
+            (
+                "/opt/myapp/rewrapped.pem",
+                MachineStateMember::PrivateKeyFile
+            ),
             ("/opt/myapp/split.txt", MachineStateMember::PrivateKeyFile),
             ("/srv/data/id_ed25519", MachineStateMember::PrivateKeyFile),
         ]
@@ -1586,6 +1675,10 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
         items,
         vec![
             "/opt/app/app.conf",
+            "/opt/app/bundle.min.js",
+            "/opt/app/check.sh",
+            "/opt/app/delimiters.json",
+            "/opt/app/resource.bin",
             "/opt/app/run",
             "/opt/data/compact.json",
             "/opt/data/items.json",
@@ -1630,15 +1723,7 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
                 "{via}: a directory COPY for {dir}:\n{cf}"
             );
         }
-        for path in [
-            "/opt/app/k",
-            "/opt/myapp/client.kt",
-            "/opt/myapp/client.pem",
-            "/opt/myapp/config.yaml",
-            "/opt/myapp/late.conf",
-            "/opt/myapp/split.txt",
-            "/srv/data/id_ed25519",
-        ] {
+        for (path, _) in &withheld {
             let rel = path.trim_start_matches('/');
             assert!(
                 !root.join("unmanaged").join(rel).exists(),

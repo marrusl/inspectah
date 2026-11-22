@@ -582,7 +582,10 @@ mod tests {
     fn bundling_fails_on_a_payload_the_gate_withholds_or_cannot_check() {
         use inspectah_collect::executor::mock::MockExecutor;
         use inspectah_core::machine_state::ScreenedExecutor;
-        const KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n";
+        // One base64 line, as long as the smallest real key's body.
+        const KEY: &str = "-----BEGIN PRIVATE KEY-----\n\
+            MC4CAQAwBQYDK2VwBCIEIBQh0WfR6aXEBHdgfX4ix5qDYmYRBZGZEmNFdzJ1Owlp\n\
+            -----END PRIVATE KEY-----\n";
         let host = MockExecutor::new()
             .with_dir("/etc/pki/tls/private", vec!["server.key"])
             .with_file("/etc/pki/tls/private/server.key", KEY)
