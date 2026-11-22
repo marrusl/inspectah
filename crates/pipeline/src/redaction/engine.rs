@@ -1009,48 +1009,62 @@ fn is_credential_kernel_arg(arg: &KernelArg<'_>) -> bool {
 /// The secrets on a kernel command line, for detection and replacement
 /// alike.
 ///
-/// Every pattern searches the command line as it searches a file, with one
-/// change: an argument with a credential name ([`is_credential_kernel_arg`])
-/// is found by its name, and its whole non-empty value is the secret,
-/// whatever the value holds. The generic pattern needs `\S` right after
-/// the `=`, so a value starting with a Unicode space (`"password=\u{2003}x"`)
-/// was found by no pattern and kept whole. The generic pattern's own
-/// matches on such a name are dropped: with an empty value
-/// (`rd.iscsi.password= nosmt=force`) it ran on into the next argument.
-/// An empty value (`password=`, `password=""`) holds nothing to redact and
-/// is not a finding; neither is a credential name with no `=`.
+/// Every pattern searches each kernel argument ([`kernel_args`]) on its
+/// own, as it searches a file, and never reads across the whitespace
+/// between two arguments. Searching the whole line let a match run from
+/// one argument into the next: in `rd.iscsi.password=
+/// systemd.setenv=DB_PASSWORD=bravo7k` the generic pattern read past the
+/// space and took the next argument as the empty password's value.
+///
+/// An argument with a credential name ([`is_credential_kernel_arg`]) is
+/// found by its name instead of by the generic pattern, and its whole
+/// non-empty value is the secret, whatever the value holds. The generic
+/// pattern needs `\S` right after the `=`, so a value starting with a
+/// Unicode space (`"password=\u{2003}x"`) was found by no pattern and kept
+/// whole, while it takes the quotes of an empty `password=""` for a value.
+/// Leaving the generic pattern off such an argument cannot lose a secret:
+/// its search stays inside the argument, and past the name the argument
+/// holds only its `=`, quotes and value, which the name match covers
+/// whole. An empty value (`password=`, `password=""`) holds nothing to
+/// redact and is not a finding; neither is a credential name with no `=`.
+/// The other patterns still search a credential argument.
 fn kernel_cmdline_matches(cmdline: &str) -> Vec<(usize, EligibleMatch)> {
     let generic = *GENERIC_CREDENTIAL_PATTERN;
-    let args = kernel_args(cmdline);
-    let credential_args: Vec<&KernelArg<'_>> = args
-        .iter()
-        .filter(|arg| is_credential_kernel_arg(arg))
-        .collect();
-    let in_credential_name = |pos: usize| {
-        credential_args
-            .iter()
-            .any(|arg| arg.name_span().contains(&pos))
-    };
-
+    let line_num = |pos: usize| cmdline[..pos].matches('\n').count() + 1;
     let mut matches: Vec<(usize, EligibleMatch)> = Vec::new();
-    for (idx, pat) in PATTERNS.iter().enumerate() {
-        for em in collect_eligible_matches(pat, cmdline, Some(KERNEL_CMDLINE_PATH)) {
-            if !(idx == generic && in_credential_name(em.claim.start)) {
-                matches.push((idx, em));
+    for arg in kernel_args(cmdline) {
+        let raw = arg.raw_span();
+        let by_name = is_credential_kernel_arg(&arg);
+        for (idx, pat) in PATTERNS.iter().enumerate() {
+            if by_name && idx == generic {
+                continue;
+            }
+            for em in collect_eligible_matches(pat, arg.raw(), Some(KERNEL_CMDLINE_PATH)) {
+                let start = raw.start + em.start;
+                matches.push((
+                    idx,
+                    EligibleMatch {
+                        claim: raw.start + em.claim.start..raw.start + em.claim.end,
+                        start,
+                        end: raw.start + em.end,
+                        line_num: line_num(start),
+                    },
+                ));
             }
         }
-    }
-    for arg in &credential_args {
+        if !by_name {
+            continue;
+        }
         let Some(value) = arg.value_span().filter(|v| !v.is_empty()) else {
             continue;
         };
         matches.push((
             generic,
             EligibleMatch {
-                claim: arg.raw_span(),
+                claim: raw,
                 start: value.start,
                 end: value.end,
-                line_num: cmdline[..value.start].matches('\n').count() + 1,
+                line_num: line_num(value.start),
             },
         ));
     }
@@ -4262,8 +4276,8 @@ baseurl = https://cdn.redhat.com
     /// On the kernel command line a credential name decides, whatever the
     /// value holds: a non-empty value is one finding and is replaced
     /// whole; an empty value or a name with no `=` is no finding and
-    /// changes nothing, and the generic pattern does not run on from an
-    /// empty value into the next argument. The kernel reads `-` as `_` in
+    /// changes nothing, and no pattern runs on from an empty value into
+    /// the next argument. The kernel reads `-` as `_` in
     /// a name. Any other argument keeps its value.
     #[test]
     fn cmdline_credentials_are_found_by_name() {
@@ -4298,6 +4312,24 @@ baseurl = https://cdn.redhat.com
                 "ro foo.bar=\u{2003}keep7k nosmt=force",
                 "ro foo.bar=\u{2003}keep7k nosmt=force",
                 0,
+            ),
+            // Patterns search one argument at a time, so an empty
+            // credential value cannot take the next argument as its value
+            // and hide a secret inside it.
+            (
+                "ro rd.iscsi.password= systemd.setenv=DB_PASSWORD=bravo7k nosmt=force",
+                "ro rd.iscsi.password= systemd.setenv=REDACTED_PASSWORD_1 nosmt=force",
+                1,
+            ),
+            (
+                "ro rd.iscsi.password= foo=bar api_token=zz9secret nosmt=force",
+                "ro rd.iscsi.password= foo=bar api_token=REDACTED_PASSWORD_1 nosmt=force",
+                1,
+            ),
+            (
+                "ro \"rd.iscsi.password=\" \"systemd.setenv=DB_PASSWORD=bravo7k\"",
+                "ro \"rd.iscsi.password=\" \"systemd.setenv=REDACTED_PASSWORD_1\"",
+                1,
             ),
         ];
         for (cmdline, want, finding_count) in cases {

@@ -500,3 +500,121 @@ fn other_kernel_arguments_keep_a_space_first_value() {
         );
     }
 }
+
+/// One host whose empty credential argument sits before an argument that
+/// holds a secret.
+struct CrossArgumentHost {
+    label: &'static str,
+    cmdline: &'static str,
+    /// The text of the secret that must reach no file.
+    secret: &'static str,
+    /// The kargs file's arguments, in order.
+    kargs: &'static [&'static str],
+    /// How every surface names the owed argument.
+    owed: &'static str,
+    /// How the audit report's command line shows the redacted argument.
+    audit_shows: &'static str,
+}
+
+const CROSS_ARGUMENT_HOSTS: &[CrossArgumentHost] = &[
+    CrossArgumentHost {
+        label: "secret in the next argument",
+        cmdline: "ro rd.iscsi.password= systemd.setenv=DB_PASSWORD=bravo7k nosmt=force\n",
+        secret: "bravo7k",
+        kargs: &["rd.iscsi.password=", "nosmt=force"],
+        owed: "systemd.setenv=<value>",
+        audit_shows: "systemd.setenv=REDACTED_PASSWORD_1 ",
+    },
+    CrossArgumentHost {
+        label: "secret two arguments on",
+        cmdline: "ro rd.iscsi.password= foo=bar api_token=zz9secret nosmt=force\n",
+        secret: "zz9secret",
+        kargs: &["rd.iscsi.password=", "foo=bar", "nosmt=force"],
+        owed: "api_token=<value>",
+        audit_shows: "api_token=REDACTED_PASSWORD_1 ",
+    },
+    CrossArgumentHost {
+        label: "both arguments quoted",
+        cmdline: "ro \"rd.iscsi.password=\" \"systemd.setenv=DB_PASSWORD=bravo7k\"\n",
+        secret: "bravo7k",
+        kargs: &["\"rd.iscsi.password=\""],
+        owed: "systemd.setenv=<value>",
+        audit_shows: "\"systemd.setenv=REDACTED_PASSWORD_1\"",
+    },
+];
+
+/// One cross-argument host's export tree.
+fn assert_cross_argument_export(host: &CrossArgumentHost, label: &str, tree: &tempfile::TempDir) {
+    let kargs = read(tree, KARGS_FILE);
+    assert_eq!(parse_kargs(&kargs), host.kargs, "{label}:\n{kargs}");
+    assert!(!kargs.contains("REDACTED"), "{label}: {kargs}");
+    let containerfile = read(tree, "Containerfile");
+    assert!(
+        containerfile.contains(&format!("#   bootc install to-disk --karg {}\n", host.owed)),
+        "{label}:\n{containerfile}"
+    );
+    // The refine export writes no README.md.
+    for name in ["audit-report.md", "README.md"] {
+        if !tree.path().join(name).exists() && label.ends_with("refine export") {
+            continue;
+        }
+        let md = read(tree, name);
+        assert!(
+            md.contains(&format!("- `{}`", host.owed)),
+            "{label} {name}:\n{md}"
+        );
+    }
+    let audit = read(tree, "audit-report.md");
+    assert!(
+        audit.contains(host.audit_shows),
+        "{label}: the audit's command line shows the value redacted:\n{audit}"
+    );
+    for entry in walk(tree.path()) {
+        let Ok(text) = std::fs::read_to_string(&entry) else {
+            continue;
+        };
+        assert!(
+            !text.contains(host.secret),
+            "{label}: {} holds the secret",
+            entry.display()
+        );
+    }
+}
+
+/// An empty credential value does not take the next argument as its
+/// value: the secret further on is found in its own argument, redacted,
+/// left out of the kernel arguments file and owed, while the empty
+/// argument and the others are carried.
+#[test]
+fn an_empty_credential_value_does_not_hide_the_next_argument() {
+    for host in CROSS_ARGUMENT_HOSTS {
+        let label = host.label;
+        let snap = reload(&scan(SysctlHost::new().file("/proc/cmdline", host.cmdline)));
+        let json = serde_json::to_string(&snap).expect("the snapshot serializes");
+        assert!(
+            !json.contains(host.secret),
+            "{label}: the snapshot holds the secret"
+        );
+        let notices: Vec<String> = inspectah_pipeline::render::machine_state::export_notices(&snap)
+            .iter()
+            .map(|n| n.text().to_owned())
+            .collect();
+        assert!(
+            notices.iter().all(|n| !n.contains(host.secret)),
+            "{label}: {notices:?}"
+        );
+        assert!(
+            notices.contains(
+                &"1 kernel argument left out: the value was redacted. At install time: bootc \
+                  install to-disk --karg."
+                    .to_owned()
+            ),
+            "{label}: {notices:?}"
+        );
+
+        let from_scan = render_export(&snap);
+        assert_cross_argument_export(host, &format!("{label}, scan export"), &from_scan);
+        let from_refine = export_session(&session(&snap));
+        assert_cross_argument_export(host, &format!("{label}, refine export"), &from_refine);
+    }
+}
