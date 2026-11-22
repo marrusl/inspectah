@@ -4454,6 +4454,8 @@ baseurl = https://cdn.redhat.com
             "PRIVATE KEY",
             "RSA PRIVATE KEY",
             "EC PRIVATE KEY",
+            "PGP PRIVATE KEY BLOCK",
+            "PGP SECRET KEY BLOCK",
         ] {
             let input = format!(
                 "listen = 443\n-----BEGIN {label}-----\nMIIFsecretkeybody\n-----END {label}-----\nworkers = 4\n"
@@ -4464,6 +4466,9 @@ baseurl = https://cdn.redhat.com
             assert!(result.contains("listen = 443\n"), "{label}: {result}");
             assert!(result.contains("workers = 4"), "{label}: {result}");
         }
+        // A public key block is not a secret.
+        let public = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBFtest\n-----END PGP PUBLIC KEY BLOCK-----\n";
+        assert_eq!(redact_string(public), public);
     }
 
     #[test]

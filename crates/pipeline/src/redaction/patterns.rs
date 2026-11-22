@@ -46,10 +46,12 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // PEM private key blocks (full BEGIN...END matching with dotall).
         // Any label ending in PRIVATE KEY, as the machine-state class's
         // whole-file key rule reads it: `PRIVATE KEY` (PKCS#8),
-        // `ENCRYPTED PRIVATE KEY`, `RSA`, `EC`, `DSA`, `OPENSSH`.
+        // `ENCRYPTED PRIVATE KEY`, `RSA`, `EC`, `DSA`, `OPENSSH`; and
+        // OpenPGP secret key armor, `PGP PRIVATE KEY BLOCK` and PGP 2's
+        // `PGP SECRET KEY BLOCK`, which that rule reads too.
         SecretPattern {
             regex: Regex::new(
-                r"(?s)-----BEGIN\s+(?:[A-Z0-9]+ )*PRIVATE KEY-----.*?-----END\s+(?:[A-Z0-9]+ )*PRIVATE KEY-----",
+                r"(?s)-----BEGIN\s+(?:(?:[A-Z0-9]+ )*PRIVATE KEY|PGP (?:PRIVATE|SECRET) KEY BLOCK)-----.*?-----END\s+(?:(?:[A-Z0-9]+ )*PRIVATE KEY|PGP (?:PRIVATE|SECRET) KEY BLOCK)-----",
             )
             .unwrap(),
             finding_kind: FindingKind::PrivateKey,

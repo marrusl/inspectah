@@ -1503,6 +1503,18 @@ fn pem_key(label: &str, indent: &str) -> String {
     )
 }
 
+/// An OpenPGP armored block with `label`, armor headers as gpg and
+/// Sequoia write them, and a checksum line, carrying [`MARKER`]. Not a
+/// real key.
+fn pgp_block(label: &str) -> String {
+    let body = "lQOYBGVhbXBsZQEIALx5b2xvc2FtcGxla2V5bWF0ZXJpYWxub3RyZWFsMDEyMzQ1Njc4";
+    format!(
+        "-----BEGIN {label}-----\nVersion: GnuPG v2\n\
+         Comment: Build signing key <build@example.invalid>\n\n\
+         {body}\n{MARKER}\n{body}\n=Xb7Q\n-----END {label}-----\n"
+    )
+}
+
 /// A synthetic certificate, base64 but no key.
 fn certificate() -> String {
     let line = "MIIDXTCCAkWgAwIBAgIJAKoK/heBjcOuMA0GCSqGSIb3DQEBBQUAMEUxCzAJBgNV\n";
@@ -1596,6 +1608,17 @@ fn unmanaged_payloads() -> Vec<(&'static str, Vec<u8>)> {
         ("/srv/data/id_ed25519", openssh_key().into_bytes()),
         ("/srv/data/readme.txt", b"data\n".to_vec()),
         ("/opt/myapp/ff.pem", ff_vt.into_bytes()),
+        (
+            "/opt/myapp/signing.asc",
+            pgp_block("PGP PRIVATE KEY BLOCK").into_bytes(),
+        ),
+        (
+            "/opt/trust/vendor.asc",
+            // Shipped, so it must not carry the marker.
+            pgp_block("PGP PUBLIC KEY BLOCK")
+                .replace(MARKER, "PUBLICKEYMATERIAL0123")
+                .into_bytes(),
+        ),
         ("/opt/myapp/rewrapped.pem", rewrapped.into_bytes()),
         ("/opt/myapp/p224.pem", P224_NO_PUBLIC.as_bytes().to_vec()),
         (
@@ -1733,6 +1756,7 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
                 "/opt/myapp/secp112r1.pem",
                 MachineStateMember::PrivateKeyFile
             ),
+            ("/opt/myapp/signing.asc", MachineStateMember::PrivateKeyFile),
             ("/opt/myapp/split.txt", MachineStateMember::PrivateKeyFile),
             ("/srv/data/id_ed25519", MachineStateMember::PrivateKeyFile),
         ]
@@ -1754,6 +1778,7 @@ fn unmanaged_credentials_are_withheld_on_both_export_paths() {
             "/opt/myapp/lib.so",
             "/opt/trust/bundle.pem",
             "/opt/trust/revocations.pem",
+            "/opt/trust/vendor.asc",
             "/srv/data/readme.txt",
         ]
     );

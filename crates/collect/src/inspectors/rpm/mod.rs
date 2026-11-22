@@ -4998,13 +4998,16 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 host: |m| {
                     m.with_file(
                         "/etc/pki/rpm-gpg/RPM-GPG-KEY-private",
-                        "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQdGB\n\
+                        "Signing material for the build host.\n\
+                         -----BEGIN PGP PRIVATE KEY BLOCK-----\nlQdGB\n\
                          -----END PGP PRIVATE KEY BLOCK-----\n\
                          -----BEGIN PGP PUBLIC KEY BLOCK-----\nmQINB\n",
                     )
                 },
                 // Refused like a non-key file, with the reason that is true
-                // of it and a remedy that names a public-only key file.
+                // of it and a remedy that names a public-only key file. The
+                // line of prose keeps it from being a whole-file key, which
+                // the read gate withholds before this reader sees it.
                 keys: &["/etc/pki/rpm-gpg/RPM-GPG-KEY-private"],
                 warning: Some(
                     "/etc/pki/rpm-gpg/RPM-GPG-KEY-private holds PGP private key material. \

@@ -262,9 +262,41 @@ pub fn credential_content(content: &[u8]) -> Option<MachineStateMember> {
 /// `OPENSSH PRIVATE KEY`.
 const PRIVATE_KEY_LABEL_SUFFIX: &str = "PRIVATE KEY";
 
+/// The OpenPGP armor labels of a secret key (RFC 4880 § 6.2): `PGP
+/// PRIVATE KEY BLOCK`, and `PGP SECRET KEY BLOCK` as PGP 2 wrote it. Their
+/// bodies open with armor headers (`Version:`, `Comment:`) whose values
+/// are free text, and close with a `=` checksum line.
+const PGP_PRIVATE_KEY_LABELS: [&str; 2] = ["PGP PRIVATE KEY BLOCK", "PGP SECRET KEY BLOCK"];
+
+/// What kind of private-key block a `BEGIN` label opens, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyArmor {
+    /// A PEM label ending with [`PRIVATE_KEY_LABEL_SUFFIX`]: RFC 1421
+    /// headers only.
+    Pem,
+    /// One of [`PGP_PRIVATE_KEY_LABELS`]: armor headers with free-text
+    /// values.
+    Pgp,
+}
+
+impl KeyArmor {
+    /// The kind of private-key block `label` names, or `None` for any
+    /// other label (a certificate, a public key block).
+    fn of(label: &[u8]) -> Option<Self> {
+        if PGP_PRIVATE_KEY_LABELS.iter().any(|l| l.as_bytes() == label) {
+            Some(Self::Pgp)
+        } else if label.ends_with(PRIVATE_KEY_LABEL_SUFFIX.as_bytes()) {
+            Some(Self::Pem)
+        } else {
+            None
+        }
+    }
+}
+
 /// PEM labels that may sit beside a private key in a key file.
 const COMPANION_LABELS: &[&str] = &[
     "CERTIFICATE",
+    "PGP PUBLIC KEY BLOCK",
     "TRUSTED CERTIFICATE",
     "X509 CRL",
     "EC PARAMETERS",
@@ -281,7 +313,8 @@ const PEM_END: &str = "-----END ";
 const PEM_DASHES: &str = "-----";
 
 /// Every line outside a PEM block is blank, a `#` comment or `openssl`
-/// envelope metadata, every block's label is a private-key label or a
+/// envelope metadata, every block's label is a private-key label (a PEM
+/// label ending `PRIVATE KEY`, or OpenPGP secret key armor) or a
 /// companion, and at least one block is a private key. Any other line (an
 /// application setting) makes the file configuration, and a key embedded
 /// in it is left to redaction. A block that never ends counts as a block
@@ -298,7 +331,7 @@ pub fn is_whole_file_private_key(content: &str) -> bool {
             continue;
         }
         if let Some(label) = pem_label(line, PEM_BEGIN) {
-            if label.ends_with(PRIVATE_KEY_LABEL_SUFFIX) {
+            if KeyArmor::of(label.as_bytes()).is_some() {
                 has_key = true;
             } else if !COMPANION_LABELS.contains(&label) {
                 return false;
@@ -404,7 +437,8 @@ pub fn payload_credential(reader: &mut dyn io::Read) -> io::Result<Option<Machin
 ///
 /// Two readers run over every byte. The first looks for a
 /// `-----BEGIN <label>-----` marker whose label ends with `PRIVATE KEY`
-/// (plain, encrypted, RSA, EC, DSA and OpenSSH keys alike), at any
+/// (plain, encrypted, RSA, EC, DSA and OpenSSH keys alike) or is OpenPGP
+/// secret key armor ([`PGP_PRIVATE_KEY_LABELS`]), at any
 /// position in a line and whatever came before it, so no earlier text can
 /// hide a later marker. Each such marker starts a fresh [`KeyBody`], which
 /// reads what follows as a PEM body and counts its key material. A body
@@ -473,7 +507,11 @@ impl LabelRead {
     }
 
     fn is_private_key(&self) -> bool {
-        self.label.ends_with(PRIVATE_KEY_LABEL_SUFFIX.as_bytes())
+        self.armor().is_some()
+    }
+
+    fn armor(&self) -> Option<KeyArmor> {
+        KeyArmor::of(&self.label)
     }
 }
 
@@ -514,25 +552,25 @@ impl PemKeyFinder {
                 BodyStep::Ended => self.body = None,
             }
         }
-        if self.begin_step(b) {
-            self.body = Some(KeyBody::default());
+        if let Some(armor) = self.begin_step(b) {
+            self.body = Some(KeyBody::new(armor));
         }
     }
 
-    /// Feeds `b` to the `BEGIN` reader; true when it closed a private-key
-    /// marker.
-    fn begin_step(&mut self, b: u8) -> bool {
+    /// Feeds `b` to the `BEGIN` reader; the kind of block when it closed
+    /// a private-key marker.
+    fn begin_step(&mut self, b: u8) -> Option<KeyArmor> {
         let begin = PEM_BEGIN.as_bytes();
         let (next, opened) = match std::mem::take(&mut self.begin) {
-            BeginScan::Seek(k) => (marker_step(begin, k, b), false),
+            BeginScan::Seek(k) => (marker_step(begin, k, b), None),
             BeginScan::Label(mut read) => match read.step(b) {
                 LabelStep::More => {
                     self.begin = BeginScan::Label(read);
-                    return false;
+                    return None;
                 }
                 // The closing dashes may open the next marker.
-                LabelStep::Closed => (PEM_DASH_RUN, read.is_private_key()),
-                LabelStep::Invalid => (marker_step(begin, 0, b), false),
+                LabelStep::Closed => (PEM_DASH_RUN, read.armor()),
+                LabelStep::Invalid => (marker_step(begin, 0, b), None),
             },
         };
         self.begin = if next == begin.len() {
@@ -574,7 +612,10 @@ fn is_base64_byte(b: u8) -> bool {
 ///
 /// - a lead: whitespace, one opening quote, `#` comment marks;
 /// - then nothing, base64, or, before any key line, an RFC 1421 header
-///   (`Proc-Type: 4,ENCRYPTED`, `DEK-Info: AES-256-CBC,...`);
+///   (`Proc-Type: 4,ENCRYPTED`, `DEK-Info: AES-256-CBC,...`), or in an
+///   OpenPGP block an armor header, whose value is any text to the line's
+///   end (`Version: GnuPG v2`, `Comment: Alice <alice@example.org>`); the
+///   `=` checksum line is base64;
 /// - then whitespace, and after a closing quote one `,`, `+` or `;`, as a
 ///   string list or concatenation writes it.
 ///
@@ -605,6 +646,9 @@ struct KeyBody {
     line: Line,
     /// Reading what may be the `END` marker, from a dash on.
     end: Option<EndRead>,
+    /// The block's kind: an OpenPGP armor header's value is free text to
+    /// the line's end, where an RFC 1421 header's is a word list.
+    armor: KeyArmor,
 }
 
 /// A [`KeyBody`]'s text from a dash that ended its content: perhaps the
@@ -644,9 +688,10 @@ impl EndRead {
     }
 }
 
-impl Default for KeyBody {
-    fn default() -> Self {
+impl KeyBody {
+    fn new(armor: KeyArmor) -> Self {
         Self {
+            armor,
             material: 0,
             run: 0,
             begin_line: true,
@@ -827,6 +872,8 @@ impl KeyBody {
                     BodyStep::More
                 }
                 Sym::Quote if header != Header::Value => self.close_content(),
+                // An armor header's value is free text, quotes included.
+                Sym::Quote if self.armor == KeyArmor::Pgp => BodyStep::More,
                 Sym::Quote => BodyStep::Ended,
                 Sym::Byte(b) => self.content(b),
                 Sym::Break => unreachable!("handled above"),
@@ -856,7 +903,10 @@ impl KeyBody {
             unreachable!("called in a line's content");
         };
         if *header == Header::Value {
-            return if b.is_ascii_alphanumeric() || matches!(b, b'-' | b',') {
+            return if self.armor == KeyArmor::Pgp
+                || b.is_ascii_alphanumeric()
+                || matches!(b, b'-' | b',')
+            {
                 BodyStep::More
             } else {
                 BodyStep::Ended
@@ -2082,6 +2132,96 @@ mod tests {
         let embedded = format!("listen = 443\n{key}");
         assert_eq!(credential_content(embedded.as_bytes()), None);
         assert_eq!(credential_content(b"plain text"), None);
+    }
+
+    /// An OpenPGP armored key block with `label`, the armor headers gpg
+    /// and Sequoia write, base64 lines and the checksum line.
+    fn pgp_block(label: &str) -> String {
+        format!(
+            "-----BEGIN {label}-----\nVersion: GnuPG v2\n\
+             Comment: \"Alice\" <alice@example.org>, https://example.org/key.asc\n\n{}=Xb7Q\n\
+             -----END {label}-----\n",
+            body()
+        )
+    }
+
+    /// OpenPGP secret key armor is a private key to both checks, with its
+    /// free-text armor headers and its checksum line, cut off or not, and
+    /// embedded or whole; a public key block is not, alone or with a
+    /// certificate beside it, and neither is a marker quoted in prose.
+    #[test]
+    fn openpgp_secret_key_armor_is_a_private_key() {
+        let private = pgp_block("PGP PRIVATE KEY BLOCK");
+        let secret = pgp_block("PGP SECRET KEY BLOCK");
+        let public = pgp_block("PGP PUBLIC KEY BLOCK");
+        let cut_off = private[..private.find("=Xb7Q").expect("the checksum")].to_owned();
+        let cases: Vec<(&str, String, Option<M>, Option<M>)> = vec![
+            // (name, bytes, whole-file answer, payload answer)
+            (
+                "private block",
+                private.clone(),
+                Some(M::PrivateKeyFile),
+                Some(M::PrivateKeyFile),
+            ),
+            (
+                "PGP 2 secret block",
+                secret.clone(),
+                Some(M::PrivateKeyFile),
+                Some(M::PrivateKeyFile),
+            ),
+            (
+                "public then private",
+                format!("{public}{private}"),
+                Some(M::PrivateKeyFile),
+                Some(M::PrivateKeyFile),
+            ),
+            (
+                "cut off",
+                cut_off,
+                Some(M::PrivateKeyFile),
+                Some(M::PrivateKeyFile),
+            ),
+            (
+                "embedded in a config file",
+                format!("signing_key = <<EOF\n{private}EOF\n"),
+                None,
+                Some(M::PrivateKeyFile),
+            ),
+            (
+                "escaped in JSON",
+                format!("{{\"key\":\"{}\"}}", private.replace('\n', "\\n")),
+                None,
+                Some(M::PrivateKeyFile),
+            ),
+            ("public block", public.clone(), None, None),
+            (
+                "public block and a certificate",
+                format!("{public}-----BEGIN CERTIFICATE-----\nMII=\n-----END CERTIFICATE-----\n"),
+                None,
+                None,
+            ),
+            (
+                "marker in prose",
+                "Export it with gpg; the file starts -----BEGIN PGP PRIVATE KEY BLOCK----- \
+                 and holds your secret key.\n"
+                    .into(),
+                None,
+                None,
+            ),
+        ];
+        for (name, text, whole, payload) in &cases {
+            assert_eq!(
+                credential_content(text.as_bytes()),
+                *whole,
+                "{name}, whole file"
+            );
+            assert_eq!(
+                judge(text.as_bytes(), PAYLOAD_READ_CHUNK),
+                *payload,
+                "{name}"
+            );
+            assert_eq!(judge(text.as_bytes(), 7), *payload, "{name}, 7-byte reads");
+        }
     }
 
     /// A reader that yields at most `n` bytes per call, as a pipe or a

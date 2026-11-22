@@ -142,15 +142,19 @@ keytab header wins. Otherwise `PemKeyFinder` recognizes a PEM private
 key by its structure, with two readers over every byte:
 
 - `BeginScan` finds every `BEGIN` marker whose label ends with
-  `PRIVATE KEY`, on the raw bytes, whatever the body reader is doing.
+  `PRIVATE KEY` or is OpenPGP secret key armor (`PGP PRIVATE KEY BLOCK`,
+  `PGP SECRET KEY BLOCK`; `KeyArmor`), on the raw bytes, whatever the
+  body reader is doing.
   Each one starts a fresh `KeyBody`, so an earlier quoted marker and any
   padding after it cannot hide a later key.
 - `KeyBody` decodes escapes (`\n`, `\r`, `\t`, `\f`, `\v`, `\/`,
   quotes, `\uXXXX`, backslash runs), treats every byte at or below
   space other than a line end as whitespace (OpenSSL strips trailing
   VT, FF and NUL), and reads lines: a lead (whitespace, one quote, `#`),
-  then base64 or, before any key line, an RFC 1421 header, then
-  whitespace and after a closing quote one `,`, `+` or `;`. A quote
+  then base64 or, before any key line, an RFC 1421 header (in an
+  OpenPGP block an armor header, whose value is any text to the line's
+  end: `Comment:` holds user ids and URLs), then whitespace and after a
+  closing quote one `,`, `+` or `;`. A quote
   after that starts the next line (JSON arrays, Python concatenation).
   Any other byte ends the body; a dash may start `EndRead`, the `END`
   marker, which ends it too.
@@ -186,7 +190,11 @@ file. Test the whole route with
 `unmanaged_credentials_are_withheld_on_both_export_paths`: write each
 payload both to the `SysctlHost` and to a host-root tempdir. Test the
 recognizer's classes in `machine_state.rs`'s table and property tests
-(`pem_properties`), not single inputs.
+(`pem_properties`, `openpgp_secret_key_armor_is_a_private_key`), not
+single inputs. The whole-file check (`is_whole_file_private_key`) and the
+redaction pattern read the same labels; `PGP PUBLIC KEY BLOCK` is a
+companion there, so a public block beside a secret one is still a key
+file, and a public block alone is not.
 
 Not covered, and caught only by review: a file-opening route not on the
 lint list (a new dependency, a `libc` call) and a command whose output is a

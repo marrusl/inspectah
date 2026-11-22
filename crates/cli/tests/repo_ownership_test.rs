@@ -40,6 +40,19 @@ const KEY_COPY: &str = "COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/";
 const PGP: &str =
     "-----BEGIN PGP PUBLIC KEY BLOCK-----\nmQENBFtest\n-----END PGP PUBLIC KEY BLOCK-----\n";
 
+/// What only private key material holds, so a test can look for it.
+const PRIVATE_MATERIAL: &str = "lQOYBPRIVATEKEYMATERIAL0123456789";
+
+/// A public key block, then a private one, after a line of prose: not a
+/// whole-file key, so the read gate lets the RPM reader and the config walk
+/// read it, and the RPM reader rejects it for its private armor.
+fn private_beside_public() -> String {
+    format!(
+        "Exported for the build team.\n{PGP}-----BEGIN PGP PRIVATE KEY BLOCK-----\n\
+         {PRIVATE_MATERIAL}\n-----END PGP PRIVATE KEY BLOCK-----\n"
+    )
+}
+
 fn custom_repo() -> String {
     format!(
         "[custom]\nname=Custom\nbaseurl=https://custom.example/repo\nenabled=1\n\
@@ -110,10 +123,7 @@ fn with_parser_inputs(host: UnitHost) -> UnitHost {
     .file(&key("BARE"), PGP)
     .file(&key("PRE"), PGP)
     .file(&key("RPM-GPG-KEY-notpgp"), "plain text, not a key\n")
-    .file(
-        &key("RPM-GPG-KEY-priv"),
-        &format!("{PGP}-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQ\n-----END PGP PRIVATE KEY BLOCK-----\n"),
-    )
+    .file(&key("RPM-GPG-KEY-priv"), &private_beside_public())
 }
 
 fn rpm(snap: &InspectionSnapshot) -> &inspectah_core::types::rpm::RpmSection {
