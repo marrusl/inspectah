@@ -52,6 +52,11 @@ pub struct MockExecutor {
     /// Every `read_file`, `read_head` and `open_read` call, in order.
     read_log: Mutex<Vec<ReadRecord>>,
     dirs: HashMap<String, Vec<String>>,
+    /// Entry names that are not UTF-8, by directory, listed after the
+    /// directory's registered entries: `read_dir_raw` returns their bytes,
+    /// `read_dir` and `read_dir_strict` their lossy decoding, as the real
+    /// executor does.
+    raw_dir_entries: HashMap<String, Vec<std::ffi::OsString>>,
     links: HashMap<String, String>,
     /// Paths that are a FIFO, socket or device ([`FileKind::Special`]).
     /// Reading one panics: a collector must never open such a path.
@@ -97,6 +102,7 @@ impl MockExecutor {
             modes: HashMap::new(),
             read_log: Mutex::new(Vec::new()),
             dirs: HashMap::new(),
+            raw_dir_entries: HashMap::new(),
             links: HashMap::new(),
             specials: HashSet::new(),
             dangling_links: HashSet::new(),
@@ -197,6 +203,17 @@ impl MockExecutor {
         if !entries.iter().any(|e| e == entry) {
             entries.push(entry.to_string());
         }
+        self
+    }
+
+    /// Add an entry whose name is the raw bytes `name`, which need not be
+    /// UTF-8, to the listing of the registered directory `path`.
+    pub fn with_raw_dir_entry(mut self, path: &str, name: &[u8]) -> Self {
+        use std::os::unix::ffi::OsStrExt;
+        self.raw_dir_entries
+            .entry(path.to_string())
+            .or_default()
+            .push(std::ffi::OsStr::from_bytes(name).to_os_string());
         self
     }
 
@@ -385,10 +402,18 @@ impl Executor for MockExecutor {
         if let Some(&error_kind) = self.dir_errors.get(key) {
             return Err(io::Error::new(error_kind, path.display().to_string()));
         }
-        self.dirs
-            .get(key)
-            .cloned()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))
+        let mut entries =
+            self.dirs.get(key).cloned().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, path.display().to_string())
+            })?;
+        entries.extend(
+            self.raw_dir_entries
+                .get(key)
+                .into_iter()
+                .flatten()
+                .map(|name| name.to_string_lossy().into_owned()),
+        );
+        Ok(entries)
     }
 
     fn read_dir_strict(&self, path: &Path) -> io::Result<Vec<String>> {
@@ -521,6 +546,20 @@ impl HostRead for MockExecutor {
         let head = bytes[..n.min(bytes.len())].to_vec();
         self.log_read(path, ReadKind::Head, head.len());
         Ok(head)
+    }
+
+    fn read_dir_raw(&self, path: &Path) -> io::Result<Vec<std::ffi::OsString>> {
+        let key = path.to_str().unwrap_or("");
+        let raw = self.raw_dir_entries.get(key);
+        let decoded = self.read_dir_strict(path)?;
+        // The lossy decodings of the raw entries end the strict listing.
+        let registered = decoded.len() - raw.map_or(0, Vec::len);
+        Ok(decoded
+            .into_iter()
+            .take(registered)
+            .map(std::ffi::OsString::from)
+            .chain(raw.into_iter().flatten().cloned())
+            .collect())
     }
 
     fn open_read(&self, path: &Path) -> io::Result<Box<dyn io::Read + '_>> {

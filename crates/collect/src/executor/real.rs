@@ -458,6 +458,12 @@ impl HostRead for RealExecutor {
         Ok(head)
     }
 
+    fn read_dir_raw(&self, path: &Path) -> io::Result<Vec<std::ffi::OsString>> {
+        std::fs::read_dir(path)?
+            .map(|entry| entry.map(|e| e.file_name()))
+            .collect()
+    }
+
     fn open_read(&self, path: &Path) -> io::Result<Box<dyn io::Read + '_>> {
         Ok(Box::new(std::fs::File::open(path)?))
     }

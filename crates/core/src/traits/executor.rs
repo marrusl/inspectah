@@ -138,13 +138,20 @@ pub trait Executor: Send + Sync {
 /// ([`crate::machine_state::ScreenedExecutor`]). The real and mock
 /// executors implement it; the gate does not, so no inspector holds a
 /// value it can call these on. The gate's own reads are the only partial
-/// and raw reads a scan makes: the two-byte keytab sniff, and the
-/// unmanaged payload check
+/// and raw reads a scan makes: the inventory's raw listings, the two-byte
+/// keytab sniff, and the unmanaged payload check
 /// ([`crate::machine_state::ScreenedExecutor::screen_payload`]), which
 /// reads a file to its end a buffer at a time.
 pub trait HostRead: Executor {
     /// At most `n` bytes from the start of the file.
     fn read_head(&self, path: &Path, n: usize) -> io::Result<Vec<u8>>;
+
+    /// Every entry name in `path` as the bytes the directory holds, which
+    /// need not be UTF-8, and never a partial listing, as
+    /// [`Executor::read_dir_strict`]. For the machine-state inventory,
+    /// which must decide from a name's real bytes whether a rule could
+    /// match it.
+    fn read_dir_raw(&self, path: &Path) -> io::Result<Vec<std::ffi::OsString>>;
 
     /// The file, open for reading from its start. The caller reads it a
     /// buffer at a time, so a file of any length costs bounded memory.

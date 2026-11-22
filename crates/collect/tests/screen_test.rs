@@ -368,7 +368,8 @@ fn the_inventory_follows_directory_links_and_deep_trees() {
 /// deeper than the screen follows, a name that is not UTF-8 where a rule
 /// could match it, and a directory that cannot be listed in full each
 /// leave a gap naming the directory, and the gate then withholds every
-/// path. A name that is not UTF-8 where no rule can match leaves none.
+/// path. A name that is not UTF-8 where no rule can match leaves none,
+/// and a literal U+FFFD is an ordinary name.
 #[test]
 fn an_incomplete_inventory_leaves_a_gap_and_withholds_everything() {
     let too_deep = || {
@@ -382,7 +383,11 @@ fn an_incomplete_inventory_leaves_a_gap_and_withholds_everything() {
         }
         exec
     };
-    let not_utf8 = || MockExecutor::new().with_dir("/etc/pki/tls/private", vec!["key\u{FFFD}.pem"]);
+    let not_utf8 = || {
+        MockExecutor::new()
+            .with_dir("/etc/pki/tls/private", vec![])
+            .with_raw_dir_entry("/etc/pki/tls/private", b"key\xff.pem")
+    };
     let unlistable = || {
         MockExecutor::new()
             .with_dir("/etc/pki/entitlement", vec!["1.pem"])
@@ -410,12 +415,250 @@ fn an_incomplete_inventory_leaves_a_gap_and_withholds_everything() {
         assert!(!exec.was_read("/etc/myapp/app.conf"), "{name}");
     }
 
-    let unrelated = MockExecutor::new()
-        .with_dir("/etc", vec!["backup\u{FFFD}.conf", "krb5.keytab.d"])
-        .with_dir("/etc/krb5.keytab.d", vec!["k\u{FFFD}"]);
-    let gate = ScreenedExecutor::new(&unrelated);
+    // A name that is not UTF-8 is judged by its bytes: under
+    // `krb5.keytab.d` the glob takes any name; directly under `/etc` a
+    // Latin-1 name cannot spell the `krb5.keytab.` stem; a literal U+FFFD
+    // is an ordinary UTF-8 name, statted and recorded like any other.
+    let matching = MockExecutor::new()
+        .with_dir("/etc", vec!["krb5.keytab.d"])
+        .with_raw_dir_entry("/etc", b"\xe9quipe.conf")
+        .with_dir("/etc/krb5.keytab.d", vec![])
+        .with_raw_dir_entry("/etc/krb5.keytab.d", b"k\xff");
+    let gate = ScreenedExecutor::new(&matching);
     let gap = gate.gap().expect("the name under krb5.keytab.d can match");
     assert_eq!(gap.dir, "/etc/krb5.keytab.d");
-    let only_unrelated = MockExecutor::new().with_dir("/etc", vec!["backup\u{FFFD}.conf"]);
-    assert_eq!(ScreenedExecutor::new(&only_unrelated).gap(), None);
+    let unrelated = MockExecutor::new()
+        .with_dir("/etc", vec!["app.conf"])
+        .with_raw_dir_entry("/etc", b"\xe9quipe.conf")
+        .with_file("/etc/app.conf", "a = 1\n");
+    let gate = ScreenedExecutor::new(&unrelated);
+    assert_eq!(gate.gap(), None);
+    assert_eq!(gate.screen("/etc/app.conf"), Screened::Ordinary);
+    let literal = MockExecutor::new()
+        .with_dir("/etc/pki/tls/private", vec!["key\u{FFFD}.pem"])
+        .with_file("/etc/pki/tls/private/key\u{FFFD}.pem", KEY)
+        .with_hard_link("/opt/app/k", "/etc/pki/tls/private/key\u{FFFD}.pem");
+    let gate = ScreenedExecutor::new(&literal);
+    assert_eq!(gate.gap(), None);
+    assert_eq!(
+        gate.screen("/opt/app/k"),
+        Screened::Withheld(MachineStateMember::PrivateKeyFile)
+    );
+}
+
+/// A host whose `/` is a directory on disk: host paths map below `root`,
+/// and links resolve on disk, so the inventory lists real directory
+/// entries with their raw names. Runs no commands.
+struct RootedHost {
+    root: std::path::PathBuf,
+}
+
+impl RootedHost {
+    fn new(root: &Path) -> Self {
+        Self {
+            root: root.canonicalize().expect("the temp root resolves"),
+        }
+    }
+
+    fn on_disk(&self, path: &Path) -> std::path::PathBuf {
+        self.root.join(path.strip_prefix("/").unwrap_or(path))
+    }
+}
+
+// A test host over a temp directory: it opens files on disk on purpose.
+#[allow(clippy::disallowed_methods)]
+impl Executor for RootedHost {
+    fn run(&self, _cmd: &str, _args: &[&str]) -> ExecResult {
+        ExecResult {
+            exit_code: 127,
+            ..Default::default()
+        }
+    }
+
+    fn run_with_line_callback(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        _on_stderr_line: &mut dyn FnMut(&str),
+    ) -> ExecResult {
+        self.run(cmd, args)
+    }
+
+    fn read_file(&self, path: &Path) -> std::io::Result<String> {
+        std::fs::read_to_string(self.on_disk(path))
+    }
+
+    fn file_exists(&self, path: &Path) -> bool {
+        self.on_disk(path).exists()
+    }
+
+    fn read_dir(&self, path: &Path) -> std::io::Result<Vec<String>> {
+        self.read_dir_strict(path)
+    }
+
+    fn read_dir_strict(&self, path: &Path) -> std::io::Result<Vec<String>> {
+        std::fs::read_dir(self.on_disk(path))?
+            .map(|e| e.map(|e| e.file_name().to_string_lossy().into_owned()))
+            .collect()
+    }
+
+    fn read_link(&self, path: &Path) -> std::io::Result<String> {
+        Ok(std::fs::read_link(self.on_disk(path))?
+            .to_string_lossy()
+            .into_owned())
+    }
+
+    fn file_kind(
+        &self,
+        _path: &Path,
+    ) -> std::io::Result<inspectah_core::traits::executor::FileKind> {
+        unimplemented!("the inventory does not ask a file's kind")
+    }
+
+    fn host_root(&self) -> &Path {
+        Path::new("/")
+    }
+
+    fn resolve_final_target(&self, path: &Path) -> std::io::Result<std::path::PathBuf> {
+        let resolved = self.on_disk(path).canonicalize()?;
+        let inside = resolved.strip_prefix(&self.root).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "a link out of the root")
+        })?;
+        Ok(Path::new("/").join(inside))
+    }
+
+    fn file_metadata(
+        &self,
+        path: &Path,
+    ) -> std::io::Result<inspectah_core::traits::executor::FileMetadata> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(self.on_disk(path))?;
+        Ok(inspectah_core::traits::executor::FileMetadata {
+            mode: meta.mode(),
+            size: meta.size(),
+            dev: meta.dev(),
+            ino: meta.ino(),
+            nlink: meta.nlink(),
+        })
+    }
+}
+
+#[allow(clippy::disallowed_methods)]
+impl inspectah_core::traits::executor::HostRead for RootedHost {
+    fn read_head(&self, path: &Path, n: usize) -> std::io::Result<Vec<u8>> {
+        use std::io::Read;
+        let mut head = Vec::new();
+        std::fs::File::open(self.on_disk(path))?
+            .take(n as u64)
+            .read_to_end(&mut head)?;
+        Ok(head)
+    }
+
+    fn read_dir_raw(&self, path: &Path) -> std::io::Result<Vec<std::ffi::OsString>> {
+        std::fs::read_dir(self.on_disk(path))?
+            .map(|e| e.map(|e| e.file_name()))
+            .collect()
+    }
+
+    fn open_read(&self, path: &Path) -> std::io::Result<Box<dyn std::io::Read + '_>> {
+        Ok(Box::new(std::fs::File::open(self.on_disk(path))?))
+    }
+}
+
+/// Writes `content` at the host path `path` below `root`.
+fn put(root: &Path, path: &str, content: &[u8]) {
+    let on_disk = root.join(path.trim_start_matches('/'));
+    std::fs::create_dir_all(on_disk.parent().expect("a parent")).expect("the parent is made");
+    std::fs::write(on_disk, content).expect("the file is written");
+}
+
+/// On disk, a literal U+FFFD in a name is an ordinary UTF-8 name: the
+/// key file holding one is listed, statted and recorded, so a hard link
+/// to it elsewhere is withheld, and no gap is left. And the self-link
+/// case: `/etc/insights-client/.state -> .` makes `registration.json`
+/// there a member, so its hard link in `/etc/myapp` is withheld.
+#[test]
+fn the_inventory_lists_real_directories_by_their_entries() {
+    let tmp = tempfile::tempdir().expect("a host root");
+    let root = tmp.path();
+    put(root, "/etc/pki/tls/private/key\u{FFFD}.pem", KEY.as_bytes());
+    put(
+        root,
+        "/etc/insights-client/registration.json",
+        b"{\"machine_id\": 1}\n",
+    );
+    put(root, "/etc/app.conf", b"a = 1\n");
+    std::fs::create_dir_all(root.join("opt/app")).unwrap();
+    std::fs::hard_link(
+        root.join("etc/pki/tls/private/key\u{FFFD}.pem"),
+        root.join("opt/app/k"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("etc/myapp")).unwrap();
+    std::fs::hard_link(
+        root.join("etc/insights-client/registration.json"),
+        root.join("etc/myapp/registration.json"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(".", root.join("etc/insights-client/.state")).unwrap();
+
+    let host = RootedHost::new(root);
+    let gate = ScreenedExecutor::new(&host);
+    assert_eq!(gate.gap(), None);
+    assert_eq!(
+        gate.screen("/opt/app/k"),
+        Screened::Withheld(MachineStateMember::PrivateKeyFile)
+    );
+    assert_eq!(
+        gate.screen("/etc/myapp/registration.json"),
+        Screened::Withheld(MachineStateMember::InsightsState)
+    );
+    assert_eq!(gate.screen("/etc/app.conf"), Screened::Ordinary);
+}
+
+/// On disk, with names that are not UTF-8 (Linux only: macOS file
+/// systems refuse such names with `EILSEQ`): a Latin-1 name directly
+/// under `/etc`, which cannot spell the `krb5.keytab.` stem, leaves no
+/// gap and the scan's gate reads on; a name that is not UTF-8 below a
+/// rule that takes any name leaves a gap at its directory, and the gate
+/// then withholds everything.
+#[cfg(target_os = "linux")]
+#[test]
+fn raw_names_on_disk_leave_a_gap_only_where_a_rule_could_match() {
+    use std::os::unix::ffi::OsStrExt;
+    let unrelated = tempfile::tempdir().expect("a host root");
+    let etc = unrelated.path().join("etc");
+    std::fs::create_dir_all(&etc).unwrap();
+    std::fs::write(
+        etc.join(std::ffi::OsStr::from_bytes(b"\xe9quipe.conf")),
+        "x = 1\n",
+    )
+    .unwrap();
+    put(unrelated.path(), "/etc/app.conf", b"a = 1\n");
+    let host = RootedHost::new(unrelated.path());
+    let gate = ScreenedExecutor::new(&host);
+    assert_eq!(gate.gap(), None);
+    assert_eq!(gate.screen("/etc/app.conf"), Screened::Ordinary);
+    assert_eq!(
+        gate.read_file(Path::new("/etc/app.conf")).unwrap(),
+        "a = 1\n"
+    );
+
+    let matching = tempfile::tempdir().expect("a host root");
+    let private = matching.path().join("etc/pki/tls/private");
+    std::fs::create_dir_all(&private).unwrap();
+    std::fs::write(
+        private.join(std::ffi::OsStr::from_bytes(b"key\xff.pem")),
+        KEY,
+    )
+    .unwrap();
+    put(matching.path(), "/etc/app.conf", b"a = 1\n");
+    let host = RootedHost::new(matching.path());
+    let gate = ScreenedExecutor::new(&host);
+    let gap = gate.gap().expect("a name the private-key rule takes");
+    assert_eq!(gap.dir, "/etc/pki/tls/private");
+    assert!(matches!(
+        gate.screen("/etc/app.conf"),
+        Screened::Withheld(_)
+    ));
 }

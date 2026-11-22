@@ -1621,6 +1621,16 @@ VARIANT_ID="workstation"
             ))
         }
 
+        fn read_dir_raw(
+            &self,
+            _path: &std::path::Path,
+        ) -> std::io::Result<Vec<std::ffi::OsString>> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            ))
+        }
+
         fn open_read(
             &self,
             _path: &std::path::Path,

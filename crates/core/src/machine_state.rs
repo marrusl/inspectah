@@ -612,7 +612,9 @@ fn pem_label<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
 
 use crate::traits::executor::{ExecResult, Executor, FileKind, FileMetadata, HostRead};
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 /// How many directories deep the screen follows a withheld rule's tree,
@@ -667,7 +669,8 @@ pub enum ScreenGapCause {
     TooDeep,
     /// The rules' trees hold more entries than one build examines.
     TooManyEntries,
-    /// An entry's name is not UTF-8, so it cannot be named to `stat` it.
+    /// An entry's name is not UTF-8 and a rule could match it, or match
+    /// below it, so the rule's spelling of it cannot be recorded.
     NameNotUtf8,
     /// The directory could not be listed in full.
     Unlistable(io::ErrorKind),
@@ -713,14 +716,15 @@ impl std::error::Error for ScreenGap {}
 impl MachineStateScreen {
     /// Stats every host file a withheld rule matches, reading no file
     /// content. Each `Glob` and `Prefix` rule's tree is listed from the
-    /// rule's own directory, following directory links (each directory
-    /// once on any one path, so a link back up ends there) and keeping
-    /// the logical spelling the rule matches, and descending only where a
-    /// match is still possible. Where the listing cannot be completed the
-    /// build records a [`ScreenGap`] and stops. `BasenameSuffix` rules are
+    /// rule's own directory, by the raw bytes of each entry's name,
+    /// following directory links (each directory once per matching
+    /// state, so a link cycle ends) and keeping the logical spelling the
+    /// rule matches, and descending only where a match is still
+    /// possible. Where the listing cannot be completed the build records
+    /// a [`ScreenGap`] and stops. `BasenameSuffix` rules are
     /// not enumerated: that would take a walk of `/etc`, and a keytab
     /// linked under another name is caught by its header.
-    pub fn build(exec: &dyn Executor) -> Self {
+    pub fn build(exec: &dyn HostRead) -> Self {
         let mut screen = Self::default();
         let mut budget = SCREEN_MAX_ENTRIES;
         for (rule, target) in RULES {
@@ -807,7 +811,7 @@ impl RuleWalk<'_> {
     fn walk(
         &mut self,
         inodes: &mut HashMap<(u64, u64), MachineStateMember>,
-        exec: &dyn Executor,
+        exec: &dyn HostRead,
         logical: &str,
         physical: &Path,
         state: &MatchState,
@@ -819,7 +823,7 @@ impl RuleWalk<'_> {
             member,
             cause,
         };
-        let names = match exec.read_dir_strict(physical) {
+        let names = match exec.read_dir_raw(physical) {
             Ok(names) => names,
             Err(e)
                 if matches!(
@@ -831,21 +835,24 @@ impl RuleWalk<'_> {
             }
             Err(e) => return Err(gap(logical, ScreenGapCause::Unlistable(e.kind()))),
         };
-        for name in names {
-            // A name read lossily: the part before the first replaced
-            // byte is what the real name starts with.
-            if let Some(cut) = name.find(char::REPLACEMENT_CHARACTER) {
-                if may_match_below(self.rule, &format!("{logical}/{}", &name[..cut])) {
-                    return Err(gap(logical, ScreenGapCause::NameNotUtf8));
-                }
-                continue;
-            }
+        for raw in names {
             *self.budget = self
                 .budget
                 .checked_sub(1)
                 .ok_or_else(|| gap(logical, ScreenGapCause::TooManyEntries))?;
+            // A name that is not UTF-8 has no spelling the rule's string
+            // can match or the gate can name, so it is decided from its
+            // bytes: a gap where the rule could match it or below it,
+            // else nothing. A UTF-8 name, a literal U+FFFD included, is an
+            // ordinary name.
+            let Some(name) = raw.to_str() else {
+                if self.nfa.read(state, raw_name_syms(&raw)).any_live() {
+                    return Err(gap(logical, ScreenGapCause::NameNotUtf8));
+                }
+                continue;
+            };
             let child = format!("{logical}/{name}");
-            let child_physical = physical.join(&name);
+            let child_physical = physical.join(name);
             // A dangling or looping link names no file to read through it.
             let Ok(meta) = exec.file_metadata(&child_physical) else {
                 continue;
@@ -886,11 +893,30 @@ impl RuleWalk<'_> {
 #[derive(Debug, Clone, Copy)]
 enum PathSym {
     Char(char),
+    /// A run of bytes in a raw name that is not UTF-8. No pattern
+    /// character equals it, since every character is valid UTF-8; a `*`
+    /// or `?` matches it.
+    NotUtf8,
+}
+
+/// A raw directory entry name as automaton symbols: its valid UTF-8 runs
+/// character by character, each invalid run as one [`PathSym::NotUtf8`].
+fn raw_name_syms(name: &OsStr) -> Vec<PathSym> {
+    let mut syms = Vec::new();
+    for chunk in name.as_bytes().utf8_chunks() {
+        syms.extend(chunk.valid().chars().map(PathSym::Char));
+        if !chunk.invalid().is_empty() {
+            syms.push(PathSym::NotUtf8);
+        }
+    }
+    syms
 }
 
 /// A walked rule's pattern read as a nondeterministic automaton over a
 /// path's characters, with `*` matching any run and `?` one character,
-/// as [`glob_match_simple`] does. A `Prefix` rule is its prefix then `*`.
+/// as [`glob_match_simple`] does. That is exact for [`match_glob`], whose
+/// other two cases are subsets of the whole-path match. A `Prefix` rule
+/// is its prefix then `*`.
 struct RuleNfa {
     pat: Vec<char>,
 }
@@ -908,6 +934,11 @@ impl MatchState {
     /// of the end.
     fn alive_below(&self) -> bool {
         self.0[..self.0.len() - 1].iter().any(|&live| live)
+    }
+
+    /// Whether the path read so far, or some longer one, can match.
+    fn any_live(&self) -> bool {
+        self.0.iter().any(|&live| live)
     }
 
     /// Whether every position live in `other` is live here.
@@ -969,28 +1000,6 @@ impl RuleNfa {
             }
         }
     }
-}
-
-/// Whether some path starting with `start` can match `rule`: the rule's
-/// pattern, read from its left, has not yet failed on `start`.
-fn may_match_below(rule: PathMatch, start: &str) -> bool {
-    match rule {
-        PathMatch::Exact(path) => path.starts_with(start),
-        PathMatch::Prefix(prefix) => start.starts_with(prefix) || prefix.starts_with(start),
-        PathMatch::Glob(pattern) => glob_start_alive(pattern, start),
-        PathMatch::BasenameSuffix(_) => true,
-    }
-}
-
-/// Whether `glob_match_simple(pattern, text)` holds for some `text` that
-/// begins with `start` and is longer than it: the pattern positions
-/// reachable after reading `start`, short of the end, are not empty.
-/// Exact for [`match_glob`], whose other two cases are subsets of the
-/// whole-path match.
-fn glob_start_alive(pattern: &str, start: &str) -> bool {
-    let nfa = RuleNfa::glob(pattern);
-    nfa.read(&nfa.start(), start.chars().map(PathSym::Char))
-        .alive_below()
 }
 
 /// The directory a glob's fixed stem names: everything before the
@@ -1495,10 +1504,23 @@ mod tests {
         assert_eq!(normal_path("//"), None);
     }
 
+    fn nfa(rule: PathMatch) -> RuleNfa {
+        match rule {
+            Glob(pattern) => RuleNfa::glob(pattern),
+            Prefix(prefix) => RuleNfa::prefix(prefix),
+            other => panic!("only Glob and Prefix rules are walked: {other:?}"),
+        }
+    }
+
+    fn state(rule: PathMatch, start: &str) -> MatchState {
+        let nfa = nfa(rule);
+        nfa.read(&nfa.start(), start.chars().map(PathSym::Char))
+    }
+
     /// The inventory descends only where a rule can still match, judged
     /// as `match_glob` judges a whole path.
     #[test]
-    fn may_match_below_prunes_only_dead_branches() {
+    fn the_rule_automaton_prunes_only_dead_branches() {
         let cases: &[(PathMatch, &str, bool)] = &[
             (Glob("/etc/krb5.keytab.*"), "/etc/krb5.keytab.d/", true),
             (Glob("/etc/krb5.keytab.*"), "/etc/ssh/", false),
@@ -1537,13 +1559,74 @@ mod tests {
             ),
         ];
         for (rule, start, want) in cases {
-            assert_eq!(may_match_below(*rule, start), *want, "{rule:?} {start}");
+            assert_eq!(state(*rule, start).alive_below(), *want, "{rule:?} {start}");
         }
         // Agrees with match_glob on what it lets through.
         assert!(match_glob(
             "/etc/cockpit/ws-certs.d/*.key",
             "/etc/cockpit/ws-certs.d/sub/a.key"
         ));
+    }
+
+    /// A directory reached again under a state an earlier listing covers
+    /// holds nothing new; one reached under a state no earlier listing
+    /// covers, such as `.state/` linked back to its own directory, does.
+    #[test]
+    fn a_matching_state_covers_only_what_it_matches() {
+        let insights = Glob("/etc/insights-client/.*");
+        let root = state(insights, "/etc/insights-client/");
+        let dot_state = state(insights, "/etc/insights-client/.state/");
+        let twice = state(insights, "/etc/insights-client/.state/.state/");
+        assert!(!root.covers(&dot_state));
+        assert!(!dot_state.covers(&root));
+        assert!(dot_state.covers(&twice));
+        assert!(root.covers(&root));
+    }
+
+    /// A raw name is matched by its bytes: a run that is not UTF-8 equals
+    /// no pattern character but a wildcard matches it.
+    #[test]
+    fn a_raw_name_could_match_only_where_a_wildcard_takes_it() {
+        use std::os::unix::ffi::OsStrExt;
+        let cases: &[(PathMatch, &str, &[u8], bool)] = &[
+            (
+                Glob("/etc/krb5.keytab.*"),
+                "/etc/",
+                b"\xe9quipe.conf",
+                false,
+            ),
+            (
+                Glob("/etc/krb5.keytab.*"),
+                "/etc/",
+                b"krb5.keytab.\xff",
+                true,
+            ),
+            (Glob("/etc/krb5.keytab.*"), "/etc/", b"krb5\xff", false),
+            (
+                Prefix("/etc/pki/tls/private/"),
+                "/etc/pki/tls/private/",
+                b"k\xff.pem",
+                true,
+            ),
+            (
+                Glob("/etc/insights-client/.*"),
+                "/etc/insights-client/",
+                b"\xffstate",
+                false,
+            ),
+            (
+                Glob("/etc/insights-client/.*"),
+                "/etc/insights-client/",
+                b".\xff",
+                true,
+            ),
+        ];
+        for (rule, dir, name, want) in cases {
+            let nfa = nfa(*rule);
+            let at = state(*rule, dir);
+            let read = nfa.read(&at, raw_name_syms(OsStr::from_bytes(name)));
+            assert_eq!(read.any_live(), *want, "{rule:?} {dir} {name:?}");
+        }
     }
 
     #[test]
