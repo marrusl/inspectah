@@ -447,6 +447,24 @@ pub fn default_carried_unit_owners(snap: &InspectionSnapshot) -> HashSet<String>
         .collect()
 }
 
+/// The unit owners the install line names when they are included: those
+/// carried by default ([`default_carried_unit_owners`]), and those held
+/// only because a repo is lost in this export ([`OwnerHold::RepoExcluded`]).
+///
+/// An included owner of the second kind is one the operator included,
+/// through the package, its repo or a group: the scan's defaults exclude
+/// every held owner, and refine's projection excludes the rest
+/// ([`hold_owners_losing_a_repo`]). Its include matches the default refine
+/// set when the repo was still carried, so the include-changed test does
+/// not name it; this does, as an included owner of any other hold is.
+pub fn named_unit_owners(snap: &InspectionSnapshot) -> HashSet<String> {
+    unit_owner_holds(snap)
+        .into_iter()
+        .filter(|(_, hold)| matches!(hold, None | Some(OwnerHold::RepoExcluded)))
+        .map(|(id, _)| id)
+        .collect()
+}
+
 /// Every auto package that owns a unit enabled on the source host, by
 /// `name.arch` id, with the [`owner_hold`] that keeps it from being
 /// carried by default, if any: an auto package, not a leaf, outside the
@@ -607,14 +625,15 @@ fn repos_lost_in_export(rpm: &RpmSection, repos: &InstallRepos) -> HashSet<Strin
 /// Exclude every included unit owner this export holds because it may
 /// pull in a package whose repo the export does not carry
 /// ([`OwnerHold::RepoExcluded`]), except the `name.arch` ids in `by_hand`,
-/// which the operator included explicitly.
+/// which the operator included explicitly: by the package's own toggle,
+/// or by its repo's or a group's, whichever reached it last.
 ///
 /// The scan's defaults exclude such an owner with the other held ones
 /// ([`apply_scan_package_defaults`]). Refine sets its defaults when it
 /// opens a snapshot, before the operator excludes any repo, so it runs
 /// this over every projection: the owner is held while the repo is
 /// excluded and carried again once it is back. An owner the operator
-/// included by hand installs as any held owner they include does.
+/// included installs as any held owner they include does.
 pub fn hold_owners_losing_a_repo(snap: &mut InspectionSnapshot, by_hand: &HashSet<String>) {
     let held: HashSet<String> = unit_owner_holds(snap)
         .into_iter()

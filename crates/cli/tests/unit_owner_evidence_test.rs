@@ -13,7 +13,8 @@
 //!   package the host did not have, is not carried by default and is
 //!   listed with the reason; included, it installs as released. So is
 //!   one that needs a package from a repo refine excludes, while it is
-//!   excluded. A carried owner's dependency keeps its
+//!   excluded, unless the operator includes it through the package, its
+//!   repo or a group. A carried owner's dependency keeps its
 //!   recorded `systemctl disable`, guarded.
 //! - An auto package the operator includes brings its dependencies: their
 //!   unit commands survive, guarded. It installs as released.
@@ -104,9 +105,17 @@ fn collected(host: UnitHost) -> InspectionSnapshot {
 /// [`collected`] on a host whose `dnf repolist --enabled` prints
 /// `enabled_repos`.
 fn collected_with_repos(host: UnitHost, enabled_repos: &str) -> InspectionSnapshot {
+    collected_with(host, enabled_repos, |exec| exec)
+}
+
+/// [`collected_with_repos`] on a host whose executor `more` also answers.
+fn collected_with(
+    host: UnitHost,
+    enabled_repos: &str,
+    more: impl FnOnce(MockExecutor) -> MockExecutor,
+) -> InspectionSnapshot {
     let baseline = host.baseline();
-    let exec: MockExecutor = host
-        .build()
+    let exec: MockExecutor = more(host.build())
         .with_command("dnf repolist --enabled -q", ok(enabled_repos))
         .with_command_prefix("dnf repoquery --available", ok(""))
         .with_command("find /var/cache/dnf -name *.rpm -type f", ok(""));
@@ -699,6 +708,139 @@ fn a_requirement_the_host_could_not_resolve_holds_its_owner() {
         let run = exports(host);
         assert_agent_held(&run, case, UNRESOLVED_HOLD);
     }
+}
+
+/// The host's enabled repos, the custom `tools` and `vendor` among them.
+const TOOLS_ENABLED_REPOS: &str = "repo id    repo name\nappstream  AppStream\nbaseos     BaseOS\n\
+     tools      Tools\nvendor     Vendor\n";
+
+/// The enabled custom repo `tools`, carried with a source.
+const TOOLS_REPO: &str = "[tools]\nname=Tools\nbaseurl=https://example.invalid/tools\n\
+     enabled=1\ngpgcheck=0\n";
+
+/// The installed group whose one member is `tuned`.
+const TUNING_GROUP: &str = "Tuning";
+
+/// The installed `Tuning` group, as `dnf group list --installed` and
+/// `dnf group info` print it.
+fn with_tuning_group(exec: MockExecutor) -> MockExecutor {
+    exec.with_command(
+        "env LC_ALL=C dnf group list --installed",
+        ok(&format!("Installed Groups:\n   {TUNING_GROUP}\n")),
+    )
+    .with_command(
+        &format!("env LC_ALL=C dnf group info {TUNING_GROUP}"),
+        ok(&format!(
+            "Group: {TUNING_GROUP}\n Mandatory Packages:\n   tuned\n"
+        )),
+    )
+}
+
+/// The refine export after the operator includes `dmidecode`, so the
+/// `vendor` toggle has a member, then excludes `vendor` and the config
+/// entry that would still stage `vendor.repo`, then includes `item_id`.
+/// Asserts `tuned` is held before that last step, and listed as included
+/// after it.
+fn include_after_losing_vendor(snapshot: InspectionSnapshot, item_id: ItemId) -> Surfaces {
+    let via = format!("{item_id:?}");
+    let mut session = RefineSession::new(snapshot);
+    set_package(&mut session, "dmidecode", "x86_64", true);
+    set_repo(&mut session, "vendor", false);
+    exclude_config(&mut session, VENDOR_REPO_PATH);
+    let held = surfaces_of(&session);
+    assert!(
+        held.not_carried_block()
+            .iter()
+            .any(|line| line.contains("tuned") && line.contains(REPO_EXCLUDED_HOLD)),
+        "{via}: vendor excluded, tuned is held:\n{}",
+        held.containerfile
+    );
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id,
+            include: true,
+        })
+        .unwrap_or_else(|e| panic!("include {via}: {e}"));
+    let shown = session
+        .view()
+        .packages
+        .iter()
+        .find(|p| p.entry.name == "tuned")
+        .unwrap_or_else(|| panic!("{via}: tuned is in the package list"));
+    assert!(shown.entry.disposition.is_included(), "{via}: {shown:?}");
+    surfaces_of(&session)
+}
+
+/// `tuned`, from the enabled custom repo `tools`, owns the enabled
+/// `tuned.service` and recommends `dmidecode`, from the enabled custom
+/// repo `vendor`; `app` needs neither. With `vendor` excluded, `tuned` is
+/// held. The operator then includes `tuned` through its repository
+/// `tools`, or on a host where it is the member of the group `Tuning`,
+/// through that group, never by its own toggle. That inclusion stands as
+/// one by the package's toggle does: through the repo the install line is
+/// beta.6's, `app tuned`; through the group, the group install names it.
+#[test]
+fn an_owner_included_through_its_repo_or_group_is_not_held() {
+    let host = || {
+        base_host()
+            .file("/etc/yum.repos.d/tools.repo", TOOLS_REPO)
+            .file(VENDOR_REPO_PATH, VENDOR_REPO)
+            .unit("tuned.service", "enabled")
+            .vendor_unit("tuned.service", WANTED_UNIT, Some("tuned"))
+            .preset("disable *")
+            .package_from("tuned", "tools")
+            .package_from("dmidecode", "vendor")
+            .recommends("tuned", &["dmidecode"])
+    };
+
+    let by_package = include_after_losing_vendor(
+        collected_with_repos(host(), TOOLS_ENABLED_REPOS),
+        ItemId::Package {
+            name: "tuned".into(),
+            arch: "x86_64".into(),
+        },
+    );
+    assert_eq!(
+        by_package.install_names(),
+        ["app", "tuned"],
+        "package tuned: the install line is beta.6's:\n{}",
+        by_package.containerfile
+    );
+
+    let by_repo = include_after_losing_vendor(
+        collected_with_repos(host(), TOOLS_ENABLED_REPOS),
+        ItemId::Repo {
+            path: "tools".into(),
+        },
+    );
+    assert_eq!(
+        by_repo.install_names(),
+        ["app", "tuned"],
+        "repo tools: the install line is beta.6's:\n{}",
+        by_repo.containerfile
+    );
+
+    let by_group = include_after_losing_vendor(
+        collected_with(host(), TOOLS_ENABLED_REPOS, with_tuning_group),
+        ItemId::Group {
+            name: TUNING_GROUP.into(),
+        },
+    );
+    assert!(
+        by_group.containerfile.contains(&format!(
+            "RUN dnf group install -y \\\n    \"{TUNING_GROUP}\""
+        )),
+        "group Tuning: the group install names it:\n{}",
+        by_group.containerfile
+    );
+    assert!(
+        !by_group
+            .not_carried_block()
+            .iter()
+            .any(|l| l.contains("tuned")),
+        "group Tuning: tuned is not held:\n{}",
+        by_group.containerfile
+    );
 }
 
 /// `agent` owns the user-enabled `agent.service` and needs `agent-helper`,

@@ -34,9 +34,7 @@ use super::configtree::{
     staged_count, staged_unit_file, staged_writes, unstaged_files, validate_path,
 };
 use super::language_packages;
-use super::not_carried::{
-    NOT_CARRIED_REASON, default_carried_unit_owners, export_not_carried_packages,
-};
+use super::not_carried::{NOT_CARRIED_REASON, export_not_carried_packages, named_unit_owners};
 use super::repoless::PackageRoute;
 use super::safety::{
     BareWord, CopyToken, ExportPath, ExportToken, double_quoted_word_refusal, is_shell_operand,
@@ -919,7 +917,7 @@ fn packages_section_lines(
     let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
     let pulled_in = super::unit_plan::leaf_tree_pulled_in(rpm, &install_repos);
     let leaf_pulled_in = super::unit_plan::pulled_in_by_installed_leaves(rpm, &install_repos);
-    let unit_owners = default_carried_unit_owners(snap);
+    let unit_owners = named_unit_owners(snap);
 
     let installable_packages: Vec<&PackageEntry> = rpm
         .packages_added
@@ -964,7 +962,9 @@ fn packages_section_lines(
             // named, so this cannot leave out two owners that need each
             // other, as asking every root would. Every package such an
             // owner may pull in comes from a repo the image enables
-            // (`not_carried::owner_hold`), so it needs no disabled repo.
+            // (`not_carried::owner_hold`), so it needs no disabled repo;
+            // one held on a lost repo is here only when the operator
+            // included it (`not_carried::named_unit_owners`).
             if unit_owners.contains(&id) && !leaf_pulled_in.contains(&id) {
                 return true;
             }

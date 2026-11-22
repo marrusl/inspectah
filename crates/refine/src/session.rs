@@ -16,7 +16,7 @@ use inspectah_pipeline::render::configtree::unmanaged_withheld;
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
-use inspectah_pipeline::render::not_carried::{default_carried_unit_owners, not_carried_notice};
+use inspectah_pipeline::render::not_carried::{named_unit_owners, not_carried_notice};
 use inspectah_pipeline::render::repoless::{InstallRepos, PackageRoute, route_for};
 
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
@@ -3277,20 +3277,27 @@ impl RefineSession {
         // A unit owner carried by default that may pull in a package from
         // a repo this projection excludes is held on it, and carried again
         // once the repo is back. The include decisions it reads are the
-        // projection's, as above; one the operator made by hand stands.
+        // projection's, as above; one the operator made, through the
+        // package, its repo or a group, stands.
         inspectah_pipeline::render::not_carried::hold_owners_losing_a_repo(
             &mut snap,
-            &self.packages_included_by_hand(),
+            &self.packages_included_explicitly(),
         );
 
         snap
     }
 
-    /// The `name.arch` ids of the packages whose last `SetInclude` in the
-    /// active op stack includes them: the ones the operator included by
-    /// hand.
-    fn packages_included_by_hand(&self) -> HashSet<String> {
+    /// The `name.arch` ids of the packages the operator included
+    /// explicitly: those whose last `SetInclude` in the active op stack
+    /// that reaches them includes them, whether it names the package, a
+    /// repo it is attributed to, or a group it is a member of. Each op
+    /// reaches the packages the projection applies it to.
+    fn packages_included_explicitly(&self) -> HashSet<String> {
         let mut included = HashSet::new();
+        let Some(rpm) = self.original.rpm.as_ref() else {
+            return included;
+        };
+        let id_of = |pkg: &PackageEntry| canonical_package_id(&pkg.name, &pkg.arch);
         for entry in &self.timeline[..self.cursor] {
             let ops: &[RefinementOp] = match entry {
                 TimelineEntry::Op(op) => std::slice::from_ref(op),
@@ -3298,12 +3305,37 @@ impl RefineSession {
                 TimelineEntry::View(_) => continue,
             };
             for op in ops {
-                if let RefinementOp::SetInclude {
-                    item_id: ItemId::Package { name, arch },
-                    include,
-                } = op
-                {
-                    let id = canonical_package_id(name, arch);
+                let RefinementOp::SetInclude { item_id, include } = op else {
+                    continue;
+                };
+                let reached: Vec<String> = match item_id {
+                    ItemId::Package { name, arch } => vec![canonical_package_id(name, arch)],
+                    ItemId::Repo { path: section_id } => {
+                        let repo = self.repo_index.repo_identity(section_id);
+                        rpm.packages_added
+                            .iter()
+                            .filter(|p| package_attributed_to_repo(p, &self.repo_index, repo))
+                            .filter(|p| !p.locked)
+                            .map(id_of)
+                            .collect()
+                    }
+                    ItemId::Group { name } => {
+                        let members: Vec<String> = self
+                            .installed_groups()
+                            .iter()
+                            .find(|g| g.name == *name)
+                            .map(|g| g.members.clone())
+                            .unwrap_or_default();
+                        rpm.packages_added
+                            .iter()
+                            .filter(|p| members.contains(&p.name))
+                            .filter(|p| !(*include && p.locked))
+                            .map(id_of)
+                            .collect()
+                    }
+                    _ => continue,
+                };
+                for id in reached {
                     if *include {
                         included.insert(id);
                     } else {
@@ -3551,8 +3583,10 @@ impl RefineSession {
             if !is_aggregate && let Some(leaf_names) = rpm.leaf_packages.as_ref() {
                 let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
                 // Auto packages that own an enabled unit are carried by
-                // default, so the operator sees them beside the leaves.
-                let unit_owners = default_carried_unit_owners(&projected);
+                // default, so the operator sees them beside the leaves, as
+                // one held on a lost repo is: it is included only when the
+                // operator included it, and the export names it then.
+                let unit_owners = named_unit_owners(&projected);
 
                 // Ungrouped group members must bypass the leaf filter so they
                 // appear as individual packages after ungrouping. Without this,
