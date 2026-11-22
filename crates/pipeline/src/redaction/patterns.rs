@@ -46,6 +46,47 @@ fn is_aws_key_byte(b: u8) -> bool {
     b.is_ascii_uppercase() || b.is_ascii_digit()
 }
 
+/// The key names the generic credential pattern ([`GENERIC_CREDENTIAL`])
+/// and the credential name test ([`is_credential_name`]) share, as a regex
+/// alternation, so what is detected in a file and what is detected by name
+/// on the kernel command line cannot drift apart.
+macro_rules! credential_keys {
+    () => {
+        "password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key|authtok"
+    };
+}
+
+/// The generic `key=value` credential pattern's source; see its entry in
+/// [`PATTERNS`].
+const GENERIC_CREDENTIAL: &str = concat!(
+    r"(?i)(?:^|\b|_)(?:",
+    credential_keys!(),
+    r")[ \t]*[=:][ \t]*(?P<secret>\S+)"
+);
+
+/// A name that ends in a credential key, at the boundary
+/// [`GENERIC_CREDENTIAL`] requires before one.
+static CREDENTIAL_NAME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(r"(?i)(?:^|\b|_)(?:", credential_keys!(), r")$"))
+        .expect("the credential name pattern compiles")
+});
+
+/// Returns true if `name` is one the generic credential pattern treats as
+/// a credential key when it comes before an `=`: `password`,
+/// `rd.iscsi.password`, `db_password`, `api_key`.
+pub(crate) fn is_credential_name(name: &str) -> bool {
+    CREDENTIAL_NAME.is_match(name)
+}
+
+/// The index in [`PATTERNS`] of the generic credential pattern, whose
+/// finding kind, remediation and token a credential found by name take.
+pub(crate) static GENERIC_CREDENTIAL_PATTERN: LazyLock<usize> = LazyLock::new(|| {
+    PATTERNS
+        .iter()
+        .position(|pat| pat.regex.as_str() == GENERIC_CREDENTIAL)
+        .expect("PATTERNS holds the generic credential pattern")
+});
+
 /// All compiled patterns. `LazyLock` ensures they compile exactly once.
 pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
     vec![
@@ -116,10 +157,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         // so `proxy_password = x` still parses as INI and
         // `Environment=API_TOKEN=x` is still a valid assignment.
         SecretPattern {
-            regex: Regex::new(
-                r"(?i)(?:^|\b|_)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key|authtok)[ \t]*[=:][ \t]*(?P<secret>\S+)",
-            )
-            .unwrap(),
+            regex: Regex::new(GENERIC_CREDENTIAL).unwrap(),
             finding_kind: FindingKind::Password,
             filter_nss_pam_tokens: true,
             spares_repo_id_headers: true,

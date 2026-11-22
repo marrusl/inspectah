@@ -51,10 +51,20 @@ by splitting on whitespace or matching raw text:
   whitespace inside a UTF-8 character where `kernel_args` cannot split.
   It does not apply the shell filter: the file is TOML, and a retained
   argument is written in its original spelling through the escaper.
-- **Redaction** (`redact_kernel_cmdline` in `redaction/engine.rs`) runs
-  the generic patterns to find a secret, then replaces the whole parsed
-  value of each argument a secret falls in (the whole argument when the
-  secret touches the name), keeping the quotes. A pattern can stop at
+- **Redaction** (`redact_kernel_cmdline` in `redaction/engine.rs`) finds
+  secrets with `kernel_cmdline_matches`, which detection (`scan_content`)
+  uses too: the generic patterns, plus each argument whose parsed name is
+  a credential name (`patterns::is_credential_name`, the generic
+  pattern's own key list, with `-` read as `_` as the kernel does). Such
+  an argument's whole non-empty value is the secret, whatever it holds:
+  the generic pattern needs a non-space character after the `=`, so
+  `"rd.iscsi.password=<U+2003>bravo7k"` matched no pattern and shipped
+  whole. The generic pattern's own matches on a credential name are
+  dropped, since from an empty value it ran on into the next argument;
+  an empty value or a name with no `=` is no finding. Redaction then
+  replaces the whole parsed value of each argument a secret falls in
+  (the whole argument when the secret touches the name), keeping the
+  quotes. A pattern can stop at
   the first space, so replacing only its match left
   `"rd.iscsi.password=REDACTED_PASSWORD_1 bravo"` in the snapshot. The
   cmdline hint check reads the value to the end of the argument, quotes

@@ -11,9 +11,12 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 use std::sync::LazyLock;
 
-use crate::redaction::patterns::{PATTERNS, SECRET_GROUP, SecretPattern, scan_shadow};
+use crate::redaction::patterns::{
+    GENERIC_CREDENTIAL_PATTERN, PATTERNS, SECRET_GROUP, SecretPattern, is_credential_name,
+    scan_shadow,
+};
 use crate::render::language_packages::scrub_manifest_auth;
-use crate::render::safety::kernel_args;
+use crate::render::safety::{KernelArg, kernel_args};
 use inspectah_core::types::destination::Destination;
 use inspectah_core::types::repo::{SectionId, is_repo_id, parse_repo_sections};
 
@@ -940,8 +943,8 @@ fn is_kernel_cmdline(path: Option<&str>) -> bool {
 
 /// Redacts a kernel command line one kernel argument at a time.
 ///
-/// The generic patterns find where a secret is, but a pattern's secret can
-/// stop short of what the kernel reads as the value: in
+/// [`kernel_cmdline_matches`] finds where a secret is, but a pattern's
+/// secret can stop short of what the kernel reads as the value: in
 /// `"rd.iscsi.password=alpha bravo"` the whole argument is quoted, so the
 /// value is `alpha bravo` while the pattern stops at `alpha`. So each
 /// argument ([`kernel_args`]) a secret falls in has its whole parsed value
@@ -950,14 +953,7 @@ fn is_kernel_cmdline(path: Option<&str>) -> bool {
 /// stays. No part of a secret argument's value survives, whatever the
 /// quoting.
 fn redact_kernel_cmdline(cmdline: &str, registry: &mut CounterRegistry) -> String {
-    let mut matches: Vec<(usize, EligibleMatch)> = Vec::new();
-    for (idx, pat) in PATTERNS.iter().enumerate() {
-        for em in collect_eligible_matches(pat, cmdline, Some(KERNEL_CMDLINE_PATH)) {
-            matches.push((idx, em));
-        }
-    }
-    dedup_overlapping_matches(&mut matches);
-
+    let matches = kernel_cmdline_matches(cmdline);
     let args = kernel_args(cmdline);
     let overlaps = |a: &Range<usize>, b: &Range<usize>| a.start < b.end && b.start < a.end;
     // Each span to replace, with the pattern that found its secret.
@@ -1000,6 +996,66 @@ fn redact_kernel_cmdline(cmdline: &str, registry: &mut CounterRegistry) -> Strin
         content.replace_range(span, &token);
     }
     content
+}
+
+/// Returns true if the kernel reads `arg` as a credential: its name is one
+/// the generic credential pattern treats as a credential key. The kernel
+/// compares parameter names with `-` and `_` as one character (`parameq`),
+/// so `api-key` is `api_key`.
+fn is_credential_kernel_arg(arg: &KernelArg<'_>) -> bool {
+    is_credential_name(&arg.name().replace('-', "_"))
+}
+
+/// The secrets on a kernel command line, for detection and replacement
+/// alike.
+///
+/// Every pattern searches the command line as it searches a file, with one
+/// change: an argument with a credential name ([`is_credential_kernel_arg`])
+/// is found by its name, and its whole non-empty value is the secret,
+/// whatever the value holds. The generic pattern needs `\S` right after
+/// the `=`, so a value starting with a Unicode space (`"password=\u{2003}x"`)
+/// was found by no pattern and kept whole. The generic pattern's own
+/// matches on such a name are dropped: with an empty value
+/// (`rd.iscsi.password= nosmt=force`) it ran on into the next argument.
+/// An empty value (`password=`, `password=""`) holds nothing to redact and
+/// is not a finding; neither is a credential name with no `=`.
+fn kernel_cmdline_matches(cmdline: &str) -> Vec<(usize, EligibleMatch)> {
+    let generic = *GENERIC_CREDENTIAL_PATTERN;
+    let args = kernel_args(cmdline);
+    let credential_args: Vec<&KernelArg<'_>> = args
+        .iter()
+        .filter(|arg| is_credential_kernel_arg(arg))
+        .collect();
+    let in_credential_name = |pos: usize| {
+        credential_args
+            .iter()
+            .any(|arg| arg.name_span().contains(&pos))
+    };
+
+    let mut matches: Vec<(usize, EligibleMatch)> = Vec::new();
+    for (idx, pat) in PATTERNS.iter().enumerate() {
+        for em in collect_eligible_matches(pat, cmdline, Some(KERNEL_CMDLINE_PATH)) {
+            if !(idx == generic && in_credential_name(em.claim.start)) {
+                matches.push((idx, em));
+            }
+        }
+    }
+    for arg in &credential_args {
+        let Some(value) = arg.value_span().filter(|v| !v.is_empty()) else {
+            continue;
+        };
+        matches.push((
+            generic,
+            EligibleMatch {
+                claim: arg.raw_span(),
+                start: value.start,
+                end: value.end,
+                line_num: cmdline[..value.start].matches('\n').count() + 1,
+            },
+        ));
+    }
+    dedup_overlapping_matches(&mut matches);
+    matches
 }
 
 /// Where a hinted value ends, which is what must have been replaced for the
@@ -1196,14 +1252,20 @@ pub fn scan_content(content: &str, path: &str) -> Vec<RedactionFinding> {
         findings.extend(scan_shadow(content, path));
     }
 
-    // Generic pattern matching — collect from all patterns, then dedup overlaps
-    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-    for (idx, pat) in PATTERNS.iter().enumerate() {
-        for em in collect_eligible_matches(pat, content, Some(path)) {
-            all_matches.push((idx, em));
+    // Generic pattern matching: collect from all patterns, then dedup
+    // overlaps. The kernel command line also finds credentials by name.
+    let all_matches = if is_kernel_cmdline(Some(path)) {
+        kernel_cmdline_matches(content)
+    } else {
+        let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+        for (idx, pat) in PATTERNS.iter().enumerate() {
+            for em in collect_eligible_matches(pat, content, Some(path)) {
+                all_matches.push((idx, em));
+            }
         }
-    }
-    dedup_overlapping_matches(&mut all_matches);
+        dedup_overlapping_matches(&mut all_matches);
+        all_matches
+    };
     for (pat_idx, em) in all_matches {
         let pat = &PATTERNS[pat_idx];
         findings.push(RedactionFinding {
@@ -4145,6 +4207,24 @@ baseurl = https://cdn.redhat.com
                 "# ro rd.iscsi.password=bravo7k",
                 "# ro rd.iscsi.password=REDACTED_PASSWORD_1",
             ),
+            // A value starting with a space character, or made only of
+            // them, is still the whole value: the name finds it.
+            (
+                "ro \"rd.iscsi.password=\u{2003}bravo7k\" nosmt=force",
+                "ro \"rd.iscsi.password=REDACTED_PASSWORD_1\" nosmt=force",
+            ),
+            (
+                "ro rd.iscsi.password=\"\u{2003}\u{2002}\u{3000}\" nosmt=force",
+                "ro rd.iscsi.password=\"REDACTED_PASSWORD_1\" nosmt=force",
+            ),
+            (
+                "ro rd.iscsi.password=\u{a0}bravo7k nosmt=force",
+                "ro rd.iscsi.password=REDACTED_PASSWORD_1 nosmt=force",
+            ),
+            (
+                "ro \"rd.iscsi.password=\tbravo7k\" nosmt=force",
+                "ro \"rd.iscsi.password=REDACTED_PASSWORD_1\" nosmt=force",
+            ),
         ];
         for (cmdline, want) in cases {
             let mut snapshot = InspectionSnapshot::new();
@@ -4176,6 +4256,67 @@ baseurl = https://cdn.redhat.com
                 "{cmdline}: {:?}",
                 snapshot.redaction_state
             );
+        }
+    }
+
+    /// On the kernel command line a credential name decides, whatever the
+    /// value holds: a non-empty value is one finding and is replaced
+    /// whole; an empty value or a name with no `=` is no finding and
+    /// changes nothing, and the generic pattern does not run on from an
+    /// empty value into the next argument. The kernel reads `-` as `_` in
+    /// a name. Any other argument keeps its value.
+    #[test]
+    fn cmdline_credentials_are_found_by_name() {
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        let cases: &[(&str, &str, usize)] = &[
+            (
+                "ro rd.iscsi.password=bravo7k",
+                "ro rd.iscsi.password=REDACTED_PASSWORD_1",
+                1,
+            ),
+            (
+                "ro rd.foo.api-key=\u{2003}bravo7k quiet",
+                "ro rd.foo.api-key=REDACTED_PASSWORD_1 quiet",
+                1,
+            ),
+            (
+                "ro rd.iscsi.password= nosmt=force",
+                "ro rd.iscsi.password= nosmt=force",
+                0,
+            ),
+            (
+                "ro rd.iscsi.password=\"\" nosmt=force",
+                "ro rd.iscsi.password=\"\" nosmt=force",
+                0,
+            ),
+            (
+                "ro rd.iscsi.password nosmt=force",
+                "ro rd.iscsi.password nosmt=force",
+                0,
+            ),
+            (
+                "ro foo.bar=\u{2003}keep7k nosmt=force",
+                "ro foo.bar=\u{2003}keep7k nosmt=force",
+                0,
+            ),
+        ];
+        for (cmdline, want, finding_count) in cases {
+            let findings = scan_content(cmdline, KERNEL_CMDLINE_PATH);
+            assert_eq!(findings.len(), *finding_count, "{cmdline:?}: {findings:?}");
+            assert!(
+                findings
+                    .iter()
+                    .all(|f| f.finding_kind == Some(FindingKind::Password)),
+                "{cmdline:?}: {findings:?}"
+            );
+            let mut snapshot = InspectionSnapshot::new();
+            snapshot.kernel_boot = Some(KernelBootSection {
+                cmdline: (*cmdline).into(),
+                ..Default::default()
+            });
+            redact(&mut snapshot, &RedactOptions::default());
+            let got = &snapshot.kernel_boot.as_ref().unwrap().cmdline;
+            assert_eq!(got, want, "{cmdline:?}");
         }
     }
 
