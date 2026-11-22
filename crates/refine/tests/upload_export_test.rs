@@ -1507,7 +1507,6 @@ const NOT_IMAGE_CONTENT: &[&str] = &[
     "schema",
     "inspectah-users.ks",
     "inspectah-users.toml",
-    "users",
     "compose",
     "aggregate",
 ];

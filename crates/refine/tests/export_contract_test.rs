@@ -653,6 +653,9 @@ fn export_includes_user_artifacts() {
             "home": "/home/webadmin",
             "shell": "/bin/bash",
             "ssh_keys": ["ssh-rsa AAAAB3test webadmin@host"],
+            "supplementary_groups": [],
+            "primary_group": "webadmin",
+            "group_gids": {"webadmin": 1001},
             "source": "custom"
         })],
         groups: vec![serde_json::json!({
@@ -694,8 +697,8 @@ fn export_includes_user_artifacts() {
         "export must contain inspectah-users.toml, got: {actual:?}"
     );
     assert!(
-        actual.iter().any(|f| f.starts_with("users/")),
-        "export must contain users/ SSH key directory, got: {actual:?}"
+        !actual.iter().any(|f| f.starts_with("users/")),
+        "keys are provisioned, not staged: no users/ tree, got: {actual:?}"
     );
 }
 

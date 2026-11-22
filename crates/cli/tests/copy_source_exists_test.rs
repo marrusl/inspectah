@@ -32,6 +32,7 @@ use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_collect::inspectors::units::UnitsInspector;
+use inspectah_collect::inspectors::users::{UserGroupOptions, UsersGroupsInspector};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::Inspector;
@@ -177,10 +178,6 @@ const NOT_IMAGE_CONTENT: &[(&str, &str)] = &[
         "image-builder blueprint input, consumed outside the build for the same reason",
     ),
     (
-        "users",
-        "SSH key material staged for the kickstart and blueprint above to reference",
-    ),
-    (
         "compose",
         "reference-only by design: the containers renderer documents that compose emits no COPY or RUN",
     ),
@@ -271,6 +268,25 @@ fn assert_every_staged_file_is_copied(path_label: &str, root: &Path) {
     );
 }
 
+/// The users block creates its user without copying anything: keys are
+/// provisioned at install time, so neither export writes a `users/` tree
+/// and no `COPY` names one.
+fn assert_users_block_stages_nothing(path_label: &str, root: &Path) {
+    assert!(
+        !root.join("users").exists(),
+        "{path_label}: the export staged a users/ tree"
+    );
+    let containerfile = std::fs::read_to_string(root.join("Containerfile")).expect("read");
+    assert!(
+        containerfile.contains(&format!("{KEY_USER} had 1 key in")),
+        "{path_label}: the users block must render the user with keys:\n{containerfile}"
+    );
+    assert!(
+        !containerfile.contains("COPY users/"),
+        "{path_label}: a COPY of the users/ tree:\n{containerfile}"
+    );
+}
+
 // ── The fixture ──────────────────────────────────────────────────────
 
 const QUADLET_DIR: &str = "/etc/containers/systemd";
@@ -315,6 +331,14 @@ const DISABLED_REPO_CONTENT: &str = "[epel-cisco-openh264]\n\
      name=openh264\n\
      metalink=https://example.invalid/metalink\n\
      enabled=0\n";
+
+/// A user with keys the scan keeps. The users block once staged them
+/// under `users/` and copied them into the image; it now copies nothing,
+/// so this user is what keeps the guard from holding vacuously over it.
+const KEY_USER: &str = "appuser";
+const KEY_USER_PASSWD: &str = "appuser:x:1001:1001::/home/appuser:/bin/bash\n";
+const KEY_USER_GROUP: &str = "wheel:x:10:appuser\nappgrp:x:1001:\n";
+const KEY_USER_KEYS: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample appuser@host\n";
 
 const SYSTEMCTL: &str = "UNIT FILE                 STATE     PRESET\n\
                          httpd.service             enabled   enabled\n\
@@ -433,6 +457,10 @@ fn populated_host_mock(cache_dir: &Path) -> MockExecutor {
         .with_file("/opt/webapp/package-lock.json", NPM_LOCK_JSON)
         .with_dir("/opt/lockonly", vec!["package-lock.json"])
         .with_file("/opt/lockonly/package-lock.json", NPM_LOCK_JSON)
+        // -- a user with kept SSH keys ---------------------------------
+        .with_file("/etc/passwd", KEY_USER_PASSWD)
+        .with_file("/etc/group", KEY_USER_GROUP)
+        .with_file("/home/appuser/.ssh/authorized_keys", KEY_USER_KEYS)
 }
 
 /// `collect()` then `validate`, `redact` and the dnf cache scan: the calls
@@ -444,6 +472,10 @@ fn scan_like(exec: &MockExecutor) -> InspectionSnapshot {
         Box::new(UnitsInspector::new()),
         Box::new(ContainersInspector),
         Box::new(NonRpmInspector::new()),
+        Box::new(UsersGroupsInspector::with_options(UserGroupOptions {
+            preserve_ssh_keys: true,
+            ..Default::default()
+        })),
     ];
     let collected = collect(
         &pkg_source(),
@@ -455,9 +487,23 @@ fn scan_like(exec: &MockExecutor) -> InspectionSnapshot {
     );
     let validated = validate(collected).expect("the snapshot validates");
     let mut snapshot = validated.state.snapshot;
+    // `--preserve ssh-keys`, so redaction keeps the user's key.
+    snapshot.preserved_ssh_keys = true;
     redact(&mut snapshot, &RedactOptions::default());
     if let Some(rpm) = snapshot.rpm.as_mut() {
         scan_dnf_cache_for_repoless(exec, rpm);
+    }
+    // The operator's refine decision for the user with keys: create it in
+    // the image. The scan defaults every user to Skip.
+    for user in &mut snapshot
+        .users_groups
+        .as_mut()
+        .expect("the users section")
+        .users
+    {
+        if user["name"] == KEY_USER {
+            user["containerfile_strategy"] = serde_json::json!("useradd");
+        }
     }
     snapshot
 }
@@ -600,10 +646,25 @@ fn the_fixture_populates_the_optional_export_directories() {
         "one manifest is never high confidence"
     );
 
+    let key_user = snapshot
+        .users_groups
+        .as_ref()
+        .and_then(|ug| ug.users.iter().find(|u| u["name"] == KEY_USER))
+        .expect("the collector must record the user with keys");
+    assert_eq!(
+        key_user["ssh_keys"].as_array().map(Vec::len),
+        Some(1),
+        "the scan keeps the user's key, so the users block has keys to stage or not"
+    );
+
     let dir = tempfile::tempdir().expect("tempdir");
     scan_export(&snapshot, dir.path());
     let containerfile =
         std::fs::read_to_string(dir.path().join("Containerfile")).expect("Containerfile");
+    assert!(
+        containerfile.contains("RUN useradd -M -u 1001 -g appgrp -G wheel"),
+        "the user with keys is created in the image:\n{containerfile}"
+    );
     assert!(
         containerfile.contains("--enablerepo=epel-cisco-openh264"),
         "openh264 installs from its disabled repo:\n{containerfile}"
@@ -648,6 +709,7 @@ fn the_cli_scan_export_satisfies_every_copy_it_emits() {
 
     assert_every_copy_source_exists("CLI scan export", dir.path());
     assert_every_staged_file_is_copied("CLI scan export", dir.path());
+    assert_users_block_stages_nothing("CLI scan export", dir.path());
 }
 
 /// The refine web download. This is the path that stripped `quadlet/`
@@ -705,6 +767,7 @@ fn the_refine_web_export_satisfies_every_copy_it_emits() {
 
     assert_every_copy_source_exists("refine web export", &root);
     assert_every_staged_file_is_copied("refine web export", &root);
+    assert_users_block_stages_nothing("refine web export", &root);
     let containerfile = std::fs::read_to_string(root.join("Containerfile")).expect("read");
     assert!(
         containerfile.contains("--enablerepo=epel-cisco-openh264"),

@@ -145,10 +145,6 @@ pub fn render_all(
         std::fs::write(output_dir.join("inspectah-users.toml"), users_toml)?;
     }
 
-    // 6d. users/ — SSH key staging
-    users::stage_ssh_keys(snap, output_dir)
-        .map_err(|e| RenderError::Failed(format!("stage SSH keys: {e}")))?;
-
     // 7. inspection-snapshot.json, validated at step 0
     std::fs::write(output_dir.join("inspection-snapshot.json"), snapshot_json)?;
 

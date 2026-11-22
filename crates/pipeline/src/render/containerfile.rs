@@ -2388,26 +2388,11 @@ fn secrets_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 /// Collect usernames being materialized via useradd in this Containerfile.
 ///
-/// These are users with `containerfile_strategy == "useradd"` and `include == true`.
-/// Their accounts are guaranteed to exist at image build time, so tmpfiles.d entries
-/// can safely reference them by name.
+/// These are the users the users block's plan accepts, so their accounts
+/// are guaranteed to exist at image build time and tmpfiles.d entries can
+/// safely reference them by name. A user the block refuses is not one.
 fn collect_materialized_usernames(snap: &InspectionSnapshot) -> std::collections::HashSet<String> {
-    let ug = match &snap.users_groups {
-        Some(u) => u,
-        None => return std::collections::HashSet::new(),
-    };
-    ug.users
-        .iter()
-        .filter(|u| {
-            let strategy = u
-                .get("containerfile_strategy")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let include = u.get("include").and_then(|v| v.as_bool()).unwrap_or(true);
-            strategy == "useradd" && include
-        })
-        .filter_map(|u| u.get("name").and_then(|v| v.as_str()).map(String::from))
-        .collect()
+    super::users::ContainerfileUserPlan::from_snapshot(snap).materialized_usernames()
 }
 
 /// Well-known RPM packages and the system accounts their scriptlets create.
@@ -7345,7 +7330,9 @@ RUN dnf install -y \
                 "uid": 1001,
                 "gid": 1001,
                 "include": true,
-                "containerfile_strategy": "useradd"
+                "containerfile_strategy": "useradd",
+                "primary_group": "myapp",
+                "group_gids": {"myapp": 1001}
             })],
             ..Default::default()
         });
@@ -7774,7 +7761,9 @@ RUN dnf install -y \
                 "uid": 1001,
                 "gid": 1001,
                 "include": true,
-                "containerfile_strategy": "useradd"
+                "containerfile_strategy": "useradd",
+                "primary_group": "appone",
+                "group_gids": {"appone": 1001}
             })],
             ..Default::default()
         });

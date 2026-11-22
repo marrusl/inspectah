@@ -111,7 +111,9 @@ fn materialized_user(name: &str, uid: u32) -> UserGroupSection {
             "uid": uid,
             "gid": uid,
             "include": true,
-            "containerfile_strategy": "useradd"
+            "containerfile_strategy": "useradd",
+            "primary_group": name,
+            "group_gids": {name: uid}
         })],
         ..Default::default()
     }

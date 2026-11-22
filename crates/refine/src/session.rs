@@ -4672,8 +4672,6 @@ pub fn render_refine_export(
     if !users_toml.is_empty() {
         std::fs::write(out.join("inspectah-users.toml"), users_toml)?;
     }
-    inspectah_pipeline::render::users::stage_ssh_keys(snap, out)
-        .map_err(|e| RefineError::RenderFailed(format!("stage SSH keys: {e}")))?;
 
     // 2c. Materialize aggregate variant files (conditional — only for aggregate snapshots
     //     with Alternative config entries, drop-ins, or quadlet units).
@@ -4787,7 +4785,6 @@ pub fn render_refine_export(
         "env-files",
         "aggregate",
         "schema",
-        "users",
         "compose",
         "inspection-snapshot.json",
         "Containerfile",

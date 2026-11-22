@@ -71,8 +71,10 @@ fn snapshot_with_alice() -> InspectionSnapshot {
                 "shell": "/bin/bash",
                 "ssh_keys": ["ssh-rsa AAAAB3testkey alice@host"],
                 "source": "custom",
-                "groups": ["docker"],
-                "supplementary_groups": ["docker"]
+                "supplementary_groups": ["docker"],
+                "primary_group": "alice",
+                "group_gids": {"alice": 1001, "docker": 1010},
+                "ssh_key_count": 1
             })],
             groups: vec![serde_json::json!({
                 "name": "docker",
@@ -150,8 +152,8 @@ fn full_pipeline_users_groups_materialization() {
         "tarball must contain inspectah-users.toml, got: {files:?}"
     );
     assert!(
-        files.contains("output/users/home/alice/.ssh/authorized_keys"),
-        "tarball must contain users/home/alice/.ssh/authorized_keys, got: {files:?}"
+        !files.iter().any(|f| f.starts_with("output/users/")),
+        "keys are provisioned, not staged: no users/ tree, got: {files:?}"
     );
     assert!(
         files.contains("output/Containerfile"),
@@ -174,12 +176,12 @@ fn full_pipeline_users_groups_materialization() {
         "Containerfile must contain chpasswd -e, got:\n{containerfile}"
     );
     assert!(
-        containerfile.contains("COPY users/home/alice/.ssh/authorized_keys"),
-        "Containerfile must contain COPY for SSH keys, got:\n{containerfile}"
+        containerfile.contains("RUN useradd -M -u 1001 -g alice -G docker"),
+        "Containerfile must add alice with useradd -M, got:\n{containerfile}"
     );
     assert!(
-        containerfile.contains("install -d -m 700"),
-        "Containerfile must contain install -d -m 700 for .ssh dir, got:\n{containerfile}"
+        !containerfile.contains("COPY users/") && !containerfile.contains("install -d -m 700"),
+        "Containerfile must not copy keys or make a .ssh directory, got:\n{containerfile}"
     );
 
     // 7. Verify KS has groups before users

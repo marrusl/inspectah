@@ -135,7 +135,9 @@ fn snapshot_with_useradd_users() -> InspectionSnapshot {
             "uid": 1500,
             "gid": 1500,
             "include": true,
-            "containerfile_strategy": "useradd"
+            "containerfile_strategy": "useradd",
+            "primary_group": "appuser",
+            "group_gids": {"appuser": 1500}
         })],
         ..Default::default()
     });
@@ -376,7 +378,7 @@ fn containerfile_users_useradd_override() {
         "Containerfile must contain Users and Groups heading"
     );
     assert!(
-        output.contains("RUN useradd -m -u 1500 -g 1500 appuser"),
+        output.contains("RUN useradd -M -u 1500 -g appuser appuser"),
         "Containerfile must emit RUN useradd with uid/gid for useradd-strategy users"
     );
 }
