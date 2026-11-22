@@ -22,6 +22,12 @@ pub(crate) struct SecretPattern {
     /// stacks match by accident; false for a key that only ever holds a
     /// secret, where `files` is as good a password as any.
     pub filter_nss_pam_tokens: bool,
+    /// Whether a match on a `.repo` file's `[section]` header whose id is
+    /// one dnf accepts is dropped. True only for the generic `key: value`
+    /// pattern: a repo id may spell a credential key (a COPR id's
+    /// `token:`), and its characters (letters, digits, `-_.:`) can hold no
+    /// match of any other pattern but the AWS key id, which stays live.
+    pub spares_repo_id_headers: bool,
 }
 
 /// Name of the capture group holding the secret itself.
@@ -56,6 +62,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             .unwrap(),
             finding_kind: FindingKind::PrivateKey,
             filter_nss_pam_tokens: false,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -69,6 +76,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             .unwrap(),
             finding_kind: FindingKind::Certificate,
             filter_nss_pam_tokens: false,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -85,6 +93,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             .unwrap(),
             finding_kind: FindingKind::PasswordHash,
             filter_nss_pam_tokens: false,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -113,6 +122,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             .unwrap(),
             finding_kind: FindingKind::Password,
             filter_nss_pam_tokens: true,
+            spares_repo_id_headers: true,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -133,6 +143,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             }),
             finding_kind: FindingKind::AwsKey,
             filter_nss_pam_tokens: false,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
                         remediation: "Rotate the AWS access key and use IAM roles",
@@ -152,6 +163,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             regex: Regex::new(r"jdbc:[a-z]+://(?P<secret>[^\r\n]*(?:@|password=[^&\s])\S*)").unwrap(),
             finding_kind: FindingKind::JdbcPassword,
             filter_nss_pam_tokens: false,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -171,6 +183,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             regex: Regex::new(r"postgres(?:ql)?://[^:\r\n]+:(?P<secret>[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::PostgresPassword,
             filter_nss_pam_tokens: false,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -181,6 +194,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             regex: Regex::new(r"mongodb(?:\+srv)?://[^:\r\n]+:(?P<secret>[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::MongodbPassword,
             filter_nss_pam_tokens: false,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -191,6 +205,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             regex: Regex::new(r"redis://:(?P<secret>[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::RedisPassword,
             filter_nss_pam_tokens: false,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -201,6 +216,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             regex: Regex::new(r"(?i)(?:PrivateKey|PreSharedKey)[ \t]*=[ \t]*(?P<secret>[A-Za-z0-9+/]{43}=)").unwrap(),
             finding_kind: FindingKind::WireguardKey,
             filter_nss_pam_tokens: false,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -211,6 +227,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             regex: Regex::new(r"(?i)(?:psk|wpa-psk|wifi\.psk)[ \t]*=[ \t]*(?P<secret>\S+)").unwrap(),
             finding_kind: FindingKind::WifiPsk,
             filter_nss_pam_tokens: false,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -236,6 +253,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             .unwrap(),
             finding_kind: FindingKind::Password,
             filter_nss_pam_tokens: true,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -264,6 +282,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             .unwrap(),
             finding_kind: FindingKind::Password,
             filter_nss_pam_tokens: true,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
@@ -285,6 +304,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             .unwrap(),
             finding_kind: FindingKind::Password,
             filter_nss_pam_tokens: false,
+            spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,

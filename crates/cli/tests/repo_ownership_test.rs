@@ -2350,6 +2350,75 @@ fn t9_load_refuses_a_rejected_key_made_usable_or_given_its_bytes() {
 // T10. Redaction.
 // ---------------------------------------------------------------------
 
+/// A bracketed line that is not a repo id dnf accepts is searched like
+/// any other line: `[{"token":"orchid92"}]` in a `.repo` file loses its
+/// token in the repo inventory, its Configuration twin, the snapshot
+/// JSON, both exports, and a fleet whose hosts hold different copies,
+/// with their config alternatives, while the file's real repo, its key
+/// and its package keep their route. A COPR id spelling `token:` is still
+/// kept as written.
+#[test]
+fn t10_a_bracketed_line_that_is_no_repo_id_is_redacted() {
+    const CUSTOM: &str = "/etc/yum.repos.d/custom.repo";
+    const COPR: &str = "copr:copr.fedorainfracloud.org:token:vendor";
+    let content = |mirror: &str| {
+        format!(
+            "[custom]\nbaseurl=https://{mirror}.example.invalid/rpm/\nenabled=1\ngpgcheck=0\n\
+             [{{\"token\":\"orchid92\"}}]\n[{COPR}]\nbaseurl=https://copr.example.invalid/\n\
+             enabled=1\ngpgcheck=0\n"
+        )
+    };
+    let host = |mirror: &str| {
+        UnitHost::new()
+            .base_package("bash")
+            .file(CUSTOM, &content(mirror))
+            .package_from("custom-tool", "custom")
+            .package_from("copr-tool", COPR)
+            .enabled_repos(&["custom", COPR])
+    };
+    let snap = scan_finished(host("repo"));
+    let stored = &rpm(&snap)
+        .repo_files
+        .iter()
+        .find(|f| f.path == CUSTOM)
+        .unwrap()
+        .content;
+    assert!(stored.contains(&format!("\n[{COPR}]\n")), "{stored}");
+    assert_eq!(config_row(&snap, CUSTOM).unwrap().content, *stored);
+    let loaded = reload(&snap);
+    for (via, file) in both_containerfiles(&loaded) {
+        assert!(installs(&file, "custom-tool"), "{via}:\n{file}");
+        assert!(installs(&file, "copr-tool"), "{via}:\n{file}");
+    }
+    let mut all = vec![(
+        "snapshot".to_string(),
+        serde_json::to_vec(&snap).expect("the snapshot serializes"),
+    )];
+    all.extend(tree_files(render_export(&loaded).path()));
+    all.extend(refine_artifacts(&session(&loaded)));
+
+    let (merged, _) = merge_snapshots(
+        vec![named(host("repo"), "h1"), named(host("mirror"), "h2")],
+        None,
+        None,
+    )
+    .unwrap();
+    let alternatives = merged
+        .config
+        .iter()
+        .flat_map(|c| &c.files)
+        .filter(|f| f.path == CUSTOM)
+        .count();
+    assert_eq!(alternatives, 2, "two config alternatives");
+    all.push((
+        "aggregate".to_string(),
+        serde_json::to_vec(&merged).expect("the aggregate serializes"),
+    ));
+    all.extend(tree_files(render_export(&merged).path()));
+    all.extend(refine_artifacts(&session(&reload(&merged))));
+    assert_absent_from("orchid92", &all);
+}
+
 #[test]
 fn t10_a_key_whose_reference_redaction_rewrote_is_left_out_and_named() {
     const VEND: &str = "/etc/yum.repos.d/vend.repo";

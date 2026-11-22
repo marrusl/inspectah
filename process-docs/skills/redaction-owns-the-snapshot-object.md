@@ -91,11 +91,17 @@ with the host's variables, never the reference it reads; a variable
 written inside a credential is not named either. `t6_no_separator_leaves_a_piece_of_a_key_reference_password`
 holds it over each separator, inside a userinfo and after it.
 
-**A `.repo` file's `[section]` headers are never searched.** A repo id
+**A repo-id header is spared one pattern, not every one.** A repo id
 can spell a key (`[copr:...:token:vendor]`), and rewriting it leaves a
-file that defines no repo. The engine skips matches on a header line of
-a `.repo` file dnf reads (`is_repo_file_path`), and only there: a YAML
-flow sequence `[token: x]` elsewhere is a real secret.
+file that defines no repo. So in a `.repo` file dnf reads
+(`is_repo_file_path`), the generic `key: value` pattern, the only one
+flagged `spares_repo_id_headers`, skips a header line whose id dnf
+accepts (`is_repo_id`, libdnf's `REPOID_CHARS`: letters, digits,
+`-_.:`). Exempting every `[...]` line from every detector kept
+`[{"token":"x"}]` whole: a bracketed line holding anything else is no
+repo to dnf, and every other pattern, private keys, certificates and
+JSON credentials among them, runs on every line. Elsewhere a YAML flow
+sequence `[token: x]` is a real secret, and nothing is spared.
 
 ## Search forward from the key, never from the start of the line
 

@@ -586,6 +586,21 @@ pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
         .collect()
 }
 
+/// The characters a repo id may hold besides ASCII letters and digits:
+/// libdnf's `REPOID_CHARS` (`Repo::verifyId`), which dnf 4 and dnf 5 both
+/// check before they read a section. A section whose id holds anything
+/// else is not a repo to dnf.
+const REPO_ID_PUNCTUATION: &[char] = &['-', '_', '.', ':'];
+
+/// Whether `id` is a repo id dnf accepts: not empty, and only ASCII
+/// letters, digits and [`REPO_ID_PUNCTUATION`].
+pub fn is_repo_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || REPO_ID_PUNCTUATION.contains(&c))
+}
+
 /// The key dnf 4 sorts `.repo` files by: the path without its `.repo`
 /// suffix, split into components (`dnf.util.split_path`). Without the cut,
 /// `x-y.repo` would sort before `x.repo`; dnf reads `x` first.
@@ -1133,6 +1148,25 @@ enabled=1
             let got = parse_repo_sections(&content);
             let named: Vec<(&str, &str)> = got[0].local_keys_named().collect();
             assert_eq!(named, *want, "{value:?}");
+        }
+    }
+
+    /// A repo id is what libdnf's `verifyId` accepts: ASCII letters,
+    /// digits and `-_.:`, at least one of them.
+    #[test]
+    fn a_repo_id_is_what_dnf_accepts() {
+        for (id, ok) in [
+            ("copr:copr.fedorainfracloud.org:token:vendor", true),
+            ("rhel-9-for-x86_64-baseos-rpms", true),
+            ("epel_10.x", true),
+            ("", false),
+            ("{\"token\":\"x\"}", false),
+            ("password=x", false),
+            ("a b", false),
+            ("repo-\u{fc}", false),
+            ("$releasever", false),
+        ] {
+            assert_eq!(is_repo_id(id), ok, "{id:?}");
         }
     }
 

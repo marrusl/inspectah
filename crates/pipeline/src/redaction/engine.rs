@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use crate::redaction::patterns::{PATTERNS, SECRET_GROUP, SecretPattern, scan_shadow};
 use crate::render::language_packages::scrub_manifest_auth;
 use inspectah_core::types::destination::Destination;
+use inspectah_core::types::repo::is_repo_id;
 
 /// Paths that are known false-positive sources for credential scanning.
 /// Files under these prefixes use keywords like "password", "auth", and
@@ -404,14 +405,11 @@ impl<'c> LineCursor<'c> {
         self.pos = pos;
     }
 
-    /// Whether the line holding the current position is an INI section
-    /// header: `[`, then anything, then `]`, once trimmed, as
-    /// `parse_repo_sections` reads a header.
-    fn is_section_header(&self) -> bool {
+    /// Whether the line holding the current position is a `[section]`
+    /// header whose id dnf accepts ([`is_repo_id_header`]).
+    fn is_repo_id_header(&self) -> bool {
         let rest = &self.content[self.start..];
-        let line = &rest[..rest.find(['\r', '\n']).unwrap_or(rest.len())];
-        let line = line.trim();
-        line.starts_with('[') && line.ends_with(']')
+        is_repo_id_header(&rest[..rest.find(['\r', '\n']).unwrap_or(rest.len())])
     }
 
     /// Returns true if the match whose whole match starts at `claim_start`
@@ -439,6 +437,17 @@ impl<'c> LineCursor<'c> {
             .iter()
             .any(|m| first_text + m.len() <= claim_start && content[first_text..].starts_with(m))
     }
+}
+
+/// Whether `line`, trimmed, is `[`, an id dnf accepts ([`is_repo_id`]),
+/// then `]`: a header that names a repo. A bracketed line holding anything
+/// else (`[{"token":"x"}]`) names no repo dnf reads, whatever the scan's
+/// permissive parser makes of it.
+fn is_repo_id_header(line: &str) -> bool {
+    line.trim()
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .is_some_and(is_repo_id)
 }
 
 /// Offset of the first line break (`\r` or `\n`) at or after `pos`, or the
@@ -523,7 +532,9 @@ fn collect_eligible_matches(
     path: Option<&str>,
 ) -> Vec<EligibleMatch> {
     let markers = comment_markers(path);
-    let headers_kept = path.is_some_and(is_repo_file_path);
+    // Repo-id headers this pattern leaves alone: only the generic one's,
+    // and only in a `.repo` file dnf reads.
+    let headers_kept = pat.spares_repo_id_headers && path.is_some_and(is_repo_file_path);
     let mut lines = LineCursor::new(content);
     let mut found = Vec::new();
     // The union of the eligible secrets kept last, which overlap one
@@ -545,7 +556,7 @@ fn collect_eligible_matches(
         }
         if pos < line_end && redundant >= MAX_REDUNDANT_RESCANS_PER_LINE {
             lines.advance(pos);
-            if headers_kept && lines.is_section_header() {
+            if headers_kept && lines.is_repo_id_header() {
                 pos = line_end;
                 continue;
             }
@@ -643,13 +654,15 @@ fn eligible_match(
         return None;
     }
 
-    // Filter 1b: in a `.repo` file (`headers_kept`), skip matches on a
-    // `[section]` header line. A header holds a repo id, never a secret,
-    // and a repo id can spell a credential key: in
+    // Filter 1b: for the generic pattern in a `.repo` file
+    // (`headers_kept`), skip matches on a header whose id dnf accepts. A
+    // repo id can spell a credential key: in
     // `[copr:copr.fedorainfracloud.org:token:vendor]` the generic pattern
     // took `vendor]`, the file then defined no section, and every
-    // decision read from the stored file lost the repo.
-    if headers_kept && lines.is_section_header() {
+    // decision read from the stored file lost the repo. Any other
+    // bracketed line, and every other pattern, is searched as usual: an
+    // exemption for every `[...]` line kept `[{"token":"x"}]` whole.
+    if headers_kept && lines.is_repo_id_header() {
         return None;
     }
 
@@ -3219,21 +3232,27 @@ baseurl = https://cdn.redhat.com
         );
     }
 
-    /// A `.repo` file's `[section]` headers are never rewritten, in the
-    /// repo inventory or in its Configuration row, whatever credential
-    /// key a repo id spells; the values under them still are. Another
-    /// file's lines, and a `.repo` file's option lines, are searched as
-    /// before.
+    /// A `.repo` file's `[section]` header whose id dnf accepts is spared
+    /// only the generic `key: value` pattern, which reads a COPR id's
+    /// `token:` as a credential key, in the repo inventory and in its
+    /// Configuration row; the values under it are still searched. A
+    /// bracketed line that is not a repo id, and every other detector on a
+    /// line that is, are searched as on any line, so a token in one is
+    /// replaced. Another file's lines are searched whole.
     #[test]
-    fn test_redact_never_rewrites_a_repo_files_section_headers() {
+    fn test_redact_spares_only_a_repo_id_header_from_the_generic_pattern() {
         use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
         use inspectah_core::types::rpm::{RepoFile, RpmSection};
+        // `(header, kept as written, the secret it holds)`.
         let headers = [
-            "[copr:copr.fedorainfracloud.org:token:vendor]",
-            "  [password=hunter2]  ",
-            "[api_key: k1 token:t2 secret=s3 token=a token=b token=c token=d token=e]",
+            ("[copr:copr.fedorainfracloud.org:token:vendor]", true, ""),
+            ("  [vendor-9.x_86_64:token:a]  ", true, ""),
+            ("[{\"token\":\"tulip17\"}]", false, "tulip17"),
+            ("  [password=hunter2]  ", false, "hunter2"),
+            ("[api_key: k1 token:t2 secret=s3 token=tok5]", false, "tok5"),
+            ("[AKIAIOSFODNN7EXAMPLE]", false, "AKIAIOSFODNN7EXAMPLE"),
         ];
-        for header in headers {
+        for (header, kept, secret) in headers {
             let content = format!("{header}\nbaseurl=https://v.example/\npassword=orchid92\n");
             for path in [
                 "/etc/yum.repos.d/vendor.repo",
@@ -3268,11 +3287,15 @@ baseurl = https://cdn.redhat.com
                         &snapshot.config.as_ref().unwrap().files[0].content,
                     ),
                 ] {
-                    assert!(
+                    assert_eq!(
                         got.starts_with(&format!("{header}\n")),
+                        kept,
                         "{what} {path}: {got}"
                     );
                     assert!(!got.contains("orchid92"), "{what} {path}: {got}");
+                    if !kept {
+                        assert!(!got.contains(secret), "{what} {path}: {got}");
+                    }
                 }
             }
         }
