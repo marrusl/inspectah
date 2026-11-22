@@ -134,8 +134,9 @@ compiles with `cargo clippy --target x86_64-unknown-linux-musl`.
 ## Unmanaged payloads are screened by content
 
 The bundler ships binary unmanaged files byte for byte, and text
-redaction exempts private keys (see "Unmanaged text is redacted
-before it ships" below), so the walk calls `screen_payload`, not
+redaction leaves delimiter-only key markers alone (see "Unmanaged text
+is redacted or withheld before it ships" below), so the walk calls
+`screen_payload`, not
 `screen`: path, alias and inode, then
 `payload_credential` over one streaming read of the whole file
 (`open_read`, `PAYLOAD_READ_CHUNK` at a time; memory is that buffer,
@@ -188,9 +189,10 @@ item. `bundle_unmanaged_files` lives in `pipeline::render::unmanaged`,
 takes the snapshot and the host root (`/` in `run_scan`, a tempdir in
 tests), asks `screen_payload` again for every included regular file
 before copying any, and fails on a withheld answer or a read error; it
-never skips a file. It then reads each file once and runs
-`payload_credential` again over the bytes it is about to write, so a
-file that gained a key after the first check fails the bundle too. Test the whole route with
+never skips a file unrecorded, since an unrecorded skip leaves a `COPY`
+with no source. It then screens the bytes it writes, so a file that
+gained a key after the first check fails the bundle too. Test the whole
+route with
 `unmanaged_credentials_are_withheld_on_both_export_paths`: write each
 payload both to the `SysctlHost` and to a host-root tempdir. Test the
 recognizer's classes in `machine_state.rs`'s table and property tests
@@ -200,28 +202,47 @@ redaction pattern read the same labels; `PGP PUBLIC KEY BLOCK` is a
 companion there, so a public block beside a secret one is still a key
 file, and a public block alone is not.
 
-## Unmanaged text is redacted before it ships
+## Unmanaged text is redacted or withheld before it ships
 
 `bundle_unmanaged_files` runs before `render_all` and mutates the
 snapshot, so the snapshot JSON, the audit report and `secrets-review.md`
-describe the copies in `unmanaged/`. Unless `redaction_state` is `Raw`
-(`--no-redaction`), each regular file up to `PAYLOAD_REDACTION_LIMIT`
-(8 MiB) that has no NUL byte and is UTF-8 goes through
-`redaction::engine::redact_payload`, with its path: compose files by
-name (`COMPOSE_FILE_PATTERNS`, shared with the containers collector)
-take both compose passes, anything else the URL credential maskers and
-the generic patterns. `PAYLOAD_EXEMPT_KINDS` leaves private keys (the
-screening's job; a PEM match left is delimiters in code) and
-certificates (public, and a CA bundle with a placeholder breaks) alone.
-What ships is written from the bytes read, never re-copied from the
-host, and keeps the source file's mode. Each file records
-`UnmanagedFile::payload_redaction` (`Redacted`, or `TooLargeToCheck`
-with a flagged finding for text over the limit); refine's `is_sensitive`
-reads it. A file the snapshot also holds (an `.env` in `env-files`, a
-compose file's `raw_content`) takes the bundle's text, and the bundle's
-findings replace that copy's inline ones, so the export has one text
-per file. Tokens in a payload are numbered per file. Test the route with
-`unmanaged_credentials_ship_redacted_on_both_export_paths`.
+describe the copies in `unmanaged/`. Each regular file is opened once
+(`payload_copy`) and every byte written is screened by
+`payload_credential` as written, a streamed file through `TeeReader`, so
+nothing ships that the key check did not read; there is no `fs::copy`.
+Under `--no-redaction` (`redaction_state` `Raw`) the file streams
+through as read. Otherwise:
+
+- Binary ships byte for byte. Binary is a NUL byte and no UTF-16 or
+  UTF-32 byte-order mark (`is_binary`); everything else is text, so a
+  file on that boundary is withheld, never shipped as read.
+- Text that is not UTF-8, or over `PAYLOAD_REDACTION_LIMIT` (8 MiB), is
+  not written: the item records `PayloadRedaction::Withheld`
+  (`UncheckedPayload`), an `Excluded` finding names it in
+  `secrets-review.md`, and `unmanaged_file_withheld` (configtree) is the
+  one decision the Containerfile, `staged_writes`, refine's extraction
+  and its row (`WithheldWhy::UncheckedPayload`) ask. An oversized file is
+  streamed, screened, then removed once it reads as text.
+- Other text goes through `redaction::engine::redact_payload` with its
+  path: compose files by name (`COMPOSE_FILE_PATTERNS`) take both
+  compose passes, anything else the URL credential maskers and the
+  patterns. `PayloadRules::Payload` leaves certificates out and narrows a
+  private-key block to the text between its markers, dropped only when
+  that holds under `CLOSED_KEY_MATERIAL_MIN` base64 characters counted
+  anywhere; a `BEGIN` marker nothing closes has its following body
+  replaced too. Left-out patterns are dropped before overlaps resolve,
+  and findings and replacements come from that one match set
+  (`payload_matches`), so markers never hide a credential between them.
+
+A file the snapshot also holds (an `.env` in `env-files`, a compose
+file's `raw_content`) is redacted with `PayloadRules::SnapshotCopy`, the
+rules `redact` used for that copy (keys and certificates whole), then
+that copy takes the shipped text. The bundle's findings replace that
+copy's inline findings kind for kind, so a key finding is never dropped.
+Refine's `is_sensitive` reads `payload_redaction`. Tokens in a payload
+are numbered per file. Test the routes with
+`unmanaged_credentials_ship_redacted_on_both_export_paths` and
+`unmanaged_reproducers_never_ship_a_credential`.
 
 Not covered, and caught only by review: a file-opening route not on the
 lint list (a new dependency, a `libc` call) and a command whose output is a

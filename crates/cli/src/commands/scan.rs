@@ -1141,37 +1141,37 @@ fn build_sensitivity_notice(
     Some(lines.join("\n"))
 }
 
-/// The line that says the unmanaged bundle ships changed or unchecked
-/// copies, by count, pointing at `secrets-review.md`; `None` when every
-/// payload shipped as read.
+/// The line that says the unmanaged bundle ships redacted copies, or
+/// leaves out files redaction could not check, by count, pointing at
+/// `secrets-review.md`; `None` when every payload shipped as read.
 fn unmanaged_redaction_notice(
     snapshot: &inspectah_core::snapshot::InspectionSnapshot,
 ) -> Option<String> {
     use inspectah_core::types::nonrpm::PayloadRedaction;
     let items = snapshot.unmanaged_files.as_ref().map(|s| &s.items)?;
-    let count =
-        |want: PayloadRedaction| items.iter().filter(|f| f.payload_redaction == want).count();
-    let redacted = count(PayloadRedaction::Redacted);
-    let unchecked = count(PayloadRedaction::TooLargeToCheck);
+    let files = |n: usize| if n == 1 { "file" } else { "files" };
+    let redacted = items
+        .iter()
+        .filter(|f| f.payload_redaction == PayloadRedaction::Redacted)
+        .count();
+    let withheld = items
+        .iter()
+        .filter(|f| f.payload_redaction.withheld().is_some())
+        .count();
     let mut parts = Vec::new();
     if redacted > 0 {
         parts.push(format!(
             "{redacted} unmanaged {} redacted before bundling",
-            if redacted == 1 { "file" } else { "files" }
+            files(redacted)
         ));
     }
-    if unchecked > 0 {
+    if withheld > 0 {
         parts.push(format!(
-            "{unchecked} unmanaged {} too large to check, bundled as read",
-            if unchecked == 1 { "file" } else { "files" }
+            "{withheld} unmanaged {} left out, not checkable for credentials",
+            files(withheld)
         ));
     }
-    (!parts.is_empty()).then(|| {
-        format!(
-            "Note: {}. The image gets the bundled copies; see secrets-review.md.",
-            parts.join("; ")
-        )
-    })
+    (!parts.is_empty()).then(|| format!("Note: {}; see secrets-review.md.", parts.join("; ")))
 }
 
 /// Print a minimal footer for `--quiet` mode (Null renderer swallows finalize).

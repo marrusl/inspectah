@@ -388,7 +388,7 @@ const KEY_MATERIAL_MIN: usize = 64;
 /// The longest text a closed marker pair holds in the controls this must
 /// not withhold (JSON and minified JavaScript delimiters, prose,
 /// templates) is 3 characters.
-const CLOSED_KEY_MATERIAL_MIN: usize = 12;
+pub const CLOSED_KEY_MATERIAL_MIN: usize = 12;
 
 /// The run of dashes both PEM markers start with.
 const PEM_DASH_RUN: usize = PEM_DASHES.len();

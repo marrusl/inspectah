@@ -20,6 +20,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderError;
 use inspectah_core::types::config::AUTHSELECT_CONF_PATH;
 use inspectah_core::types::machine_state::MachineStateMember;
+use inspectah_core::types::nonrpm::{UncheckedPayload, UnmanagedFile};
 use inspectah_core::types::units::{UNIT_TYPE_SUFFIXES, UnitName};
 use regex::Regex;
 use std::borrow::Cow;
@@ -97,6 +98,9 @@ pub enum WithheldWhy {
     /// is what makes first boot keep the rendered unit states (§ 10.1,
     /// § 10.2 "Never the machine-id").
     MachineState { member: MachineStateMember },
+    /// An unmanaged text file redaction could not check: the scan's
+    /// bundler left it out rather than ship it as read.
+    UncheckedPayload { reason: UncheckedPayload },
 }
 
 /// How the collected unit a generated unit's name collides with is known
@@ -123,6 +127,7 @@ impl WithheldWhy {
             Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
             Self::UnmanagedUnitPath => "UnmanagedUnitPath",
             Self::MachineState { .. } => "MachineState",
+            Self::UncheckedPayload { .. } => "UncheckedPayload",
         }
     }
 
@@ -168,6 +173,12 @@ impl WithheldWhy {
                 "a machine-state file ({}) belongs to one host; its contents are left out of \
                  the configuration",
                 member.as_str()
+            ),
+            Self::UncheckedPayload { reason } => format!(
+                "inspectah could not check this unmanaged file for credentials: {}, so the \
+                 export leaves it out rather than ship it as read; check it on the host and \
+                 supply it yourself",
+                reason.describe()
             ),
         }
     }
@@ -238,6 +249,18 @@ pub fn unmanaged_withheld(path: &str) -> Option<WithheldWhy> {
     } else {
         None
     }
+}
+
+/// [`unmanaged_withheld`] for an unmanaged item: its path, then what the
+/// scan's bundler recorded for its payload. The one decision every
+/// consumer of an item asks, so a payload the bundle left out has no
+/// `COPY`, no extraction and no shipped-copy advice.
+pub fn unmanaged_file_withheld(file: &UnmanagedFile) -> Option<WithheldWhy> {
+    unmanaged_withheld(&file.path).or_else(|| {
+        file.payload_redaction
+            .withheld()
+            .map(|reason| WithheldWhy::UncheckedPayload { reason })
+    })
 }
 
 /// One file the export writes: what offered it, and its content, borrowed
@@ -894,8 +917,9 @@ fn generated_name_collisions(
 ///
 /// An included unmanaged file whose path is under `/etc/systemd/system`
 /// ([`unmanaged_unit_path`]) is listed in `withheld` as
-/// `UnmanagedUnitPath`, and one at a withheld class path as
-/// `MachineState` ([`unmanaged_withheld`]). It is not one of this decision's offers: the
+/// `UnmanagedUnitPath`, one at a withheld class path as `MachineState`,
+/// and one the bundler could not check as `UncheckedPayload`
+/// ([`unmanaged_file_withheld`]). It is not one of this decision's offers: the
 /// unmanaged-files section writes its own files, and leaves that one out.
 ///
 /// Everything else is written. [`write_config_tree`] writes `writes` and
@@ -942,15 +966,15 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
     let collisions = generated_name_collisions(&generated_unit_groups(snap), &collected);
 
     // An unmanaged file under the unit directory, or at the machine-id, is
-    // withheld by name; the unmanaged-files section skips it on the same
-    // decision.
+    // withheld by name, and one the bundler could not check by its record;
+    // the unmanaged-files section skips it on the same decision.
     out.withheld.extend(
         snap.unmanaged_files
             .iter()
             .flat_map(|section| &section.items)
             .filter(|file| file.disposition.is_included())
             .filter_map(|file| {
-                let why = unmanaged_withheld(&file.path)?;
+                let why = unmanaged_file_withheld(file)?;
                 let dest = Destination::new(&file.path).ok()?;
                 Some((dest, StagedFileKind::UnmanagedFile, why))
             }),

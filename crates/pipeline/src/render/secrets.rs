@@ -12,11 +12,11 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::machine_state::{ProvisioningNotice, ProvisioningStep};
 use inspectah_core::types::redaction::{DetectionMethod, RedactionFinding, RedactionKind};
 
-use inspectah_core::types::nonrpm::{FileType, PayloadRedaction};
+use inspectah_core::types::nonrpm::{FileType, PayloadRedaction, UncheckedPayload};
 
 use super::configtree::{
     Destination, ETC_UNIT_DIR, KARGS_PATH, owed_kernel_arguments, staged_unit_file, staged_writes,
-    unmanaged_withheld,
+    unmanaged_file_withheld,
 };
 use super::machine_state::class_rows;
 use super::md_literal::{md_code, md_code_cell};
@@ -82,6 +82,9 @@ enum SupplyAdvice {
     /// An unmanaged file the export ships under `unmanaged/` as the scan
     /// read it, with nothing replaced in that copy.
     UnmanagedAsRead { var_srv: bool },
+    /// An included unmanaged file the export leaves out because redaction
+    /// could not check it.
+    UnmanagedWithheld(UncheckedPayload),
     /// A file not matched to anything the export stages. The image may
     /// still carry it another way, so the line says what is not known
     /// instead of asserting it is absent.
@@ -188,6 +191,13 @@ impl SupplyAdvice {
                     ", and the Containerfile copies it into the image"
                 }
             ),
+            Self::UnmanagedWithheld(reason) => format!(
+                "Left out of this export and the image: inspectah could not check it for \
+                 credentials, because {}. Check the file on the host; if a deployed machine \
+                 needs it, supply it yourself, with any real value from a mounted secret or a \
+                 provisioning step.",
+                reason.describe()
+            ),
             Self::Unmatched => "Not matched to a file inspectah stages for the image, so check \
                  whether the image carries it another way. Wherever a deployed machine needs the \
                  value, supply it at deploy time with a mounted secret or a provisioning step."
@@ -210,6 +220,9 @@ struct Carriage {
     /// Each regular unmanaged file the export ships under `unmanaged/`,
     /// with where it lands and what redaction did to the shipped copy.
     unmanaged: BTreeMap<String, (UnmanagedDestination, PayloadRedaction)>,
+    /// Each included unmanaged file the export leaves out because
+    /// redaction could not check it, with why.
+    unmanaged_withheld: BTreeMap<String, UncheckedPayload>,
     /// The kargs file leaves out a kernel argument redaction replaced.
     owed_kargs: bool,
 }
@@ -249,15 +262,20 @@ impl Carriage {
                 Some((key, advice))
             })
             .collect();
-        let unmanaged = snap
-            .unmanaged_files
-            .iter()
-            .flat_map(|s| &s.items)
-            .filter(|f| {
-                f.disposition.is_included()
-                    && f.file_type != FileType::Symlink
-                    && unmanaged_withheld(&f.path).is_none()
+        let regular_included = || {
+            snap.unmanaged_files
+                .iter()
+                .flat_map(|s| &s.items)
+                .filter(|f| f.disposition.is_included() && f.file_type != FileType::Symlink)
+        };
+        let unmanaged_withheld = regular_included()
+            .filter_map(|f| {
+                let reason = f.payload_redaction.withheld()?;
+                Some((Destination::new(&f.path).ok()?.as_str().to_owned(), reason))
             })
+            .collect();
+        let unmanaged = regular_included()
+            .filter(|f| unmanaged_file_withheld(f).is_none())
             .filter_map(|f| {
                 let key = Destination::new(&f.path).ok()?.as_str().to_owned();
                 Some((
@@ -270,6 +288,7 @@ impl Carriage {
             carried,
             machine_state,
             unmanaged,
+            unmanaged_withheld,
             owed_kargs: !owed_kernel_arguments(snap).is_empty(),
         }
     }
@@ -297,6 +316,9 @@ impl Carriage {
     fn advice(&self, key: &str, findings: &[&RedactionFinding]) -> SupplyAdvice {
         if let Some(advice) = self.machine_state.get(key) {
             return *advice;
+        }
+        if let Some(reason) = self.unmanaged_withheld.get(key) {
+            return SupplyAdvice::UnmanagedWithheld(*reason);
         }
         if findings.iter().all(|f| f.kind == RedactionKind::Excluded) {
             return SupplyAdvice::NotInImage;
@@ -997,8 +1019,8 @@ mod tests {
     /// An unmanaged file the export ships: the line names the shipped
     /// copy, says whether placeholders are in it, and never calls it
     /// unmatched. A `/srv` one is left to the `/var` strategy; an excluded
-    /// one is not shipped; a flagged-only one the image carries reads as
-    /// carried as the host had it.
+    /// one is not shipped; one the bundle withheld unchecked says it is
+    /// left out and why, and names no shipped copy.
     #[test]
     fn test_supply_advice_for_unmanaged_payloads() {
         use inspectah_core::types::FindingKind as Disposition;
@@ -1021,7 +1043,16 @@ mod tests {
                 item("/srv/app/.env", PayloadRedaction::Redacted, true),
                 item("/opt/app/plain.conf", PayloadRedaction::Unchanged, true),
                 item("/opt/app/off.env", PayloadRedaction::Redacted, false),
-                item("/opt/app/huge.log", PayloadRedaction::TooLargeToCheck, true),
+                item(
+                    "/opt/app/huge.log",
+                    PayloadRedaction::Withheld(UncheckedPayload::TooLarge),
+                    true,
+                ),
+                item(
+                    "/opt/app/latin1.env",
+                    PayloadRedaction::Withheld(UncheckedPayload::NotUtf8),
+                    true,
+                ),
             ],
             ..Default::default()
         });
@@ -1051,9 +1082,16 @@ mod tests {
             advice("/opt/app/off.env", RedactionKind::Inline),
             SupplyAdvice::Unmatched
         );
-        assert_eq!(
-            advice("/opt/app/huge.log", RedactionKind::Flagged),
-            SupplyAdvice::ReviewOnly { carried: true }
-        );
+        for (path, reason) in [
+            ("/opt/app/huge.log", UncheckedPayload::TooLarge),
+            ("/opt/app/latin1.env", UncheckedPayload::NotUtf8),
+        ] {
+            let withheld = advice(path, RedactionKind::Excluded);
+            assert_eq!(withheld, SupplyAdvice::UnmanagedWithheld(reason));
+            let line = withheld.line(path);
+            assert!(line.contains("Left out of this export"), "{line}");
+            assert!(line.contains(reason.describe()), "{line}");
+            assert!(!line.contains("unmanaged/"), "{line}");
+        }
     }
 }

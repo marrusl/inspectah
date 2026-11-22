@@ -14,7 +14,7 @@ use inspectah_pipeline::build::extract::{
     is_single_normal_component,
 };
 use inspectah_pipeline::export_warning::{ExportWarning, sanitize_bounded};
-use inspectah_pipeline::render::configtree::unmanaged_withheld;
+use inspectah_pipeline::render::configtree::{unmanaged_file_withheld, unmanaged_withheld};
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
@@ -2044,7 +2044,8 @@ impl RefineSession {
     /// Returns true if the PROJECTED state contains sensitive material.
     ///
     /// Sensitive when `sensitive_snapshot` is true, when an included
-    /// unmanaged file ships a copy redaction changed or could not check
+    /// unmanaged file ships a copy redaction changed or is left out
+    /// because redaction could not check it
     /// (`PayloadRedaction::is_sensitive`), OR any user has
     /// `password_choice == "new"` with a non-empty `password_hash`.
     /// Based on projected state, not op history.
@@ -4387,7 +4388,7 @@ fn extract_payload_dirs_with_budget(
         .map(|s| {
             s.items
                 .iter()
-                .filter(|f| f.disposition.is_included() && unmanaged_withheld(&f.path).is_none())
+                .filter(|f| f.disposition.is_included() && unmanaged_file_withheld(f).is_none())
                 .map(|f| f.path.trim_start_matches('/').to_string())
                 .collect()
         })

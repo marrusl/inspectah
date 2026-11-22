@@ -191,9 +191,31 @@ pub enum PayloadRedaction {
     /// Text redaction changed: the shipped copy holds `REDACTED_*`
     /// placeholders where the host's file held credentials.
     Redacted,
-    /// Text too large for redaction to check, shipped as the host had it
-    /// and flagged for review.
-    TooLargeToCheck,
+    /// Text redaction could not check it, so the export leaves it out:
+    /// the bundle has no copy, and no export or image carries it.
+    Withheld(UncheckedPayload),
+}
+
+/// Why redaction could not check a text payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UncheckedPayload {
+    /// Text that is not UTF-8, which redaction cannot read without
+    /// changing bytes it did not match.
+    NotUtf8,
+    /// Text larger than the bundler reads whole to redact.
+    TooLarge,
+}
+
+impl UncheckedPayload {
+    /// Why, in words that follow "inspectah could not check it for
+    /// credentials:".
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::NotUtf8 => "it is text that is not UTF-8",
+            Self::TooLarge => "it is text too large to check",
+        }
+    }
 }
 
 impl PayloadRedaction {
@@ -202,10 +224,18 @@ impl PayloadRedaction {
         *self == Self::Unchanged
     }
 
-    /// Whether the shipped copy holds, or may hold, a credential's place:
-    /// a session carrying it asks for the sensitive-data acknowledgment.
+    /// Whether the payload holds, or may hold, a credential's place: a
+    /// session carrying it asks for the sensitive-data acknowledgment.
     pub fn is_sensitive(self) -> bool {
         self != Self::Unchanged
+    }
+
+    /// Why the export leaves the payload out, if it does.
+    pub fn withheld(self) -> Option<UncheckedPayload> {
+        match self {
+            Self::Withheld(why) => Some(why),
+            Self::Unchanged | Self::Redacted => None,
+        }
     }
 }
 

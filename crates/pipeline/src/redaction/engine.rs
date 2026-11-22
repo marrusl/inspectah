@@ -1,3 +1,4 @@
+use inspectah_core::machine_state::CLOSED_KEY_MATERIAL_MIN;
 use inspectah_core::redaction::{
     is_compose_file_name, scrub_compose_secrets, scrub_repo_credentials,
 };
@@ -1298,19 +1299,7 @@ pub fn scan_content(content: &str, path: &str) -> Vec<RedactionFinding> {
         all_matches
     };
     for (pat_idx, em) in all_matches {
-        let pat = &PATTERNS[pat_idx];
-        findings.push(RedactionFinding {
-            path: path.to_string(),
-            source: "pattern".into(),
-            kind: RedactionKind::Inline,
-            pattern: format!("{:?}", pat.finding_kind).to_lowercase(),
-            remediation: pat.remediation.to_string(),
-            line: Some(em.line_num as i32),
-            replacement: None,
-            detection_method: pat.detection_method.clone(),
-            confidence: Some(pat.confidence),
-            finding_kind: Some(pat.finding_kind.clone()),
-        });
+        findings.push(pattern_finding(&PATTERNS[pat_idx], em.line_num, path));
     }
 
     findings
@@ -1457,7 +1446,7 @@ fn redact_compose_content(
     raw: &mut String,
     path: &str,
     registry: &mut CounterRegistry,
-    generic: FieldRedactor,
+    generic: impl Fn(&mut String, &str, &mut CounterRegistry) -> Vec<RedactionFinding>,
 ) -> Vec<RedactionFinding> {
     let scrubbed = scrub_compose_secrets(raw);
     let compose_pass_fired = scrubbed.matches(COMPOSE_REDACTED_MARKER).count()
@@ -1491,58 +1480,220 @@ fn redact_compose_content(
     findings
 }
 
-/// A field redactor: scrubs `content` in place under `path`, with tokens
-/// from the registry, and returns the findings.
-type FieldRedactor = fn(&mut String, &str, &mut CounterRegistry) -> Vec<RedactionFinding>;
-
-/// The finding kinds a payload pass leaves alone, each for a reason the
-/// pattern alone cannot see:
-///
-/// - A private key is the key screening's (`payload_credential`), which
-///   reads the block's body and withholds the whole file before any
-///   payload is read here. A PEM match left by then is a pair of
-///   delimiters in code or data (a script naming them, a JSON template),
-///   and a placeholder would break that file.
-/// - A certificate is public material, not a credential, and a payload
-///   the image runs from (a CA bundle, a server certificate) would break
-///   with a placeholder in its place.
-const PAYLOAD_EXEMPT_KINDS: &[FindingKind] = &[FindingKind::PrivateKey, FindingKind::Certificate];
-
-/// Whether a payload pass applies `pat` ([`PAYLOAD_EXEMPT_KINDS`]).
-fn is_payload_pattern(pat: &SecretPattern) -> bool {
-    !PAYLOAD_EXEMPT_KINDS.contains(&pat.finding_kind)
+/// Which rules an unmanaged payload is redacted by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayloadRules {
+    /// A file only the bundle holds. A certificate is public and left in
+    /// place: a CA bundle or a server certificate breaks with a
+    /// placeholder in it. A private-key block keeps its markers and has
+    /// the text between them replaced, unless that text holds fewer
+    /// base64 characters than the smallest whole key
+    /// ([`CLOSED_KEY_MATERIAL_MIN`]): then the markers are delimiters in
+    /// code or data, and the match is left out.
+    Payload,
+    /// A file the snapshot also holds, such as an `.env` file or a compose
+    /// file: every pattern, private keys and certificates replaced whole,
+    /// as `redact` redacts the snapshot's copy. The shipped text is then
+    /// never less redacted than that copy of the same bytes.
+    SnapshotCopy,
 }
 
-/// [`scan_and_redact_field`] for a payload: every pattern but those
-/// [`is_payload_pattern`] leaves out.
+/// The index in [`PATTERNS`] of the PEM private-key block pattern.
+static PRIVATE_KEY_PATTERN: LazyLock<usize> = LazyLock::new(|| {
+    PATTERNS
+        .iter()
+        .position(|pat| pat.finding_kind == FindingKind::PrivateKey)
+        .expect("PATTERNS holds the private key pattern")
+});
+
+/// A private-key `BEGIN` marker, with the labels the private key pattern
+/// reads.
+static PRIVATE_KEY_BEGIN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"-----BEGIN\s+(?:(?:[A-Z0-9]+ )*PRIVATE KEY|PGP (?:PRIVATE|SECRET) KEY BLOCK)-----")
+        .expect("the private key marker pattern compiles")
+});
+
+/// An RFC 1421 or OpenPGP armor header line in a key body:
+/// `Proc-Type: 4,ENCRYPTED`, `DEK-Info: ...`, `Version: ...`.
+static KEY_HEADER_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[ \t]*[A-Za-z][A-Za-z0-9-]*:[ \t]").expect("the key header pattern compiles")
+});
+
+const PEM_BEGIN: &str = "-----BEGIN";
+const PEM_END: &str = "-----END";
+const PEM_DASHES: &str = "-----";
+
+/// Whether `b` is in the base64 alphabet, padding included.
+fn is_base64_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')
+}
+
+/// How many base64 characters `text` holds, wherever they are: key
+/// material is counted in any spacing and with any separators.
+fn base64_count(text: &str) -> usize {
+    text.bytes().filter(|&b| is_base64_byte(b)).count()
+}
+
+/// Whether `b` may sit in a key body after a marker that nothing closes:
+/// base64, a space or tab, or a backslash (a `\n` escape in a quoted
+/// string).
+fn is_body_byte(b: u8) -> bool {
+    is_base64_byte(b) || matches!(b, b' ' | b'\t' | b'\r' | b'\\')
+}
+
+/// The 1-based line `offset` is on in `content`.
+fn line_at(content: &str, offset: usize) -> usize {
+    content[..offset].matches('\n').count() + 1
+}
+
+/// `range` in `content` without the whitespace at either end.
+fn trimmed(content: &str, range: Range<usize>) -> Range<usize> {
+    let text = &content[range.clone()];
+    let start = range.start + (text.len() - text.trim_start().len());
+    start..start + text.trim().len()
+}
+
+/// A private-key pattern match `em` narrowed to the text between its
+/// markers, trimmed, or `None` when that text holds fewer than
+/// [`CLOSED_KEY_MATERIAL_MIN`] base64 characters: no key is that small, so
+/// the markers are delimiters (`{"begin":"-----BEGIN PRIVATE
+/// KEY-----","end":"-----END PRIVATE KEY-----"}`). Anything else between
+/// them is replaced, a key whose body is split by spaces or by other text
+/// included. The match keeps its whole block as its claim, so it wins
+/// over a credential inside it and takes that span too.
+fn private_key_body(content: &str, em: EligibleMatch) -> Option<EligibleMatch> {
+    let block = &content[em.claim.clone()];
+    let after_begin =
+        PEM_BEGIN.len() + block.get(PEM_BEGIN.len()..)?.find(PEM_DASHES)? + PEM_DASHES.len();
+    let before_end = block.rfind(PEM_END)?;
+    if before_end < after_begin
+        || base64_count(&block[after_begin..before_end]) < CLOSED_KEY_MATERIAL_MIN
+    {
+        return None;
+    }
+    let body = trimmed(
+        content,
+        em.claim.start + after_begin..em.claim.start + before_end,
+    );
+    Some(EligibleMatch {
+        start: body.start,
+        end: body.end,
+        ..em
+    })
+}
+
+/// Key material after each private-key `BEGIN` marker that no block of
+/// the private key pattern closes: a cut-off key, or one whose `END`
+/// marker is missing. The body is the rest of the marker's line while it
+/// holds only base64, spaces and backslashes, and, when that reaches the
+/// line's end, each following line that holds only those or is a key
+/// header. One holding [`CLOSED_KEY_MATERIAL_MIN`] base64 characters is
+/// replaced; a marker standing alone, or followed by a quote or other
+/// text, is not. Comment lines are read too.
+fn unclosed_private_key_bodies(content: &str) -> Vec<EligibleMatch> {
+    let pattern = &PATTERNS[*PRIVATE_KEY_PATTERN].regex;
+    let closed: Vec<Range<usize>> = pattern.find_iter(content).map(|m| m.range()).collect();
+    let mut found = Vec::new();
+    for marker in PRIVATE_KEY_BEGIN.find_iter(content) {
+        if closed
+            .iter()
+            .any(|block| block.start <= marker.start() && marker.end() <= block.end)
+        {
+            continue;
+        }
+        let mut end = marker.end();
+        let first_line_end = line_break_at_or_after(content, end);
+        end += content[end..first_line_end]
+            .bytes()
+            .position(|b| !is_body_byte(b))
+            .unwrap_or(first_line_end - end);
+        if end == first_line_end {
+            while end < content.len() {
+                let next_start = end + 1;
+                let next_end = line_break_at_or_after(content, next_start).max(next_start);
+                let line = &content[next_start.min(content.len())..next_end.min(content.len())];
+                if line.bytes().all(is_body_byte) || KEY_HEADER_LINE.is_match(line) {
+                    end = next_end.min(content.len());
+                } else {
+                    break;
+                }
+            }
+        }
+        let body = trimmed(content, marker.end()..end);
+        if base64_count(&content[body.clone()]) >= CLOSED_KEY_MATERIAL_MIN {
+            found.push(EligibleMatch {
+                claim: marker.start()..body.end,
+                start: body.start,
+                end: body.end,
+                line_num: line_at(content, marker.start()),
+            });
+        }
+    }
+    found
+}
+
+/// Every match a payload pass replaces in `content` under `rules`, with
+/// overlaps resolved: the one set both its findings and its replacements
+/// come from. A pattern a rule leaves out is left out before overlaps are
+/// resolved, so a certificate or a delimiter pair around a credential
+/// never takes that credential's place and hides it.
+fn payload_matches(content: &str, path: &str, rules: PayloadRules) -> Vec<(usize, EligibleMatch)> {
+    let narrowed = rules == PayloadRules::Payload;
+    let mut all: Vec<(usize, EligibleMatch)> = Vec::new();
+    for (idx, pat) in PATTERNS.iter().enumerate() {
+        if narrowed && pat.finding_kind == FindingKind::Certificate {
+            continue;
+        }
+        for em in collect_eligible_matches(pat, content, Some(path)) {
+            if narrowed && idx == *PRIVATE_KEY_PATTERN {
+                all.extend(private_key_body(content, em).map(|em| (idx, em)));
+            } else {
+                all.push((idx, em));
+            }
+        }
+    }
+    all.extend(
+        unclosed_private_key_bodies(content)
+            .into_iter()
+            .map(|em| (*PRIVATE_KEY_PATTERN, em)),
+    );
+    dedup_overlapping_matches(&mut all);
+    all
+}
+
+/// The finding for a pattern match at `path`, as [`scan_content`]
+/// records one.
+fn pattern_finding(pat: &SecretPattern, line_num: usize, path: &str) -> RedactionFinding {
+    RedactionFinding {
+        path: path.to_string(),
+        source: "pattern".into(),
+        kind: RedactionKind::Inline,
+        pattern: format!("{:?}", pat.finding_kind).to_lowercase(),
+        remediation: pat.remediation.to_string(),
+        line: i32::try_from(line_num).ok(),
+        replacement: None,
+        detection_method: pat.detection_method.clone(),
+        confidence: Some(pat.confidence),
+        finding_kind: Some(pat.finding_kind.clone()),
+    }
+}
+
+/// The pattern pass over a payload's text, in place, under `rules`: one
+/// finding per match [`payload_matches`] keeps, and each of those
+/// matches replaced with its token.
 fn redact_payload_field(
     content: &mut String,
     source_path: &str,
     registry: &mut CounterRegistry,
+    rules: PayloadRules,
 ) -> Vec<RedactionFinding> {
-    let findings: Vec<RedactionFinding> = scan_content(content, source_path)
-        .into_iter()
-        .filter(|f| {
-            f.finding_kind
-                .as_ref()
-                .is_none_or(|kind| !PAYLOAD_EXEMPT_KINDS.contains(kind))
-        })
+    let mut matches = payload_matches(content, source_path, rules);
+    let findings = matches
+        .iter()
+        .map(|(idx, em)| pattern_finding(&PATTERNS[*idx], em.line_num, source_path))
         .collect();
-    if findings.is_empty() {
-        return findings;
-    }
-    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-    for (idx, pat) in PATTERNS.iter().enumerate() {
-        if !is_payload_pattern(pat) {
-            continue;
-        }
-        for em in collect_eligible_matches(pat, content, Some(source_path)) {
-            all_matches.push((idx, em));
-        }
-    }
-    dedup_overlapping_matches(&mut all_matches);
-    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-    for (pat_idx, em) in all_matches {
+    matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+    for (pat_idx, em) in matches {
         let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
         let replacement = build_replacement(&em, content, registry, &kind_label);
         content.replace_range(em.start..em.end, &replacement);
@@ -1550,28 +1701,34 @@ fn redact_payload_field(
     findings
 }
 
-/// Redact one file's text the way `redact` treats a file at `path`: a
-/// compose file by name takes both compose passes, every other file the
-/// URL credential maskers and the generic pattern pass with `path`, so
-/// the path-scoped format rules apply as they do to a config file. Private keys and certificates are
-/// left in place ([`PAYLOAD_EXEMPT_KINDS`]). Returns the redacted text and its findings,
-/// or `None` when nothing in it changed.
+/// Redact one file's text the way `redact` treats a file at `path`, under
+/// `rules`: a compose file by name takes both compose passes, every other
+/// file the URL credential maskers and the pattern pass with `path`, so
+/// the path-scoped format rules apply as they do to a config file.
+/// Returns the redacted text and its findings, or `None` when nothing in
+/// it changed.
 ///
-/// For a file the snapshot does not hold, such as an unmanaged payload
-/// the scan bundles. Its tokens are numbered from 1 for this file alone,
-/// so the same secret elsewhere in the snapshot can carry another number.
-pub fn redact_payload(content: &str, path: &str) -> Option<(String, Vec<RedactionFinding>)> {
+/// For a file the bundle ships, such as an unmanaged payload. Its tokens
+/// are numbered from 1 for this file alone, so the same secret elsewhere
+/// in the snapshot can carry another number.
+pub fn redact_payload(
+    content: &str,
+    path: &str,
+    rules: PayloadRules,
+) -> Option<(String, Vec<RedactionFinding>)> {
     let mut registry = CounterRegistry::default();
     let mut text = content.to_owned();
     let is_compose = std::path::Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
         .is_some_and(is_compose_file_name);
+    let generic =
+        |c: &mut String, p: &str, r: &mut CounterRegistry| redact_payload_field(c, p, r, rules);
     let findings = if is_compose {
-        redact_compose_content(&mut text, path, &mut registry, redact_payload_field)
+        redact_compose_content(&mut text, path, &mut registry, generic)
     } else {
         let mut findings = mask_url_credentials(&mut text, path);
-        findings.extend(redact_payload_field(&mut text, path, &mut registry));
+        findings.extend(generic(&mut text, path, &mut registry));
         findings
     };
     (text != content).then_some((text, findings))
@@ -6969,27 +7126,170 @@ baseurl = https://cdn.redhat.com
     /// nothing to redact gives `None`.
     #[test]
     fn redact_payload_follows_the_file_rules() {
+        let payload =
+            |content: &str, path: &str| redact_payload(content, path, PayloadRules::Payload);
         let compose = "services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: pgsecret99\n";
         let (text, findings) =
-            redact_payload(compose, "/opt/app/docker-compose.yml").expect("compose redacts");
+            payload(compose, "/opt/app/docker-compose.yml").expect("compose redacts");
         assert!(!text.contains("pgsecret99"), "{text}");
         assert!(!findings.is_empty());
 
         let git = "[remote \"origin\"]\n\turl = https://deploy:gitsecret77@git.example.com/r.git\n";
-        let (text, findings) = redact_payload(git, "/opt/app/repo/.git/config").expect("masks");
+        let (text, findings) = payload(git, "/opt/app/repo/.git/config").expect("masks");
         assert!(!text.contains("gitsecret77"), "{text}");
         assert_eq!(findings[0].line, Some(2));
 
         let env = "API_TOKEN=supersecretvalue123\n";
-        let (text, _) = redact_payload(env, "/opt/app/.env").expect("env redacts");
+        let (text, _) = payload(env, "/opt/app/.env").expect("env redacts");
         assert!(!text.contains("supersecretvalue123"), "{text}");
 
         for kept in [
             "const begin = \"-----BEGIN PRIVATE KEY-----\", end = \"-----END PRIVATE KEY-----\";\n",
+            "{\"begin\":\"-----BEGIN PRIVATE KEY-----\",\"end\":\"-----END PRIVATE KEY-----\"}\n",
+            "echo \"-----BEGIN PRIVATE KEY-----\"\n",
+            "pem = \"-----BEGIN RSA PRIVATE KEY-----\\n\" + body\n",
             "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----\n",
             "port = 8080\n",
         ] {
-            assert!(redact_payload(kept, "/opt/app/x").is_none(), "{kept}");
+            assert!(payload(kept, "/opt/app/x").is_none(), "{kept}");
         }
+    }
+
+    /// One base64 line, as long as the smallest real key's body.
+    const KEY_LINE: &str = "MC4CAQAwBQYDK2VwBCIEIBQh0WfR6aXEBHdgfX4ix5qDYmYRBZGZEmNFdzJ1Owlp";
+
+    /// `KEY_LINE` cut into groups of `width`, joined by `sep`.
+    fn split_key(width: usize, sep: &str) -> String {
+        KEY_LINE
+            .as_bytes()
+            .chunks(width)
+            .map(|c| std::str::from_utf8(c).unwrap())
+            .collect::<Vec<_>>()
+            .join(sep)
+    }
+
+    /// Whether `text` still holds `KEY_LINE` once every byte outside the
+    /// base64 alphabet is dropped: recoverable key material.
+    fn holds_key(text: &str) -> bool {
+        let packed: String = text
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || "+/=".contains(*c))
+            .collect();
+        packed.contains(&KEY_LINE[..32]) || packed.contains(&KEY_LINE[32..])
+    }
+
+    /// A private-key block is left alone only when nothing but delimiters
+    /// sits between its markers. A body in any spacing, split by other
+    /// text, or after a marker nothing closes is replaced; the markers
+    /// stay, and so does the rest of the file.
+    #[test]
+    fn payload_key_blocks_are_exempt_only_when_delimiter_only() {
+        let begin = "-----BEGIN PRIVATE KEY-----";
+        let end = "-----END PRIVATE KEY-----";
+        let cases = [
+            (
+                "space split, closed, beside a token",
+                format!(
+                    "TLS_KEY=\"{begin} {} {end}\"\nAPI_TOKEN=supersecretvalue123\n",
+                    split_key(4, " ")
+                ),
+            ),
+            (
+                "space split over lines",
+                format!("key: |\n  {begin}\n  {}\n  {end}\n", split_key(4, "  \n  ")),
+            ),
+            (
+                "comma split",
+                format!("k = [\"{begin}\",{},\"{end}\"]\n", split_key(4, ",")),
+            ),
+            (
+                "space split, no END marker",
+                format!("TLS_KEY={begin} {}\nMODE=prod\n", split_key(4, " ")),
+            ),
+            (
+                "escaped newlines, no END marker",
+                format!("{{\"key\": \"{begin}\\n{KEY_LINE}\\n\"}}\n"),
+            ),
+        ];
+        for (label, content) in cases {
+            for rules in [PayloadRules::Payload, PayloadRules::SnapshotCopy] {
+                let (text, findings) = redact_payload(&content, "/opt/app/app.env", rules)
+                    .unwrap_or_else(|| panic!("{label} {rules:?}: redacted"));
+                assert!(!holds_key(&text), "{label} {rules:?}: {text}");
+                assert!(
+                    !text.contains("supersecretvalue123"),
+                    "{label} {rules:?}: {text}"
+                );
+                assert!(
+                    findings
+                        .iter()
+                        .any(|f| f.finding_kind == Some(FindingKind::PrivateKey)),
+                    "{label} {rules:?}: {findings:?}"
+                );
+                if rules == PayloadRules::Payload {
+                    assert!(text.contains(begin), "{label}: the marker stays: {text}");
+                }
+            }
+        }
+        // The line after a key that nothing closes keeps its text.
+        let (text, _) = redact_payload(
+            &format!(
+                "TLS_KEY={begin} {}\nAPI_TOKEN=supersecretvalue123\n",
+                split_key(4, " ")
+            ),
+            "/opt/app/app.env",
+            PayloadRules::Payload,
+        )
+        .unwrap();
+        assert!(text.contains("\nAPI_TOKEN=REDACTED_"), "{text}");
+    }
+
+    /// Exempt patterns are left out before overlaps are resolved, so a
+    /// credential between private-key or certificate markers is redacted,
+    /// with a finding, and the markers stay; a real certificate stays
+    /// whole, also when a token sits beside it.
+    #[test]
+    fn payload_exemptions_never_hide_a_credential() {
+        for (begin, end) in [
+            ("-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"),
+            ("-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----"),
+        ] {
+            let json = format!(
+                "{{\n  \"begin\": \"{begin}\",\n  \"api_token\": \"supersecretvalue123\",\n  \"end\": \"{end}\"\n}}\n"
+            );
+            let (text, findings) =
+                redact_payload(&json, "/opt/app/tmpl.json", PayloadRules::Payload)
+                    .unwrap_or_else(|| panic!("{begin}: redacted"));
+            assert!(!text.contains("supersecretvalue123"), "{text}");
+            assert!(text.contains(begin) && text.contains(end), "{text}");
+            assert!(!findings.is_empty());
+        }
+        let cert =
+            "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----\n";
+        let (text, _) = redact_payload(
+            &format!("{cert}password=hunter2hunter2\n{cert}"),
+            "/opt/app/bundle.pem",
+            PayloadRules::Payload,
+        )
+        .expect("the password is redacted");
+        assert_eq!(text.matches(cert).count(), 2, "{text}");
+        assert!(!text.contains("hunter2hunter2"), "{text}");
+    }
+
+    /// A file the snapshot also holds is redacted by the rules its copy
+    /// there was: private keys and certificates whole, so the shipped text
+    /// is never less redacted than that copy.
+    #[test]
+    fn snapshot_copy_rules_match_the_config_pass() {
+        let content = "{\"begin\":\"-----BEGIN PRIVATE KEY-----\",\"end\":\"-----END PRIVATE KEY-----\"}\n\
+             -----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----\n\
+             API_TOKEN=supersecretvalue123\n";
+        let mut twin = content.to_owned();
+        let mut registry = CounterRegistry::default();
+        scan_and_redact_field(&mut twin, "/opt/app/.env", &mut registry);
+        let (text, _) =
+            redact_payload(content, "/opt/app/.env", PayloadRules::SnapshotCopy).expect("redacted");
+        assert_eq!(text, twin);
+        assert!(!text.contains("BEGIN"), "{text}");
     }
 }
