@@ -921,3 +921,81 @@ fn non_quadlet_files_under_the_quadlet_directory_are_carried_on_both_paths() {
     let root = unpack(&tarball, &unpacked);
     assert_quadlet_dir_carried_once("refine web export", &root);
 }
+
+/// The quadlet sits in both inventories: the containers section records
+/// it, and the config walk admits it as a file under `/etc`. Excluding
+/// its quadlet row in refine leaves the config row included, so the only
+/// thing keeping the unit out of `config/` is that the containers section
+/// owns every quadlet it records, whatever its disposition. Ownership
+/// filtered to included quadlets would hand the excluded unit back to
+/// configuration and carry it into the image.
+#[test]
+fn an_excluded_quadlet_is_not_carried_back_as_configuration() {
+    use inspectah_refine::types::{ItemId, RefinementOp};
+
+    let cache = tempfile::tempdir().expect("tempdir");
+    let snapshot = scan_like(&quadlet_dir_host_mock(cache.path()));
+    let recorded = QUADLET_UNIT.trim_start_matches('/');
+    assert!(
+        snapshot
+            .containers
+            .as_ref()
+            .expect("the containers section")
+            .quadlet_units
+            .iter()
+            .any(|q| q.path == recorded && q.disposition.is_included()),
+        "the containers section records the quadlet as included"
+    );
+    assert!(
+        snapshot
+            .config
+            .as_ref()
+            .expect("the config section")
+            .files
+            .iter()
+            .any(|f| f.path == QUADLET_UNIT && f.disposition.is_included()),
+        "the config walk admits the quadlet too, or the exclusion has nothing to leak through"
+    );
+
+    let mut session = RefineSession::new(snapshot);
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Quadlet {
+                path: recorded.into(),
+            },
+            include: false,
+        })
+        .expect("the quadlet can be excluded");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tarball = dir.path().join("export.tar.gz");
+    session
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball)
+        .expect("the export writes");
+    let unpacked = dir.path().join("unpacked");
+    std::fs::create_dir_all(&unpacked).expect("mkdir");
+    let root = unpack(&tarball, &unpacked);
+
+    let label = "refine web export, quadlet excluded";
+    let files = staged_files(&root);
+    let unit_name = file_name(QUADLET_UNIT);
+    assert!(
+        !files.iter().any(|f| f.ends_with(unit_name)),
+        "{label}: the excluded quadlet is in neither quadlet/ nor config/, got {files:?}"
+    );
+    for (host_path, content) in [
+        (QUADLET_DIR_STRAY, QUADLET_DIR_STRAY_CONTENT),
+        (QUADLET_DROP_IN, QUADLET_DROP_IN_CONTENT),
+        (REGISTRIES_DROP_IN, REGISTRIES_DROP_IN_CONTENT),
+    ] {
+        let rel = format!("config/{}", host_path.trim_start_matches('/'));
+        assert_eq!(
+            std::fs::read_to_string(root.join(&rel)).ok().as_deref(),
+            Some(content),
+            "{label}: {host_path} is still carried as configuration"
+        );
+    }
+    assert_every_copy_source_exists(label, &root);
+    assert_every_staged_file_is_copied(label, &root);
+}
