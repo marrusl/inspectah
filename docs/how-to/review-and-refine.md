@@ -275,7 +275,9 @@ those packages, and including it again takes them all out of the group.
 One that needs a repo disabled on the source host, or a package that no
 enabled repo serves, or that may need a package the source host did not
 have, is not carried by default: it is listed here with that reason, and
-the export notice names it with the reason too. You can
+the export notice names it with the reason too. So is one that needs a
+package from a repo you exclude in the Repositories bar, for as long as
+that repo is excluded. You can
 include it, but the build installs it from the repos the image enables
 only, so it fails when what it needs is not there.
 Including any other package takes the packages it needs out of the group

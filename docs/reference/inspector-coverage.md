@@ -47,7 +47,7 @@ The modernization advisory catalog (`inspectors/modernization.rs`) is not an ins
 | `rpm -Va` | Package verification results (modified files) |
 | `dnf repoquery --userinstalled` | Leaf package classification |
 | Batched `rpm -q` requires, recommends and supplements, and an `rpm -qa` provides index | Dependency graph for leaf/auto classification. File requirements resolve through the file ownership query above. Falls back to `dnf repoquery --requires --resolve --recursive --installed` when either rpm query fails |
-| `dnf repoquery --installed` (`%{from_repo}`) | Source repository of each package; falls back to `rpm -qi` |
+| `dnf repoquery --installed` (`%{name} %{arch} %{from_repo}`) | Source repository of each package, per architecture; falls back to `rpm -qi` |
 | `dnf group list --installed`, `dnf group info` | Installed package groups |
 | `/etc/yum.repos.d/` | Repository configuration files |
 | `gpgkey=` paths in those repo files | Imported GPG keys (a file is kept only if one of its lines begins with a PGP public key header; a file that also holds a PGP private key block is refused) |

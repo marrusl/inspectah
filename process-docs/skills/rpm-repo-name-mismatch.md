@@ -4,13 +4,30 @@
 
 RHEL systems use two different naming schemes for the same repository:
 
-- **Install-time short names** from `dnf repoquery --installed --queryformat "%{from_repo}"`:
+- **Install-time short names** from `dnf repoquery --installed --queryformat "%{name} %{arch} %{from_repo}"`:
   `AppStream`, `baseos`, `BaseOS`, `anaconda`
 - **Full repo IDs** from `dnf repolist --enabled` and `.repo` file `[section]` headers:
   `rhel-9-for-aarch64-appstream-rpms`, `rhel-9-for-x86_64-baseos-rpms`
 
 Exact string comparison between these two schemes always fails on real
 RHEL systems. This caused ~50% false-positive repo-less flagging.
+
+## The recorded repo is per architecture
+
+`populate_source_repos` keys what dnf recorded by `name.arch`, never by
+bare name. A multilib host can have `libfoo.i686` from AppStream and
+`libfoo.x86_64` from a local RPM path; when the query was keyed by name,
+the first line dnf printed went to both, so the 64-bit library read as
+installable by name and a unit owner needing it was carried into a build
+that could not resolve it. What cannot be told apart is unknown, and
+`source_repo` stays empty (`MissingSourceRepo`, so nothing installs it
+by name and an owner that may pull it in is held): two records for one
+`name.arch` that name different repos, and a record with no
+architecture (a two-field dnf line, or an `rpm -qi` record whose
+`Architecture` line does not come before its repo line), which voids
+every entry of that name. A mock of the query answers
+`<name> <arch> <repo>` lines; the old two-field answer now reads as
+arch-less and leaves the name unknown.
 
 ## Two separate callsites, two different rules
 
@@ -192,8 +209,10 @@ of the two questions that ask it. Never resolve an id by walking
   `inspectah_core::types::repo::effective_definition` over the captured
   repo files.
 - **Export questions** (what the image build's dnf uses: the
-  disabled-repo route, the repo-enabling proof, its demotion FIXME and the
-  audit's "Carried by Export") ask `InstallRepos::effective`, which is
+  disabled-repo route, the repo-enabling proof, its demotion FIXME, the
+  unit-owner hold for a repo the export drops
+  (`not_carried::repos_lost_in_export`) and the audit's "Carried by
+  Export") ask `InstallRepos::effective`, which is
   `effective_definition` over the staged files and nothing when the
   Custom Repositories `COPY` does not render. The repo-enabling proof
   accepts that definition only when it is enabled, keyed and has a

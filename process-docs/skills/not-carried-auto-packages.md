@@ -159,7 +159,11 @@ the collector subtracts the base image by `name.arch`, so an added
 architecture the base image does not provide. Skipping an entry because
 its bare name is in `baseline_package_names` named an owner whose
 dependency the build cannot fetch
-(`another_arch_of_a_base_image_package_holds_its_owner`).
+(`another_arch_of_a_base_image_package_holds_its_owner`). The repo each
+entry is checked by is its own architecture's (`source_repos`, keyed by
+`name.arch`): a bare-name key gave `libvendor.x86_64` from a local RPM
+the AppStream repo of `libvendor.i686`
+(`a_sibling_archs_repo_never_vouches_for_a_package`).
 
 The closures name installed packages only, so they cannot show a
 package the host never had. The collector records the added packages
@@ -174,13 +178,40 @@ that is, or whose possible closure holds, such a package is
 `OwnerHold::Unresolved` (Mark Russell, 2026-11-21;
 `a_requirement_the_host_could_not_resolve_holds_its_owner`). The dnf
 fallback reads no requirement, so it lists every package and holds
-every owner. `DisabledRepo` wins over the others.
+every owner.
+
+A package whose repo the export drops is no better than one no repo
+serves. An owner that is, or whose possible closure holds, a package
+installed from a host-enabled section of a captured custom `.repo` file
+that the build's repo files no longer carry enabled
+(`repos_lost_in_export`, an export question asked of
+`InstallRepos::effective`) is `OwnerHold::RepoExcluded` (Mark Russell,
+2026-11-21; `excluding_a_dependencys_repo_holds_its_owner`). An `or`
+does not save it: `agent` requiring `(vendor-runtime or helper)` with
+`helper` from an excluded `vendor` has neither operand at build time.
+Distro repos, sections a default repo file defines and host-disabled
+sections are never lost. A file that still stages, because another of
+its sections is kept or an included config entry writes the same path,
+still carries the repo, and dnf can fetch from it. This hold is decided
+by the export, so it follows refine's repo selection: refine's defaults
+are set when a session opens, before any repo is excluded, so
+`project_snapshot` runs `hold_owners_losing_a_repo` last, excluding such
+an owner while the repo is out and leaving it carried once it is back.
+An owner the operator included by hand (the last package op on it
+includes it) is left as they set it. The scan's defaults exclude it with
+the other holds.
+
+Precedence: `RepoExcluded` first (until the repo is back nothing the
+operator does to the owner helps), then `DisabledRepo` (the one the
+operator can act on by including the owner), then the closure's
+`NoRepo` or `Unresolved`.
 `unit_owner_holds` is every owner with its hold; `default_carried_unit_owners`
 is the ones with none. A held owner is `AutoCarriage::HeldOwner`,
 excluded by default and listed with the hold's reason
 (`OwnerHold::reason`: "needs a repo disabled on the host", "needs a
 package no enabled repo serves", "may need a package the host did not
-have"). Refine's leaf default excludes it
+have", "needs a package from a repo excluded in this export"). Refine's
+leaf default excludes it
 too, since it is not in the carried set. Included by the operator, it
 installs as any auto package an operator includes does, as in beta.6.
 
@@ -409,8 +440,14 @@ than one arch of that name. All reason wording comes from the constant
 - Without leaf data, a dependency cycle no root reaches is auto, as in
   beta.6: with an unrelated leaf beside it, its members are not carried
   and their recorded unit commands are omitted.
-- The source repo is read by name (`populate_source_repos`), so two
-  architectures of one added name share the first repo dnf prints.
+- The repo-loss hold knows only the repo a package was installed from:
+  a package another enabled repo also serves is held for its owner all
+  the same when its own repo is excluded. Including the repo again
+  carries the owner.
+- The repo-loss hold is applied to the projection, so refine's Packages
+  view shows such an owner excluded while the repo is out. An explicit
+  include of the owner stands, and installs as any held owner the
+  operator includes does, which fails the build while the repo is out.
 - The possible side over-counts on purpose. It counts every `or`
   operand and both branches of every conditional without evaluating
   them, so a package the image will not install can stay included by
