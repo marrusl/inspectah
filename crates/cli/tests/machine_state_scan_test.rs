@@ -1406,12 +1406,13 @@ fn a_credential_edit_is_refused_and_an_edited_session_file_does_not_resume() {
     }
 }
 
-/// Collect case 21, the refine half, and case 31's refine half: on a
-/// fleet aggregate every class row is `never`, and an include of a
-/// withheld configuration or unmanaged path is refused.
+/// Collect case 21, the refine half: on a fleet aggregate every class row
+/// is `never`, and an include of a withheld configuration path is
+/// refused. Case 31's refine half, on a collected unmanaged row, is in
+/// `unmanaged_credentials_are_withheld_on_both_export_paths`.
 #[test]
 fn withheld_rows_are_never_overridable_in_refine() {
-    use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
+    use inspectah_refine::types::RefineError;
     let merged = aggregate(vec![
         fleet_host("host-a", |h| {
             h.file(IQN, "InitiatorName=iqn.2000-01.com.example:a\n")
@@ -1432,33 +1433,6 @@ fn withheld_rows_are_never_overridable_in_refine() {
     let mut fleet = inspectah_refine::session::RefineSession::new(merged);
     assert!(matches!(
         fleet.apply(set_include(IQN, true)),
-        Err(RefineError::NotCarriable(_))
-    ));
-
-    let mut host = InspectionSnapshot::new();
-    host.unmanaged_files = Some(inspectah_core::types::nonrpm::UnmanagedFileSection {
-        withheld: vec![
-            inspectah_core::types::machine_state::WithheldUnmanagedEntry {
-                path: "/opt/app/k".into(),
-                member: MachineStateMember::PrivateKeyFile,
-                mode: Some(0o600),
-                size: Some(10),
-                aggregate: None,
-            },
-        ],
-        ..Default::default()
-    });
-    let steps = inspectah_web::adapter::machine_state_steps(&host);
-    assert_eq!(steps.len(), 1);
-    assert_eq!(steps[0].paths, ["/opt/app/k"]);
-    let mut session = inspectah_refine::session::RefineSession::new(host);
-    assert!(matches!(
-        session.apply(RefinementOp::SetInclude {
-            item_id: ItemId::UnmanagedFile {
-                path: "/opt/app/k".into()
-            },
-            include: true,
-        }),
         Err(RefineError::NotCarriable(_))
     ));
 }
@@ -1787,4 +1761,137 @@ fn refused_repo_and_key_files_degrade_the_rpm_section() {
         assert_never_opened(&exec, path);
     }
     assert_marker_nowhere(&snap);
+}
+
+/// Both export paths' provisioning surfaces for `snap`, by name: each
+/// Containerfile and audit report, the scan's README and its stderr
+/// notices, and the refine export's warnings.
+fn provisioning_surfaces(
+    snap: &InspectionSnapshot,
+    session: &inspectah_refine::session::RefineSession,
+) -> Vec<(&'static str, String)> {
+    let read = |tree: &tempfile::TempDir, name: &str| {
+        std::fs::read_to_string(tree.path().join(name)).unwrap_or_default()
+    };
+    let scan = render_export(snap);
+    let refine = export_session(session);
+    let packed = tempfile::tempdir().unwrap();
+    let warnings: Vec<String> = session
+        .export_plan(session.generation())
+        .unwrap()
+        .render(&packed.path().join("e.tar.gz"))
+        .unwrap()
+        .into_iter()
+        .map(|w| w.to_string())
+        .collect();
+    let notices: Vec<String> = inspectah_pipeline::render::machine_state::export_notices(snap)
+        .into_iter()
+        .map(|w| w.to_string())
+        .collect();
+    vec![
+        ("scan Containerfile", read(&scan, "Containerfile")),
+        ("scan audit report", read(&scan, "audit-report.md")),
+        ("scan README", read(&scan, "README.md")),
+        ("scan notices", notices.join("\n")),
+        ("refine Containerfile", read(&refine, "Containerfile")),
+        ("refine audit report", read(&refine, "audit-report.md")),
+        ("refine warnings", warnings.join("\n")),
+    ]
+}
+
+/// Text that only a provisioning step or left-out notice writes.
+const PROVISIONING_MARKS: &[&str] = &[
+    "# === Provisioning ===",
+    "## Provisioning steps",
+    "At provisioning:",
+];
+
+/// A host whose class files are all recreated automatically (machine-id,
+/// an SSH host key, the hostname, an IQN) owes no step, so no
+/// provisioning section or notice appears on any surface of either
+/// export path, while the audit report still lists the rows.
+#[test]
+fn an_automatic_only_host_has_no_provisioning_notice_anywhere() {
+    let snap = scan_with(
+        SysctlHost::new()
+            .file("/etc/machine-id", "0123456789abcdef\n")
+            .file("/etc/ssh/ssh_host_ed25519_key", &openssh_key())
+            .file("/etc/hostname", "host-a\n")
+            .file(IQN, "InitiatorName=iqn.1994-05.com.redhat:auto\n"),
+        std_inspectors(),
+    );
+    assert!(
+        inspectah_pipeline::render::machine_state::provisioning_steps(&snap).is_empty(),
+        "no row owes a step"
+    );
+    assert!(withheld(&snap, "/etc/machine-id").is_some());
+    let session = session(&snap);
+    for (surface, text) in provisioning_surfaces(&snap, &session) {
+        for mark in PROVISIONING_MARKS {
+            assert!(!text.contains(mark), "{surface} has {mark:?}:\n{text}");
+        }
+        if surface.ends_with("audit report") {
+            assert!(text.contains("#### Machine state ("), "{surface}:\n{text}");
+        }
+    }
+    assert_marker_nowhere(&snap);
+}
+
+/// A `plain` override: a collected `/etc/rhsm/syspurpose/syspurpose.json`
+/// owes `subscription-manager register` until it is included. Included
+/// in refine, both export paths stage the captured bytes, every `COPY`
+/// source exists, the step is gone from every surface (an overridden row
+/// owes nothing), and no `warn` notice is added.
+#[test]
+fn a_plain_override_ships_the_file_and_owes_nothing_on_both_paths() {
+    const SYSPURPOSE: &str = "/etc/rhsm/syspurpose/syspurpose.json";
+    const CONTENT: &str = "{\"role\": \"Red Hat Enterprise Linux Server\"}\n";
+    let snap = scan_with(
+        SysctlHost::new().file(SYSPURPOSE, CONTENT),
+        std_inspectors(),
+    );
+    let mut session = session(&snap);
+    let row = inspectah_web::adapter::build_web_view(&session)
+        .machine_state
+        .into_iter()
+        .find(|r| r.path == SYSPURPOSE)
+        .expect("a view row");
+    assert_eq!(
+        serde_json::to_value(&row).unwrap()["override"],
+        serde_json::json!("plain")
+    );
+    for (surface, text) in provisioning_surfaces(&snap, &session) {
+        if surface != "scan README"
+            && surface != "scan audit report"
+            && surface != "refine audit report"
+        {
+            assert!(
+                text.contains("subscription-manager register"),
+                "{surface} owes the step before the include:\n{text}"
+            );
+        }
+    }
+
+    session
+        .apply(set_include(SYSPURPOSE, true))
+        .expect("the include applies");
+    let projected = reload(&session.snapshot_projected());
+    let staged = |tree: &tempfile::TempDir| {
+        std::fs::read_to_string(tree.path().join(format!("config{SYSPURPOSE}"))).ok()
+    };
+    let refine_tree = export_session(&session);
+    let scan_tree = render_export(&projected);
+    for (via, tree) in [("refine export", &refine_tree), ("scan export", &scan_tree)] {
+        assert_eq!(staged(tree).as_deref(), Some(CONTENT), "{via}");
+        crate::copy_source_exists_test::assert_every_copy_source_exists(via, tree.path());
+    }
+    for (surface, text) in provisioning_surfaces(&projected, &session) {
+        for mark in PROVISIONING_MARKS {
+            assert!(!text.contains(mark), "{surface} has {mark:?}:\n{text}");
+        }
+        assert!(
+            !text.contains("Host identity included"),
+            "{surface}: a plain override adds no warn notice"
+        );
+    }
 }
