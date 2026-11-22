@@ -1,12 +1,253 @@
-//! Secrets review renderer — produces secrets-review.md listing all
-//! redaction findings and recommended actions.
+//! Secrets review renderer: produces `secrets-review.md`, every
+//! redaction finding grouped by the file it is in, each file with one line
+//! on how to supply the real value at deploy time.
+//!
+//! The file holds paths, finding names and placeholder forms only, never a
+//! byte of a secret: every cell is a path, an enum-owned label or a
+//! finding's own text, and nothing is read from file content.
+
+use std::collections::BTreeMap;
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::machine_state::{ProvisioningNotice, ProvisioningStep};
 use inspectah_core::types::redaction::{DetectionMethod, RedactionFinding, RedactionKind};
+
+use super::configtree::{Destination, KARGS_PATH, staged_writes};
+use super::machine_state::class_rows;
+use super::md_literal::{md_code, md_code_cell};
+
+/// The path kernel command line findings carry.
+const CMDLINE_PATH: &str = "/proc/cmdline";
+/// The account database whose hashes the shadow pass replaces.
+const SHADOW_PATH: &str = "/etc/shadow";
+/// The mount table whose options the storage pass replaces.
+const FSTAB_PATH: &str = "/etc/fstab";
+/// The directory dnf reads `.repo` files from.
+const YUM_REPOS_DIR: &str = "/etc/yum.repos.d/";
+/// The prefix redaction gives a running container's environment.
+const CONTAINER_PREFIX: &str = "container:";
+
+/// How to supply the real value of one file's redactions at deploy time:
+/// the one line under each file heading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SupplyAdvice {
+    /// A machine-state file the export leaves out, with the step that
+    /// replaces it on a deployed machine.
+    MachineStateOwed(ProvisioningStep),
+    /// A machine-state file the export leaves out that is recreated
+    /// without operator action, or needed by nothing.
+    MachineStateAutomatic,
+    /// A machine-state file an operator override carries.
+    MachineStateCarried,
+    /// Every finding left the whole file out.
+    NotInImage,
+    /// Nothing was replaced: every finding is flagged for review.
+    ReviewOnly,
+    /// The kernel command line; `kargs_file` when the image carries the
+    /// kernel arguments file inspectah generates from it.
+    KernelArgument { kargs_file: bool },
+    /// Password hashes in the account database.
+    AccountPassword,
+    /// A running container's environment.
+    ContainerEnvironment,
+    /// Credentials in mount options.
+    MountOption,
+    /// A package registry credential in a language package manifest.
+    PackageRegistry,
+    /// A credential in a `.repo` file's URL.
+    RepoCredential,
+    /// A file the image carries under `/usr`, read-only when deployed.
+    CarriedInUsr,
+    /// A file the image carries anywhere else, `/etc` in practice.
+    Carried,
+    /// A file inspectah does not copy into the image.
+    NotCopied,
+}
+
+impl SupplyAdvice {
+    /// The line, plain text a person would write.
+    fn line(self) -> String {
+        match self {
+            Self::MachineStateOwed(step) => format!(
+                "Left out of the image as this host's own state (see Provisioning steps in \
+                 the audit report). At provisioning: {}.",
+                step.command()
+            ),
+            Self::MachineStateAutomatic => "Left out of the image as this host's own state, and \
+                 recreated on a deployed machine without operator action: nothing to supply."
+                .into(),
+            Self::MachineStateCarried => {
+                "Carried in the image by an operator override although it \
+                 is this host's own state, with placeholders in place: every machine built from \
+                 the image gets this file, so put the real values in place on each machine at \
+                 deploy time."
+                    .into()
+            }
+            Self::NotInImage => "Not in the image, so nothing to do there. If a deployed machine \
+                 needs this file, provision it at deploy time."
+                .into(),
+            Self::ReviewOnly => {
+                "Nothing was replaced, so the file ships as the host had it. Check \
+                 the flagged lines, and move any real secret out of the image into a deploy-time \
+                 step."
+                    .into()
+            }
+            Self::KernelArgument { kargs_file: true } => format!(
+                "The image's kernel arguments file {} carries the placeholder: remove that \
+                 argument there and pass the real one at install time, for example with \
+                 `bootc install to-disk --karg`.",
+                md_code(KARGS_PATH)
+            ),
+            Self::KernelArgument { kargs_file: false } => "Not in the image: pass the real kernel \
+                 argument at install time, for example with `bootc install to-disk --karg`."
+                .into(),
+            Self::AccountPassword => "The password hashes here were replaced: set each account's \
+                 password at provisioning, for example with kickstart `user --password` or \
+                 cloud-init."
+                .into(),
+            Self::ContainerEnvironment => "A running container's environment, not a file: give \
+                 the container the value at deploy time with `podman secret` or an environment \
+                 file written at provisioning."
+                .into(),
+            Self::MountOption => "Keep mount credentials in a `credentials=` file written at \
+                 deploy time with mode 0600, not in the image."
+                .into(),
+            Self::PackageRegistry => "A registry credential for the build: give it to the build \
+                 as a secret (`podman build --secret`) or a credential helper, never in the \
+                 manifest."
+                .into(),
+            Self::RepoCredential => "A repository credential: give it to the build as a secret \
+                 (`podman build --secret`), and write it at provisioning if deployed machines use \
+                 this repo."
+                .into(),
+            Self::CarriedInUsr => "Carried in the image under `/usr`, which is read-only on a \
+                 deployed machine: move the secret to a file under `/etc` or a mounted secret \
+                 supplied at deploy time."
+                .into(),
+            Self::Carried => "Carried in the image with placeholders in place: write the real \
+                 values on each machine at deploy time, with a drop-in where the program reads \
+                 one, a mounted secret, or a provisioning step. `/etc` keeps that local change \
+                 across upgrades."
+                .into(),
+            Self::NotCopied => "Not copied into the image as a file: supply the value at deploy \
+                 time, with a mounted secret or a provisioning step, wherever a deployed machine \
+                 needs it."
+                .into(),
+        }
+    }
+}
+
+/// What the image knows about where findings land: the destinations it
+/// carries and the machine-state rows, both keyed by normalized path.
+struct Carriage {
+    carried: std::collections::BTreeSet<String>,
+    machine_state: BTreeMap<String, SupplyAdvice>,
+}
+
+impl Carriage {
+    fn of(snap: &InspectionSnapshot) -> Self {
+        let mut carried: std::collections::BTreeSet<String> = staged_writes(snap)
+            .writes
+            .keys()
+            .map(|d| d.as_str().to_owned())
+            .collect();
+        // Quadlets are staged under `quadlet/` and copied to
+        // `/etc/containers/systemd/` by the containers section.
+        if let Some(containers) = &snap.containers {
+            carried.extend(
+                containers
+                    .quadlet_units
+                    .iter()
+                    .filter(|q| q.disposition.is_included() && !q.content.is_empty())
+                    .filter_map(|q| Destination::new(&q.path).ok())
+                    .map(|d| d.as_str().to_owned()),
+            );
+        }
+        let machine_state = class_rows(snap)
+            .into_iter()
+            .filter_map(|row| {
+                let key = Destination::new(row.path).ok()?.as_str().to_owned();
+                let advice = if row.included {
+                    SupplyAdvice::MachineStateCarried
+                } else {
+                    match row.member.notice() {
+                        ProvisioningNotice::Owed { step } => SupplyAdvice::MachineStateOwed(step),
+                        ProvisioningNotice::Automatic { .. } | ProvisioningNotice::None => {
+                            SupplyAdvice::MachineStateAutomatic
+                        }
+                    }
+                };
+                Some((key, advice))
+            })
+            .collect();
+        Self {
+            carried,
+            machine_state,
+        }
+    }
+
+    /// The advice for the file at `key` holding `findings`, by the first
+    /// rule that applies. A machine-state file takes its class line, so a
+    /// file in both lists is described once, the way the class describes it.
+    fn advice(&self, key: &str, findings: &[&RedactionFinding]) -> SupplyAdvice {
+        if let Some(advice) = self.machine_state.get(key) {
+            return *advice;
+        }
+        if findings.iter().all(|f| f.kind == RedactionKind::Excluded) {
+            return SupplyAdvice::NotInImage;
+        }
+        if findings.iter().all(|f| f.kind == RedactionKind::Flagged) {
+            return SupplyAdvice::ReviewOnly;
+        }
+        if key.starts_with(CONTAINER_PREFIX) {
+            return SupplyAdvice::ContainerEnvironment;
+        }
+        match key {
+            CMDLINE_PATH => {
+                return SupplyAdvice::KernelArgument {
+                    kargs_file: self.carried.contains(KARGS_PATH),
+                };
+            }
+            SHADOW_PATH => return SupplyAdvice::AccountPassword,
+            FSTAB_PATH => return SupplyAdvice::MountOption,
+            _ => {}
+        }
+        if findings.iter().any(|f| f.source == "manifest_auth") {
+            return SupplyAdvice::PackageRegistry;
+        }
+        if key
+            .strip_prefix(YUM_REPOS_DIR)
+            .is_some_and(|name| !name.contains('/') && name.ends_with(".repo"))
+        {
+            return SupplyAdvice::RepoCredential;
+        }
+        if self.carried.contains(key) {
+            if key.starts_with("/usr/") {
+                return SupplyAdvice::CarriedInUsr;
+            }
+            return SupplyAdvice::Carried;
+        }
+        SupplyAdvice::NotCopied
+    }
+}
+
+/// The key a finding is grouped under: its destination in the image, so
+/// `etc/x` and `/etc/x` are one file. A label with no path (`container:web`,
+/// `quadlet:app`) is kept as written.
+fn group_key(path: &str) -> String {
+    let is_label = path
+        .split_once(':')
+        .is_some_and(|(prefix, _)| !prefix.is_empty() && !prefix.contains('/'));
+    if is_label {
+        return path.to_owned();
+    }
+    Destination::new(path)
+        .map(|d| d.as_str().to_owned())
+        .unwrap_or_else(|_| path.to_owned())
+}
 
 /// Render the secrets review markdown from a snapshot.
 pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
-    // Check if there's ANY sensitive content (redactions OR subscription)
     let has_redactions = !snap.redactions.is_empty();
     let has_subscription = snap.preserved_subscription;
 
@@ -18,134 +259,93 @@ pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
     lines.push("# Secrets Review".into());
     lines.push(String::new());
 
-    // Classify findings by kind
-    let mut excluded = Vec::new();
-    let mut inline_redacted = Vec::new();
-    let mut flagged = Vec::new();
-    let overridden: Vec<&RedactionFinding> = Vec::new(); // Phase 1: no "overridden" variant in enum
-
+    let mut by_file: BTreeMap<String, Vec<&RedactionFinding>> = BTreeMap::new();
     for finding in &snap.redactions {
         if finding.source.is_empty() {
             continue;
         }
-        match finding.kind {
-            RedactionKind::Excluded => excluded.push(finding),
-            RedactionKind::Inline => inline_redacted.push(finding),
-            RedactionKind::Flagged => flagged.push(finding),
-        }
+        by_file
+            .entry(group_key(&finding.path))
+            .or_default()
+            .push(finding);
+    }
+    for findings in by_file.values_mut() {
+        // Stable, so findings on one line keep the order redaction
+        // recorded them in; a finding with no line comes last.
+        findings.sort_by_key(|f| f.line.unwrap_or(i32::MAX));
     }
 
-    let _ = &overridden; // suppress unused warning until overridden variant added
-    let n_redacted = excluded.len() + inline_redacted.len();
+    let count = |kind: RedactionKind| {
+        by_file
+            .values()
+            .flatten()
+            .filter(|f| f.kind == kind)
+            .count()
+    };
+    let n_excluded = count(RedactionKind::Excluded);
+    let n_inline = count(RedactionKind::Inline);
+    let n_flagged = count(RedactionKind::Flagged);
+    let n_redacted = n_excluded + n_inline;
     let mut parts = Vec::new();
-    if !excluded.is_empty() {
-        parts.push(format!("{} excluded", excluded.len()));
+    if n_excluded > 0 {
+        parts.push(format!("{n_excluded} excluded"));
     }
-    if !inline_redacted.is_empty() {
-        parts.push(format!("{} inline", inline_redacted.len()));
+    if n_inline > 0 {
+        parts.push(format!("{n_inline} inline"));
     }
     let breakdown = if parts.is_empty() {
         String::new()
     } else {
         format!(" ({})", parts.join(", "))
     };
-    let flagged_part = if flagged.is_empty() {
+    let flagged_part = if n_flagged == 0 {
         String::new()
     } else {
-        format!(", {} flagged for review", flagged.len())
+        format!(", {n_flagged} flagged for review")
     };
-    let overridden_part = if overridden.is_empty() {
-        String::new()
-    } else {
-        format!(", {} overridden", overridden.len())
-    };
-
+    let files = if by_file.len() == 1 { "file" } else { "files" };
     lines.push(format!(
-        "> Detected secrets: {n_redacted} redacted{breakdown}{flagged_part}{overridden_part}"
+        "> Detected secrets: {n_redacted} redacted{breakdown}{flagged_part}, in {} {files}",
+        by_file.len()
     ));
     lines.push(String::new());
 
-    lines.push("The following items were redacted or excluded. Handle them according to".into());
-    lines.push("the action specified for each item.".into());
-    lines.push(String::new());
-
-    // Excluded files
-    if !excluded.is_empty() {
-        lines.push("## Excluded Files".into());
-        lines.push(String::new());
-        lines.push("These files were removed from the output entirely.".into());
-        lines.push(String::new());
-        lines.push("| Path | Pattern | Remediation |".into());
-        lines.push("|------|---------|-------------|".into());
-        for f in &excluded {
-            let rem = remediation_label(&f.remediation);
-            lines.push(format!("| {} | {} | {} |", f.path, f.pattern, rem));
-        }
-        lines.push(String::new());
-    }
-
-    // Inline redactions
-    if !inline_redacted.is_empty() {
-        lines.push("## Inline Redactions".into());
-        lines.push(String::new());
+    if !by_file.is_empty() {
         lines.push(
-            "Secret values in these files and entries were replaced with tokens of the form \
-             `REDACTED_<KIND>_<N>`, such as `REDACTED_PASSWORD_1`. A credential in a URL's \
-             user information may read `[REDACTED]`, `REDACTED` or `<REDACTED>` instead."
+            "Each file below lists what was redacted and where, and says how to supply the real \
+             value at deploy time. Secret values were replaced with tokens of the form \
+             `REDACTED_<KIND>_<N>`, such as `REDACTED_PASSWORD_1`; one secret value is the same \
+             token everywhere, so search the export for a token to find each place it is used. \
+             A credential in a URL's user information may read `[REDACTED]`, `REDACTED` or \
+             `<REDACTED>` instead."
                 .into(),
         );
         lines.push(String::new());
-        lines.push("| Path | Line | Pattern | Detection |".into());
-        lines.push("|------|------|---------|-----------|".into());
-        for f in &inline_redacted {
-            let line_str = f.line.map(|l| l.to_string()).unwrap_or_else(|| "--".into());
-            let detection = detection_label(f);
-            lines.push(format!(
-                "| {} | {} | {} | {} |",
-                f.path, line_str, f.pattern, detection
-            ));
-        }
-        lines.push(String::new());
     }
 
-    // Flagged for review
-    if !flagged.is_empty() {
-        lines.push("## Flagged for Review".into());
+    let carriage = Carriage::of(snap);
+    for (key, findings) in &by_file {
+        lines.push(format!("## {}", md_code(key)));
         lines.push(String::new());
-        lines.push("| Path | Line | Confidence | Why Flagged |".into());
-        lines.push("|------|------|------------|-------------|".into());
-        for f in &flagged {
+        lines.push(format!(
+            "**At deploy time:** {}",
+            carriage.advice(key, findings).line()
+        ));
+        lines.push(String::new());
+        lines.push("| Line | Finding | Handling | Replaced with | Detection |".into());
+        lines.push("|------|---------|----------|---------------|-----------|".into());
+        for f in findings {
             let line_str = f.line.map(|l| l.to_string()).unwrap_or_else(|| "--".into());
-            let conf = f
-                .confidence
-                .as_ref()
-                .map(|c| format!("{:?}", c).to_lowercase())
-                .unwrap_or_else(|| "--".into());
-            let why = if f.pattern.is_empty() {
-                "--"
+            let finding = if f.pattern.is_empty() {
+                "--".to_string()
             } else {
-                &f.pattern
+                md_code_cell(&f.pattern)
             };
             lines.push(format!(
-                "| {} | {} | {} | {} |",
-                f.path, line_str, conf, why
-            ));
-        }
-        lines.push(String::new());
-    }
-
-    // Overridden exclusions
-    if !overridden.is_empty() {
-        lines.push("## Overridden Exclusions".into());
-        lines.push(String::new());
-        lines.push("These files were originally excluded by the scanner but deliberately".into());
-        lines.push("re-included by the operator during triage.".into());
-        lines.push(String::new());
-        for f in &overridden {
-            let method = format!("{:?}", f.detection_method).to_lowercase();
-            lines.push(format!(
-                "- **{}** — {} (originally excluded for: {})",
-                f.path, f.pattern, method
+                "| {line_str} | {finding} | {} | {} | {} |",
+                handling_cell(f),
+                replaced_with(f),
+                detection_cell(f)
             ));
         }
         lines.push(String::new());
@@ -201,27 +401,65 @@ pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
     lines.join("\n")
 }
 
+/// What happened to the finding: replaced in place, the whole file left
+/// out (with the remediation the finding names), or flagged.
+fn handling_cell(f: &RedactionFinding) -> String {
+    match f.kind {
+        RedactionKind::Inline => "redacted inline".into(),
+        RedactionKind::Excluded => format!(
+            "file excluded: {}",
+            md_code_cell(remediation_label(&f.remediation))
+        ),
+        RedactionKind::Flagged => "flagged for review".into(),
+    }
+}
+
+/// What stands in the export where the secret was, by the pass that
+/// recorded the finding. Only the form: the token's number is per run.
+fn replaced_with(f: &RedactionFinding) -> String {
+    match f.kind {
+        RedactionKind::Excluded => return "whole file left out".into(),
+        RedactionKind::Flagged => return "nothing".into(),
+        RedactionKind::Inline => {}
+    }
+    match f.source.as_str() {
+        "pattern" if !f.pattern.is_empty() => {
+            md_code_cell(&format!("REDACTED_{}_<N>", f.pattern.to_uppercase()))
+        }
+        "shadow" => "`REDACTED_SHADOWHASH_<N>`".into(),
+        "mount_options" => "`REDACTED_MOUNT_PASSWORD_<N>`".into(),
+        "proxy_credential" | "token_credential" => "`[REDACTED]`".into(),
+        "repo_url_credential" | "manifest_auth" => "`REDACTED` in the URL".into(),
+        "compose_env" => "`<REDACTED>`".into(),
+        _ => "a `REDACTED` placeholder".into(),
+    }
+}
+
+/// How the finding was detected, with its confidence where the method
+/// alone does not settle it: a heuristic, or a finding flagged for review.
+fn detection_cell(f: &RedactionFinding) -> String {
+    let method = match f.detection_method {
+        DetectionMethod::Pattern => "pattern",
+        DetectionMethod::Heuristic => "heuristic",
+        DetectionMethod::PathBased => "path-based",
+    };
+    let show_confidence =
+        f.detection_method == DetectionMethod::Heuristic || f.kind == RedactionKind::Flagged;
+    match f.confidence {
+        Some(c) if show_confidence => {
+            format!("{method} ({})", format!("{c:?}").to_lowercase())
+        }
+        None if f.detection_method == DetectionMethod::Heuristic => format!("{method} (unknown)"),
+        _ => method.into(),
+    }
+}
+
 fn remediation_label(rem: &str) -> &str {
     match rem {
         "regenerate" => "Regenerate on target",
         "provision" => "Provision from secret store",
         "value-removed" => "Value removed inline",
         other => other,
-    }
-}
-
-fn detection_label(f: &RedactionFinding) -> String {
-    match f.detection_method {
-        DetectionMethod::Pattern => "pattern".into(),
-        DetectionMethod::Heuristic => {
-            let conf = f
-                .confidence
-                .as_ref()
-                .map(|c| format!("{:?}", c).to_lowercase())
-                .unwrap_or_else(|| "unknown".into());
-            format!("heuristic ({conf})")
-        }
-        DetectionMethod::PathBased => "path-based".into(),
     }
 }
 
@@ -260,8 +498,12 @@ mod tests {
         }];
         let md = render_secrets_review(&snap);
         assert!(md.contains("# Secrets Review"));
-        assert!(md.contains("Excluded Files"));
-        assert!(md.contains("/etc/shadow"));
+        assert!(md.contains("## `/etc/shadow`"), "{md}");
+        assert!(
+            md.contains("| -- | `shadow_hash` | file excluded: `Regenerate on target` | whole file left out | pattern |"),
+            "{md}"
+        );
+        assert!(md.contains(&SupplyAdvice::NotInImage.line()), "{md}");
     }
 
     /// The Line column is the line the secret is on, also when the key
@@ -281,8 +523,9 @@ mod tests {
         });
         redact(&mut snap, &RedactOptions::default());
         let md = render_secrets_review(&snap);
-        assert!(md.contains("| /etc/app/app.conf | 2 | password |"), "{md}");
-        assert!(md.contains("| /etc/app/app.conf | 4 | awskey |"), "{md}");
+        assert!(md.contains("## `/etc/app/app.conf`"), "{md}");
+        assert!(md.contains("| 2 | `password` |"), "{md}");
+        assert!(md.contains("| 4 | `awskey` |"), "{md}");
     }
 
     /// The Inline Redactions note names the token form redaction writes,
@@ -333,5 +576,154 @@ mod tests {
             md.contains("inspectah build"),
             "must reference inspectah build helper"
         );
+    }
+
+    fn finding(path: &str, source: &str, kind: RedactionKind) -> RedactionFinding {
+        RedactionFinding {
+            path: path.into(),
+            source: source.into(),
+            kind,
+            pattern: "password".into(),
+            remediation: String::new(),
+            line: Some(1),
+            replacement: None,
+            detection_method: DetectionMethod::Pattern,
+            confidence: None,
+            finding_kind: None,
+        }
+    }
+
+    /// Each kind of file gets its own line, by the first rule that
+    /// applies: excluded, flagged-only, then by what the path is and
+    /// whether the image carries it.
+    #[test]
+    fn test_supply_advice_by_kind_of_file() {
+        use RedactionKind::{Excluded, Flagged, Inline};
+        let snap = InspectionSnapshot::new();
+        let carriage = Carriage::of(&snap);
+        let cases: &[(&str, &str, &[RedactionKind], SupplyAdvice)] = &[
+            (
+                "/etc/a.conf",
+                "pattern",
+                &[Excluded],
+                SupplyAdvice::NotInImage,
+            ),
+            (
+                "/etc/a.conf",
+                "pattern",
+                &[Flagged, Flagged],
+                SupplyAdvice::ReviewOnly,
+            ),
+            (
+                "container:web",
+                "pattern",
+                &[Inline],
+                SupplyAdvice::ContainerEnvironment,
+            ),
+            (
+                "/proc/cmdline",
+                "pattern",
+                &[Inline],
+                SupplyAdvice::KernelArgument { kargs_file: false },
+            ),
+            (
+                "/etc/shadow",
+                "shadow",
+                &[Inline, Flagged],
+                SupplyAdvice::AccountPassword,
+            ),
+            (
+                "/etc/fstab",
+                "mount_options",
+                &[Inline],
+                SupplyAdvice::MountOption,
+            ),
+            (
+                "/opt/app/package.json",
+                "manifest_auth",
+                &[Inline],
+                SupplyAdvice::PackageRegistry,
+            ),
+            (
+                "/etc/yum.repos.d/corp.repo",
+                "repo_url_credential",
+                &[Inline],
+                SupplyAdvice::RepoCredential,
+            ),
+            (
+                "/etc/app/env",
+                "pattern",
+                &[Inline],
+                SupplyAdvice::NotCopied,
+            ),
+        ];
+        for (path, source, kinds, want) in cases {
+            let findings: Vec<RedactionFinding> = kinds
+                .iter()
+                .map(|k| finding(path, source, k.clone()))
+                .collect();
+            let refs: Vec<&RedactionFinding> = findings.iter().collect();
+            assert_eq!(carriage.advice(&group_key(path), &refs), *want, "{path}");
+        }
+    }
+
+    /// A file the config tree stages is carried; one under `/usr` is
+    /// read-only on a deployed machine and says so.
+    #[test]
+    fn test_supply_advice_for_carried_files() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
+            files: vec![ConfigFileEntry {
+                path: "/etc/app/app.conf".to_string(),
+                content: "password = REDACTED_PASSWORD_1\n".to_string(),
+                ..Default::default()
+            }],
+        });
+        let carriage = Carriage::of(&snap);
+        let f = finding("etc/app/app.conf", "pattern", RedactionKind::Inline);
+        assert_eq!(
+            carriage.advice(&group_key(&f.path), &[&f]),
+            SupplyAdvice::Carried
+        );
+        let mut usr = Carriage::of(&InspectionSnapshot::new());
+        usr.carried.insert("/usr/lib/app/app.conf".into());
+        let f = finding("/usr/lib/app/app.conf", "pattern", RedactionKind::Inline);
+        assert_eq!(usr.advice(&f.path, &[&f]), SupplyAdvice::CarriedInUsr);
+    }
+
+    /// A finding recorded with a relative path and one with an absolute
+    /// path are one file; a label with no path is kept as written.
+    #[test]
+    fn test_group_key_normalizes_paths_and_keeps_labels() {
+        assert_eq!(group_key("etc/app.conf"), "/etc/app.conf");
+        assert_eq!(group_key("/etc//app.conf"), "/etc/app.conf");
+        assert_eq!(group_key("container:web"), "container:web");
+        assert_eq!(group_key("quadlet:app.container"), "quadlet:app.container");
+        assert_eq!(group_key("/etc/a:b"), "/etc/a:b");
+    }
+
+    /// The placeholder column names the form each pass writes, and a
+    /// finding that replaced nothing says so.
+    #[test]
+    fn test_replaced_with_names_each_pass_form() {
+        let cases: &[(&str, RedactionKind, &str)] = &[
+            ("pattern", RedactionKind::Inline, "`REDACTED_PASSWORD_<N>`"),
+            ("shadow", RedactionKind::Inline, "`REDACTED_SHADOWHASH_<N>`"),
+            ("proxy_credential", RedactionKind::Inline, "`[REDACTED]`"),
+            (
+                "repo_url_credential",
+                RedactionKind::Inline,
+                "`REDACTED` in the URL",
+            ),
+            ("compose_env", RedactionKind::Inline, "`<REDACTED>`"),
+            ("pattern", RedactionKind::Flagged, "nothing"),
+            ("pattern", RedactionKind::Excluded, "whole file left out"),
+        ];
+        for (source, kind, want) in cases {
+            let f = finding("/etc/x", source, kind.clone());
+            assert_eq!(replaced_with(&f), *want, "{source} {kind:?}");
+        }
     }
 }

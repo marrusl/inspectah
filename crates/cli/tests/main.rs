@@ -24,6 +24,7 @@ mod machine_state_scan_test;
 mod not_carried_parity_test;
 mod refine_e2e_test;
 mod repo_ownership_test;
+mod secrets_review_test;
 mod selinux_scan_test;
 mod staged_writes_parity_test;
 mod sysctl_scan_test;

@@ -557,6 +557,33 @@ twice in `secrets-review.md` and counted each match twice wherever
 `redactions` is counted. A new consumer that parses content after redaction follows
 the same rule: give the pass a flag to set, and read the flag.
 
+## `secrets-review.md` reports findings, never content
+
+`render_secrets_review` (`crates/pipeline/src/render/secrets.rs`) groups
+`snap.redactions` by file: the key is the finding's `Destination`, so
+`etc/x` and `/etc/x` are one heading, and a label with no path
+(`container:web`, `quadlet:app`) stays as written. Every cell is a
+path, an enum-owned label or a finding's own field; nothing is read from
+file content, so the file cannot carry a secret byte. The "Replaced
+with" column gives the placeholder **form** by the pass that recorded the
+finding (`REDACTED_PASSWORD_<N>` for `source: "pattern"`, `[REDACTED]`
+for the proxy and token maskers, and so on): `replacement` is always
+`None` and the token's number is never recorded on the finding, so do not
+print one as if it were.
+
+Each file gets one `**At deploy time:**` line from `SupplyAdvice`, the
+first rule that applies: a machine-state class row (its provisioning step
+or "recreated", or carried by override), all excluded, all flagged, then
+by path (`container:`, `/proc/cmdline`, `/etc/shadow`, `/etc/fstab`, a
+manifest, a `.repo` file), then whether `staged_writes` or an included
+quadlet puts the file in the image. A file that is machine state takes
+the class line only, so it never also reads as carried. A new pass with a
+new `source` needs a `replaced_with` arm, and a new kind of file a rule,
+or it falls to the generic line.
+
+The scan and the fleet aggregate write the file
+through this one function.
+
 ## Testing it
 
 Assert over the **whole export directory**, not over one named file:

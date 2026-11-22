@@ -1453,12 +1453,15 @@ fn case_18_redaction_makes_the_explanation_unknown_snapshot() {
     assert_eq!(findings_at(&shadowed, vendor), 1);
 }
 
-/// The `secrets-review.md` rows that name `path`.
+/// The `secrets-review.md` rows under the heading of `path`.
 fn review_rows(snap: &InspectionSnapshot, path: &str) -> Vec<String> {
-    let cell = format!("| {path} |");
+    let heading = format!("## `{path}`");
     render_secrets_review(snap)
         .lines()
-        .filter(|l| l.starts_with(&cell))
+        .skip_while(|l| *l != heading)
+        .skip(1)
+        .take_while(|l| !l.starts_with("## "))
+        .filter(|l| l.starts_with("| ") && !l.starts_with("| Line "))
         .map(str::to_string)
         .collect()
 }
