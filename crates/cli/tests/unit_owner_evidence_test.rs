@@ -14,8 +14,9 @@
 //!   listed with the reason; included, it installs as released. So is
 //!   one that needs a package from a repo refine excludes, while it is
 //!   excluded, unless the operator includes it through the package, its
-//!   repo or a group. A carried owner's dependency keeps its
-//!   recorded `systemctl disable`, guarded.
+//!   repo or a group. One the scan keeps because a leaf may pull it in is
+//!   never named while its repo is lost. A carried owner's dependency
+//!   keeps its recorded `systemctl disable`, guarded.
 //! - An auto package the operator includes brings its dependencies: their
 //!   unit commands survive, guarded. It installs as released.
 //! - The transaction that enables a disabled repo names what the leaf
@@ -841,6 +842,67 @@ fn an_owner_included_through_its_repo_or_group_is_not_held() {
         "group Tuning: tuned is not held:\n{}",
         by_group.containerfile
     );
+}
+
+/// Where the host keeps a `vendor` repo file whose name the stager
+/// refuses: dnf reads it, as its `.repo` glob matches a tab, but the build
+/// never gets it, so `vendor` is lost in every export.
+const VENDOR_TAB_REPO_PATH: &str = "/etc/yum.repos.d/vendor\t.repo";
+
+/// `app`, the one user-installed package, comes from the enabled custom
+/// repo `tools` and recommends `worker`, from `tools` too. `worker` owns
+/// the enabled `worker.service`, as its preset says, and requires
+/// `vendor-runtime`, which only `vendor` serves, from a repo file the
+/// stager refuses. The scan keeps `worker` included, since `app` may pull
+/// it in, while the lost `vendor` holds it; no operator included it, so
+/// nothing names it. The install line is beta.6's, `app`, and dnf may skip
+/// the recommendation it cannot satisfy. Naming `worker` would make its
+/// missing requirement fail the build.
+#[test]
+fn a_held_owner_the_operator_never_included_is_not_named() {
+    let host = UnitHost::new()
+        .base_package("bash")
+        .base_package("glibc")
+        .file("/etc/yum.repos.d/tools.repo", TOOLS_REPO)
+        .file(VENDOR_TAB_REPO_PATH, VENDOR_REPO)
+        .package_from("app", "tools")
+        .package_from("worker", "tools")
+        .package_from("vendor-runtime", "vendor")
+        .userinstalled(&["bash", "app"])
+        .recommends("app", &["worker"])
+        .requires("worker", &["vendor-runtime"])
+        .unit("worker.service", "enabled")
+        .vendor_unit("worker.service", WANTED_UNIT, Some("worker"))
+        .preset("enable worker.service")
+        .preset("disable *");
+    let collected = collected_with_repos(host, TOOLS_ENABLED_REPOS);
+
+    let scan_dir = tempfile::tempdir().expect("tempdir");
+    let scanned = scan_export(collected.clone(), scan_dir.path());
+    let worker = scanned
+        .rpm
+        .iter()
+        .flat_map(|rpm| &rpm.packages_added)
+        .find(|p| p.name == "worker")
+        .expect("worker is an added package");
+    assert!(
+        worker.disposition.is_included(),
+        "app may pull worker in, so the scan keeps it: {worker:?}"
+    );
+    let refine_dir = tempfile::tempdir().expect("tempdir");
+    let refine_root = export_session(RefineSession::new(collected), refine_dir.path());
+
+    for (label, surfaces) in [
+        ("scan", Surfaces::read(scan_dir.path())),
+        ("refine", Surfaces::read(&refine_root)),
+    ] {
+        assert_eq!(
+            surfaces.install_names(),
+            ["app"],
+            "{label}: the install line is beta.6's:\n{}",
+            surfaces.containerfile
+        );
+    }
 }
 
 /// `agent` owns the user-enabled `agent.service` and needs `agent-helper`,

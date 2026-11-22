@@ -85,6 +85,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
+use inspectah_core::types::group_render::OperatorIncludes;
 use inspectah_core::types::repo::{RepoTier, effective_definition, parse_repo_sections, repo_tier};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::units::{UnitName, UnitState, UnitStateChange};
@@ -449,18 +450,30 @@ pub fn default_carried_unit_owners(snap: &InspectionSnapshot) -> HashSet<String>
 
 /// The unit owners the install line names when they are included: those
 /// carried by default ([`default_carried_unit_owners`]), and those held
-/// only because a repo is lost in this export ([`OwnerHold::RepoExcluded`]).
+/// only because a repo is lost in this export ([`OwnerHold::RepoExcluded`])
+/// that the operator included, through the package, its repo or a group.
 ///
-/// An included owner of the second kind is one the operator included,
-/// through the package, its repo or a group: the scan's defaults exclude
-/// every held owner, and refine's projection excludes the rest
-/// ([`hold_owners_losing_a_repo`]). Its include matches the default refine
-/// set when the repo was still carried, so the include-changed test does
-/// not name it; this does, as an included owner of any other hold is.
-pub fn named_unit_owners(snap: &InspectionSnapshot) -> HashSet<String> {
+/// An owner of the second kind is named on `operator`'s word alone, never
+/// on its disposition. The scan keeps an owner included when a leaf may
+/// pull it in ([`AutoCarriage::PulledIn`]), a recommendation among them,
+/// whatever its hold: naming that one would make dnf install it and fail
+/// on the package the lost repo serves, where left unnamed it is a weak
+/// dependency dnf may skip when it cannot satisfy it. Refine's projection excludes every
+/// owner the operator did not include ([`hold_owners_losing_a_repo`]). An
+/// operator's include matches the default refine set when the repo was
+/// still carried, so the include-changed test does not name it; this does,
+/// as an included owner of any other hold is.
+pub fn named_unit_owners(
+    snap: &InspectionSnapshot,
+    operator: &OperatorIncludes,
+) -> HashSet<String> {
     unit_owner_holds(snap)
         .into_iter()
-        .filter(|(_, hold)| matches!(hold, None | Some(OwnerHold::RepoExcluded)))
+        .filter(|(id, hold)| match hold {
+            None => true,
+            Some(OwnerHold::RepoExcluded) => operator.contains(id),
+            Some(OwnerHold::DisabledRepo | OwnerHold::NoRepo | OwnerHold::Unresolved) => false,
+        })
         .map(|(id, _)| id)
         .collect()
 }
@@ -624,9 +637,9 @@ fn repos_lost_in_export(rpm: &RpmSection, repos: &InstallRepos) -> HashSet<Strin
 
 /// Exclude every included unit owner this export holds because it may
 /// pull in a package whose repo the export does not carry
-/// ([`OwnerHold::RepoExcluded`]), except the `name.arch` ids in `by_hand`,
-/// which the operator included explicitly: by the package's own toggle,
-/// or by its repo's or a group's, whichever reached it last.
+/// ([`OwnerHold::RepoExcluded`]), except those in `operator`, which the
+/// operator included: by the package's own toggle, or by its repo's or a
+/// group's, whichever reached it last.
 ///
 /// The scan's defaults exclude such an owner with the other held ones
 /// ([`apply_scan_package_defaults`]). Refine sets its defaults when it
@@ -634,10 +647,10 @@ fn repos_lost_in_export(rpm: &RpmSection, repos: &InstallRepos) -> HashSet<Strin
 /// this over every projection: the owner is held while the repo is
 /// excluded and carried again once it is back. An owner the operator
 /// included installs as any held owner they include does.
-pub fn hold_owners_losing_a_repo(snap: &mut InspectionSnapshot, by_hand: &HashSet<String>) {
+pub fn hold_owners_losing_a_repo(snap: &mut InspectionSnapshot, operator: &OperatorIncludes) {
     let held: HashSet<String> = unit_owner_holds(snap)
         .into_iter()
-        .filter(|(id, hold)| *hold == Some(OwnerHold::RepoExcluded) && !by_hand.contains(id))
+        .filter(|(id, hold)| *hold == Some(OwnerHold::RepoExcluded) && !operator.contains(id))
         .map(|(id, _)| id)
         .collect();
     let Some(rpm) = snap.rpm.as_mut() else {

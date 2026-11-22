@@ -18,7 +18,7 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
-use inspectah_core::types::group_render::RenderContext;
+use inspectah_core::types::group_render::{OperatorIncludes, RenderContext};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 use inspectah_core::types::repo::parse_repo_sections;
@@ -917,7 +917,9 @@ fn packages_section_lines(
     let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
     let pulled_in = super::unit_plan::leaf_tree_pulled_in(rpm, &install_repos);
     let leaf_pulled_in = super::unit_plan::pulled_in_by_installed_leaves(rpm, &install_repos);
-    let unit_owners = named_unit_owners(snap);
+    let no_operator_includes = OperatorIncludes::default();
+    let operator_includes = render_ctx.map_or(&no_operator_includes, |c| &c.operator_includes);
+    let unit_owners = named_unit_owners(snap, operator_includes);
 
     let installable_packages: Vec<&PackageEntry> = rpm
         .packages_added
@@ -963,8 +965,9 @@ fn packages_section_lines(
             // other, as asking every root would. Every package such an
             // owner may pull in comes from a repo the image enables
             // (`not_carried::owner_hold`), so it needs no disabled repo;
-            // one held on a lost repo is here only when the operator
-            // included it (`not_carried::named_unit_owners`).
+            // one held on a lost repo is here only when the render context
+            // says the operator included it, never because the scan left
+            // it included (`not_carried::named_unit_owners`).
             if unit_owners.contains(&id) && !leaf_pulled_in.contains(&id) {
                 return true;
             }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +45,34 @@ pub struct RenderContext {
     /// the safe answer: a `uploaded: true` entry the snapshot carries gets
     /// no `COPY` until an export or a preview proves the file.
     pub verified_uploads: VerifiedUploads,
+    /// The packages the operator included in refine. Empty by default,
+    /// which is the safe answer: a render outside a refine session has no
+    /// operator include to honor.
+    pub operator_includes: OperatorIncludes,
+}
+
+/// The `name.arch` ids of the packages the operator included in a refine
+/// session: those whose last include op that reaches them includes them,
+/// whether it names the package, a repo it is attributed to, or a group
+/// it is a member of.
+///
+/// This is provenance, not disposition. A package can be included because
+/// the scan's defaults or refine's open-time defaults left it so; only
+/// membership here says an operator chose it. A fresh scan's render has
+/// none, so a decision that needs an operator's include never fires there.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OperatorIncludes(HashSet<String>);
+
+impl OperatorIncludes {
+    /// The operator includes `ids`, by `name.arch`.
+    pub fn new(ids: impl IntoIterator<Item = String>) -> Self {
+        Self(ids.into_iter().collect())
+    }
+
+    /// Whether the operator included the package `id` (`name.arch`).
+    pub fn contains(&self, id: &str) -> bool {
+        self.0.contains(id)
+    }
 }
 
 impl RenderContext {

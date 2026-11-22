@@ -34,7 +34,7 @@ use crate::types::{
     SectionChangeSummary, SectionKind, SectionStats, TimelineEntry, TriageBucket, TriageReason,
     UserPasswordOp, ViewDirective,
 };
-use inspectah_core::types::group_render::RenderContext;
+use inspectah_core::types::group_render::{OperatorIncludes, RenderContext};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 
@@ -3292,10 +3292,10 @@ impl RefineSession {
     /// that reaches them includes them, whether it names the package, a
     /// repo it is attributed to, or a group it is a member of. Each op
     /// reaches the packages the projection applies it to.
-    fn packages_included_explicitly(&self) -> HashSet<String> {
+    fn packages_included_explicitly(&self) -> OperatorIncludes {
         let mut included = HashSet::new();
         let Some(rpm) = self.original.rpm.as_ref() else {
-            return included;
+            return OperatorIncludes::default();
         };
         let id_of = |pkg: &PackageEntry| canonical_package_id(&pkg.name, &pkg.arch);
         for entry in &self.timeline[..self.cursor] {
@@ -3344,7 +3344,7 @@ impl RefineSession {
                 }
             }
         }
-        included
+        OperatorIncludes::new(included)
     }
 
     /// Compute the set of section IDs that are currently excluded based on the
@@ -3584,9 +3584,10 @@ impl RefineSession {
                 let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
                 // Auto packages that own an enabled unit are carried by
                 // default, so the operator sees them beside the leaves, as
-                // one held on a lost repo is: it is included only when the
-                // operator included it, and the export names it then.
-                let unit_owners = named_unit_owners(&projected);
+                // one held on a lost repo that the operator included is:
+                // the export names it then.
+                let unit_owners =
+                    named_unit_owners(&projected, &self.packages_included_explicitly());
 
                 // Ungrouped group members must bypass the leaf filter so they
                 // appear as individual packages after ungrouping. Without this,
@@ -3784,6 +3785,7 @@ impl RefineSession {
         self.cached_render_context = Some(RenderContext {
             group_states,
             verified_uploads: verified_uploads(&proved),
+            operator_includes: self.packages_included_explicitly(),
         });
 
         // Preview must use the SAME root derivation as export to guarantee
@@ -4721,6 +4723,9 @@ pub fn render_refine_export(
             .map(|c| c.group_states.clone())
             .unwrap_or_default(),
         verified_uploads: verified,
+        operator_includes: render_ctx
+            .map(|c| c.operator_includes.clone())
+            .unwrap_or_default(),
     };
     let containerfile = if let Some(orig) = original_includes {
         render_containerfile_with_originals(snap, Some(&materialized_roots), orig, Some(&ctx))
