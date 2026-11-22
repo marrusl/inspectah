@@ -670,9 +670,20 @@ fn collect_ssh_keys(exec: &dyn Executor, section: &mut UserGroupSection, preserv
 
 /// Scans ALL /etc/group entries (including system GIDs) to find supplementary
 /// group memberships for each user. Sets `supplementary_groups` array on user.
+///
+/// In the same pass it records the group identities the Containerfile's
+/// users block needs, from any gid range: `primary_group`, the name of the
+/// group whose gid is the user's `gid` (absent when `/etc/group` has no
+/// entry for it), and `group_gids`, each group the user belongs to, primary
+/// and supplementary, mapped to its gid on this host. `parse_group` keeps
+/// only gids 1000 to 59999, so a primary gid such as 100 or 65534 has a
+/// name only here. When `/etc/group` names one gid or one group twice, the
+/// first entry wins, as it does for a `files` NSS lookup.
 fn enrich_supplementary_groups(group_text: &str, section: &mut UserGroupSection) {
     // Build map: username → list of group names where they appear as a member.
     let mut memberships: HashMap<String, Vec<String>> = HashMap::new();
+    let mut name_by_gid: HashMap<u32, String> = HashMap::new();
+    let mut gid_by_name: HashMap<String, u32> = HashMap::new();
 
     for line in group_text.lines() {
         let line = line.trim();
@@ -684,6 +695,12 @@ fn enrich_supplementary_groups(group_text: &str, section: &mut UserGroupSection)
             continue;
         }
         let group_name = parts[0];
+        if let Ok(gid) = parts[2].parse::<u32>() {
+            name_by_gid
+                .entry(gid)
+                .or_insert_with(|| group_name.to_string());
+            gid_by_name.entry(group_name.to_string()).or_insert(gid);
+        }
         let member_list = parts[3];
         if member_list.is_empty() {
             continue;
@@ -707,6 +724,22 @@ fn enrich_supplementary_groups(group_text: &str, section: &mut UserGroupSection)
             .unwrap_or("")
             .to_string();
         let groups = memberships.get(&username).cloned().unwrap_or_default();
+        let primary = user
+            .get("gid")
+            .and_then(|v| v.as_u64())
+            .and_then(|gid| u32::try_from(gid).ok())
+            .and_then(|gid| name_by_gid.get(&gid).map(|name| (name.clone(), gid)));
+        let mut group_gids = serde_json::Map::new();
+        if let Some((name, gid)) = &primary {
+            group_gids.insert(name.clone(), serde_json::Value::Number((*gid).into()));
+        }
+        for g in &groups {
+            if let Some(gid) = gid_by_name.get(g) {
+                group_gids
+                    .entry(g.clone())
+                    .or_insert_with(|| serde_json::Value::Number((*gid).into()));
+            }
+        }
         if let serde_json::Value::Object(map) = user {
             let groups_json: Vec<serde_json::Value> = groups
                 .iter()
@@ -715,6 +748,13 @@ fn enrich_supplementary_groups(group_text: &str, section: &mut UserGroupSection)
             map.insert(
                 "supplementary_groups".to_string(),
                 serde_json::Value::Array(groups_json),
+            );
+            if let Some((name, _)) = primary {
+                map.insert("primary_group".to_string(), serde_json::Value::String(name));
+            }
+            map.insert(
+                "group_gids".to_string(),
+                serde_json::Value::Object(group_gids),
             );
         }
     }

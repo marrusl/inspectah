@@ -418,3 +418,68 @@ fn test_users_inspector_json_roundtrip() {
         "inspector output must round-trip faithfully through UserGroupSection"
     );
 }
+
+/// Each user records its primary group's name and the gid of every group
+/// it belongs to, from any gid range: the Containerfile creates the groups
+/// a carried user needs from these, and `groups` keeps only gids 1000 to
+/// 59999. Rows: (user, primary gid, primary_group, group_gids).
+#[test]
+fn test_users_inspector_records_group_identities() {
+    let exec = MockExecutor::new()
+        .with_file(
+            "/etc/passwd",
+            "alice:x:1001:1001::/home/alice:/bin/bash\n\
+             carol:x:1002:100::/home/carol:/bin/bash\n\
+             nora:x:1003:65534::/home/nora:/bin/bash\n\
+             hank:x:1004:60001::/home/hank:/bin/bash\n\
+             zed:x:1005:1999::/home/zed:/bin/bash\n",
+        )
+        .with_file(
+            "/etc/group",
+            "root:x:0:\n\
+             wheel:x:10:alice,zed\n\
+             users:x:100:alice\n\
+             appgrp:x:1001:\n\
+             hostgrp:x:60001:\n\
+             nobody:x:65534:\n",
+        );
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+        rpm_state: None,
+        baseline_data: None,
+    };
+    let (section, _) = extract_section(UsersGroupsInspector::new().inspect(&ctx, &NullProgress));
+
+    let cases = [
+        (
+            "alice",
+            Some("appgrp"),
+            serde_json::json!({"appgrp": 1001, "wheel": 10, "users": 100}),
+        ),
+        ("carol", Some("users"), serde_json::json!({"users": 100})),
+        ("nora", Some("nobody"), serde_json::json!({"nobody": 65534})),
+        (
+            "hank",
+            Some("hostgrp"),
+            serde_json::json!({"hostgrp": 60001}),
+        ),
+        // No /etc/group entry has gid 1999: no primary_group, and the
+        // supplementary group still has its gid.
+        ("zed", None, serde_json::json!({"wheel": 10})),
+    ];
+    for (name, primary, gids) in cases {
+        let user = section
+            .users
+            .iter()
+            .find(|u| u["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is collected"));
+        assert_eq!(
+            user.get("primary_group").and_then(|v| v.as_str()),
+            primary,
+            "{name}: primary_group"
+        );
+        assert_eq!(user["group_gids"], gids, "{name}: group_gids");
+    }
+}
