@@ -144,6 +144,19 @@ applies `SetInclude` to the session before recording, which gives
 `e2e/machine-state.spec.ts` and the Vitest tests a real "after the op"
 view to answer `/api/op` with.
 
+The repo ownership sessions record one host with a repo per control and
+an owned file or key per export state: `repos` (scanned),
+`repos-excluded` (after excluding `custom`, `a` and `baseos`, so a key is
+kept by another repo and `site-tool` loses its route) and
+`repos-aggregate` (the aggregate view of a fleet that narrows a repo's
+file out). `RepoBar`, the repo-owned Configuration rows and
+`e2e/repo-ownership.spec.ts` read them. **A recording served as the
+answer to an op needs a newer `generation` than the view on screen.**
+`useView` keeps the view with the newest generation, and every recording
+starts its own count, so a test that serves one recording after another
+renumbers the second (`e2e/repo-ownership.spec.ts`'s `renumbered`), or
+the page keeps showing the first and the test reads stale rows.
+
 **The recorded units bodies are the other kind of recording.**
 `e2e/systemd-units.spec.ts` and the units Vitest tests load four bodies
 taken from one refine session over a driftify kitchen-sink scan, not
