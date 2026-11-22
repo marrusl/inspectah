@@ -12,7 +12,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::machine_state::{ProvisioningNotice, ProvisioningStep};
 use inspectah_core::types::redaction::{DetectionMethod, RedactionFinding, RedactionKind};
 
-use super::configtree::{Destination, KARGS_PATH, staged_writes};
+use super::configtree::{Destination, ETC_UNIT_DIR, KARGS_PATH, staged_unit_file, staged_writes};
 use super::machine_state::class_rows;
 use super::md_literal::{md_code, md_code_cell};
 
@@ -26,6 +26,9 @@ const FSTAB_PATH: &str = "/etc/fstab";
 const YUM_REPOS_DIR: &str = "/etc/yum.repos.d/";
 /// The prefix redaction gives a running container's environment.
 const CONTAINER_PREFIX: &str = "container:";
+/// The prefix redaction gives a unit the scheduled section generates from
+/// a cron entry: `generated:<name>.service` or `generated:<name>.timer`.
+const GENERATED_UNIT_PREFIX: &str = "generated:";
 
 /// How to supply the real value of one file's redactions at deploy time:
 /// the one line under each file heading.
@@ -35,14 +38,19 @@ enum SupplyAdvice {
     /// replaces it on a deployed machine.
     MachineStateOwed(ProvisioningStep),
     /// A machine-state file the export leaves out that is recreated
-    /// without operator action, or needed by nothing.
+    /// without operator action.
     MachineStateAutomatic,
+    /// A machine-state file the export leaves out that the image does not
+    /// need ([`ProvisioningNotice::None`]).
+    MachineStateNotNeeded,
     /// A machine-state file an operator override carries.
     MachineStateCarried,
     /// Every finding left the whole file out.
     NotInImage,
     /// Nothing was replaced: every finding is flagged for review.
-    ReviewOnly,
+    /// `carried` when the export stages the file, so it ships as the host
+    /// had it; otherwise where it goes is not known here.
+    ReviewOnly { carried: bool },
     /// The kernel command line; `kargs_file` when the image carries the
     /// kernel arguments file inspectah generates from it.
     KernelArgument { kargs_file: bool },
@@ -60,8 +68,10 @@ enum SupplyAdvice {
     CarriedInUsr,
     /// A file the image carries anywhere else, `/etc` in practice.
     Carried,
-    /// A file inspectah does not copy into the image.
-    NotCopied,
+    /// A file not matched to anything the export stages. The image may
+    /// still carry it another way (an unmanaged file, for one), so the
+    /// line says what is not known instead of asserting it is absent.
+    Unmatched,
 }
 
 impl SupplyAdvice {
@@ -76,6 +86,9 @@ impl SupplyAdvice {
             Self::MachineStateAutomatic => "Left out of the image as this host's own state, and \
                  recreated on a deployed machine without operator action: nothing to supply."
                 .into(),
+            Self::MachineStateNotNeeded => "Left out of the image as this host's own state, and \
+                 not needed in the image: nothing to supply."
+                .into(),
             Self::MachineStateCarried => {
                 "Carried in the image by an operator override although it \
                  is this host's own state, with placeholders in place: every machine built from \
@@ -86,10 +99,14 @@ impl SupplyAdvice {
             Self::NotInImage => "Not in the image, so nothing to do there. If a deployed machine \
                  needs this file, provision it at deploy time."
                 .into(),
-            Self::ReviewOnly => {
-                "Nothing was replaced, so the file ships as the host had it. Check \
-                 the flagged lines, and move any real secret out of the image into a deploy-time \
-                 step."
+            Self::ReviewOnly { carried: true } => "Nothing was replaced, and the image carries \
+                 this file as the host had it. Check the flagged lines, and move any real secret \
+                 out of the image into a deploy-time step."
+                .into(),
+            Self::ReviewOnly { carried: false } => {
+                "Nothing was replaced. Check the flagged lines: \
+                 if one holds a real secret and the image carries this file, move the value out \
+                 of the image into a deploy-time step."
                     .into()
             }
             Self::KernelArgument { kargs_file: true } => format!(
@@ -109,8 +126,10 @@ impl SupplyAdvice {
                  the container the value at deploy time with `podman secret` or an environment \
                  file written at provisioning."
                 .into(),
-            Self::MountOption => "Keep mount credentials in a `credentials=` file written at \
-                 deploy time with mode 0600, not in the image."
+            Self::MountOption => "Keep mount credentials out of the image and supply them at \
+                 deploy time. For SMB/CIFS, provision a mode-0600 file referenced by \
+                 `credentials=`; for other filesystems, use the mount helper's supported \
+                 credential mechanism."
                 .into(),
             Self::PackageRegistry => "A registry credential for the build: give it to the build \
                  as a secret (`podman build --secret`) or a credential helper, never in the \
@@ -121,17 +140,17 @@ impl SupplyAdvice {
                  this repo."
                 .into(),
             Self::CarriedInUsr => "Carried in the image under `/usr`, which is read-only on a \
-                 deployed machine: move the secret to a file under `/etc` or a mounted secret \
-                 supplied at deploy time."
+                 deployed machine: configure the program to read a file under `/etc` provisioned \
+                 on each deployed machine, or a mounted secret supplied at deploy time."
                 .into(),
             Self::Carried => "Carried in the image with placeholders in place: write the real \
                  values on each machine at deploy time, with a drop-in where the program reads \
                  one, a mounted secret, or a provisioning step. `/etc` keeps that local change \
                  across upgrades."
                 .into(),
-            Self::NotCopied => "Not copied into the image as a file: supply the value at deploy \
-                 time, with a mounted secret or a provisioning step, wherever a deployed machine \
-                 needs it."
+            Self::Unmatched => "Not matched to a file inspectah stages for the image, so check \
+                 whether the image carries it another way. Wherever a deployed machine needs the \
+                 value, supply it at deploy time with a mounted secret or a provisioning step."
                 .into(),
         }
     }
@@ -172,9 +191,8 @@ impl Carriage {
                 } else {
                     match row.member.notice() {
                         ProvisioningNotice::Owed { step } => SupplyAdvice::MachineStateOwed(step),
-                        ProvisioningNotice::Automatic { .. } | ProvisioningNotice::None => {
-                            SupplyAdvice::MachineStateAutomatic
-                        }
+                        ProvisioningNotice::Automatic { .. } => SupplyAdvice::MachineStateAutomatic,
+                        ProvisioningNotice::None => SupplyAdvice::MachineStateNotNeeded,
                     }
                 };
                 Some((key, advice))
@@ -184,6 +202,19 @@ impl Carriage {
             carried,
             machine_state,
         }
+    }
+
+    /// Whether the export stages the file at `key`. A unit generated from
+    /// a cron entry is recorded under its `generated:` label, and is
+    /// looked up at the destination the stager gives it.
+    fn is_carried(&self, key: &str) -> bool {
+        if let Some(file) = key.strip_prefix(GENERATED_UNIT_PREFIX) {
+            return file
+                .rsplit_once('.')
+                .and_then(|(name, suffix)| staged_unit_file(name, suffix))
+                .is_some_and(|file| self.carried.contains(&format!("{ETC_UNIT_DIR}/{file}")));
+        }
+        self.carried.contains(key)
     }
 
     /// The advice for the file at `key` holding `findings`, by the first
@@ -197,7 +228,9 @@ impl Carriage {
             return SupplyAdvice::NotInImage;
         }
         if findings.iter().all(|f| f.kind == RedactionKind::Flagged) {
-            return SupplyAdvice::ReviewOnly;
+            return SupplyAdvice::ReviewOnly {
+                carried: self.is_carried(key),
+            };
         }
         if key.starts_with(CONTAINER_PREFIX) {
             return SupplyAdvice::ContainerEnvironment;
@@ -221,13 +254,13 @@ impl Carriage {
         {
             return SupplyAdvice::RepoCredential;
         }
-        if self.carried.contains(key) {
+        if self.is_carried(key) {
             if key.starts_with("/usr/") {
                 return SupplyAdvice::CarriedInUsr;
             }
             return SupplyAdvice::Carried;
         }
-        SupplyAdvice::NotCopied
+        SupplyAdvice::Unmatched
     }
 }
 
@@ -314,9 +347,10 @@ pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
         lines.push(
             "Each file below lists what was redacted and where, and says how to supply the real \
              value at deploy time. Secret values were replaced with tokens of the form \
-             `REDACTED_<KIND>_<N>`, such as `REDACTED_PASSWORD_1`; one secret value is the same \
-             token everywhere, so search the export for a token to find each place it is used. \
-             A credential in a URL's user information may read `[REDACTED]`, `REDACTED` or \
+             `REDACTED_<KIND>_<N>`, such as `REDACTED_PASSWORD_1`. A placeholder marks where \
+             redacted material was, so search the export for one to find that place; the same \
+             token in two files, containers or fleet variants does not prove the credentials \
+             match, and one credential can appear under different tokens. A credential in a URL's user information may read `[REDACTED]`, `REDACTED` or \
              `<REDACTED>` instead."
                 .into(),
         );
@@ -550,6 +584,10 @@ mod tests {
         assert!(!md.contains("[REDACTED-*]"), "{md}");
         assert!(md.contains("`REDACTED_<KIND>_<N>`"), "{md}");
         assert!(md.contains("`REDACTED_PASSWORD_1`"), "{md}");
+        // A token locates redacted material; it is not an identity: two
+        // hosts or containers number their secrets separately.
+        assert!(!md.contains("same token everywhere"), "{md}");
+        assert!(md.contains("does not prove the credentials match"), "{md}");
     }
 
     #[test]
@@ -612,7 +650,7 @@ mod tests {
                 "/etc/a.conf",
                 "pattern",
                 &[Flagged, Flagged],
-                SupplyAdvice::ReviewOnly,
+                SupplyAdvice::ReviewOnly { carried: false },
             ),
             (
                 "container:web",
@@ -654,7 +692,7 @@ mod tests {
                 "/etc/app/env",
                 "pattern",
                 &[Inline],
-                SupplyAdvice::NotCopied,
+                SupplyAdvice::Unmatched,
             ),
         ];
         for (path, source, kinds, want) in cases {
@@ -691,6 +729,145 @@ mod tests {
         usr.carried.insert("/usr/lib/app/app.conf".into());
         let f = finding("/usr/lib/app/app.conf", "pattern", RedactionKind::Inline);
         assert_eq!(usr.advice(&f.path, &[&f]), SupplyAdvice::CarriedInUsr);
+    }
+
+    /// A unit generated from a cron entry is recorded under its
+    /// `generated:` label and staged under `/etc/systemd/system`: when
+    /// the unit is included the label resolves to that destination and
+    /// reads as carried; when it is excluded nothing stages it, and the
+    /// line says so without claiming where the value is.
+    #[test]
+    fn test_supply_advice_for_a_generated_unit() {
+        use inspectah_core::types::FindingKind;
+        use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection};
+        let with_unit = |disposition: FindingKind| {
+            let mut snap = InspectionSnapshot::new();
+            snap.scheduled_tasks = Some(ScheduledTaskSection {
+                generated_timer_units: vec![GeneratedTimerUnit {
+                    name: "cron-backup".into(),
+                    timer_content: "[Timer]\nOnCalendar=daily\n".into(),
+                    service_content: "[Service]\nExecStart=/usr/bin/backup \
+                                      --password=REDACTED_PASSWORD_1\n"
+                        .into(),
+                    disposition,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            Carriage::of(&snap)
+        };
+        let svc = finding(
+            "generated:cron-backup.service",
+            "pattern",
+            RedactionKind::Inline,
+        );
+        let flagged = finding(
+            "generated:cron-backup.timer",
+            "pattern",
+            RedactionKind::Flagged,
+        );
+        let included = with_unit(FindingKind::included());
+        assert_eq!(
+            included.advice(&group_key(&svc.path), &[&svc]),
+            SupplyAdvice::Carried
+        );
+        assert_eq!(
+            included.advice(&group_key(&flagged.path), &[&flagged]),
+            SupplyAdvice::ReviewOnly { carried: true }
+        );
+        let excluded = with_unit(FindingKind::excluded());
+        assert_eq!(
+            excluded.advice(&group_key(&svc.path), &[&svc]),
+            SupplyAdvice::Unmatched
+        );
+        assert!(!SupplyAdvice::Unmatched.line().contains("Not copied"));
+    }
+
+    /// A file with only flagged findings says it ships as the host had it
+    /// only when the export stages it: refine can exclude it, and then it
+    /// does not ship.
+    #[test]
+    fn test_supply_advice_for_a_flagged_file_follows_its_route() {
+        use inspectah_core::types::FindingKind;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        let with_file = |disposition: FindingKind| {
+            let mut snap = InspectionSnapshot::new();
+            snap.config = Some(ConfigSection {
+                withheld: Vec::new(),
+                files: vec![ConfigFileEntry {
+                    path: "/etc/app/app.conf".to_string(),
+                    content: "key = maybe\n".to_string(),
+                    disposition,
+                    ..Default::default()
+                }],
+            });
+            Carriage::of(&snap)
+        };
+        let f = finding(
+            "/etc/app/app.conf",
+            "inspector_hint",
+            RedactionKind::Flagged,
+        );
+        let included = with_file(FindingKind::included()).advice(&f.path, &[&f]);
+        assert_eq!(included, SupplyAdvice::ReviewOnly { carried: true });
+        assert!(included.line().contains("as the host had it"));
+        let excluded = with_file(FindingKind::excluded()).advice(&f.path, &[&f]);
+        assert_eq!(excluded, SupplyAdvice::ReviewOnly { carried: false });
+        assert!(
+            !excluded.line().contains("as the host had it"),
+            "{}",
+            excluded.line()
+        );
+        assert!(!excluded.line().contains("ships"), "{}", excluded.line());
+    }
+
+    /// A machine-state file the image does not need reads the way the
+    /// provisioning table describes it, not as recreated.
+    #[test]
+    fn test_supply_advice_for_a_machine_state_file_not_needed() {
+        use inspectah_core::types::FindingKind;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::machine_state::CarriableMember;
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            withheld: Vec::new(),
+            files: vec![ConfigFileEntry {
+                path: "/etc/grub.d/00_tuned".to_string(),
+                content: "password = REDACTED_PASSWORD_1\n".to_string(),
+                disposition: FindingKind::MachineState {
+                    member: CarriableMember::GrubTuned,
+                    include: false,
+                },
+                ..Default::default()
+            }],
+        });
+        let f = finding("/etc/grub.d/00_tuned", "pattern", RedactionKind::Inline);
+        let advice = Carriage::of(&snap).advice(&f.path, &[&f]);
+        assert_eq!(advice, SupplyAdvice::MachineStateNotNeeded);
+        let table = super::super::machine_state::notice_text(ProvisioningNotice::None);
+        assert!(
+            advice.line().contains(&table),
+            "{} / {table}",
+            advice.line()
+        );
+        assert!(!advice.line().contains("recreated"), "{}", advice.line());
+    }
+
+    /// Mount credential advice names `credentials=` for SMB/CIFS only:
+    /// other filesystems take their own helper's mechanism.
+    #[test]
+    fn test_mount_option_advice_is_scoped_to_cifs() {
+        let line = SupplyAdvice::MountOption.line();
+        assert!(
+            line.contains("For SMB/CIFS, provision a mode-0600 file referenced by `credentials=`"),
+            "{line}"
+        );
+        assert!(
+            line.contains(
+                "for other filesystems, use the mount helper's supported credential mechanism"
+            ),
+            "{line}"
+        );
     }
 
     /// A finding recorded with a relative path and one with an absolute

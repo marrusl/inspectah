@@ -572,14 +572,35 @@ for the proxy and token maskers, and so on): `replacement` is always
 print one as if it were.
 
 Each file gets one `**At deploy time:**` line from `SupplyAdvice`, the
-first rule that applies: a machine-state class row (its provisioning step
-or "recreated", or carried by override), all excluded, all flagged, then
-by path (`container:`, `/proc/cmdline`, `/etc/shadow`, `/etc/fstab`, a
-manifest, a `.repo` file), then whether `staged_writes` or an included
-quadlet puts the file in the image. A file that is machine state takes
-the class line only, so it never also reads as carried. A new pass with a
-new `source` needs a `replaced_with` arm, and a new kind of file a rule,
-or it falls to the generic line.
+first rule that applies: a machine-state class row (its provisioning step,
+"recreated" or "not needed in the image" as its notice says, or carried
+by override), all excluded, all flagged, then by path (`container:`,
+`/proc/cmdline`, `/etc/shadow`, `/etc/fstab`, a manifest, a `.repo`
+file), then whether `staged_writes` or an included quadlet puts the file
+in the image. A file that is machine state takes the class line only, so
+it never also reads as carried. A new pass with a new `source` needs a
+`replaced_with` arm, and a new kind of file a rule, or it falls to the
+generic line.
+
+**Say only what the export route proves.** Carriage is a positive signal:
+a key `staged_writes` or an included quadlet writes is carried; anything
+else is unmatched, not absent, because the unmanaged-files section and
+others copy files this lookup does not see. So the fallback line says
+inspectah did not match the file, never that it is not in the image, and
+a flagged-only file says it ships as the host had it only when it is
+carried (refine can exclude it). A finding recorded under a label is
+resolved to where the stager writes it before the lookup:
+`generated:<name>.service` and `.timer` are
+`/etc/systemd/system/<name>.<suffix>` through `staged_unit_file`. A new
+labelled pass whose output is staged needs the same resolution, or its
+carried file reads as unmatched.
+
+**A token locates, it does not identify.** Each scan numbers its own
+secrets, container environments get their own registry, fleet merging
+keeps each host's tokens, and different detection kinds can give one
+value different tokens. So `REDACTED_PASSWORD_1` in two files, containers
+or fleet variants does not mean the same credential, and the review says
+so rather than promising one token per value.
 
 The scan, the fleet aggregate and the refine export all write the file
 through this one function.
