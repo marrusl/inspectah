@@ -225,13 +225,17 @@ pub fn settle_repo_ownership(snapshot: &mut InspectionSnapshot) {
 }
 
 /// The content every config entry at a rejected key's destination holds:
-/// the rejected entry's own placeholder, the first in list order where
-/// two spellings of one destination are recorded.
+/// the canonical placeholder of the rejected entry
+/// ([`KeyRejection::placeholder`] of its path), the first in list order
+/// where two spellings of one destination are recorded. Read from the
+/// rejection, never from the entry's stored content, so a load check
+/// cannot be satisfied by an edited key whose twins match its edit.
 fn rejected_key_placeholders(rpm: &RpmSection) -> BTreeMap<Destination, String> {
     let mut out = BTreeMap::new();
-    for key in rpm.gpg_keys.iter().filter(|k| k.rejected.is_some()) {
-        if let Ok(dest) = Destination::new(&key.path) {
-            out.entry(dest).or_insert_with(|| key.content.clone());
+    for key in &rpm.gpg_keys {
+        if let (Some(rejection), Ok(dest)) = (key.rejected, Destination::new(&key.path)) {
+            out.entry(dest)
+                .or_insert_with(|| rejection.placeholder(&key.path));
         }
     }
     out
@@ -278,9 +282,10 @@ pub enum RepoOwnershipViolation {
     /// private key armor in it.
     #[error("{path}: a key recorded as usable is not a PGP public key, or holds private key armor")]
     UnusableKey { path: String },
-    /// A rejected key that holds more than a placeholder (PGP armor of
-    /// either kind), or a config entry at its destination that holds
-    /// anything but that key's placeholder, or a diff.
+    /// A rejected key whose content is not its canonical placeholder
+    /// ([`KeyRejection::placeholder`] of its path), or a config entry at
+    /// its destination that holds anything but that placeholder, or a
+    /// diff.
     #[error("{path}: a key the scan refused to store, or its configuration row, holds its content")]
     RejectedKeyContent { path: String },
 }
@@ -308,12 +313,17 @@ pub fn check_repo_ownership(snapshot: &InspectionSnapshot) -> Result<(), RepoOwn
                     path: key.path.clone(),
                 },
             ),
-            Some(_) if found != Some(KeyRejection::NotPgp) => note(
-                &key.path,
-                RepoOwnershipViolation::RejectedKeyContent {
-                    path: key.path.clone(),
-                },
-            ),
+            Some(rejection)
+                if found != Some(KeyRejection::NotPgp)
+                    || key.content != rejection.placeholder(&key.path) =>
+            {
+                note(
+                    &key.path,
+                    RepoOwnershipViolation::RejectedKeyContent {
+                        path: key.path.clone(),
+                    },
+                )
+            }
             _ => {}
         }
     }
@@ -537,8 +547,32 @@ mod tests {
         diff.config.as_mut().unwrap().files[1].diff_against_rpm = Some("+secret".into());
         assert_eq!(
             check_repo_ownership(&diff),
-            Err(RepoOwnershipViolation::RejectedKeyContent { path: key }),
+            Err(RepoOwnershipViolation::RejectedKeyContent { path: key.clone() }),
             "a diff of the refused bytes"
+        );
+
+        // The refused bytes put back in the key and in every twin alike,
+        // with no PGP armor in them: the content is not the canonical
+        // placeholder, whatever the twins agree on.
+        let mut restored = rejected.clone();
+        restored.rpm.as_mut().unwrap().gpg_keys[0].rejected = Some(KeyRejection::NotPgp);
+        restored.rpm.as_mut().unwrap().gpg_keys[0].content = "plain text, not a key\n".into();
+        for file in &mut restored.config.as_mut().unwrap().files {
+            if file.path.ends_with("/K") {
+                file.content = "plain text, not a key\n".into();
+            }
+        }
+        assert_eq!(
+            check_repo_ownership(&restored),
+            Err(RepoOwnershipViolation::RejectedKeyContent { path: key.clone() }),
+            "a NotPgp key holding its refused bytes"
+        );
+        let mut wrong_kind = rejected.clone();
+        wrong_kind.rpm.as_mut().unwrap().gpg_keys[0].rejected = Some(KeyRejection::NotPgp);
+        assert_eq!(
+            check_repo_ownership(&wrong_kind),
+            Err(RepoOwnershipViolation::RejectedKeyContent { path: key }),
+            "another rejection's placeholder"
         );
     }
 
