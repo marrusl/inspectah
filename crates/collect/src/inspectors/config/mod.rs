@@ -135,18 +135,18 @@ impl Inspector for ConfigInspector {
             if !exec.file_exists(Path::new(path)) {
                 continue;
             }
-            match admit::locate(exec, path) {
-                Ok(_) => {}
+            let located = match admit::locate(exec, path) {
+                Ok(located) => located,
                 Err(admit::Refusal::NotUnderEtc) => continue,
-                Err(_) => {
-                    warnings.push(aliased_path_warning(path));
+                Err(refusal) => {
+                    warnings.push(refused_path_warning(path, &refusal));
                     continue;
                 }
-            }
-            if dhcp_paths.contains(*path) {
-                continue;
-            }
-            if is_selinux_fcontext_store_file(path) {
+            };
+            if located
+                .spellings()
+                .any(|p| dhcp_paths.contains(p) || is_selinux_fcontext_store_file(p))
+            {
                 continue;
             }
             if is_authselect_pam_link(exec, path, flags) {
@@ -226,25 +226,26 @@ impl Inspector for ConfigInspector {
                 for rel_path in files {
                     let abs_path = format!("/etc/{rel_path}");
 
-                    // Skip already captured rpm -Va paths
-                    if rpm_va_paths.contains(&abs_path) {
+                    // Under a directory link, the file it names is
+                    // outside /etc or withheld: not collected, and an
+                    // unowned path is not named by a warning. Every
+                    // check below applies to both spellings.
+                    let Ok(located) = admit::locate(exec, &abs_path) else {
+                        continue;
+                    };
+                    // Skip already captured rpm -Va paths, and RPM-owned
+                    // ones (not modified).
+                    if located
+                        .spellings()
+                        .any(|p| rpm_va_paths.contains(p) || rpm_state.is_rpm_owned(Path::new(p)))
+                    {
                         continue;
                     }
-                    // Skip RPM-owned (not modified).
                     // Also resolve symlinks: a file discovered at
                     // /etc/ssl/certs/ca-bundle.crt may be a symlink to
                     // /etc/pki/tls/certs/ca-bundle.crt — RPM owns the
                     // target path, not the symlink path.
-                    if rpm_state.is_rpm_owned(Path::new(&abs_path)) {
-                        continue;
-                    }
                     if is_rpm_owned_via_symlink(exec, rpm_state, &abs_path) {
-                        continue;
-                    }
-                    // A second name for a file under a directory link:
-                    // the walk reaches that file under its own name, or
-                    // it is outside /etc.
-                    if admit::locate(exec, &abs_path).is_err() {
                         continue;
                     }
                     // Never open a FIFO, socket or device, before any
@@ -252,16 +253,11 @@ impl Inspector for ConfigInspector {
                     if admit::readable(exec, &abs_path) == Err(admit::Unreadable::Special) {
                         continue;
                     }
-                    // Skip excluded unowned
-                    if is_excluded_unowned(exec, &abs_path) {
-                        continue;
-                    }
-                    // Skip dev artifacts
-                    if is_dev_artifact(&abs_path) {
-                        continue;
-                    }
-                    // Skip DHCP connections
-                    if dhcp_paths.contains(&abs_path) {
+                    // Skip excluded unowned files, dev artifacts and
+                    // DHCP connections.
+                    if located.spellings().any(|p| {
+                        is_excluded_unowned(exec, p) || is_dev_artifact(p) || dhcp_paths.contains(p)
+                    }) {
                         continue;
                     }
 
@@ -459,19 +455,22 @@ const GHOST_CREDENTIAL_WITHHELD: &str = "holds key material, so it was withheld:
 /// not a regular file by `lstat` ([`Executor::file_kind`]): absent, a
 /// symlink (its state is the link, not content), a directory (`%ghost
 /// %dir`), or a FIFO, socket or device, which is never opened because
-/// opening a FIFO with no writer blocks. Then a path with a directory
-/// link above it ([`admit::locate`]), which names a file elsewhere and is
-/// a scan warning. Then every path, in its normalized spelling,
+/// opening a FIFO with no writer blocks. Then a path [`admit::locate`]
+/// refuses, a scan warning: a directory above it is a link that does not
+/// resolve, or names a file outside `/etc` or one the section withholds.
+/// Then every path, in its normalized spelling,
 /// [`ghost::classify_ghost`] does not call [`ghost::GhostClass::Config`]:
 /// a file another section records (fstab, crypttab, the `*.repo` files
 /// the repos section reads, the SELinux config, the account databases,
 /// the locale), a machine-state member, a file the host generates, or a
 /// keymap file the locale item decides. A credential by path is never
 /// opened and is withheld with a scan warning naming it.
-/// `/etc/audit/audit.rules` is skipped when the host writes it with
-/// `augenrules`, carried when the host loads it directly, and carried
-/// with a scan warning when the scan cannot tell ([`audit_rules::source`]). Then the unowned walk's exclusions that need
-/// the host (`is_excluded_unowned`'s unit-link test, DHCP connections).
+/// `/etc/audit/audit.rules` is skipped when the audit loader units are
+/// exactly as packaged, so `augenrules` writes it, and otherwise carried
+/// with a scan warning ([`audit_rules::source`]). Then the unowned walk's
+/// exclusions that need the host (`is_excluded_unowned`'s unit-link
+/// test, DHCP connections), on both spellings of a path under a
+/// directory link, which is collected at the spelling it was found by.
 /// Last, once read, a file whose content is a keytab or a whole-file
 /// private key (`ghost::is_credential_content`) is dropped before the
 /// content is kept, with the same warning.
@@ -530,20 +529,23 @@ fn collect_ghost_configs(
         {
             continue;
         }
-        let path = match admit::locate(exec, requested) {
+        let located = match admit::locate(exec, requested) {
             Ok(located) => located,
-            Err(_) => {
-                warnings.push(aliased_path_warning(requested));
+            Err(refusal) => {
+                warnings.push(refused_path_warning(requested, &refusal));
                 continue;
             }
         };
-        let path = path.as_str();
+        let path = located.path.as_str();
         match ghost::classify_ghost(path) {
             ghost::GhostClass::Config => {}
-            ghost::GhostClass::AuditRules => match audit_rules::source(exec) {
+            ghost::GhostClass::AuditRules => match audit_rules::source(
+                exec,
+                &query.packaged_units,
+                rpm_state.verification_results(),
+            ) {
                 audit_rules::Source::Augenrules => continue,
-                audit_rules::Source::LoadedDirectly => {}
-                audit_rules::Source::Unknown(reason) => {
+                audit_rules::Source::Carried(reason) => {
                     warnings.push(Warning {
                         inspector: "config".into(),
                         message: format!("{requested} {AUDIT_RULES_UNCERTAIN} ({reason})."),
@@ -560,7 +562,10 @@ fn collect_ghost_configs(
             | ghost::GhostClass::Generated
             | ghost::GhostClass::Deferred => continue,
         }
-        if is_excluded_unowned(exec, path) || dhcp_paths.contains(path) {
+        if located
+            .spellings()
+            .any(|p| is_excluded_unowned(exec, p) || dhcp_paths.contains(p))
+        {
             continue;
         }
 
@@ -585,11 +590,14 @@ fn collect_ghost_configs(
     }
 }
 
-/// The scan warning for a packaged path refused by [`admit::locate`]; the
-/// path comes first.
-const ALIASED_PATH_REFUSED: &str = "was not read and is not carried: a directory above it is a \
-     symbolic link, so the path names a file somewhere else. That file is collected, or left \
-     out, under its own path.";
+/// The start of the scan warning for a packaged path refused by
+/// [`admit::locate`]; the path comes first and the reason follows.
+const PATH_REFUSED: &str = "was not read and is not carried:";
+
+/// Why a path under a directory link was refused, after the file it
+/// names.
+const ALIAS_TO_WITHHELD: &str = "is key material, host identity, a generated file, or a file \
+     another section records, so it is left out under either name";
 
 /// The scan warning for a modified packaged file that is a link to a file
 /// this section does not carry; the path and the target come first.
@@ -608,10 +616,28 @@ const AUDIT_RULES_UNCERTAIN: &str = "is carried as it is on the host, because th
 const LINK_LEAVES_ETC_RATIONALE: &str = "Symlink points outside /etc: its target was not read and \
      is not carried. Recreate the link in the image if it is needed.";
 
-fn aliased_path_warning(path: &str) -> Warning {
+/// The scan warning naming a packaged path [`admit::locate`] refused and
+/// why. It names paths only, never content.
+fn refused_path_warning(path: &str, refusal: &admit::Refusal) -> Warning {
+    let reason = match refusal {
+        admit::Refusal::NotUnderEtc => "it is not a path under /etc".to_string(),
+        admit::Refusal::UnresolvedAncestor => {
+            "a directory above it could not be resolved (a dangling or looping symbolic link, \
+             or one that could not be read)"
+                .to_string()
+        }
+        admit::Refusal::AliasLeavesEtc(physical) => format!(
+            "a directory above it is a symbolic link, and the file it names, {physical}, is \
+             outside /etc"
+        ),
+        admit::Refusal::AliasToWithheld(physical) => format!(
+            "a directory above it is a symbolic link, and the path or the file it names, \
+             {physical}, {ALIAS_TO_WITHHELD}"
+        ),
+    };
     Warning {
         inspector: "config".into(),
-        message: format!("{path} {ALIASED_PATH_REFUSED}"),
+        message: format!("{path} {PATH_REFUSED} {reason}."),
         ..Default::default()
     }
 }
@@ -1035,9 +1061,21 @@ fn is_ostree_system(source: &SourceSystem) -> bool {
 /// The file naming the system crypto policy.
 const CRYPTO_POLICY_CONFIG: &str = "/etc/crypto-policies/config";
 
+/// The scan warning when the crypto policy file's first line is not a
+/// policy name; the path comes first. It never quotes the line: the file
+/// is read before any config is collected.
+const CRYPTO_POLICY_UNEXPECTED: &str = "does not start with a policy name (capital letters, \
+     digits, `_`, `:`, `.` and `-`), so the Containerfile update-crypto-policies command will be \
+     skipped";
+
 /// Detects the system crypto policy and adds a warning if non-default.
+///
+/// The file is opened only as a capture would open it
+/// ([`admit::may_read_to_decide`]). The policy name a warning quotes
+/// has passed the name check; a first line that does not is named by
+/// path with a fixed reason.
 fn detect_crypto_policy(exec: &dyn Executor, warnings: &mut Vec<Warning>) {
-    if !admit::opens_without_blocking(exec, CRYPTO_POLICY_CONFIG) {
+    if !admit::may_read_to_decide(exec, CRYPTO_POLICY_CONFIG) {
         return;
     }
     let content = match exec.read_file(Path::new(CRYPTO_POLICY_CONFIG)) {
@@ -1068,10 +1106,7 @@ fn detect_crypto_policy(exec: &dyn Executor, warnings: &mut Vec<Warning>) {
     if !valid || !policy.starts_with(|c: char| c.is_ascii_uppercase()) {
         warnings.push(Warning {
             inspector: "config".into(),
-            message: format!(
-                "System crypto policy value {policy:?} contains unexpected characters \
-                 \u{2014} Containerfile update-crypto-policies command will be skipped"
-            ),
+            message: format!("{CRYPTO_POLICY_CONFIG} {CRYPTO_POLICY_UNEXPECTED}"),
             ..Default::default()
         });
         return;
@@ -1131,19 +1166,17 @@ fn detect_orphaned_configs(
             if seen_paths.contains(&abs_path) {
                 continue;
             }
-            if rpm_state.is_rpm_owned(Path::new(&abs_path)) {
+            let Ok(located) = admit::locate(exec, &abs_path) else {
+                continue;
+            };
+            if located.spellings().any(|p| {
+                rpm_state.is_rpm_owned(Path::new(p))
+                    || rpm_va_paths.contains(p)
+                    || dhcp_paths.contains(p)
+            }) {
                 continue;
             }
             if is_rpm_owned_via_symlink(exec, rpm_state, &abs_path) {
-                continue;
-            }
-            if rpm_va_paths.contains(&abs_path) {
-                continue;
-            }
-            if dhcp_paths.contains(&abs_path) {
-                continue;
-            }
-            if admit::locate(exec, &abs_path).is_err() {
                 continue;
             }
 

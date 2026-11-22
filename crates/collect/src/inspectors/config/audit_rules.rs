@@ -1,28 +1,31 @@
 //! Whether `/etc/audit/audit.rules` is the administrator's input or a file
 //! the host writes again at every audit start.
 //!
-//! By default `augenrules --load` builds the file from
+//! With the packaged units, `augenrules --load` builds the file from
 //! `/etc/audit/rules.d/*.rules` and loads it: `ExecStartPost=` of
 //! `auditd.service` on RHEL 9.8 (audit 3.1.5), `ExecStart=` of
 //! `audit-rules.service` on RHEL 10.2 (audit-rules 4.0.3); both packaged
-//! units are in `testdata/fixtures/config/audit/`. Then the file is
-//! generated: the rules that matter are in `rules.d`, which the walk
-//! carries, and a copied `audit.rules` is overwritten at the first start.
+//! units are in `testdata/fixtures/config/audit/`. `augenrules` itself
+//! (read on both hosts, 2026-11-21) always rewrites the file when
+//! `rules.d` exists, since its output starts with a header line. Then the
+//! file is generated: the rules that matter are in `rules.d`, which the
+//! walk carries, and a copied `audit.rules` is overwritten at the first
+//! start.
 //!
-//! RHEL also supports turning `augenrules` off: copy the unit to
-//! `/etc/systemd/system/`, comment out the `augenrules` line and enable
-//! the `auditctl -R /etc/audit/audit.rules` line beside it (the RHEL 9
-//! security hardening guide, "Disabling augenrules", and the comment in
-//! the packaged unit itself). Then `audit.rules` is what the host loads,
-//! and dropping it would leave an image that loads no rules at all.
-//!
-//! `augenrules` itself (read on both hosts, 2026-11-21) always rewrites
-//! the file when `rules.d` exists, since its output starts with a header
-//! line, and leaves it alone and loads it as it is when `rules.d` is
-//! missing.
+//! Anything else may load the file as it is. RHEL documents turning
+//! `augenrules` off by copying the unit to `/etc/systemd/system/` and
+//! enabling the `auditctl -R /etc/audit/audit.rules` line beside it, and a
+//! drop-in can do the same in syntax as varied as systemd accepts (dash
+//! prefixes, type-wide directories, quoting, continued lines, `/run`).
+//! Dropping such a file leaves an image that loads no rules. So the units
+//! are not read at all: the file is generated only when the loader units
+//! are exactly as packaged, which the scan decides by what is present,
+//! and in every other case it is carried with a scan warning.
 
-use super::admit::opens_without_blocking;
 use inspectah_core::traits::executor::{Executor, FileKind};
+use inspectah_core::types::rpm::RpmVaEntry;
+use std::collections::BTreeSet;
+use std::fmt;
 use std::path::Path;
 
 /// The file this module decides about.
@@ -35,203 +38,191 @@ const RULES_DIR: &str = "/etc/audit/rules.d";
 /// `audit-rules.service` on RHEL 10.
 const LOADER_UNITS: &[&str] = &["auditd.service", "audit-rules.service"];
 
-/// Where a unit's own file is looked for, the administrator's first.
-const UNIT_DIRS: &[&str] = &["/etc/systemd/system", "/usr/lib/systemd/system"];
+/// Where packages install unit files.
+const PACKAGED_UNIT_DIR: &str = "/usr/lib/systemd/system";
 
-/// What a masked unit file links to.
-const DEV_NULL: &str = "/dev/null";
+/// Every directory systemd reads system units and drop-ins from
+/// (`systemd.unit(5)`, "System Unit Search Path"), the packaged one
+/// included.
+const UNIT_SEARCH_PATH: &[&str] = &[
+    "/etc/systemd/system.control",
+    "/run/systemd/system.control",
+    "/run/systemd/transient",
+    "/run/systemd/generator.early",
+    "/etc/systemd/system",
+    "/etc/systemd/system.attached",
+    "/run/systemd/system",
+    "/run/systemd/system.attached",
+    "/run/systemd/generator",
+    "/usr/local/lib/systemd/system",
+    PACKAGED_UNIT_DIR,
+    "/run/systemd/generator.late",
+];
 
-/// The drop-in directory for every service, beside each unit's own.
-const SERVICE_TYPE_DROP_IN_DIR: &str = "service.d";
+/// The suffix of a drop-in directory's name.
+const DROP_IN_DIR_SUFFIX: &str = ".d";
 
-/// A drop-in file's suffix.
-const DROP_IN_SUFFIX: &str = ".conf";
-
-/// The section the exec settings live in.
-const SERVICE_SECTION: &str = "[Service]";
-
-/// The settings whose commands run when the unit starts.
-const START_COMMAND_KEYS: &[&str] = &["ExecStartPre", "ExecStart", "ExecStartPost"];
-
-/// The characters systemd allows before an exec command's path (`-` to
-/// ignore failure, and the privilege prefixes).
-const EXEC_PREFIX_CHARS: &[char] = &['-', '@', ':', '+', '!', '|'];
-
-/// The program that builds and loads the rules from [`RULES_DIR`].
-const AUGENRULES: &str = "augenrules";
-
-/// The `augenrules` option that only reports and writes nothing.
-const AUGENRULES_CHECK_ONLY: &str = "--check";
-
-/// The program that loads a rules file, and its option for one.
-const AUDITCTL: &str = "auditctl";
-const AUDITCTL_LOAD_FILE: &str = "-R";
-
-/// How the host comes by [`AUDIT_RULES_PATH`].
+/// How the scan treats [`AUDIT_RULES_PATH`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Source {
-    /// A loader unit runs `augenrules` and [`RULES_DIR`] exists, so the
-    /// file is written again from `rules.d` at every start: not carried.
+    /// The loader units are exactly as packaged and [`RULES_DIR`] is a
+    /// directory, so `augenrules` writes the file again at every start:
+    /// not carried.
     Augenrules,
-    /// No loader unit runs `augenrules` and one loads the file with
-    /// `auditctl -R`: the administrator's input, carried as config.
-    LoadedDirectly,
-    /// Neither could be established, for this reason: carried, with a
-    /// scan warning.
-    Unknown(String),
+    /// Anything else: carried, with a scan warning giving the reason.
+    Carried(Reason),
 }
 
-/// How the host comes by `/etc/audit/audit.rules`, from the start
-/// commands of its loader units after `/etc` overrides and drop-ins.
-pub(super) fn source(exec: &dyn Executor) -> Source {
-    let mut commands: Vec<Vec<String>> = Vec::new();
+/// What made the scan carry [`AUDIT_RULES_PATH`]. Every reason names
+/// paths only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Reason {
+    /// [`RULES_DIR`] is not a directory, so `augenrules` would load the
+    /// file as it is.
+    NoRulesDir,
+    /// No loader unit is installed by a package.
+    NoPackagedLoader,
+    /// `rpm -Va` reports this packaged unit changed.
+    ChangedPackagedUnit(String),
+    /// A unit file in the packaged directory no package lists.
+    UnpackagedUnit(String),
+    /// A unit file, mask or drop-in directory for a loader unit, at this
+    /// path outside the package.
+    Override(String),
+    /// A link naming a loader unit under another name, whose drop-ins
+    /// systemd would read too.
+    Alias(String),
+    /// This path could not be checked, for this reason.
+    Unchecked(String, String),
+}
+
+impl fmt::Display for Reason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoRulesDir => write!(
+                f,
+                "{RULES_DIR} is not a directory, so augenrules loads {AUDIT_RULES_PATH} as it is"
+            ),
+            Self::NoPackagedLoader => write!(
+                f,
+                "no package installs an audit loader unit ({}) in {PACKAGED_UNIT_DIR}",
+                LOADER_UNITS.join(", ")
+            ),
+            Self::ChangedPackagedUnit(path) => write!(f, "rpm reports {path} changed"),
+            Self::UnpackagedUnit(path) => write!(f, "no package installs {path}"),
+            Self::Override(path) => write!(f, "{path} overrides or extends an audit loader unit"),
+            Self::Alias(path) => write!(f, "{path} is another name for an audit loader unit"),
+            Self::Unchecked(path, error) => write!(f, "{path} could not be checked ({error})"),
+        }
+    }
+}
+
+/// How the scan treats `/etc/audit/audit.rules`. `packaged` is every path
+/// under [`PACKAGED_UNIT_DIR`] some package lists, and `verified` the
+/// `rpm -Va` rows. Only what is present is looked at; no unit is read.
+pub(super) fn source(
+    exec: &dyn Executor,
+    packaged: &BTreeSet<String>,
+    verified: &[RpmVaEntry],
+) -> Source {
+    match exactly_as_packaged(exec, packaged, verified) {
+        Ok(()) => Source::Augenrules,
+        Err(reason) => Source::Carried(reason),
+    }
+}
+
+/// `Ok` when at least one loader unit is installed by a package and
+/// unchanged, nothing else anywhere in [`UNIT_SEARCH_PATH`] names, masks,
+/// aliases or extends a loader unit, and [`RULES_DIR`] is a directory.
+fn exactly_as_packaged(
+    exec: &dyn Executor,
+    packaged: &BTreeSet<String>,
+    verified: &[RpmVaEntry],
+) -> Result<(), Reason> {
+    let mut any_loader = false;
     for unit in LOADER_UNITS {
-        match start_commands(exec, unit) {
-            Ok(found) => commands.extend(found),
-            Err(reason) => return Source::Unknown(reason),
-        }
-    }
-    let regenerates = commands.iter().any(|argv| runs_augenrules(argv));
-    let loads_directly = commands.iter().any(|argv| loads_audit_rules(argv));
-    if regenerates {
-        if matches!(
-            exec.file_kind(Path::new(RULES_DIR)),
-            Ok(FileKind::Directory)
-        ) {
-            Source::Augenrules
-        } else {
-            Source::Unknown(format!(
-                "augenrules runs, but {RULES_DIR} is not a directory, so it loads \
-                 {AUDIT_RULES_PATH} as it is"
-            ))
-        }
-    } else if loads_directly {
-        Source::LoadedDirectly
-    } else {
-        Source::Unknown(format!(
-            "no audit unit runs augenrules or loads {AUDIT_RULES_PATH} with auditctl -R"
-        ))
-    }
-}
-
-/// The start commands of `unit`, each split into words: its own file
-/// (the first of [`UNIT_DIRS`] that has it), then its drop-ins and the
-/// service-wide ones in file-name order, an `/etc` drop-in hiding a
-/// packaged one of the same name. An empty assignment clears the
-/// setting, as systemd does. No commands when the host has no such
-/// unit or the unit is masked; an error when a file that decides could
-/// not be read.
-fn start_commands(exec: &dyn Executor, unit: &str) -> Result<Vec<Vec<String>>, String> {
-    let Some(unit_file) = UNIT_DIRS
-        .iter()
-        .map(|dir| format!("{dir}/{unit}"))
-        .find(|path| exec.file_kind(Path::new(path)).is_ok())
-    else {
-        return Ok(Vec::new());
-    };
-    // A masked unit never runs, and systemd reads none of its drop-ins.
-    if exec
-        .resolve_final_target(Path::new(&unit_file))
-        .is_ok_and(|target| target == Path::new(DEV_NULL))
-    {
-        return Ok(Vec::new());
-    }
-    let mut files = vec![unit_file];
-
-    let mut drop_ins: Vec<(String, String)> = Vec::new();
-    for dir in UNIT_DIRS {
-        for drop_in_dir in [
-            format!("{dir}/{unit}.d"),
-            format!("{dir}/{SERVICE_TYPE_DROP_IN_DIR}"),
-        ] {
-            let names = match exec.read_dir(Path::new(&drop_in_dir)) {
-                Ok(names) => names,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(format!("{drop_in_dir} could not be listed: {e}")),
-            };
-            for name in names {
-                let hidden = drop_ins.iter().any(|(seen, _)| *seen == name);
-                if name.ends_with(DROP_IN_SUFFIX) && !hidden {
-                    drop_ins.push((name.clone(), format!("{drop_in_dir}/{name}")));
+        for dir in UNIT_SEARCH_PATH {
+            let unit_file = format!("{dir}/{unit}");
+            match (*dir == PACKAGED_UNIT_DIR, present(exec, &unit_file)?) {
+                (_, None) => {}
+                (false, Some(_)) => return Err(Reason::Override(unit_file)),
+                (true, Some(kind)) => {
+                    if kind != FileKind::Regular || !packaged.contains(&unit_file) {
+                        return Err(Reason::UnpackagedUnit(unit_file));
+                    }
+                    if verified.iter().any(|row| row.path == unit_file) {
+                        return Err(Reason::ChangedPackagedUnit(unit_file));
+                    }
+                    any_loader = true;
+                }
+            }
+            for name in drop_in_dirs(unit) {
+                let drop_in_dir = format!("{dir}/{name}");
+                if present(exec, &drop_in_dir)?.is_some() {
+                    return Err(Reason::Override(drop_in_dir));
                 }
             }
         }
     }
-    drop_ins.sort();
-    files.extend(drop_ins.into_iter().map(|(_, path)| path));
-
-    let mut settings: Vec<(&str, Vec<Vec<String>>)> = START_COMMAND_KEYS
-        .iter()
-        .map(|key| (*key, Vec::new()))
-        .collect();
-    for path in files {
-        if !opens_without_blocking(exec, &path) {
-            return Err(format!("{path} is not a regular file"));
+    for dir in UNIT_SEARCH_PATH {
+        if let Some(alias) = alias_of_a_loader(exec, dir)? {
+            return Err(Reason::Alias(alias));
         }
-        let content = exec
-            .read_file(Path::new(&path))
-            .map_err(|e| format!("{path} could not be read: {e}"))?;
-        apply_unit_file(&content, &mut settings);
     }
-    Ok(settings
+    if !any_loader {
+        return Err(Reason::NoPackagedLoader);
+    }
+    match exec.file_kind(Path::new(RULES_DIR)) {
+        Ok(FileKind::Directory) => Ok(()),
+        _ => Err(Reason::NoRulesDir),
+    }
+}
+
+/// What is at `path`, by `lstat`; `None` when nothing is.
+fn present(exec: &dyn Executor, path: &str) -> Result<Option<FileKind>, Reason> {
+    match exec.file_kind(Path::new(path)) {
+        Ok(kind) => Ok(Some(kind)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Reason::Unchecked(path.to_string(), e.to_string())),
+    }
+}
+
+/// The drop-in directory names systemd reads for `unit`: its own, one for
+/// each dash prefix of its name (`audit-.service.d` for
+/// `audit-rules.service`), and the type-wide one (`service.d`).
+fn drop_in_dirs(unit: &str) -> Vec<String> {
+    let (stem, unit_type) = unit
+        .rsplit_once('.')
+        .expect("a loader unit name has a type suffix");
+    let mut names = vec![format!("{unit}{DROP_IN_DIR_SUFFIX}")];
+    names.extend(
+        stem.match_indices('-')
+            .map(|(dash, _)| format!("{}.{unit_type}{DROP_IN_DIR_SUFFIX}", &stem[..=dash])),
+    );
+    names.push(format!("{unit_type}{DROP_IN_DIR_SUFFIX}"));
+    names
+}
+
+/// The first entry of `dir` that is a link to a loader unit under another
+/// name.
+fn alias_of_a_loader(exec: &dyn Executor, dir: &str) -> Result<Option<String>, Reason> {
+    let names = match exec.read_dir(Path::new(dir)) {
+        Ok(names) => names,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Reason::Unchecked(dir.to_string(), e.to_string())),
+    };
+    Ok(names
         .into_iter()
-        .flat_map(|(_, commands)| commands)
-        .collect())
-}
-
-/// Apply the start-command assignments of one unit file or drop-in, in
-/// order, to `settings`.
-fn apply_unit_file(content: &str, settings: &mut [(&str, Vec<Vec<String>>)]) {
-    let mut in_service = false;
-    for line in content.lines().map(str::trim) {
-        if line.starts_with('[') {
-            in_service = line == SERVICE_SECTION;
-            continue;
-        }
-        if !in_service || line.starts_with(['#', ';']) {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        let Some((_, commands)) = settings.iter_mut().find(|(k, _)| *k == key.trim()) else {
-            continue;
-        };
-        let value = value.trim();
-        if value.is_empty() {
-            commands.clear();
-            continue;
-        }
-        // One value can hold several commands separated by a lone `;`.
-        let words: Vec<&str> = value.split_whitespace().collect();
-        for command in words.split(|word| *word == ";") {
-            if !command.is_empty() {
-                commands.push(command.iter().map(|w| (*w).to_string()).collect());
-            }
-        }
-    }
-}
-
-/// The program a command runs, by file name, without its prefix
-/// characters.
-fn program(argv: &[String]) -> &str {
-    argv.first()
-        .map(|first| first.trim_start_matches(EXEC_PREFIX_CHARS))
-        .and_then(|path| path.rsplit('/').next())
-        .unwrap_or("")
-}
-
-/// Whether the command writes the rules from `rules.d`.
-fn runs_augenrules(argv: &[String]) -> bool {
-    program(argv) == AUGENRULES && !argv.iter().any(|arg| arg == AUGENRULES_CHECK_ONLY)
-}
-
-/// Whether the command loads `/etc/audit/audit.rules` as it is.
-fn loads_audit_rules(argv: &[String]) -> bool {
-    program(argv) == AUDITCTL
-        && argv
-            .windows(2)
-            .any(|pair| pair[0] == AUDITCTL_LOAD_FILE && pair[1] == AUDIT_RULES_PATH)
+        .filter(|name| !LOADER_UNITS.contains(&name.as_str()))
+        .map(|name| format!("{dir}/{name}"))
+        .find(|path| {
+            exec.read_link(Path::new(path)).is_ok_and(|target| {
+                Path::new(&target)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| LOADER_UNITS.contains(&name))
+            })
+        }))
 }
 
 #[cfg(test)]
@@ -239,146 +230,137 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
 
-    /// A packaged unit as measured on the test hosts, 2026-11-21.
-    macro_rules! unit {
-        ($release:literal, $name:literal) => {
-            include_str!(concat!(
-                "../../../../../testdata/fixtures/config/audit/",
-                $release,
-                "/",
-                $name
-            ))
-        };
-    }
-    const EL9_AUDITD: &str = unit!("rhel-9.8", "auditd.service");
-    const EL10_AUDITD: &str = unit!("rhel-10.2", "auditd.service");
-    const EL10_AUDIT_RULES: &str = unit!("rhel-10.2", "audit-rules.service");
+    const EL9_AUDITD: &str = "/usr/lib/systemd/system/auditd.service";
+    const EL10_AUDIT_RULES: &str = "/usr/lib/systemd/system/audit-rules.service";
 
-    /// The RHEL 9 unit as the documented procedure leaves it in `/etc`:
-    /// the `augenrules` line commented out, the `auditctl` line enabled.
-    fn el9_documented_override() -> String {
-        EL9_AUDITD
-            .replace(
-                "ExecStartPost=-/sbin/augenrules --load",
-                "#ExecStartPost=-/sbin/augenrules --load",
-            )
-            .replace(
-                "#ExecStartPost=-/sbin/auditctl -R /etc/audit/audit.rules",
-                "ExecStartPost=-/sbin/auditctl -R /etc/audit/audit.rules",
-            )
+    /// RHEL 9 as packaged: `auditd.service` listed by `audit`.
+    fn el9() -> (MockExecutor, BTreeSet<String>) {
+        let exec = MockExecutor::new()
+            .with_file(EL9_AUDITD, "[Service]\n")
+            .with_dir(RULES_DIR, vec!["audit.rules"]);
+        (exec, BTreeSet::from([EL9_AUDITD.to_string()]))
     }
 
-    fn el9() -> MockExecutor {
-        MockExecutor::new()
-            .with_file("/usr/lib/systemd/system/auditd.service", EL9_AUDITD)
-            .with_dir(RULES_DIR, vec!["audit.rules"])
-    }
-
-    fn el10() -> MockExecutor {
-        MockExecutor::new()
-            .with_file("/usr/lib/systemd/system/auditd.service", EL10_AUDITD)
-            .with_file(
-                "/usr/lib/systemd/system/audit-rules.service",
-                EL10_AUDIT_RULES,
-            )
-            .with_dir(RULES_DIR, vec!["audit.rules"])
+    /// RHEL 10 as packaged: both units listed by their packages.
+    fn el10() -> (MockExecutor, BTreeSet<String>) {
+        let exec = MockExecutor::new()
+            .with_file(EL9_AUDITD, "[Service]\n")
+            .with_file(EL10_AUDIT_RULES, "[Service]\n")
+            .with_dir(RULES_DIR, vec!["audit.rules"]);
+        (
+            exec,
+            BTreeSet::from([EL9_AUDITD.to_string(), EL10_AUDIT_RULES.to_string()]),
+        )
     }
 
     #[test]
-    fn the_packaged_units_run_augenrules() {
-        assert_eq!(source(&el9()), Source::Augenrules);
-        assert_eq!(source(&el10()), Source::Augenrules);
-    }
-
-    #[test]
-    fn the_documented_override_loads_the_file_directly() {
-        let exec = el9().with_file(
-            "/etc/systemd/system/auditd.service",
-            &el9_documented_override(),
-        );
-        assert_eq!(source(&exec), Source::LoadedDirectly);
-    }
-
-    /// The same change as a drop-in: an empty assignment clears the
-    /// packaged command, as systemd does.
-    #[test]
-    fn a_drop_in_that_replaces_augenrules_loads_the_file_directly() {
-        let el9_drop_in = el9()
-            .with_dir("/etc/systemd/system/auditd.service.d", vec!["10-load.conf"])
-            .with_file(
-                "/etc/systemd/system/auditd.service.d/10-load.conf",
-                "[Service]\nExecStartPost=\nExecStartPost=-/sbin/auditctl -R /etc/audit/audit.rules\n",
-            );
-        assert_eq!(source(&el9_drop_in), Source::LoadedDirectly);
-
-        let el10_drop_in = el10()
-            .with_dir(
-                "/etc/systemd/system/audit-rules.service.d",
-                vec!["10-load.conf"],
-            )
-            .with_file(
-                "/etc/systemd/system/audit-rules.service.d/10-load.conf",
-                "[Service]\nExecStart=\nExecStart=/usr/sbin/auditctl -R /etc/audit/audit.rules\n",
-            );
-        assert_eq!(source(&el10_drop_in), Source::LoadedDirectly);
-
-        // A drop-in that only adds a command leaves augenrules running.
-        let added = el9()
-            .with_dir("/etc/systemd/system/auditd.service.d", vec!["10-more.conf"])
-            .with_file(
-                "/etc/systemd/system/auditd.service.d/10-more.conf",
-                "[Service]\nExecStartPost=-/sbin/auditctl -R /etc/audit/audit.rules\n",
-            );
-        assert_eq!(source(&added), Source::Augenrules);
-    }
-
-    /// Whatever the scan cannot settle is `Unknown`, never `Augenrules`.
-    #[test]
-    fn what_cannot_be_established_is_unknown() {
-        let no_rules_d =
-            MockExecutor::new().with_file("/usr/lib/systemd/system/auditd.service", EL9_AUDITD);
-        let masked = el9().with_link("/etc/systemd/system/auditd.service", "/dev/null");
-        let unreadable = el9()
-            .with_dir("/etc/systemd/system/auditd.service.d", vec!["10-x.conf"])
-            .with_file_error(
-                "/etc/systemd/system/auditd.service.d/10-x.conf",
-                std::io::ErrorKind::PermissionDenied,
-            );
-        let fifo = el9()
-            .with_dir("/etc/systemd/system/auditd.service.d", vec!["10-x.conf"])
-            .with_special_file("/etc/systemd/system/auditd.service.d/10-x.conf");
-        let no_unit = MockExecutor::new().with_dir(RULES_DIR, vec![]);
-        for (name, exec) in [
-            ("no rules.d", no_rules_d),
-            ("masked", masked),
-            ("unreadable drop-in", unreadable),
-            ("FIFO drop-in", fifo),
-            ("no unit", no_unit),
-        ] {
-            assert!(
-                matches!(source(&exec), Source::Unknown(_)),
-                "{name}: {:?}",
-                source(&exec)
-            );
+    fn the_packaged_units_are_augenrules() {
+        for (exec, packaged) in [el9(), el10()] {
+            assert_eq!(source(&exec, &packaged, &[]), Source::Augenrules);
         }
     }
 
     #[test]
-    fn commands_by_program_and_arguments() {
-        let argv = |line: &str| {
-            line.split_whitespace()
-                .map(String::from)
-                .collect::<Vec<_>>()
+    fn drop_in_directory_names_follow_systemd() {
+        assert_eq!(
+            drop_in_dirs("audit-rules.service"),
+            ["audit-rules.service.d", "audit-.service.d", "service.d"]
+        );
+        assert_eq!(
+            drop_in_dirs("auditd.service"),
+            ["auditd.service.d", "service.d"]
+        );
+    }
+
+    /// Anything present beside the packaged units carries the file, with
+    /// the path that was found; nothing is read.
+    #[test]
+    fn anything_beside_the_packaged_units_is_carried() {
+        let changed = |path: &str| RpmVaEntry {
+            path: path.into(),
+            flags: "S.5....T.".into(),
+            package: None,
         };
-        assert!(runs_augenrules(&argv("-/sbin/augenrules --load")));
-        assert!(runs_augenrules(&argv("/usr/sbin/augenrules")));
-        assert!(!runs_augenrules(&argv("/usr/sbin/augenrules --check")));
-        assert!(loads_audit_rules(&argv(
-            "-/sbin/auditctl -R /etc/audit/audit.rules"
-        )));
-        assert!(!loads_audit_rules(&argv(
-            "/sbin/auditctl -R /etc/audit/audit-stop.rules"
-        )));
-        assert!(!loads_audit_rules(&argv("/sbin/auditctl -D")));
+        let override_at = |p: &str| Source::Carried(Reason::Override(p.into()));
+        let cases: Vec<(&str, MockExecutor, Vec<RpmVaEntry>, Source)> = vec![
+            (
+                "an /etc unit",
+                el9().0.with_file("/etc/systemd/system/auditd.service", "x"),
+                vec![],
+                override_at("/etc/systemd/system/auditd.service"),
+            ),
+            (
+                "a /dev/null mask",
+                el9()
+                    .0
+                    .with_link("/etc/systemd/system/auditd.service", "/dev/null"),
+                vec![],
+                override_at("/etc/systemd/system/auditd.service"),
+            ),
+            (
+                "a dash-prefix drop-in in /run",
+                el10()
+                    .0
+                    .with_dir("/run/systemd/system/audit-.service.d", vec![".x.conf"]),
+                vec![],
+                override_at("/run/systemd/system/audit-.service.d"),
+            ),
+            (
+                "a type-wide drop-in in the packaged directory",
+                el9()
+                    .0
+                    .with_dir("/usr/lib/systemd/system/service.d", vec!["10-x.conf"]),
+                vec![],
+                override_at("/usr/lib/systemd/system/service.d"),
+            ),
+            (
+                "an alias",
+                el9()
+                    .0
+                    .with_link("/etc/systemd/system/audit.service", EL9_AUDITD)
+                    .with_dir("/etc/systemd/system", vec!["audit.service"]),
+                vec![],
+                Source::Carried(Reason::Alias("/etc/systemd/system/audit.service".into())),
+            ),
+            (
+                "a changed packaged unit",
+                el9().0,
+                vec![changed(EL9_AUDITD)],
+                Source::Carried(Reason::ChangedPackagedUnit(EL9_AUDITD.into())),
+            ),
+            (
+                "an unlisted unit in the packaged directory",
+                el9().0.with_file(EL10_AUDIT_RULES, "x"),
+                vec![],
+                Source::Carried(Reason::UnpackagedUnit(EL10_AUDIT_RULES.into())),
+            ),
+            (
+                "no packaged loader",
+                MockExecutor::new().with_dir(RULES_DIR, vec![]),
+                vec![],
+                Source::Carried(Reason::NoPackagedLoader),
+            ),
+            (
+                "no rules.d",
+                MockExecutor::new().with_file(EL9_AUDITD, "x"),
+                vec![],
+                Source::Carried(Reason::NoRulesDir),
+            ),
+            (
+                "an unlistable search directory",
+                el9()
+                    .0
+                    .with_dir_error("/etc/systemd/system", std::io::ErrorKind::PermissionDenied),
+                vec![],
+                Source::Carried(Reason::Unchecked(
+                    "/etc/systemd/system".into(),
+                    "/etc/systemd/system".into(),
+                )),
+            ),
+        ];
+        let packaged = el9().1;
+        for (case, exec, verified, expected) in cases {
+            assert_eq!(source(&exec, &packaged, &verified), expected, "{case}");
+        }
     }
 }

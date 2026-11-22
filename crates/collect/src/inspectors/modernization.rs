@@ -177,7 +177,7 @@ pub fn check_modernization_patterns(
                 path,
                 default_marker: _,
             } => {
-                if !super::config::admit::opens_without_blocking(exec, path) {
+                if !super::config::admit::may_read_to_decide(exec, path) {
                     continue;
                 }
                 if let Ok(content) = exec.read_file(Path::new(path)) {

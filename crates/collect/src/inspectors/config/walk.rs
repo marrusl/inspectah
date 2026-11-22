@@ -283,6 +283,7 @@ fn is_systemd_unit_symlink(exec: &dyn Executor, path: &str) -> bool {
     // Any read error leaves the file to the config walk, which records why
     // it could not capture the content.
     has_unit_suffix
+        && super::admit::may_read_to_decide(exec, path)
         && exec
             .read_file(Path::new(path))
             .is_ok_and(|content| content.is_empty())
@@ -467,6 +468,12 @@ fn walk_recursive_inner(
                     if is_symlink_outside_root(exec, &child_path, root) {
                         continue;
                     }
+                    // A link back to a directory the walk is already in
+                    // would list every file again under a longer name,
+                    // and again inside that.
+                    if is_symlink_to_ancestor(exec, &dir, &child_path) {
+                        continue;
+                    }
                     walk_recursive_inner(exec, root, &child_rel, files, degraded_reasons);
                 }
             }
@@ -503,6 +510,22 @@ pub fn is_symlink_outside_root(exec: &dyn Executor, path: &str, root: &str) -> b
     }
 }
 
+/// Whether `path` is a directory link whose target is `dir`, the
+/// directory holding it, or a directory above that, all resolved: a
+/// loop, such as `/etc/app/state -> /etc`.
+fn is_symlink_to_ancestor(exec: &dyn Executor, dir: &str, path: &str) -> bool {
+    if exec.read_link(Path::new(path)).is_err() {
+        return false;
+    }
+    let (Ok(target), Ok(here)) = (
+        exec.resolve_final_target(Path::new(path)),
+        exec.resolve_final_target(Path::new(dir)),
+    ) else {
+        return false;
+    };
+    here.starts_with(&target)
+}
+
 /// Returns DHCP-managed NetworkManager connection file paths.
 ///
 /// Scans `/etc/NetworkManager/system-connections/` for `.nmconnection` files
@@ -521,8 +544,9 @@ pub fn dhcp_connection_paths(exec: &dyn Executor) -> Vec<String> {
             continue;
         }
         let file_path = format!("{nm_dir}/{name}");
-        // Opening a FIFO with no writer blocks the scan.
-        if !super::admit::opens_without_blocking(exec, &file_path) {
+        // Never a FIFO, which blocks the scan, nor a file behind a link
+        // the section withholds.
+        if !super::admit::may_read_to_decide(exec, &file_path) {
             continue;
         }
         if let Ok(content) = exec.read_file(Path::new(&file_path)) {
@@ -870,6 +894,31 @@ mod tests {
         let exec = MockExecutor::new().with_link("/etc/broken", "/nonexistent/path");
         // Dangling link should be treated as outside (skipped)
         assert!(is_symlink_outside_root(&exec, "/etc/broken", "/etc"));
+    }
+
+    /// A link to a directory above it is not entered, so the walk lists
+    /// each file once under its own name; a link to a sibling directory
+    /// is, so the file is also listed under the name it is read by.
+    #[test]
+    fn walk_skips_a_link_to_an_ancestor_and_enters_one_to_a_sibling() {
+        let exec = MockExecutor::new()
+            .with_dir("/etc", vec!["app", "httpd", "httpd-live"])
+            .with_dir("/etc/app", vec!["app.conf", "state"])
+            .with_dir("/etc/app/state", vec!["app", "httpd", "httpd-live"])
+            .with_link("/etc/app/state", "/etc")
+            .with_dir("/etc/httpd", vec!["conf.d"])
+            .with_dir("/etc/httpd/conf.d", vec!["site.conf"])
+            .with_link("/etc/httpd/conf.d", "../httpd-live")
+            .with_dir("/etc/httpd-live", vec!["site.conf"]);
+        let files = walk_etc_recursive(&exec, "/etc").expect("the walk succeeds");
+        assert_eq!(
+            files,
+            [
+                "app/app.conf",
+                "httpd/conf.d/site.conf",
+                "httpd-live/site.conf"
+            ]
+        );
     }
 
     #[test]

@@ -10,13 +10,15 @@
 //! - **A directory above it is a symlink.** With `/etc/app/state -> /etc`,
 //!   `/etc/app/state/chrony.keys` opens `/etc/chrony.keys`, because the
 //!   kernel follows every ancestor link, `lstat` included, while no rule
-//!   matches the requested spelling. [`locate`] refuses such a path
-//!   outright. Measured on RHEL 9.8 and 10.2 (2026-11-21, after a drift
-//!   run): no packaged path lies under a directory link in `/etc`, and
-//!   every directory link there points either out of `/etc`, which the
-//!   walk already skips, or at a directory the walk reaches under its own
-//!   name (`/etc/ssl/certs`, `/etc/yum/vars`), so refusing loses no file
-//!   and only drops a second name for one.
+//!   matches the requested spelling. [`locate`] resolves the directory
+//!   and returns both spellings ([`Located`]): it refuses the path when
+//!   the file it names is outside `/etc`, or when either spelling is one
+//!   the section never carries at its own path, and every branch applies
+//!   its own exclusions to both. A path that passes is collected under
+//!   the spelling it was found by, the one the application reads: with
+//!   `/etc/httpd/conf.d -> ../httpd-live`, httpd reads
+//!   `/etc/httpd/conf.d/site.conf`, and the image needs it there, since
+//!   the directory link itself is never carried.
 //! - **The path itself is a symlink.** A read returns its target's
 //!   content. [`readable`] reads through a link only to a regular file
 //!   under `/etc` that the section would carry at its own path.
@@ -49,17 +51,44 @@ const AUTHSELECT_CUSTOM_PREFIX: &str = "/etc/authselect/custom/";
 const AUTHSELECT_SHIPPED_PREFIX: &str = "/usr/share/authselect/";
 
 /// Why [`locate`] refused a candidate path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Refusal {
     /// Not an absolute path under `/etc` once `.` and repeated separators
     /// are removed, or it holds a `..` component.
     NotUnderEtc,
-    /// A directory above the file is a symlink: the path is another name
-    /// for a file elsewhere.
-    AliasedAncestor,
     /// The directory holding the file could not be resolved: a link in it
     /// is dangling or loops, or a component is unreadable.
     UnresolvedAncestor,
+    /// A directory above the file is a symlink, and the file it names,
+    /// this path, is outside `/etc`.
+    AliasLeavesEtc(String),
+    /// A directory above the file is a symlink, and the file it names,
+    /// this path, or the requested spelling, is one the section never
+    /// carries at its own path ([`classify_ghost`] is not `Config`): key
+    /// material, machine identity, another section's file, a generated
+    /// file.
+    AliasToWithheld(String),
+}
+
+/// A candidate path that [`locate`] admitted, in both its spellings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Located {
+    /// The normalized requested spelling: where the application reads
+    /// the file, and the path it is collected under.
+    pub path: String,
+    /// Where the file is: the directory above resolved through its links,
+    /// then the file name. Equal to `path` when no directory above is a
+    /// link.
+    pub physical: String,
+}
+
+impl Located {
+    /// The spellings every exclusion is checked against: the path, then
+    /// the physical path when it differs.
+    pub(super) fn spellings(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.path.as_str())
+            .chain((self.physical != self.path).then_some(self.physical.as_str()))
+    }
 }
 
 /// `path` with `.` components and repeated separators removed, when it
@@ -81,22 +110,38 @@ pub(super) fn normalize_etc_path(path: &str) -> Option<String> {
 }
 
 /// The candidate `path` as the inspector checks and classifies it: its
-/// normalized spelling, when every directory above it is a real
-/// directory. A path the caller reports keeps the spelling it was found
-/// under; this one is what the exclusions match.
-pub(super) fn locate(exec: &dyn Executor, path: &str) -> Result<String, Refusal> {
+/// normalized spelling, and where the file is once the directories above
+/// it are resolved. A path under a directory link is admitted only when
+/// the file it names is under `/etc` and both spellings are ones the
+/// section carries at their own path; the caller then applies its own
+/// exclusions to both ([`Located::spellings`]). A path the caller reports
+/// keeps the spelling it was found under.
+pub(super) fn locate(exec: &dyn Executor, path: &str) -> Result<Located, Refusal> {
     let normalized = normalize_etc_path(path).ok_or(Refusal::NotUnderEtc)?;
-    let (parent, _) = normalized
+    let (parent, name) = normalized
         .rsplit_once('/')
         .expect("a normalized path under /etc has a separator");
     let resolved = exec
         .resolve_final_target(Path::new(parent))
         .map_err(|_| Refusal::UnresolvedAncestor)?;
     if resolved == Path::new(parent) {
-        Ok(normalized)
-    } else {
-        Err(Refusal::AliasedAncestor)
+        return Ok(Located {
+            physical: normalized.clone(),
+            path: normalized,
+        });
     }
+    let named = resolved.join(name).to_string_lossy().into_owned();
+    let physical = normalize_etc_path(&named).ok_or(Refusal::AliasLeavesEtc(named))?;
+    if [&normalized, &physical]
+        .iter()
+        .any(|spelling| classify_ghost(spelling) != GhostClass::Config)
+    {
+        return Err(Refusal::AliasToWithheld(physical));
+    }
+    Ok(Located {
+        path: normalized,
+        physical,
+    })
 }
 
 /// What reading a located path returns.
@@ -167,20 +212,15 @@ pub(super) fn readable(exec: &dyn Executor, path: &str) -> Result<Readable, Unre
     }
 }
 
-/// Whether opening `path` cannot block: a regular file, or a link whose
-/// chain ends at one or at `/dev/null`. For the reads that only decide
-/// something (a DHCP connection, the crypto policy, a unit file), whose
-/// content is not kept.
-pub(crate) fn opens_without_blocking(exec: &dyn Executor, path: &str) -> bool {
-    let on_host = Path::new(path);
-    match exec.file_kind(on_host) {
-        Ok(FileKind::Regular) => true,
-        Ok(FileKind::Symlink) => exec.resolve_final_target(on_host).is_ok_and(|target| {
-            target == Path::new(DEV_NULL)
-                || matches!(exec.file_kind(&target), Ok(FileKind::Regular))
-        }),
-        _ => false,
-    }
+/// Whether a read that only decides something, and keeps none of the
+/// content, may open `path`: the crypto policy, a DHCP connection, the
+/// anacrontab rule, an empty unit file in `/etc/systemd/system`. The
+/// same admission as a capture ([`locate`], then [`readable`]), so a link
+/// or a linked directory to key material, machine identity, another
+/// section's file or a file outside `/etc` is never opened, and neither
+/// is a FIFO, socket or device.
+pub(crate) fn may_read_to_decide(exec: &dyn Executor, path: &str) -> bool {
+    locate(exec, path).is_ok() && readable(exec, path).is_ok()
 }
 
 /// A file of a custom authselect profile that is a link into the shipped
@@ -230,32 +270,69 @@ mod tests {
         }
     }
 
-    /// A path whose directory is a link is refused, whatever the link
-    /// points at; a final link is left to [`readable`].
+    /// A path under a directory link is admitted, in both spellings, only
+    /// when the file it names is under `/etc` and neither spelling is
+    /// withheld; a final link is left to [`readable`].
     #[test]
-    fn locate_refuses_an_aliased_ancestor() {
+    fn locate_resolves_a_linked_directory_and_checks_both_spellings() {
         let exec = MockExecutor::new()
             .with_link("/etc/app/state", "/etc")
             .with_link("/etc/app/data", "/var/lib/app")
             .with_link("/etc/repo-alias", "yum.repos.d")
+            .with_link("/etc/httpd/conf.d", "../httpd-live")
             .with_dangling_link("/etc/gone", "/nowhere")
             .with_link("/etc/final-link", "/etc/shadow");
-        for (path, located) in [
-            ("/etc/sssd/sssd.conf", Ok("/etc/sssd/sssd.conf".to_string())),
+        let located = |path: &str, physical: &str| {
+            Ok(Located {
+                path: path.into(),
+                physical: physical.into(),
+            })
+        };
+        let withheld = |physical: &str| Err(Refusal::AliasToWithheld(physical.into()));
+        for (path, expected) in [
+            (
+                "/etc/sssd/sssd.conf",
+                located("/etc/sssd/sssd.conf", "/etc/sssd/sssd.conf"),
+            ),
             (
                 "/etc/./sssd//sssd.conf",
-                Ok("/etc/sssd/sssd.conf".to_string()),
+                located("/etc/sssd/sssd.conf", "/etc/sssd/sssd.conf"),
             ),
-            ("/etc/final-link", Ok("/etc/final-link".to_string())),
-            ("/etc/app/state/chrony.keys", Err(Refusal::AliasedAncestor)),
-            ("/etc/app/state/sub/x", Err(Refusal::AliasedAncestor)),
-            ("/etc/app/data/token", Err(Refusal::AliasedAncestor)),
-            ("/etc/repo-alias/redhat.repo", Err(Refusal::AliasedAncestor)),
+            (
+                "/etc/final-link",
+                located("/etc/final-link", "/etc/final-link"),
+            ),
+            (
+                "/etc/httpd/conf.d/site.conf",
+                located("/etc/httpd/conf.d/site.conf", "/etc/httpd-live/site.conf"),
+            ),
+            (
+                "/etc/app/state/sub/x",
+                located("/etc/app/state/sub/x", "/etc/sub/x"),
+            ),
+            ("/etc/app/state/chrony.keys", withheld("/etc/chrony.keys")),
+            ("/etc/app/state/machine-id", withheld("/etc/machine-id")),
+            ("/etc/app/state/shadow", withheld("/etc/shadow")),
+            (
+                "/etc/repo-alias/redhat.repo",
+                withheld("/etc/yum.repos.d/redhat.repo"),
+            ),
+            (
+                "/etc/app/data/token",
+                Err(Refusal::AliasLeavesEtc("/var/lib/app/token".into())),
+            ),
             ("/etc/gone/x", Err(Refusal::UnresolvedAncestor)),
             ("/etc/../root/x", Err(Refusal::NotUnderEtc)),
         ] {
-            assert_eq!(locate(&exec, path), located, "{path}");
+            assert_eq!(locate(&exec, path), expected, "{path}");
         }
+        let both = locate(&exec, "/etc/httpd/conf.d/site.conf").expect("admitted");
+        assert_eq!(
+            both.spellings().collect::<Vec<_>>(),
+            ["/etc/httpd/conf.d/site.conf", "/etc/httpd-live/site.conf"]
+        );
+        let one = locate(&exec, "/etc/sssd/sssd.conf").expect("admitted");
+        assert_eq!(one.spellings().collect::<Vec<_>>(), ["/etc/sssd/sssd.conf"]);
     }
 
     #[test]
@@ -322,14 +399,17 @@ mod tests {
         }
         for (path, opens) in [
             ("/etc/app.conf", true),
-            ("/etc/to-shadow", true),
+            ("/etc/to-app", true),
             ("/etc/masked", true),
+            ("/etc/to-shadow", false),
+            ("/etc/to-keys", false),
+            ("/etc/to-root", false),
             ("/etc/app.fifo", false),
             ("/etc/to-fifo", false),
             ("/etc/dir", false),
             ("/etc/absent", false),
         ] {
-            assert_eq!(opens_without_blocking(&exec, path), opens, "{path}");
+            assert_eq!(may_read_to_decide(&exec, path), opens, "{path}");
         }
     }
 

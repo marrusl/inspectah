@@ -26,6 +26,7 @@ use super::walk::{is_dev_artifact, is_excluded_unowned_path, match_unowned_glob}
 use crate::inspectors::rpm::repos;
 use crate::inspectors::{kernelboot, selinux, storage, users};
 use inspectah_core::types::completeness::InspectorId;
+use std::collections::BTreeSet;
 
 /// `rpm -qa` query format for every packaged file with its flags: the
 /// owning package, rpm's `fflags` rendering of `FILEFLAGS`, then the path
@@ -54,6 +55,9 @@ const GHOST_FLAG: char = 'g';
 /// The directory the config inspector covers.
 const ETC_PREFIX: &str = "/etc/";
 
+/// Where packages install unit files, with its trailing slash.
+const PACKAGED_UNIT_PREFIX: &str = "/usr/lib/systemd/system/";
+
 /// What `shescape` writes, after the quote that starts it, for one quote
 /// inside the quoted string.
 const SHESCAPED_QUOTE_TAIL: &str = "\\''";
@@ -75,6 +79,10 @@ pub(crate) struct GhostQuery {
     /// a carriage return, a tab), sorted. No export can stage such a
     /// path, so these are reported and never read.
     pub refused: Vec<String>,
+    /// Every path under `/usr/lib/systemd/system/` some package lists,
+    /// whatever its flags: what tells a packaged unit file from one an
+    /// administrator put there ([`super::audit_rules::source`]).
+    pub packaged_units: BTreeSet<String>,
 }
 
 /// Why the query output could not be read as records. A record that does
@@ -113,6 +121,10 @@ pub(crate) fn parse_ghost_files(stdout: &str) -> Result<GhostQuery, GhostQueryEr
         rest = after
             .strip_prefix('\n')
             .ok_or(fail("the record does not end after its path"))?;
+        if path.starts_with(PACKAGED_UNIT_PREFIX) {
+            query.packaged_units.insert(path);
+            continue;
+        }
         if !flags.contains(GHOST_FLAG) || !path.starts_with(ETC_PREFIX) {
             continue;
         }

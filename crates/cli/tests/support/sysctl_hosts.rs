@@ -158,6 +158,14 @@ impl SysctlHost {
         self.rpm_owned(path, package)
     }
 
+    /// `package` lists `path` as an ordinary file (no `fflags`) holding
+    /// `content`, as rpm lists a packaged unit under `/usr/lib`.
+    pub fn packaged(mut self, package: &str, path: &str, content: &str) -> Self {
+        self.file_flags
+            .push((package.into(), String::new(), path.into()));
+        self.rpm_owned(path, package).file(path, content)
+    }
+
     /// `command` (the mock's key: the program and its arguments joined
     /// by spaces) exits `exit_code` printing `stdout` and `stderr`.
     pub fn command(mut self, command: &str, exit_code: i32, stdout: &str, stderr: &str) -> Self {
