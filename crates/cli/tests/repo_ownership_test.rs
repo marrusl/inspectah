@@ -1308,6 +1308,56 @@ fn t5_a_carriage_only_switch_that_restores_a_package_is_named() {
     ));
 }
 
+/// The advice names a switch from the second clause of § 5.2 too:
+/// `vendor-release` owns `company.repo`, whose enabled `baseos` serves
+/// it, and `extra.repo`, whose only section the host disabled and no
+/// package is attributed to. `extra` gets a carriage-only switch because
+/// no other repo owns its file; excluding it drops a file the package
+/// owns, and the FIXME names `extra`, whose re-inclusion restores it.
+#[test]
+fn t5_a_switch_from_the_second_control_clause_is_named() {
+    const EXTRA: &str = "/etc/yum.repos.d/extra.repo";
+    let host = UnitHost::new()
+        .base_package("bash")
+        .owned_file(
+            COMPANY_REPO,
+            &format!(
+                "[baseos]\nname=BaseOS mirror\nbaseurl=https://mirror.corp.example/baseos/\n\
+                 enabled=1\ngpgkey=file://{COMPANY_KEY}\n"
+            ),
+            "vendor-release",
+        )
+        .owned_file(COMPANY_KEY, PGP, "vendor-release")
+        .owned_file(
+            EXTRA,
+            "[extra]\nname=Extra\nbaseurl=https://extra.example/\nenabled=0\ngpgcheck=0\n",
+            "vendor-release",
+        )
+        .package_from("vendor-release", "@commandline")
+        .enabled_repos(&["baseos"])
+        .available("vendor-release", "baseos");
+    let snap = reload(&scan_finished(host));
+    let mut s = session(&snap);
+    assert_eq!(s.repo_state("extra").control, RepoControl::CarriageOnly);
+    s.apply(set_package("vendor-release", true)).unwrap();
+    assert!(installs(
+        &containerfile(export_session(&s).path()),
+        "vendor-release"
+    ));
+    s.apply(set_repo("extra", false)).unwrap();
+    let file = containerfile(export_session(&s).path());
+    assert!(!installs(&file, "vendor-release"), "{file}");
+    let fixme = "# FIXME: re-include repo extra, which brings back its repo files and keys, or \
+                 upload the RPM; vendor-release installs from repo baseos, whose definition this \
+                 export does not carry";
+    assert!(file.lines().any(|l| l == fixme), "{file}");
+    s.apply(set_repo("extra", true)).unwrap();
+    assert!(installs(
+        &containerfile(export_session(&s).path()),
+        "vendor-release"
+    ));
+}
+
 /// What the scan tarball and the refine export opened from it each
 /// render for `snap`, by path name.
 fn both_containerfiles(snap: &InspectionSnapshot) -> [(&'static str, String); 2] {
