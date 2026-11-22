@@ -197,9 +197,23 @@ by the export, so it follows refine's repo selection: refine's defaults
 are set when a session opens, before any repo is excluded, so
 `project_snapshot` runs `hold_owners_losing_a_repo` last, excluding such
 an owner while the repo is out and leaving it carried once it is back.
-An owner the operator included by hand (the last package op on it
-includes it) is left as they set it. The scan's defaults exclude it with
-the other holds.
+An owner the operator included explicitly is left as they set it: the
+last op that reaches it includes it, whether it names the package, a repo
+it is attributed to or a group it is a member of
+(`RefineSession::packages_included_explicitly`, which must reach the
+same packages the projection's cascade does). Counting package ops alone
+dropped an owner included through its repo while its profile writes
+stayed, and the build failed
+(`an_owner_included_through_its_repo_or_group_is_not_held`). The scan's
+defaults exclude it with the other holds.
+
+An included `RepoExcluded` owner therefore always came from the
+operator, but its include matches refine's open-time default (the repo
+was carried then), so the install line's include-changed test does not
+name it. `named_unit_owners`, the carried owners plus those held only on
+a lost repo, is what the install line and refine's package list key off;
+`default_carried_unit_owners` stays the default set (normalize, scan
+defaults, unit guards).
 
 Precedence: `RepoExcluded` first (until the repo is back nothing the
 operator does to the owner helps), then `DisabledRepo` (the one the
@@ -446,8 +460,10 @@ than one arch of that name. All reason wording comes from the constant
   carries the owner.
 - The repo-loss hold is applied to the projection, so refine's Packages
   view shows such an owner excluded while the repo is out. An explicit
-  include of the owner stands, and installs as any held owner the
-  operator includes does, which fails the build while the repo is out.
+  include of the owner, its repo or its group stands, and installs as
+  any held owner the operator includes does, which fails the build while
+  the repo is out if the owner requires the lost package (a weak
+  dependency does not).
 - The possible side over-counts on purpose. It counts every `or`
   operand and both branches of every conditional without evaluating
   them, so a package the image will not install can stay included by
