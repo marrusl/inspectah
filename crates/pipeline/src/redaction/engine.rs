@@ -1453,6 +1453,7 @@ fn pattern_edits(
                 range: em.start..em.end,
                 text: build_replacement(&em, content, registry, &kind_label),
                 token: true,
+                findings: Vec::new(),
             }
         })
         .collect();
@@ -1479,6 +1480,7 @@ fn compose_scrub_edits(content: &str) -> Vec<PayloadEdit> {
                 range: offset + range.start..offset + range.end,
                 text,
                 token: false,
+                findings: Vec::new(),
             });
         }
         offset += line.len();
@@ -1529,9 +1531,12 @@ pub enum SnapshotText {
 /// rewrote a line before the patterns read it removed a private key's
 /// `BEGIN` marker and left its body.
 ///
-/// The compose pass emits no finding of its own: when it alone replaced
-/// something, the file gets one compose finding, so one secret is not
-/// reported twice and a file with a secret is never reported as clean.
+/// A masker's finding is kept only when its rewrite is what the file
+/// holds: one merged into a pattern edit is reported by the pattern's
+/// finding, under the token the file shows. The compose pass emits no
+/// finding of its own: when it alone replaced something, the file gets
+/// one compose finding, so one secret is not reported twice and a file
+/// with a secret is never reported as clean.
 fn redact_snapshot_text(
     kind: SnapshotText,
     content: &mut String,
@@ -1539,18 +1544,22 @@ fn redact_snapshot_text(
     registry: &mut CounterRegistry,
 ) -> Vec<RedactionFinding> {
     let (mut edits, mut findings) = pattern_edits(content, path, registry);
-    let (url_edits, url_findings) = url_credential_edits(content, path);
+    let (url_edits, url_unedited) = url_credential_edits(content, path);
     edits.extend(url_edits);
-    findings.extend(url_findings);
+    findings.extend(url_unedited);
+    let mut compose_scrubbed = false;
     if kind == SnapshotText::ComposeFile {
         let scrub_edits = compose_scrub_edits(content);
-        if !scrub_edits.is_empty() && findings.is_empty() {
-            findings.push(compose_secret_finding(path));
-        }
+        compose_scrubbed = !scrub_edits.is_empty();
         edits.extend(scrub_edits);
     }
     if !edits.is_empty() {
-        *content = apply_payload_edits(content, edits);
+        let (text, kept) = apply_payload_edits(content, edits);
+        *content = text;
+        findings.extend(kept);
+    }
+    if compose_scrubbed && findings.is_empty() {
+        findings.push(compose_secret_finding(path));
     }
     findings
 }
@@ -1765,13 +1774,22 @@ struct PayloadEdit {
     /// than a masker's rewrite of the span, which keeps the bytes around
     /// the credential it masked.
     token: bool,
+    /// The findings that name `text`'s placeholder. They are reported only
+    /// when `text` is what the file ends up holding.
+    findings: Vec<RedactionFinding>,
 }
 
-/// `content` with every edit applied once. Edits that overlap become one
-/// edit over all their bytes, replaced by a pattern token: a masker's
-/// rewrite keeps text the pattern edit removes, so it never stands for
-/// the merged span. Every byte any edit replaces is replaced.
-fn apply_payload_edits(content: &str, mut edits: Vec<PayloadEdit>) -> String {
+/// `content` with every edit applied once, and the findings of the edits
+/// whose text it holds. Edits that overlap become one edit over all their
+/// bytes, replaced by a pattern token: a masker's rewrite keeps text the
+/// pattern edit removes, so it never stands for the merged span. Every
+/// byte any edit replaces is replaced. An edit whose text is not written
+/// drops its findings, which would name a placeholder the file does not
+/// hold.
+fn apply_payload_edits(
+    content: &str,
+    mut edits: Vec<PayloadEdit>,
+) -> (String, Vec<RedactionFinding>) {
     edits.sort_by_key(|e| (e.range.start, std::cmp::Reverse(e.range.end)));
     let mut merged: Vec<PayloadEdit> = Vec::new();
     for edit in edits {
@@ -1781,20 +1799,23 @@ fn apply_payload_edits(content: &str, mut edits: Vec<PayloadEdit>) -> String {
                 if edit.token && !last.token {
                     last.text = edit.text;
                     last.token = true;
+                    last.findings = edit.findings;
                 }
             }
             _ => merged.push(edit),
         }
     }
     let mut out = String::with_capacity(content.len());
+    let mut findings = Vec::new();
     let mut at = 0;
     for edit in merged {
         out.push_str(&content[at..edit.range.start]);
         out.push_str(&edit.text);
+        findings.extend(edit.findings);
         at = edit.range.end;
     }
     out.push_str(&content[at..]);
-    out
+    (out, findings)
 }
 
 /// The one edit that turns `line` into `masked`: the bytes between their
@@ -1832,30 +1853,35 @@ fn line_edit(line: &str, masked: &str) -> (Range<usize>, String) {
 /// ([`mask_proxy_credentials`]), then a token standing as the user name
 /// ([`mask_token_username`]). The generic patterns cover such a password
 /// for a few schemes only. Each edit is read off the original line, so
-/// it never decides what the pattern pass sees. One finding per masked
-/// line.
+/// it never decides what the pattern pass sees. Each masked line's
+/// findings ride on its edit ([`apply_payload_edits`] keeps them only if
+/// the rewrite is written); findings on a line the maskers left as it
+/// was are returned apart.
 fn url_credential_edits(content: &str, path: &str) -> (Vec<PayloadEdit>, Vec<RedactionFinding>) {
     let mut edits = Vec::new();
-    let mut findings = Vec::new();
+    let mut unedited = Vec::new();
     let mut offset = 0;
     for (number, line) in content.split_inclusive('\n').enumerate() {
         let (masked, password) = mask_proxy_credentials(line, path);
         let (masked, token) = mask_token_username(&masked, path);
+        let mut findings: Vec<RedactionFinding> = password.into_iter().chain(token).collect();
+        for finding in &mut findings {
+            finding.line = i32::try_from(number + 1).ok();
+        }
         if masked != line {
             let (range, text) = line_edit(line, &masked);
             edits.push(PayloadEdit {
                 range: offset + range.start..offset + range.end,
                 text,
                 token: false,
+                findings,
             });
-        }
-        for mut finding in password.into_iter().chain(token) {
-            finding.line = i32::try_from(number + 1).ok();
-            findings.push(finding);
+        } else {
+            unedited.extend(findings);
         }
         offset += line.len();
     }
-    (edits, findings)
+    (edits, unedited)
 }
 
 /// Redact the text of a file only the bundle holds, at `path`. Every
@@ -1895,13 +1921,15 @@ pub fn redact_payload(content: &str, path: &str) -> Option<(String, Vec<Redactio
                 range: em.start..em.end,
                 text: build_replacement(em, content, &mut registry, &kind_label),
                 token: true,
+                findings: Vec::new(),
             }
         })
         .collect();
-    let (url_edits, url_findings) = url_credential_edits(content, path);
+    let (url_edits, url_unedited) = url_credential_edits(content, path);
     edits.extend(url_edits);
-    findings.extend(url_findings);
-    let mut text = apply_payload_edits(content, edits);
+    findings.extend(url_unedited);
+    let (mut text, kept) = apply_payload_edits(content, edits);
+    findings.extend(kept);
     if is_compose {
         let scrubbed = scrub_compose_secrets(&text);
         if scrubbed.matches(COMPOSE_REDACTED_MARKER).count()
@@ -7488,19 +7516,22 @@ baseurl = https://cdn.redhat.com
             range,
             text: text.into(),
             token,
+            findings: Vec::new(),
         };
         assert_eq!(
             apply_payload_edits(
                 content,
                 vec![edit(2..9, "0[X]", false), edit(5..12, "TOKEN", true)]
-            ),
+            )
+            .0,
             "a=TOKEN;b"
         );
         assert_eq!(
             apply_payload_edits(
                 content,
                 vec![edit(12..13, "", false), edit(2..4, "T", true)]
-            ),
+            )
+            .0,
             "a=T23456789b"
         );
         assert_eq!(

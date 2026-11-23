@@ -762,3 +762,66 @@ fn lone_compose_files_mask_url_credentials() {
         assert_eq!(bundled(LONE_PLAIN_COMPOSE), plain, "{via}");
     }
 }
+
+/// The placeholder form an inline finding names, as `secrets-review.md`
+/// gives it, without the per-run number.
+fn placeholder_form(f: &inspectah_core::types::redaction::RedactionFinding) -> String {
+    match f.source.as_str() {
+        "pattern" => format!("REDACTED_{}_", f.pattern.to_uppercase()),
+        "proxy_credential" | "token_credential" => "[REDACTED]".into(),
+        other => panic!("{}: no placeholder form for source {other}: {f:#?}", f.path),
+    }
+}
+
+/// One URL credential is one `secrets-review.md` row, and the row names a
+/// placeholder the shipped file holds. A URL password the patterns have
+/// no rule for is the URL masker's row alone; one the patterns also match
+/// (a `mongodb://` password) is the pattern's row alone, because the
+/// merged edit writes the pattern token and the masker's `[REDACTED]` is
+/// never in the file.
+#[test]
+fn each_url_credential_is_one_row_naming_a_shipped_placeholder() {
+    let url_env = format!("SERVICE_URL=https://deploy:{URL_PASSWORD}@api.example.test/v1\n");
+    let (exec, root) = host_of(&[
+        (URL_ENV, url_env.into_bytes()),
+        (ENV_PATH, env_file().into_bytes()),
+    ]);
+    let Exported {
+        snap,
+        scan_tree,
+        session,
+        _packed,
+    } = export(&exec, root.path(), false);
+    let refine_tree = export_session(&session);
+
+    let rows = |path: &str| -> Vec<_> {
+        snap.redactions
+            .iter()
+            .filter(|f| f.path.trim_start_matches('/') == &path[1..])
+            .collect()
+    };
+    let url_rows = rows(URL_ENV);
+    assert_eq!(url_rows.len(), 1, "{url_rows:#?}");
+    let mongo_line: Vec<_> = rows(ENV_PATH)
+        .into_iter()
+        .filter(|f| f.line == Some(2))
+        .collect();
+    assert_eq!(mongo_line.len(), 1, "{mongo_line:#?}");
+
+    for (via, tree) in [("scan", scan_tree.path()), ("refine", refine_tree.path())] {
+        for (path, findings) in [(URL_ENV, &url_rows), (ENV_PATH, &rows(ENV_PATH))] {
+            let shipped = std::fs::read_to_string(tree.join("unmanaged").join(&path[1..]))
+                .unwrap_or_else(|e| panic!("{via}: {path} ships: {e}"));
+            let inline = findings
+                .iter()
+                .filter(|f| f.kind == inspectah_core::types::redaction::RedactionKind::Inline);
+            for f in inline {
+                let form = placeholder_form(f);
+                assert!(
+                    shipped.contains(&form),
+                    "{via}: {path} row names {form}, which the file does not hold:\n{shipped}"
+                );
+            }
+        }
+    }
+}
