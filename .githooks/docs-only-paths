@@ -18,6 +18,5 @@
 ^\.github/
 ^packaging/
 ^\.copr/
-^completions/
 ^[A-Za-z_]+\.md$
 ^LICENSE$

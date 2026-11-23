@@ -191,13 +191,14 @@ Two rules that cost people time:
   variant, does not.
   [`snapshot-schema-versioning.md`](https://github.com/marrusl/inspectah/blob/main/process-docs/skills/snapshot-schema-versioning.md)
   in the repository says where the version literals live.
-- **A flag change is hand-edited into all three files under
-  `completions/`.** `completions/inspectah.bash`, `.fish` and `.zsh` are
-  checked-in `clap_complete` output that nothing regenerates. Do not
-  regenerate them wholesale either: the checked-in files have drifted,
-  and regeneration sweeps unrelated changes into your diff.
-  [`completions-are-checked-in-and-stale.md`](https://github.com/marrusl/inspectah/blob/main/process-docs/skills/completions-are-checked-in-and-stale.md)
-  has the measurement.
+- **A flag change regenerates all three files under `completions/`.**
+  `completions/inspectah.bash`, `.fish` and `.zsh` are checked-in
+  `clap_complete` output, and a test fails unless each one equals what
+  `inspectah completions <shell>` prints. Regenerate them in the same
+  commit, from the repository root:
+  `for s in bash zsh fish; do cargo run -q -p inspectah-cli -- completions $s > completions/inspectah.$s; done`.
+  [`completions-are-checked-in-and-sync-tested.md`](https://github.com/marrusl/inspectah/blob/main/process-docs/skills/completions-are-checked-in-and-sync-tested.md)
+  has the background.
 
 ## What rejects a commit
 
@@ -216,7 +217,6 @@ per line:
 ^\.github/
 ^packaging/
 ^\.copr/
-^completions/
 ^[A-Za-z_]+\.md$
 ^LICENSE$
 ```

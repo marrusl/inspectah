@@ -243,7 +243,7 @@ Checked-in shell completion scripts:
 - `completions/inspectah.zsh`
 - `completions/inspectah.fish`
 
-The RPM does not install these files. `packaging/inspectah.spec` generates its own from the built binary with the hidden `inspectah completions <shell>` subcommand.
+`crates/cli/tests/completions_sync_test.rs` fails unless each file equals what `inspectah completions <shell>` prints; see [completions-are-checked-in-and-sync-tested](completions-are-checked-in-and-sync-tested.md). The RPM does not install these files. `packaging/inspectah.spec` generates its own from the built binary with the hidden `inspectah completions <shell>` subcommand.
 
 ## Gotchas
 

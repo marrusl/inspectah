@@ -32,7 +32,7 @@ whatever row it matches.
 | A web DTO or handler under `crates/web/src/` | Rust gates and web gates | Yes when it touches the refine export download (`crates/web/src/handlers.rs`, the tarball export); otherwise no | Yes, when the UI consumes what changed |
 | Other Rust code under `crates/` | Rust gates | No | No |
 | `crates/web/ui/src/` | Web gates | No | Yes when it alters what renders, how a control behaves, or any keyboard or accessibility behavior. No for a presentation-only change that alters none of those |
-| Docs only: `docs/`, `process-docs/`, `README.md`, `CHANGELOG.md`, `completions/` | None locally. CI still runs the full job on the pull request | No | No |
+| Docs only: `docs/`, `process-docs/`, `README.md`, `CHANGELOG.md` | None locally. CI still runs the full job on the pull request | No | No |
 
 ## Gates before a pull request
 
@@ -48,9 +48,8 @@ whatever row it matches.
 **The hook's trigger.** `.githooks/pre-commit` runs the three Rust
 gates on every commit that adds, changes, deletes or renames a path
 outside the docs-only list in `.githooks/docs-only-paths`: `docs/`,
-`process-docs/`, `.github/`, `packaging/`, `.copr/`, `completions/`,
-top-level `*.md` files and `LICENSE`. A commit whose every path is on
-that list skips the gates and is never refused for other files. For any
+`process-docs/`, `.github/`, `packaging/`, `.copr/`, top-level `*.md`
+files and `LICENSE`. A commit whose every path is on that list skips the gates and is never refused for other files. For any
 other commit the hook refuses, before fmt and again after test, while a
 path outside the list is edited and unstaged or untracked, or is an
 ignored `.rs` or `Cargo.toml` file under `crates/`, so the gates test

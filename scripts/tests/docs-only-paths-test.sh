@@ -13,8 +13,8 @@
 #   - no string literal, normalized lexically (each ../ removes the segment
 #     before it, empty and ./ segments are dropped, and any ../ left at the
 #     start is stripped), matches the list or names a docs-only directory on
-#     its own (docs, process-docs, .github, packaging, .copr, completions,
-#     with or without a trailing /), unless its file and literal pair is on
+#     its own (docs, process-docs, .github, packaging, .copr, with or
+#     without a trailing /), unless its file and literal pair is on
 #     the allowlist below. So "../../README.md", "/../../docs/x.md" after
 #     CARGO_MANIFEST_DIR, "{}/../../README.md" in a format! string, and
 #     "docs/sub/../input.json" are all caught.
@@ -389,7 +389,7 @@ planted "a format! path through ../ to README.md fails" \
 
 # A ../ segment inside a docs-only directory resolves within it: the prefix
 # before it is kept, not stripped along with it.
-for dir in docs process-docs .github packaging .copr completions; do
+for dir in docs process-docs .github packaging .copr; do
     planted "an internal parent segment stays under $dir/" \
         "pub fn f() { let _ = repo_root().join(\"$dir/sub/../input.json\"); }" \
         "" fail "$LIB:1:" "-> $dir/input.json"
