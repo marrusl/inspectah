@@ -153,8 +153,9 @@ pub struct UnmanagedFile {
     /// UI, not a scan-scope directive.
     #[serde(default)]
     pub under_var: bool,
-    /// Resolved symlink target (only set when file_type == Symlink).
-    /// Advisory only — bundling recreates the link rather than following it.
+    /// The symlink's own target, as `readlink` gives it: absolute or
+    /// relative, never resolved (only set when file_type == Symlink).
+    /// Bundling recreates the link rather than following it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub link_target: String,
     /// Aggregate prevalence (populated in aggregate mode)

@@ -4436,7 +4436,7 @@ fn extract_payload_dirs_with_budget(
     // ordinary-components-only path, one entry per path, real directories
     // as every ancestor on disk, and `create_new` on the leaf. Symlink
     // targets are not restricted -- the collector records unmanaged link
-    // targets as absolute `readlink -f` paths -- because nothing here
+    // targets as the host holds them, absolute or relative -- because nothing here
     // writes through a link; the packer preserves one rather than
     // following it.
     let mut seen = SeenPaths::new();
@@ -9975,8 +9975,8 @@ mod tests {
 
         #[test]
         fn real_unmanaged_symlinks_survive_with_their_absolute_targets() {
-            // The collector records link targets with `readlink -f`, so a
-            // real one is always absolute. It is kept, inert, not refused.
+            // The collector records link targets as `readlink` gives them,
+            // so a real one is often absolute. It is kept, inert, not refused.
             let s = Sandbox::new();
             let result = s.extract(
                 &[

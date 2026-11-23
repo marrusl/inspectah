@@ -54,8 +54,8 @@ file but two seen-set keys. The on-disk checks (`create_confined_dir` and
 
 ## Symlink targets stay unrestricted for unmanaged files
 
-The collector records an unmanaged symlink's target with `readlink -f`, so every
-real target is an absolute path. Refusing absolute or `..` targets, as
+The collector records an unmanaged symlink's target as `readlink` gives it, so a
+real target may be absolute or relative and may climb with `..`. Refusing absolute or `..` targets, as
 `TarballExtractor` does for `inspectah build`, would fail every export from a
 host with an unmanaged symlink. Do not apply that rule here. Targets are safe to
 leave alone because nothing in the extraction writes through a link, and the

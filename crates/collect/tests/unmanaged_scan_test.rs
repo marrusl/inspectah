@@ -299,14 +299,7 @@ fn scan_unmanaged_path_lists_match_on_path_boundary() {
                 ..Default::default()
             },
         )
-        .with_command(
-            "readlink -f /opt/app-link",
-            ExecResult {
-                stdout: "/opt/app/bin/x\n".into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        );
+        .with_link("/opt/app-link", "/opt/app/bin/x");
     let exec = [
         "/opt/app/bin/x",
         "/opt/app-data/y",

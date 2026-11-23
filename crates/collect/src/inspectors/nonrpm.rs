@@ -2265,13 +2265,11 @@ fn walk_for_unmanaged(
                 continue;
             }
 
-            // Record symlink target for advisory display but don't follow.
-            let link_result = exec.run("readlink", &["-f", &child]);
-            let link_target = if link_result.exit_code == 0 {
-                link_result.stdout.trim().to_string()
-            } else {
-                String::new()
-            };
+            // Record the link's own target, as `readlink` gives it, so the
+            // export recreates the link the host has. `readlink -f` would
+            // record the end of the chain instead, and lose an
+            // intermediate link the host relies on. Never followed here.
+            let link_target = exec.read_link(Path::new(&child)).unwrap_or_default();
 
             // Use lstat metadata (symlink itself, not target).
             let (size, last_modified, uid, gid, permissions) = get_file_metadata(exec, &child);
