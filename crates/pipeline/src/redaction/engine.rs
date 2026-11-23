@@ -1547,6 +1547,35 @@ fn redact_mount_options(options: &str, registry: &mut CounterRegistry) -> String
         .join(",")
 }
 
+/// Apply [`redact_mount_options`] to `options`, the option list of the
+/// mount at `mount_point` read from `path`, and return its finding when
+/// the list names `password=` or `credentials=`.
+fn redact_mount_option_secrets(
+    options: &mut String,
+    path: &str,
+    mount_point: &str,
+    registry: &mut CounterRegistry,
+) -> Option<RedactionFinding> {
+    if !(options.contains("credentials=") || options.contains("password=")) {
+        return None;
+    }
+    *options = redact_mount_options(options, registry);
+    Some(RedactionFinding {
+        path: path.to_string(),
+        source: "mount_options".into(),
+        kind: RedactionKind::Inline,
+        pattern: "credential_mount_option".into(),
+        remediation: format!(
+            "Mount point '{mount_point}': credential reference in mount options — use systemd credentials or a mount helper"
+        ),
+        line: None,
+        replacement: None,
+        detection_method: DetectionMethod::Heuristic,
+        confidence: Some(Confidence::High),
+        finding_kind: Some(FindingKind::GenericCredential),
+    })
+}
+
 /// Extract a searchable keyword from a hint's reason string.
 ///
 /// Hint reasons follow common patterns:
@@ -2506,26 +2535,12 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // don't survive into exported artifacts (snapshot JSON, audit report, HTML).
     if let Some(ref mut storage) = snapshot.storage {
         for entry in &mut storage.fstab_entries {
-            if entry.options.contains("credentials=") || entry.options.contains("password=") {
-                // Redact inline password= values from mount options
-                let redacted_options = redact_mount_options(&entry.options, &mut registry);
-                all_findings.push(RedactionFinding {
-                    path: "/etc/fstab".to_string(),
-                    source: "mount_options".into(),
-                    kind: RedactionKind::Inline,
-                    pattern: "credential_mount_option".into(),
-                    remediation: format!(
-                        "Mount point '{}': credential reference in mount options — use systemd credentials or a mount helper",
-                        entry.mount_point
-                    ),
-                    line: None,
-                    replacement: None,
-                    detection_method: DetectionMethod::Heuristic,
-                    confidence: Some(Confidence::High),
-                    finding_kind: Some(FindingKind::GenericCredential),
-                });
-                entry.options = redacted_options;
-            }
+            all_findings.extend(redact_mount_option_secrets(
+                &mut entry.options,
+                FSTAB_PATH,
+                &entry.mount_point,
+                &mut registry,
+            ));
             // A mount source can be a URL (`https://u:pw@host/share` for
             // davfs, `curlftpfs#ftp://u:pw@host/`), and an option can
             // hold one; the option rule above reads `password=` only.
@@ -2533,7 +2548,16 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             all_findings.extend(redact_url_credentials(&mut entry.options, FSTAB_PATH));
         }
         // The runtime mount table repeats each source and its options.
+        // The `password=` rule runs on its options too: what the table
+        // shows depends on the filesystem, and the snapshot's protection
+        // must not.
         for mount in &mut storage.mount_points {
+            all_findings.extend(redact_mount_option_secrets(
+                &mut mount.options,
+                MOUNT_TABLE_PATH,
+                &mount.target,
+                &mut registry,
+            ));
             all_findings.extend(redact_url_credentials(&mut mount.source, MOUNT_TABLE_PATH));
             all_findings.extend(redact_url_credentials(&mut mount.options, MOUNT_TABLE_PATH));
         }
@@ -4743,6 +4767,51 @@ baseurl = https://cdn.redhat.com
         assert!(
             !json.contains("hunter2"),
             "secret must not appear anywhere in snapshot JSON"
+        );
+    }
+
+    /// The runtime mount table's options take the same `password=` rule
+    /// as fstab's: the value goes, every other option stays, and the
+    /// finding names the mount.
+    #[test]
+    fn runtime_mount_password_option_is_redacted() {
+        use inspectah_core::types::storage::{MountPoint, StorageSection};
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.storage = Some(StorageSection {
+            mount_points: vec![MountPoint {
+                target: "/mnt/smb".into(),
+                source: "//server/share".into(),
+                fstype: "cifs".into(),
+                options: "rw,password=mountoptionpw8812,uid=1000".into(),
+            }],
+            ..Default::default()
+        });
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        let options = &snapshot.storage.as_ref().unwrap().mount_points[0].options;
+        let parts: Vec<&str> = options.split(',').collect();
+        assert_eq!(parts.len(), 3, "{options}");
+        assert_eq!(parts[0], "rw", "{options}");
+        assert!(
+            parts[1].starts_with("password=REDACTED_MOUNT_PASSWORD_"),
+            "{options}"
+        );
+        assert_eq!(parts[2], "uid=1000", "{options}");
+        assert!(
+            !serde_json::to_string(&snapshot)
+                .unwrap()
+                .contains("mountoptionpw8812")
+        );
+        assert!(
+            snapshot
+                .redactions
+                .iter()
+                .any(|f| f.path == MOUNT_TABLE_PATH
+                    && f.pattern == "credential_mount_option"
+                    && f.remediation.contains("/mnt/smb")),
+            "{:?}",
+            snapshot.redactions
         );
     }
 

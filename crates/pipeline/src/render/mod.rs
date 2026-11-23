@@ -578,7 +578,7 @@ mod tests {
         } = FstabEntry::default();
         let MountPoint {
             source: _,  // scrubbed: the URL pass
-            options: _, // scrubbed: the URL pass
+            options: _, // scrubbed: `password=` rule and the URL pass
             target: _,  // identifier: a path
             fstype: _,
         } = MountPoint::default();
