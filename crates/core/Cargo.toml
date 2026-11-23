@@ -13,7 +13,6 @@ serde_json.workspace = true
 sha2 = "0.10"
 thiserror.workspace = true
 time = { version = "0.3", features = ["serde", "serde-well-known", "parsing", "formatting"] }
-toml = "0.8"
 
 [features]
 # Counts parse_repo_sections calls, for tests in other crates that pin how
@@ -22,7 +21,6 @@ test-support = []
 
 [dev-dependencies]
 proptest = "1"
-tempfile = "3.10"
 
 [[test]]
 name = "integration"

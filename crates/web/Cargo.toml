@@ -10,18 +10,21 @@ autotests = false
 inspectah-core = { path = "../core" }
 inspectah-pipeline = { path = "../pipeline" }
 inspectah-refine = { path = "../refine" }
-axum = { version = "0.8", features = ["multipart"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "multipart", "tokio"] }
 tower-http = { version = "0.6", features = ["cors"] }
 rust-embed = "8"
 serde.workspace = true
 serde_json.workspace = true
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "sync"] }
 mime_guess = "2"
 tempfile.workspace = true
 regex = "1"
 
 [dev-dependencies]
 tempfile.workspace = true
+# `#[tokio::test]` and the upload tests' timeouts need the macros and the
+# timer, which the shipped feature list leaves out.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 # The collector-driven sysctl hosts (`crates/cli/tests/support/sysctl_hosts.rs`)
 # build their executor from `MockExecutor`.
 inspectah-collect = { path = "../collect" }
