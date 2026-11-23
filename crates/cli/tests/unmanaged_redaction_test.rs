@@ -900,6 +900,10 @@ fn mixed_url_credentials_on_one_line_each_name_a_shipped_placeholder() {
 const MULTI_ENV: &str = "/opt/multi/.env";
 const MULTI_CONF: &str = "/opt/multi/mirrors.conf";
 const MULTI_SECRETS: [&str; 3] = ["firstpw8812", "secondpw3307", "deploytoken0123456789xyz"];
+/// A fourth credential on the same line: a password holding an `@`, as
+/// its two halves. The masker once stopped at the first `@` and shipped
+/// the tail.
+const AT_PASSWORD: [&str; 2] = ["atpwhead4471", "atpwtail9940"];
 
 /// Every URL credential on a line is masked, not only the first: no
 /// secret survives in the snapshot, the scan export or the refine
@@ -908,10 +912,12 @@ const MULTI_SECRETS: [&str; 3] = ["firstpw8812", "secondpw3307", "deploytoken012
 #[test]
 fn every_url_credential_on_one_line_ships_masked() {
     let [first, second, token] = MULTI_SECRETS;
+    let [at_head, at_tail] = AT_PASSWORD;
     let line = format!(
         "MIRRORS=https://a:{first}@h1.example.test https://b:{second}@h2.example.test \
-         https://{token}@git.example.test/repo\n"
+         https://{token}@git.example.test/repo https://c:{at_head}@{at_tail}@h3.example.test\n"
     );
+    let credentials = MULTI_SECRETS.len() + 1;
     let (exec, root) = host_of(&[
         (MULTI_ENV, line.clone().into_bytes()),
         (MULTI_CONF, line.into_bytes()),
@@ -930,7 +936,7 @@ fn every_url_credential_on_one_line_ships_masked() {
     )];
     all.extend(files(scan_tree.path()));
     all.extend(files(refine_tree.path()));
-    for secret in MULTI_SECRETS {
+    for secret in MULTI_SECRETS.into_iter().chain(AT_PASSWORD) {
         for (where_, bytes) in &all {
             assert!(!contains(bytes, secret), "{where_} holds {secret}");
         }
@@ -945,7 +951,7 @@ fn every_url_credential_on_one_line_ships_masked() {
             .collect();
         assert_eq!(
             inline.len(),
-            MULTI_SECRETS.len(),
+            credentials,
             "{path}: one row per credential: {inline:#?}"
         );
         for (via, tree) in [("scan", scan_tree.path()), ("refine", refine_tree.path())] {
@@ -953,7 +959,7 @@ fn every_url_credential_on_one_line_ships_masked() {
                 .unwrap_or_else(|e| panic!("{via}: {path} ships: {e}"));
             assert_eq!(
                 shipped.matches("[REDACTED]").count(),
-                MULTI_SECRETS.len(),
+                credentials,
                 "{via}: {path}:\n{shipped}"
             );
         }

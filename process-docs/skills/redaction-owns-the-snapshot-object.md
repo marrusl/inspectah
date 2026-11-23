@@ -90,6 +90,14 @@ finding, so the payload merge reports one row per credential. Test a
 masker with two and three credentials on a line, the same one repeated,
 and mixed forms.
 
+**A URL's userinfo runs to the last `@` of the authority.** A password
+may hold an `@` (`deploy:p@s3cret@host`), and a masker that stops at the
+first `@` ships the tail; no generic pattern covers an https password,
+so nothing else catches it. Bound the authority first (it ends at `/`,
+`?`, `#` or whitespace), then take its last `@`, so an `@` in the path
+or query never takes the host. `scrub_url_auth` and `PROXY_CRED_RE`
+both follow this rule.
+
 **Diagnostics are not redacted, so name them from the raw value.** A
 warning, notice or degraded reason is written at collection, before
 `redact()` runs, and `redact()` never reads it. Sanitizing a reference

@@ -127,8 +127,17 @@ fn is_allowlisted_path(path: &str) -> bool {
 ///   1. `://user:` (scheme + username + colon)
 ///   2. the password segment
 ///   3. `@`
+///
+/// The password runs to the last `@` of the authority, which ends at the
+/// first `/`, `?`, `#` or whitespace, as `scrub_url_auth` reads it: a
+/// password may hold an `@` (`deploy:p@s3cret@host`), and stopping at the
+/// first one shipped the tail. Bounding it by the authority keeps an `@`
+/// in the path or query from taking the host. Only when the authority
+/// holds no `@` does the second branch take the first `@` on the line, as
+/// this pattern always did, so a raw `/`, `?` or `#` in a password
+/// (`u:pa/ss@host`) stays masked.
 static PROXY_CRED_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(://[^:/@\s]+:)([^@\s]+)(@)").expect("proxy regex"));
+    LazyLock::new(|| Regex::new(r"(://[^:/?#@\s]+:)([^/?#\s]+|[^@\s]+)(@)").expect("proxy regex"));
 
 /// Compiled regex for bare `proxy_password=VALUE` lines in DNF/Yum configs.
 /// Spacing around `=` is `[ \t]*`, not `\s*`, so an empty value never takes
@@ -145,11 +154,12 @@ static PROXY_PASSWORD_KV_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// long alphanumeric strings) with no colon/password separator.
 /// Captures three groups:
 ///   1. `://` (scheme separator)
-///   2. the token value (username portion)
+///   2. the token value (username portion), running on through any later
+///      `@` of the authority, as [`PROXY_CRED_RE`]'s password does
 ///   3. `@` (delimiter before host)
 static TOKEN_USERNAME_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(://)(?:(ghp_[A-Za-z0-9_]{36,}|gho_[A-Za-z0-9_]{36,}|glpat-[A-Za-z0-9_\-]{20,}|github_pat_[A-Za-z0-9_]{22,}|[A-Za-z0-9_\-]{20,}))(@)",
+        r"(://)((?:ghp_[A-Za-z0-9_]{36,}|gho_[A-Za-z0-9_]{36,}|glpat-[A-Za-z0-9_\-]{20,}|github_pat_[A-Za-z0-9_]{22,}|[A-Za-z0-9_\-]{20,})(?:@[^/?#@\s]*)*)(@)",
     )
     .expect("token username regex")
 });
@@ -5335,6 +5345,43 @@ baseurl = https://cdn.redhat.com
                 "proxy_password=http://u:[REDACTED]@p".into(),
                 1,
             ),
+            // A password holding an `@` is masked to the authority's last
+            // `@`, not cut at its first.
+            (
+                "https://deploy:p@s3cret@host/r".into(),
+                "https://deploy:[REDACTED]@host/r".into(),
+                1,
+            ),
+            (
+                "https://u:a@b@c@host".into(),
+                "https://u:[REDACTED]@host".into(),
+                1,
+            ),
+            // An `@` in the path or query is not the authority's.
+            (
+                "https://u:p@s@host/x@y?to=a@b#c@d".into(),
+                "https://u:[REDACTED]@host/x@y?to=a@b#c@d".into(),
+                1,
+            ),
+            // Two such URLs on one line.
+            (
+                "M=https://a:p@1@h1/z@w https://b:q@2@h2".into(),
+                "M=https://a:[REDACTED]@h1/z@w https://b:[REDACTED]@h2".into(),
+                2,
+            ),
+            // An `@` user name, percent-encoded, keeps its user name.
+            (
+                "https://me%40corp.example:p@ss@host".into(),
+                "https://me%40corp.example:[REDACTED]@host".into(),
+                1,
+            ),
+            // An authority with no `@`: a raw `/` in the password still
+            // runs to the first `@`, as before.
+            (
+                "https://u:pa/ss@host".into(),
+                "https://u:[REDACTED]@host".into(),
+                1,
+            ),
         ];
         for (input, want, count) in proxy_cases {
             let (out, findings) = mask_proxy_credentials(&input, PATH);
@@ -5354,6 +5401,12 @@ baseurl = https://cdn.redhat.com
                     "x".repeat(36)
                 ),
                 "https://[REDACTED]@h1 https://[REDACTED]@github.com".into(),
+                2,
+            ),
+            // A token holding an `@`, with an `@` in the path after it.
+            (
+                format!("https://{token}@x@h1/p@q https://{token}@h2"),
+                "https://[REDACTED]@h1/p@q https://[REDACTED]@h2".into(),
                 2,
             ),
         ];
@@ -5397,6 +5450,21 @@ baseurl = https://cdn.redhat.com
             assert!(!out.contains(secret), "{secret} survives: {out}");
         }
         assert_eq!(out.matches("[REDACTED]").count(), 4, "{out}");
+
+        // Passwords and a token holding an `@`: still one edit each, and
+        // no tail of any left behind.
+        let content = format!(
+            "M=https://a:p@tail1@h1/x@y https://{token}@tail2@h2 https://b:q@r@tail3@h3?u=v@w\n"
+        );
+        let (edits, unedited) = url_credential_edits(&content, "/opt/app/.env");
+        assert!(unedited.is_empty());
+        assert_eq!(edits.len(), 3);
+        let (out, findings) = apply_payload_edits(&content, edits);
+        assert_eq!(findings.len(), 3);
+        assert_eq!(
+            out,
+            "M=https://a:[REDACTED]@h1/x@y https://[REDACTED]@h2 https://b:[REDACTED]@h3?u=v@w\n"
+        );
     }
 
     /// The proxy masker's `proxy_password =` stays on its line: with an
