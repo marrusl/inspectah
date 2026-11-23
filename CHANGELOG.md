@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.0-beta.7] - 2026-11-22
+## [0.9.0-beta.7] - 2026-11-23
 
 ### Added
 - **Exports name the provisioning steps a deployed machine owes**: when a keytab, registration or other machine-state file is left out, the Containerfile, the audit report, the README, the scan's output and the refine export's warnings name the step to run, such as `realm join` or `subscription-manager register`.
