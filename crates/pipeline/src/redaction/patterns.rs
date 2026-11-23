@@ -28,6 +28,10 @@ pub(crate) struct SecretPattern {
     /// `token:`), and its characters (letters, digits, `-_.:`) can hold no
     /// match of any other pattern but the AWS key id, which stays live.
     pub spares_repo_id_headers: bool,
+    /// The paths whose file format this pattern describes, when it
+    /// describes only some: a match elsewhere, or in content with no
+    /// path, is not a finding. `None` applies the pattern everywhere.
+    pub paths: Option<fn(&str) -> bool>,
 }
 
 /// Name of the capture group holding the secret itself.
@@ -107,6 +111,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation: "Remove private key or exclude file from snapshot",
         },
         // PEM certificate blocks (full BEGIN...END matching)
@@ -121,6 +126,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation: "Review whether certificate exposure is intended; check for adjacent private keys",
         },
         // Modular crypt password hashes ($1$, $2b$, $5$, $6$, $y$, etc.)
@@ -138,6 +144,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation: "Remove password hash or use a secrets manager",
         },
         // Generic password/credential in key=value config.
@@ -164,6 +171,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation:
                 "Use environment variables or a secrets manager instead of inline passwords",
         },
@@ -179,6 +187,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
                     !content.as_bytes().get(key.end()).is_some_and(|&b| is_aws_key_byte(b))
                 })
             }),
+            paths: None,
             finding_kind: FindingKind::AwsKey,
             filter_nss_pam_tokens: false,
             spares_repo_id_headers: false,
@@ -205,6 +214,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation: "Use connection pooling with externalized credentials",
         },
         // PostgreSQL connection URI with password. Only the password is
@@ -230,6 +240,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation: "Use .pgpass or environment variables for PostgreSQL credentials",
         },
         // MongoDB connection URI with password; one line, and to the
@@ -242,6 +253,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation: "Use environment variables for MongoDB credentials",
         },
         // Redis connection URI with password; one line, and to the
@@ -254,6 +266,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation: "Use environment variables for Redis credentials",
         },
         // WireGuard private key (base64, 44 chars including trailing =)
@@ -265,17 +278,25 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation: "Regenerate WireGuard keys and use wg-quick with externalized key files",
         },
-        // WiFi PSK in wpa_supplicant or NetworkManager config
+        // WiFi PSK in wpa_supplicant or NetworkManager config. A quoted
+        // value (`psk="correct horse battery staple"`) is taken whole,
+        // quotes included, as the quoted credential patterns below take
+        // one: `\S+` stopped at the first space and shipped the rest.
         SecretPattern {
-            regex: Regex::new(r"(?i)(?:psk|wpa-psk|wifi\.psk)[ \t]*=[ \t]*(?P<secret>\S+)").unwrap(),
+            regex: Regex::new(
+                r#"(?i)(?:psk|wpa-psk|wifi\.psk)[ \t]*=[ \t]*(?P<secret>"(?:[^"\\\r\n]|\\[^\r\n]?)+"?\S*|'(?:[^'\r\n]|'')+'?\S*|\S+)"#,
+            )
+            .unwrap(),
             finding_kind: FindingKind::WifiPsk,
             filter_nss_pam_tokens: false,
             spares_repo_id_headers: false,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation: "Use 802.1X or externalize WiFi credentials",
         },
         // A double-quoted value under a double-quoted credential key, as in
@@ -302,6 +323,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation:
                 "Use environment variables or a secrets manager instead of inline passwords",
         },
@@ -331,6 +353,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation:
                 "Use environment variables or a secrets manager instead of inline passwords",
         },
@@ -353,10 +376,65 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
             accept: None,
+            paths: None,
             remediation: "Provision the SSSD bind password on the deployed host instead of carrying it",
+        },
+        // A credential key that opens its line in an INI-style file
+        // ([`value_runs_to_line_end`]): the value is the rest of the line,
+        // as those files' readers read it, so `password=alpha bravo`
+        // loses `bravo` too, where the generic pattern's `\S+` stopped at
+        // the space. Only where the format says so: in a command, a shell
+        // file or a kernel argument list, whitespace ends a value and
+        // what follows is another field. Anchored at the start of the
+        // line, as the SSSD pattern is, so a key inside another value
+        // (`opts = password=x retries=3`) keeps what follows it. Last, so
+        // it changes no other pattern's index or its tie order.
+        SecretPattern {
+            regex: Regex::new(concat!(
+                r"(?im)^[ \t]*(?:[a-z0-9_.\-]*[_.\-])?(?:",
+                credential_keys!(),
+                r"|psk)[ \t]*[=:][ \t]*(?P<secret>[^\r\n]*[^ \t\r\n])"
+            ))
+            .unwrap(),
+            finding_kind: FindingKind::Password,
+            filter_nss_pam_tokens: true,
+            spares_repo_id_headers: false,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Confidence::High,
+            accept: None,
+            remediation:
+                "Use environment variables or a secrets manager instead of inline passwords",
+            paths: Some(value_runs_to_line_end),
         },
     ]
 });
+
+/// File name endings of INI-style formats, whose readers take a value to
+/// the end of its line: INI and its dialects (`.cnf`, `.cfg`, `.conf`,
+/// `.repo`, NetworkManager keyfiles), Java properties and `.env` files.
+const LINE_VALUE_SUFFIXES: &[&str] = &[
+    ".ini",
+    ".cnf",
+    ".cfg",
+    ".conf",
+    ".repo",
+    ".properties",
+    ".nmconnection",
+    ".env",
+];
+
+/// `.conf` files whose lines are not `key = value` assignments: in
+/// `nsswitch.conf`, `passwd:` names a database and the rest of its line
+/// lists sources.
+const NOT_LINE_VALUE_FILE_NAMES: &[&str] = &["nsswitch.conf"];
+
+/// Whether an assignment that opens a line in the file at `path` takes the
+/// rest of the line as its value: an INI-style file by its name.
+pub(crate) fn value_runs_to_line_end(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    LINE_VALUE_SUFFIXES.iter().any(|s| name.ends_with(s))
+        && !NOT_LINE_VALUE_FILE_NAMES.contains(&name)
+}
 
 /// Shadow line classification result.
 pub(crate) enum ShadowClassification {

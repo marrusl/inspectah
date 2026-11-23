@@ -3000,6 +3000,16 @@ mod tests {
         assert!(out.unscrubbed.is_empty());
     }
 
+    /// A quoted Gemfile source ends at its closing quote, not at an
+    /// escaped quote inside it.
+    #[test]
+    fn a_gemfile_source_runs_past_an_escaped_quote() {
+        let input = r#"source "https://u:head\"tail9@gems.example.com""#;
+        let out = scrub_manifest_auth("Gemfile", input);
+        assert_eq!(out.content, r#"source "https://REDACTED@gems.example.com""#);
+        assert!(out.unscrubbed.is_empty());
+    }
+
     /// A located member is scrubbed even when another member on its line
     /// cannot be located, and that one is still reported.
     #[test]

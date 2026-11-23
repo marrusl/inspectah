@@ -147,11 +147,27 @@ static PROXY_CRED_RE: LazyLock<Regex> =
 /// Compiled regex for bare `proxy_password=VALUE` lines in DNF/Yum configs.
 /// Spacing around `=` is `[ \t]*`, not `\s*`, so an empty value never takes
 /// the next line as the password (see the generic credential patterns).
-/// Captures two groups:
+/// A quoted value is taken whole, quotes included; any other runs to the
+/// next whitespace, which is all this masker can know of a key inside
+/// another line ([`PROXY_PASSWORD_LINE_RE`] reads one that opens its
+/// line). Captures two groups:
 ///   1. `proxy_password=` (the key prefix)
 ///   2. the password value
 static PROXY_PASSWORD_KV_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(proxy_password[ \t]*=[ \t]*)(\S+)").expect("proxy_password key-value regex")
+    Regex::new(
+        r#"(?i)(proxy_password[ \t]*=[ \t]*)("(?:[^"\\\r\n]|\\[^\r\n]?)+"?\S*|'[^'\r\n]+'?\S*|\S+)"#,
+    )
+    .expect("proxy_password key-value regex")
+});
+
+/// Compiled regex for a `proxy_password=` that opens its line, as dnf's
+/// ini reader reads one: the value is the rest of the line, spaces
+/// included, to its last non-blank character. `\S+` alone shipped
+/// `bravo` from `proxy_password=alpha bravo`. Captures the same two
+/// groups as [`PROXY_PASSWORD_KV_RE`].
+static PROXY_PASSWORD_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)^[ \t]*(proxy_password[ \t]*=[ \t]*)([^\r\n]*[^ \t\r\n])")
+        .expect("proxy_password line regex")
 });
 
 /// Compiled regex for username-only token remotes: `://token@host`.
@@ -793,6 +809,14 @@ fn eligible_match(
         return None;
     }
 
+    // Filter 0b: a pattern that describes one file format applies only to
+    // a path in that format (`SecretPattern::paths`).
+    if let Some(applies) = pat.paths
+        && !path.is_some_and(applies)
+    {
+        return None;
+    }
+
     // Filter 1: skip matches on comment lines
     lines.advance(secret.start());
     if lines.is_comment(whole.start(), markers) {
@@ -1359,13 +1383,15 @@ fn proxy_credential_parts(
             "Remove embedded credentials from proxy URL; use environment-specific auth configuration",
         ),
     );
-    let key_values = credential_edits(
-        &PROXY_PASSWORD_KV_RE,
-        line,
-        &finding(
-            "Remove plaintext proxy_password from DNF/Yum configuration; use repository-level auth instead",
-        ),
+    let key_value_finding = finding(
+        "Remove plaintext proxy_password from DNF/Yum configuration; use repository-level auth instead",
     );
+    let mut key_values = credential_edits(&PROXY_PASSWORD_KV_RE, line, &key_value_finding);
+    key_values.extend(credential_edits(
+        &PROXY_PASSWORD_LINE_RE,
+        line,
+        &key_value_finding,
+    ));
     (passwords, key_values)
 }
 
@@ -5400,6 +5426,112 @@ baseurl = https://cdn.redhat.com
         }
     }
 
+    /// Where a value ends follows the file's format. A quoted Wi-Fi PSK is
+    /// taken whole. In an INI-style file a credential key that opens its
+    /// line has the rest of the line as its value, as the INI readers
+    /// read it; in a format whose values end at whitespace (a command, a
+    /// shell file) it does not, so the fields after it stay.
+    #[test]
+    fn test_value_boundaries_follow_the_format() {
+        let whole: &[(&str, &str, &[&str])] = &[
+            (
+                "/etc/wpa_supplicant/wpa_supplicant.conf",
+                "network={\n  psk=\"correct horse battery staple\"\n}\n",
+                &["horse", "battery", "staple"],
+            ),
+            (
+                "/etc/NetworkManager/system-connections/home.nmconnection",
+                "[wifi-security]\npsk=correct horse battery\n",
+                &["horse", "battery"],
+            ),
+            (
+                "/etc/app/app.ini",
+                "[db]\npassword=alpha bravo\n",
+                &["alpha", "bravo"],
+            ),
+            (
+                "/etc/app/app.conf",
+                "  db_password = alpha bravo charlie  \n",
+                &["alpha", "bravo", "charlie"],
+            ),
+            (
+                "/opt/app/.env",
+                "API_TOKEN=alpha bravo\n",
+                &["alpha", "bravo"],
+            ),
+        ];
+        for (path, input, secrets) in whole {
+            let mut snap = config_snapshot(path, input);
+            redact(&mut snap, &RedactOptions::default());
+            let out = &snap.config.as_ref().unwrap().files[0].content;
+            for secret in *secrets {
+                assert!(!out.contains(secret), "{path}: {secret} survives: {out}");
+            }
+            assert!(out.ends_with('\n'), "{path}: {out:?}");
+        }
+        // The kernel argument after a value, a command after an inline
+        // assignment, and a value that does not open its line keep what
+        // follows them.
+        let kept: &[(&str, &str, &str, &str)] = &[
+            (
+                "/etc/cron.d/backup",
+                "DB_PASSWORD=alpha /usr/bin/backup --full\n",
+                "alpha",
+                "/usr/bin/backup --full",
+            ),
+            (
+                "/etc/sysconfig/app",
+                "PASSWORD=alpha OTHER=bravo\n",
+                "alpha",
+                "OTHER=bravo",
+            ),
+            (
+                "/etc/app/app.conf",
+                "opts = password=alpha retries=3\n",
+                "alpha",
+                "retries=3",
+            ),
+        ];
+        for (path, input, secret, rest) in kept {
+            let mut snap = config_snapshot(path, input);
+            redact(&mut snap, &RedactOptions::default());
+            let out = &snap.config.as_ref().unwrap().files[0].content;
+            assert!(!out.contains(secret), "{path}: {secret} survives: {out}");
+            assert!(out.contains(rest), "{path}: {rest} lost: {out}");
+        }
+    }
+
+    /// A `proxy_password=` value is read as dnf reads it: to the end of
+    /// its line when the key opens the line, whole when quoted, and to
+    /// the next whitespace elsewhere.
+    #[test]
+    fn test_proxy_password_value_boundaries() {
+        let cases = [
+            ("proxy_password=alpha bravo", "proxy_password=[REDACTED]"),
+            (
+                "  proxy_password = alpha bravo ",
+                "  proxy_password = [REDACTED] ",
+            ),
+            (
+                r#"proxy_password="alpha bravo""#,
+                "proxy_password=[REDACTED]",
+            ),
+            (
+                r#"opts proxy_password="alpha bravo" retries=3"#,
+                "opts proxy_password=[REDACTED] retries=3",
+            ),
+            (
+                "opts proxy_password=alpha retries=3",
+                "opts proxy_password=[REDACTED] retries=3",
+            ),
+        ];
+        for (input, want) in cases {
+            let (out, findings) = mask_proxy_credentials(input, "/etc/dnf/dnf.conf");
+            assert_eq!(out, want, "{input}");
+            assert_eq!(findings.len(), 1, "{input}");
+        }
+    }
+
     /// The URL credential edits a payload takes: one per credential, mixed
     /// password and token forms alike, each with its own finding on the
     /// right line, and none of the secrets left in the output.
@@ -7113,6 +7245,10 @@ baseurl = https://cdn.redhat.com
     /// quote, tag or text around a value with it; it never leaves any of
     /// the value behind. A value's end is not read off its punctuation, so
     /// an unquoted value runs to the next whitespace whatever it holds.
+    /// The snapshot path is a shell-sourced file, where whitespace ends a
+    /// value as it does for `redact_string()`; in an INI-style file a key
+    /// that opens its line takes the rest of the line
+    /// (`test_value_boundaries_follow_the_format`).
     #[test]
     fn test_no_secret_byte_survives_a_reviewed_input() {
         let cases: &[(&str, &str, &[&str])] = &[
@@ -7435,7 +7571,7 @@ baseurl = https://cdn.redhat.com
             let once = redact_string(input).into_owned();
             assert_eq!(&once, want, "{input:?}");
 
-            let mut snap = config_snapshot("/etc/app/app.conf", input);
+            let mut snap = config_snapshot("/etc/sysconfig/app", input);
             redact(&mut snap, &RedactOptions::default());
             assert_eq!(
                 &snap.config.as_ref().unwrap().files[0].content,
@@ -7581,9 +7717,9 @@ baseurl = https://cdn.redhat.com
                 "DB_KEY=REDACTED_PASSWORD_1\tstill-secret\n",
                 false,
             ),
-            // The generic `\S+` value stops at the space, so ` words` is
-            // left; the hint says so.
-            ("DB_PASSWORD", "DB_PASSWORD=two words\n", false),
+            // A `.env` value runs to the end of its line, so ` words` is
+            // replaced with the rest of the value and the hint resolved.
+            ("DB_PASSWORD", "DB_PASSWORD=two words\n", true),
             // A replaced value followed by a comment or nothing is handled.
             ("DB_PASSWORD", "DB_PASSWORD=hunter2 # rotated\n", true),
             ("DB_PASSWORD", "DB_PASSWORD=hunter2  \r\n", true),

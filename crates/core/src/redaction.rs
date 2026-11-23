@@ -35,7 +35,10 @@ fn leading_whitespace(s: &str) -> usize {
 /// The span inside a quoted run that begins at the first non-whitespace
 /// character at or after `from`. The closing quote must match the
 /// opening one, so an apostrophe inside a double-quoted value, or a
-/// quoted comment later on the line, cannot end the run.
+/// quoted comment later on the line, cannot end the run. A backslash
+/// escapes the character after it, as JSON and Ruby strings read one, so
+/// `"https://u:a\"b@host"` runs past its `\"`: ending there left the
+/// credential after it unexamined.
 fn quoted_run(line: &str, from: usize, quotes: &[char]) -> Option<Range<usize>> {
     let rest = line.get(from..)?;
     let open = from + leading_whitespace(rest);
@@ -44,8 +47,15 @@ fn quoted_run(line: &str, from: usize, quotes: &[char]) -> Option<Range<usize>> 
         return None;
     }
     let inner = open + quote.len_utf8();
-    let close = line.get(inner..)?.find(quote)?;
-    Some(inner..inner + close)
+    let mut chars = line.get(inner..)?.char_indices();
+    while let Some((i, c)) = chars.next() {
+        if c == '\\' {
+            chars.next();
+        } else if c == quote {
+            return Some(inner..inner + i);
+        }
+    }
+    None
 }
 
 /// Locate the value belonging to the key that ends at `key_end`.

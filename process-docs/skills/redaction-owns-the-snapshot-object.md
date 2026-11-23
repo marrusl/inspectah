@@ -542,6 +542,24 @@ takes a quoted value under an unquoted key (`password: "two words"`)
 whole, where `\S+` stopped at the space. Like the JSON one, it can only
 lengthen a span that `\S+` starts at the same quote.
 
+**Where a file's format says a value runs on, read it that way.** In an
+INI-style file a value is the rest of its line, so `\S+` shipped `bravo`
+from `password=alpha bravo`. The last pattern takes a credential key
+that opens its line to the end of the line, and only in a file whose
+name says INI (`value_runs_to_line_end`: `.ini`, `.cnf`, `.cfg`, `.conf`,
+`.repo`, `.properties`, `.nmconnection`, `.env`; not `nsswitch.conf`,
+whose `passwd:` names a database). A pattern that describes one format
+sets `SecretPattern::paths`, and `eligible_match` checks it, so the
+bounded search and its unbounded reference agree. Never widen a value to
+the line's end where whitespace ends it: a command
+(`DB_PASSWORD=x /usr/bin/backup`), a shell file, a kernel argument list
+and a key inside another value (`opts = password=x retries=3`) keep what
+follows. The same holds for the dedicated maskers: `PROXY_PASSWORD_LINE_RE`
+reads a `proxy_password=` that opens its line to the end of it, and a
+quoted `proxy_password` or Wi-Fi `psk` is taken whole. A quoted run
+(`quoted_run`, `json_strings`) ends at its closing quote, never at a
+backslash-escaped one.
+
 A secret that runs past its own value can run into the next key, so the
 search for a pattern's next match resumes where the last match's
 **secret** starts, not where the whole match ends
