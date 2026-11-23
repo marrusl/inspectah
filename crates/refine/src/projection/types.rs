@@ -16,6 +16,7 @@ use inspectah_core::types::units::{
 };
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
+use inspectah_pipeline::render::tmpfiles_accounts::MissingOwner;
 use inspectah_pipeline::render::unit_plan::{AdvisoryReason, OmissionReason};
 use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 
@@ -57,6 +58,10 @@ pub struct DecisionProjection {
     pub not_carried: Vec<NotCarriedRow>,
     /// The notice the export sends for the rows that own an enabled unit.
     pub not_carried_notice: Option<ExportWarning>,
+    /// The carried tmpfiles.d lines that name a user or group the image
+    /// does not create, which `systemd-tmpfiles` skips at boot: the rows
+    /// the export's Containerfile and audit reports name, in that order.
+    pub tmpfiles_missing_owners: Vec<MissingOwner>,
     /// Every request for a unit inspectah generates that the plan does not
     /// write, for the scheduled or flatpak row that asked for it (§ 11.1).
     pub declined_generated: Vec<DeclinedGeneratedView>,

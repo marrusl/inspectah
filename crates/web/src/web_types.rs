@@ -15,6 +15,7 @@ use inspectah_core::types::sysctl::SysctlDir;
 use inspectah_core::types::units::UnitName;
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
+use inspectah_pipeline::render::tmpfiles_accounts::MissingOwner;
 use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::projection::{
     AlsoView, DeclinedGeneratedView, DeclinedView, DefaultTargetView, FragmentView, ManualLinkView,
@@ -702,6 +703,11 @@ pub struct ViewResponse {
     /// The `notice` entry the export's `x-export-warnings` header will
     /// carry for the rows with `owns_enabled_unit`, or `null`.
     pub not_carried_notice: Option<ExportWarning>,
+    /// The carried tmpfiles.d lines naming a user or group the image does
+    /// not create, as the export's Containerfile and audit reports name
+    /// them. Empty when absent.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tmpfiles_missing_owners: Vec<MissingOwner>,
     pub session_is_sensitive: bool,
     /// Language package environments (Tier 1 non-RPM). Empty when absent.
     #[serde(skip_serializing_if = "Vec::is_empty")]

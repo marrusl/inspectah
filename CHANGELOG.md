@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Passwords with spaces are redacted whole**: a quoted Wi-Fi `psk`, a `password=` or `proxy_password=` value that runs to the end of its line in an INI-style file, a quoted `proxy_password`, and a quoted manifest URL holding an escaped quote kept their text after the first space or quote. Each is now masked to the end of its value.
 - **URL credentials in every user-name form are redacted**: a password after an empty user name (`https://:pw@host`), and a token used as the user name before a password (`https://<token>:x-oauth-basic@host` or `https://<token>:@host`), shipped raw. Both are now masked.
 - **A failed `rpm -Va` is a warning, not a silent loss**: when `rpm -Va` exits with an error, is killed or cannot run, the scan found no modified RPM-owned file, so modified configuration files could be left out with no warning. The scan now prints a warning on stderr, the audit and HTML reports list it under Warnings, and the refine export shows it among its warnings. Check the exported configuration against the host, fix what stopped `rpm -Va` and re-scan.
+- **The `tmpfiles.d` account notice covers quoted lines and the HTML report**: a carried line with a quoted or escaped path or owner is now named when its user or group is missing from the image, and the notice now appears in `audit-report.html` as well as the Containerfile and `audit-report.md`.
 
 ## [0.9.0-beta.7] - 2026-11-23
 

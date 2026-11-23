@@ -12,6 +12,7 @@ use crate::types::ItemId;
 use inspectah_pipeline::render::not_carried::{
     NotCarriedPackage, not_carried_notice_for, not_carried_packages,
 };
+use inspectah_pipeline::render::tmpfiles_accounts::missing_owners;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::units::{
@@ -78,6 +79,10 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let not_carried_notice = not_carried_notice_for(&not_carried_list);
     let not_carried = not_carried_list.iter().map(not_carried_row).collect();
 
+    // The carried tmpfiles.d lines the export names for an account the
+    // image lacks, as its Containerfile and audit reports name them.
+    let tmpfiles_missing_owners = missing_owners(&snap);
+
     // Users/groups from projected snapshot
     let users_groups: Vec<UserGroupDecision> = snap
         .users_groups
@@ -112,6 +117,7 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
         baseline_summary,
         not_carried,
         not_carried_notice,
+        tmpfiles_missing_owners,
         declined_generated,
         generated_timers,
         unmanaged_withheld,

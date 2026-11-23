@@ -1,6 +1,7 @@
 //! A carried tmpfiles.d line naming a local account the image does not
 //! create is named in the Containerfile and the audit report, on both
-//! export paths.
+//! export paths, in the scan's HTML audit report (the refine export
+//! writes none), and in refine's decision data.
 //!
 //! `systemd-tmpfiles` skips a line whose user it cannot resolve and
 //! `systemd-tmpfiles-setup` counts that as success, so the directory is
@@ -13,6 +14,7 @@ use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::users::UsersGroupsInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::users::UserContainerfileStrategy;
+use inspectah_pipeline::render::tmpfiles_accounts::MissingOwner;
 use inspectah_refine::types::RefinementOp;
 
 const FRAGMENT: &str = "/etc/tmpfiles.d/appone.conf";
@@ -33,6 +35,11 @@ const AUDIT_ROW: &str = "- `/etc/tmpfiles.d/appone.conf`: `/var/lib/appone/cache
 /// Present wherever any line is named.
 const NOTICE_MARKER: &str = "tmpfiles.d lines name an account";
 const AUDIT_HEADING: &str = "#### tmpfiles.d Lines Naming Accounts the Image Lacks";
+/// The HTML audit report's heading and row for the same line.
+const HTML_HEADING: &str = "tmpfiles.d Lines Naming Accounts the Image Lacks";
+const HTML_ROW: &str = "<li><code>/etc/tmpfiles.d/appone.conf</code>: \
+                        <code>/var/lib/appone/cache</code> needs user <code>appuser</code>, \
+                        group <code>appgroup</code></li>";
 /// What the operator does about a named line, in the Containerfile.
 const CONTAINERFILE_REMEDY: &str = "# Create each missing user or group (useradd in refine) or provision it, so\n\
      # its line can run. Otherwise systemd-tmpfiles skips the line, and\n\
@@ -103,6 +110,41 @@ fn both_exports(
     [("scan export", scan), ("refine export", refine)]
 }
 
+/// Refine's decision data for `snap`: the rows it names, checked to be
+/// the rows the web view sends the client.
+fn refine_rows(snap: &InspectionSnapshot) -> Vec<MissingOwner> {
+    let session = session(snap);
+    let rows = session.decisions().tmpfiles_missing_owners.clone();
+    let view = serde_json::to_value(inspectah_web::adapter::build_web_view(&session))
+        .expect("the view serializes");
+    let sent: Vec<MissingOwner> = view
+        .get("tmpfiles_missing_owners")
+        .map(|v| serde_json::from_value(v.clone()).expect("rows deserialize"))
+        .unwrap_or_default();
+    assert_eq!(rows, sent, "the web view carries refine's rows");
+    rows
+}
+
+/// The row naming `path` for `user` and `group` in the fragment.
+fn row(path: &str, user: Option<&str>, group: Option<&str>) -> MissingOwner {
+    MissingOwner {
+        file: FRAGMENT.into(),
+        path: path.into(),
+        user: user.map(Into::into),
+        group: group.map(Into::into),
+    }
+}
+
+/// `text` with its whitespace collapsed, so a row reads as one line
+/// whatever the template's indentation, and the `/` the HTML escaper
+/// writes as `&#x2f;` read back.
+fn collapsed(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace("&#x2f;", "/")
+}
+
 fn read(root: &std::path::Path, rel: &str) -> String {
     std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
 }
@@ -155,6 +197,72 @@ fn a_skipped_user_is_named_on_both_export_paths() {
             "{label}: only the local account's line is named:\n{audit}"
         );
     }
+    let html = collapsed(&read(scan.path(), "audit-report.html"));
+    assert!(html.contains(&format!("{HTML_HEADING} (1)")), "{html}");
+    assert!(html.contains(HTML_ROW), "{html}");
+    assert!(html.contains(AUDIT_REMEDY), "{html}");
+    assert_eq!(html.matches("<code>/var/lib/appone/").count(), 1, "{html}");
+    assert_eq!(
+        refine_rows(&snap),
+        vec![row(
+            "/var/lib/appone/cache",
+            Some("appuser"),
+            Some("appgroup")
+        )]
+    );
+}
+
+/// Quoted and escaped fields are read as systemd reads them, so a line
+/// whose path holds a space, or whose owner is quoted, is named with the
+/// owner systemd resolves, in every place the notice appears.
+#[test]
+fn a_quoted_line_is_named_with_the_owner_systemd_reads() {
+    let fragment = "d \"/var/lib/appone/cache dir\" 0750 appuser appgroup 30d\n\
+                    d /var/lib/appone/x\\x20y 0750 'appuser' - -\n";
+    let snap = scan_host(
+        fragment,
+        "root:x:0:0:root:/root:/bin/bash\n\
+         appuser:x:1001:1001::/home/appuser:/bin/bash\n",
+        "root:x:0:\nappgroup:x:1001:\n",
+    );
+    assert_eq!(
+        refine_rows(&snap),
+        vec![
+            row(
+                "/var/lib/appone/cache dir",
+                Some("appuser"),
+                Some("appgroup")
+            ),
+            row("/var/lib/appone/x y", Some("appuser"), None),
+        ]
+    );
+    for (label, root) in both_exports(&snap, None) {
+        let containerfile = read(root.path(), "Containerfile");
+        assert_eq!(
+            named_rows(&containerfile, "#   "),
+            vec![
+                "#   /etc/tmpfiles.d/appone.conf: /var/lib/appone/cache dir needs user appuser, \
+                 group appgroup",
+                "#   /etc/tmpfiles.d/appone.conf: /var/lib/appone/x y needs user appuser",
+            ],
+            "{label}:\n{containerfile}"
+        );
+        let audit = read(root.path(), "audit-report.md");
+        assert!(
+            audit.contains(&format!("{AUDIT_HEADING} (2)")),
+            "{label}:\n{audit}"
+        );
+        assert!(
+            audit.contains("`/var/lib/appone/cache dir` needs user `appuser`, group `appgroup`"),
+            "{label}:\n{audit}"
+        );
+    }
+    let html = collapsed(&read(render_export(&snap).path(), "audit-report.html"));
+    assert!(html.contains(&format!("{HTML_HEADING} (2)")), "{html}");
+    assert!(
+        html.contains("<code>/var/lib/appone/x y</code> needs user <code>appuser</code></li>"),
+        "{html}"
+    );
 }
 
 #[test]
@@ -172,6 +280,11 @@ fn a_user_the_image_creates_is_not_named_on_either_export_path() {
         let audit = read(root.path(), "audit-report.md");
         assert!(!audit.contains(AUDIT_HEADING), "{label}:\n{audit}");
     }
+    let html = read(
+        render_export(&with_useradd(scanned_host(), "appuser")).path(),
+        "audit-report.html",
+    );
+    assert!(!html.contains(HTML_HEADING));
 }
 
 /// A quoted path holds whitespace, so splitting on whitespace alone reads

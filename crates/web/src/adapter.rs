@@ -587,6 +587,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         package_provenances,
         not_carried_packages: decisions.not_carried.clone(),
         not_carried_notice: decisions.not_carried_notice.clone(),
+        tmpfiles_missing_owners: decisions.tmpfiles_missing_owners.clone(),
         session_is_sensitive: decisions.is_sensitive,
         language_packages,
         unmanaged_files,

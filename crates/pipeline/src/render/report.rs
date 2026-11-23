@@ -471,6 +471,9 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .unwrap_or_default();
 
     let config_count = config_files.len();
+    // Carried tmpfiles.d lines naming an account the image lacks: the
+    // rows the Markdown audit report and the Containerfile name.
+    let tmpfiles_owners = Value::from_serialize(super::tmpfiles_accounts::missing_owners(snap));
     let config_advisory_count = config_advisories(snap).len();
     let config_state = section_state(InspectorId::Config, &snap.completeness);
     let config_state_str = match config_state {
@@ -1281,6 +1284,8 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         config_state => config_state_str,
         config_conflict_count,
         has_config_packages,
+        tmpfiles_owners,
+        tmpfiles_owner_remedy => super::tmpfiles_accounts::remedy_text(),
         services => services_val,
         svc_count,
         svc_advisory_count,

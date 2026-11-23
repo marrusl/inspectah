@@ -5,8 +5,8 @@
 //! success, so whatever the line does (create a path, set ownership on
 //! one) silently does not happen on a deployed host. The export does not
 //! change such a line; it names it, in the Containerfile next to the
-//! config `COPY` and in the audit report, so the operator can create the
-//! account or provision it.
+//! config `COPY` and in both audit reports, and refine carries the same
+//! rows, so the operator can create the account or provision it.
 //!
 //! An account is named only when the export is sure the image lacks it:
 //! the scan recorded it as a local (non-system) account on the host, the
@@ -16,13 +16,13 @@
 //! check, so it is not named. A numeric id and `-` are never named:
 //! tmpfiles resolves neither.
 //!
-//! A line whose leading fields use quoting or escapes is left out: the
-//! shared [`TmpfilesEntry`] parser splits on whitespace alone, so it
-//! would read a quoted path holding a space as two fields and take the
-//! mode for the user. The notice never guesses an owner field.
+//! Lines are read through the shared [`TmpfilesEntry`] parser, which
+//! unquotes and unescapes fields as systemd does, so a quoted path holding
+//! a space is one field and the owner is the field systemd resolves.
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::storage::{ETC_TMPFILES_PREFIX, TmpfilesEntry, USR_TMPFILES_PREFIX};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use super::configtree::staged_writes;
@@ -39,24 +39,21 @@ const CARRIED_TMPFILES_DIRS: [&str; 2] = [ETC_TMPFILES_PREFIX, USR_TMPFILES_PREF
 const TMPFILES_SUFFIX: &str = ".conf";
 
 /// What the operator does about a named line, one Containerfile comment
-/// line each. The audit report joins them into one paragraph.
+/// line each. The audit reports join them into one paragraph.
 const REMEDY: [&str; 3] = [
     "Create each missing user or group (useradd in refine) or provision it, so",
     "its line can run. Otherwise systemd-tmpfiles skips the line, and",
     "systemd-tmpfiles-setup.service still reports success.",
 ];
 
-/// The characters that quote or escape a tmpfiles.d field. The shared
-/// parser does not model them, so a line holding one in a field it reads
-/// is left out of the notice.
-const QUOTING_CHARS: [char; 3] = ['"', '\'', '\\'];
-
-/// The type, path, mode, user and group fields: the ones the notice reads.
-const OWNER_FIELDS: usize = 5;
+/// [`REMEDY`] as one paragraph, for the audit reports.
+pub fn remedy_text() -> String {
+    REMEDY.join(" ")
+}
 
 /// One carried tmpfiles.d line whose user or group the image lacks.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MissingOwner {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MissingOwner {
     /// Where the fragment lands in the image.
     pub file: String,
     /// The path the line names.
@@ -160,14 +157,6 @@ fn named_account(field: Option<&str>) -> Option<&str> {
     (field != "-" && !is_numeric && !field.contains('%')).then_some(field)
 }
 
-/// Whether `line` quotes or escapes a field the notice reads, which the
-/// shared parser would split wrongly.
-fn has_quoting(line: &str) -> bool {
-    line.split_whitespace()
-        .take(OWNER_FIELDS)
-        .any(|field| field.contains(QUOTING_CHARS))
-}
-
 /// Whether the image's systemd reads `dest` as a tmpfiles.d fragment.
 fn is_tmpfiles_fragment(dest: &str) -> bool {
     CARRIED_TMPFILES_DIRS.iter().any(|dir| {
@@ -178,7 +167,7 @@ fn is_tmpfiles_fragment(dest: &str) -> bool {
 
 /// Every carried tmpfiles.d line whose user or group the image lacks, in
 /// file order then line order.
-pub(crate) fn missing_owners(snap: &InspectionSnapshot) -> Vec<MissingOwner> {
+pub fn missing_owners(snap: &InspectionSnapshot) -> Vec<MissingOwner> {
     let staged = staged_writes(snap);
     let fragments: Vec<_> = staged
         .writes
@@ -192,20 +181,17 @@ pub(crate) fn missing_owners(snap: &InspectionSnapshot) -> Vec<MissingOwner> {
     let mut out = Vec::new();
     for (dest, write) in fragments {
         for line in write.content.lines() {
-            if has_quoting(line) {
-                continue;
-            }
             let Some(entry) = TmpfilesEntry::parse(line) else {
                 continue;
             };
-            let user = accounts.missing_user(entry.user);
-            let group = accounts.missing_group(entry.group);
+            let user = accounts.missing_user(entry.user.as_deref());
+            let group = accounts.missing_group(entry.group.as_deref());
             if user.is_none() && group.is_none() {
                 continue;
             }
             out.push(MissingOwner {
                 file: dest.as_str().to_string(),
-                path: entry.path.to_string(),
+                path: entry.path,
                 user: user.map(str::to_string),
                 group: group.map(str::to_string),
             });
@@ -263,7 +249,7 @@ pub(crate) fn audit_lines(snap: &InspectionSnapshot) -> Vec<String> {
         ));
     }
     lines.push(String::new());
-    lines.push(REMEDY.join(" "));
+    lines.push(remedy_text());
     lines.push(String::new());
     lines
 }
@@ -284,24 +270,6 @@ mod tests {
             (Some("app1"), Some("app1")),
         ] {
             assert_eq!(named_account(field), named, "{field:?}");
-        }
-    }
-
-    #[test]
-    fn a_quoted_or_escaped_owner_field_is_left_out() {
-        for (line, quoted) in [
-            ("d /var/lib/a 0750 appuser appgroup 30d", false),
-            ("d \"/var/lib/a b\" 0750 appuser appgroup 30d", true),
-            ("d '/var/lib/a b' 0750 appuser appgroup 30d", true),
-            ("d /var/lib/a\\x20b 0750 appuser appgroup 30d", true),
-            ("d /var/lib/a 0750 \"appuser\" appgroup -", true),
-            // Quoting past the group field is never read.
-            (
-                "f /var/lib/a 0640 appuser appgroup - \"hello world\"",
-                false,
-            ),
-        ] {
-            assert_eq!(has_quoting(line), quoted, "{line}");
         }
     }
 

@@ -63,46 +63,160 @@ pub const ETC_TMPFILES_PREFIX: &str = "/etc/tmpfiles.d/";
 pub const RUN_TMPFILES_PREFIX: &str = "/run/tmpfiles.d/";
 pub const USR_TMPFILES_PREFIX: &str = "/usr/lib/tmpfiles.d/";
 
-/// The leading fields of one tmpfiles.d entry, split as
-/// `tmpfiles.d(5)` splits them on whitespace. Fields past the group are
-/// not read.
+/// The leading fields of one tmpfiles.d entry, split and unquoted as
+/// `systemd-tmpfiles` reads them. Fields past the group are not kept.
 ///
 /// This is the one tmpfiles.d line parser: the collector's `/var`
 /// backing index and the export's account checks both read lines through
-/// it. Quoted fields are not unquoted, which only matters for a path
-/// holding whitespace or an escape: the collector matches no such path,
-/// and the export's account check leaves out any line that quotes or
-/// escapes a field it reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TmpfilesEntry<'a> {
+/// it. systemd reads the type, path, mode, user, group and age fields with
+/// `extract_many_words(..., EXTRACT_UNQUOTE | EXTRACT_CUNESCAPE, ...)`:
+/// whitespace separates fields, a `"` or `'` quoted run may hold
+/// whitespace, and a backslash starts a C escape inside or outside quotes.
+/// A line systemd would reject for an unterminated quote or a bad escape
+/// in those fields is no entry here either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TmpfilesEntry {
     /// The first character of the type field. The `+ ! - = ~ ^`
     /// modifiers that may follow it do not change which kind it is.
     pub entry_type: char,
-    pub path: &'a str,
-    pub mode: Option<&'a str>,
-    pub user: Option<&'a str>,
-    pub group: Option<&'a str>,
+    pub path: String,
+    pub mode: Option<String>,
+    pub user: Option<String>,
+    pub group: Option<String>,
 }
 
-impl<'a> TmpfilesEntry<'a> {
-    /// Parse one line, or `None` for a blank line, a comment, or a line
-    /// with no path field.
-    pub fn parse(line: &'a str) -> Option<Self> {
+impl TmpfilesEntry {
+    /// Parse one line, or `None` for a blank line, a comment, a line with
+    /// no path field, and a line whose leading fields systemd cannot
+    /// split.
+    pub fn parse(line: &str) -> Option<Self> {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             return None;
         }
-        let mut fields = line.split_whitespace();
-        let entry_type = fields.next()?.chars().next()?;
-        let path = fields.next()?;
+        let mut rest = line;
+        let entry_type = next_tmpfiles_field(&mut rest).ok()??.chars().next()?;
+        let path = next_tmpfiles_field(&mut rest).ok()??;
+        let mode = next_tmpfiles_field(&mut rest).ok()?;
+        let user = next_tmpfiles_field(&mut rest).ok()?;
+        let group = next_tmpfiles_field(&mut rest).ok()?;
+        // The age field is split the same way, so a bad quote there
+        // rejects the line too. Its value is not kept.
+        next_tmpfiles_field(&mut rest).ok()?;
         Some(Self {
             entry_type,
             path,
-            mode: fields.next(),
-            user: fields.next(),
-            group: fields.next(),
+            mode,
+            user,
+            group,
         })
     }
+}
+
+/// A tmpfiles.d field systemd cannot split: an unterminated quote, a
+/// trailing backslash, or an escape `cunescape` rejects.
+#[derive(Debug)]
+struct TmpfilesSplitError;
+
+/// The next field of `rest`, unquoted and unescaped, advancing `rest`
+/// past it; `Ok(None)` when no field is left. Mirrors systemd's
+/// `extract_first_word` with `EXTRACT_UNQUOTE | EXTRACT_CUNESCAPE`.
+fn next_tmpfiles_field(rest: &mut &str) -> Result<Option<String>, TmpfilesSplitError> {
+    let input = rest.trim_start();
+    if input.is_empty() {
+        *rest = input;
+        return Ok(None);
+    }
+    let mut out: Vec<u8> = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut chars = input.char_indices();
+    let mut end = input.len();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => {
+                let (_, e) = chars.next().ok_or(TmpfilesSplitError)?;
+                unescape_one(e, &mut chars, &mut out)?;
+            }
+            q if quote == Some(q) => quote = None,
+            '"' | '\'' if quote.is_none() => quote = Some(c),
+            w if quote.is_none() && w.is_whitespace() => {
+                end = i;
+                break;
+            }
+            other => {
+                let mut buf = [0; 4];
+                out.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err(TmpfilesSplitError);
+    }
+    *rest = &input[end..];
+    String::from_utf8(out)
+        .map(Some)
+        .map_err(|_| TmpfilesSplitError)
+}
+
+/// Append the character systemd's `cunescape_one` decodes for the escape
+/// starting with `e` (the character after the backslash), reading any
+/// further digits from `chars`. A NUL is refused, as systemd refuses it.
+fn unescape_one(
+    e: char,
+    chars: &mut std::str::CharIndices<'_>,
+    out: &mut Vec<u8>,
+) -> Result<(), TmpfilesSplitError> {
+    let mut digits = |n: usize, radix: u32| -> Result<u32, TmpfilesSplitError> {
+        (0..n).try_fold(0u32, |acc, _| {
+            let d = chars
+                .next()
+                .and_then(|(_, c)| c.to_digit(radix))
+                .ok_or(TmpfilesSplitError)?;
+            Ok(acc * radix + d)
+        })
+    };
+    let byte = |v: u32| {
+        u8::try_from(v)
+            .ok()
+            .filter(|b| *b != 0)
+            .ok_or(TmpfilesSplitError)
+    };
+    let simple = match e {
+        'a' => Some('\u{7}'),
+        'b' => Some('\u{8}'),
+        'f' => Some('\u{c}'),
+        'n' => Some('\n'),
+        'r' => Some('\r'),
+        't' => Some('\t'),
+        'v' => Some('\u{b}'),
+        's' => Some(' '),
+        '\\' | '"' | '\'' => Some(e),
+        _ => None,
+    };
+    if let Some(c) = simple {
+        let mut buf = [0; 4];
+        out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        return Ok(());
+    }
+    match e {
+        // A byte, which may be one of several in a UTF-8 sequence.
+        'x' => out.push(byte(digits(2, 16)?)?),
+        '0'..='7' => {
+            let first = e.to_digit(8).ok_or(TmpfilesSplitError)?;
+            let rest = digits(2, 8)?;
+            out.push(byte(first * 64 + rest)?);
+        }
+        'u' | 'U' => {
+            let n = if e == 'u' { 4 } else { 8 };
+            let c = char::from_u32(digits(n, 16)?)
+                .filter(|c| *c != '\0')
+                .ok_or(TmpfilesSplitError)?;
+            let mut buf = [0; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+        _ => return Err(TmpfilesSplitError),
+    }
+    Ok(())
 }
 
 /// What created a `/var` directory on the source host.
@@ -236,6 +350,115 @@ pub struct StorageSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each line split as `systemd-tmpfiles` splits it: (type, path,
+    /// mode, user, group), or `None` where systemd rejects the line.
+    #[test]
+    fn tmpfiles_fields_are_unquoted_and_unescaped_as_systemd_reads_them() {
+        type Fields<'a> = (
+            char,
+            &'a str,
+            Option<&'a str>,
+            Option<&'a str>,
+            Option<&'a str>,
+        );
+        let cases: [(&str, Option<Fields<'_>>); 16] = [
+            (
+                "d /var/lib/a 0750 appuser appgroup 30d",
+                Some((
+                    'd',
+                    "/var/lib/a",
+                    Some("0750"),
+                    Some("appuser"),
+                    Some("appgroup"),
+                )),
+            ),
+            ("d /var/lib/a", Some(('d', "/var/lib/a", None, None, None))),
+            (
+                "d \"/var/lib/a b\" 0750 appuser appgroup 30d",
+                Some((
+                    'd',
+                    "/var/lib/a b",
+                    Some("0750"),
+                    Some("appuser"),
+                    Some("appgroup"),
+                )),
+            ),
+            (
+                "d '/var/lib/a b' 0750 'appuser' \"appgroup\" -",
+                Some((
+                    'd',
+                    "/var/lib/a b",
+                    Some("0750"),
+                    Some("appuser"),
+                    Some("appgroup"),
+                )),
+            ),
+            (
+                "d /var/lib/a\\x20b 0750 appuser appgroup -",
+                Some((
+                    'd',
+                    "/var/lib/a b",
+                    Some("0750"),
+                    Some("appuser"),
+                    Some("appgroup"),
+                )),
+            ),
+            (
+                "d /var/lib/a\\sb 0750 app\\165ser - -",
+                Some((
+                    'd',
+                    "/var/lib/a b",
+                    Some("0750"),
+                    Some("appuser"),
+                    Some("-"),
+                )),
+            ),
+            // A quote may start mid-field and the other quote is literal
+            // inside it.
+            (
+                "d /var/lib/\"a 'b\"c 0750 appuser",
+                Some(('d', "/var/lib/a 'bc", Some("0750"), Some("appuser"), None)),
+            ),
+            (
+                "d \"/var/lib/a\\\"b\" - appuser",
+                Some(('d', "/var/lib/a\"b", Some("-"), Some("appuser"), None)),
+            ),
+            // Quoting past the age field is the argument, never split.
+            (
+                "f /var/lib/a 0640 appuser appgroup - \"hello",
+                Some((
+                    'f',
+                    "/var/lib/a",
+                    Some("0640"),
+                    Some("appuser"),
+                    Some("appgroup"),
+                )),
+            ),
+            ("  # comment", None),
+            ("", None),
+            ("d", None),
+            ("d \"/var/lib/a 0750 appuser", None),
+            ("d /var/lib/a\\q 0750 appuser", None),
+            // A backslash before a space is no C escape, so systemd
+            // rejects the line rather than keep the space.
+            ("d /var/lib/a\\ b 0750 appuser", None),
+            ("d /var/lib/a 0750 appuser appgroup \"30d", None),
+        ];
+        for (line, want) in cases {
+            let got = TmpfilesEntry::parse(line);
+            let got = got.as_ref().map(|e| {
+                (
+                    e.entry_type,
+                    e.path.as_str(),
+                    e.mode.as_deref(),
+                    e.user.as_deref(),
+                    e.group.as_deref(),
+                )
+            });
+            assert_eq!(got, want, "{line}");
+        }
+    }
 
     #[test]
     fn test_storage_section_roundtrip() {

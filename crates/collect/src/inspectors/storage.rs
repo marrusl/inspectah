@@ -504,12 +504,10 @@ fn index_tmpfiles_fragment(conf: &str, content: &str, index: &mut TmpfilesIndex)
         if !DIRECTORY_CREATING_TYPES.contains(&entry_type) {
             continue;
         }
-        index
-            .entry(path.to_string())
-            .or_insert_with(|| TmpfilesDirEntry {
-                conf: conf.to_string(),
-                line: line.to_string(),
-            });
+        index.entry(path).or_insert_with(|| TmpfilesDirEntry {
+            conf: conf.to_string(),
+            line: line.to_string(),
+        });
     }
 }
 

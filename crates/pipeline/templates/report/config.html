@@ -57,5 +57,18 @@
 {% else %}
 <p class="empty-state">No configuration file changes detected</p>
 {% endif %}
+{%- if tmpfiles_owners %}
+<h4>tmpfiles.d Lines Naming Accounts the Image Lacks ({{ tmpfiles_owners|length }})</h4>
+<p>Each line below names an account the image does not create.</p>
+<ul class="tmpfiles-owners">
+  {% for m in tmpfiles_owners %}
+  <li><code>{{ m.file }}</code>: <code>{{ m.path }}</code> needs
+    {%- if m.user %} user <code>{{ m.user }}</code>{% endif %}
+    {%- if m.user and m.group %},{% endif %}
+    {%- if m.group %} group <code>{{ m.group }}</code>{% endif %}</li>
+  {% endfor %}
+</ul>
+<p>{{ tmpfiles_owner_remedy }}</p>
+{% endif %}
 
 {% endcall %}
