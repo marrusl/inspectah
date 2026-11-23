@@ -20,6 +20,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'testdata/**'
+      - 'completions/**'
       - '**.tar.gz'
       - 'scripts/**'
       - '.githooks/**'
