@@ -16,6 +16,8 @@ _inspectah() {
     local context curcontext="$curcontext" state line
     _arguments "${_arguments_options[@]}" : \
 '--markdown-help[Print full CLI reference in markdown format]' \
+'-y[Assume yes to all interactive prompts (for CI/automation)]' \
+'--yes[Assume yes to all interactive prompts (for CI/automation)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 '-V[Print version]' \
@@ -37,6 +39,9 @@ _arguments "${_arguments_options[@]}" : \
 '*--preserve=[Preserve sensitive data in the snapshot]:ITEM:(password-hashes ssh-keys subscription all)' \
 '--progress=[Progress display mode\: pretty (default TTY), flat (non-TTY/CI)]:MODE:((pretty\:"Arrival-order receipt with spinners and ANSI color (default for TTY)"
 flat\:"Numbered sequential lines, no ANSI (CI / piped output)"))' \
+'*--exclude-path=[Exclude specific paths from unmanaged file collection (repeatable)]:PATH:_default' \
+'--scan-home=[Scan home directories for non-RPM software. Value\: '\''all'\'' for users with UID 1000 through 59999, or a comma-separated list of usernames. A home of / is not scanned]:all|USER,...:_default' \
+'*--scan-path=[Add extra scan paths for non-RPM software detection (repeatable)]:PATH:_default' \
 '--inspect-only[Write JSON snapshot only, skip tarball/artifact generation]' \
 '--no-redaction[Skip the redaction phase — secrets remain unmasked in output]' \
 '--ack-sensitive[Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction)]' \
@@ -45,6 +50,9 @@ flat\:"Numbered sequential lines, no ANSI (CI / piped output)"))' \
 '(-q --quiet)--verbose[Show sub-step detail for all inspectors, including fast ones]' \
 '(-v --verbose)-q[Suppress the scan progress checklist (completion summary still prints)]' \
 '(-v --verbose)--quiet[Suppress the scan progress checklist (completion summary still prints)]' \
+'--include-unmanaged[Catalog and bundle unmanaged files from /opt, /srv, /usr/local. Prompts with total size before bundling (suppressed by -y/--yes)]' \
+'-y[Assume yes to all interactive prompts (for CI/automation)]' \
+'--yes[Assume yes to all interactive prompts (for CI/automation)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -54,6 +62,8 @@ _arguments "${_arguments_options[@]}" : \
 '--port=[Port to bind (default\: 8642, use 0 for ephemeral)]:PORT:_default' \
 '--open=[Open browser automatically (use --no-open to suppress)]:OPEN:(true false)' \
 '--fresh[Start a fresh session, discarding any saved progress]' \
+'-y[Assume yes to all interactive prompts (for CI/automation)]' \
+'--yes[Assume yes to all interactive prompts (for CI/automation)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':tarball -- Path to scan output tarball (.tar.gz):_files' \
@@ -63,6 +73,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--target-image=[Override the target image reference for baseline comparison]:TARGET_IMAGE:_default' \
 '--output-dir=[Output directory for the aggregate tarball]:OUTPUT_DIR:_files' \
+'-o+[Output file path for the aggregate tarball]:OUTPUT_FILE:_files' \
 '--output-file=[Output file path for the aggregate tarball]:OUTPUT_FILE:_files' \
 '--json-only[Write JSON snapshot instead of tarball (to stdout, --output-file, or --output-dir)]' \
 '--strict[Treat warnings as errors]' \
@@ -70,6 +81,8 @@ _arguments "${_arguments_options[@]}" : \
 '--verbose[Show per-host detail in output]' \
 '--ack-sensitive[Acknowledge that the merged output may contain sensitive data (subscription certs, password hashes, SSH keys)]' \
 '--acknowledge-sensitive[Acknowledge that the merged output may contain sensitive data (subscription certs, password hashes, SSH keys)]' \
+'-y[Assume yes to all interactive prompts (for CI/automation)]' \
+'--yes[Assume yes to all interactive prompts (for CI/automation)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 '*::inputs -- Input tarballs or directory containing tarballs:_files' \
@@ -81,6 +94,8 @@ _arguments "${_arguments_options[@]}" : \
 '--tag=[Image tag (must include version, e.g., '\''myimage\:v1'\'')]:TAG:_default' \
 '--dry-run[Show the build command without executing it]' \
 '--keep-context[Keep the extracted build context after build completes]' \
+'-y[Assume yes to all interactive prompts (for CI/automation)]' \
+'--yes[Assume yes to all interactive prompts (for CI/automation)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':tarball -- Path to inspectah tarball (.tar.gz snapshot):_files' \
@@ -89,12 +104,16 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (version)
 _arguments "${_arguments_options[@]}" : \
+'-y[Assume yes to all interactive prompts (for CI/automation)]' \
+'--yes[Assume yes to all interactive prompts (for CI/automation)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
 ;;
 (completions)
 _arguments "${_arguments_options[@]}" : \
+'-y[Assume yes to all interactive prompts (for CI/automation)]' \
+'--yes[Assume yes to all interactive prompts (for CI/automation)]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':shell -- Shell to generate for:(bash elvish fish powershell zsh)' \

@@ -1,6 +1,6 @@
 # Print an optspec for argparse to handle cmd's options that are independent of any subcommand.
 function __fish_inspectah_global_optspecs
-	string join \n markdown-help h/help V/version
+	string join \n markdown-help y/yes h/help V/version
 end
 
 function __fish_inspectah_needs_command
@@ -25,6 +25,7 @@ function __fish_inspectah_using_subcommand
 end
 
 complete -c inspectah -n "__fish_inspectah_needs_command" -l markdown-help -d 'Print full CLI reference in markdown format'
+complete -c inspectah -n "__fish_inspectah_needs_command" -s y -l yes -d 'Assume yes to all interactive prompts (for CI/automation)'
 complete -c inspectah -n "__fish_inspectah_needs_command" -s h -l help -d 'Print help'
 complete -c inspectah -n "__fish_inspectah_needs_command" -s V -l version -d 'Print version'
 complete -c inspectah -n "__fish_inspectah_needs_command" -f -a "scan" -d 'Scan the current system and produce a migration snapshot'
@@ -42,30 +43,40 @@ subscription\t''
 all\t''"
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l progress -d 'Progress display mode: pretty (default TTY), flat (non-TTY/CI)' -r -f -a "pretty\t'Arrival-order receipt with spinners and ANSI color (default for TTY)'
 flat\t'Numbered sequential lines, no ANSI (CI / piped output)'"
+complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l exclude-path -d 'Exclude specific paths from unmanaged file collection (repeatable)' -r
+complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l scan-home -d 'Scan home directories for non-RPM software. Value: \'all\' for users with UID 1000 through 59999, or a comma-separated list of usernames. A home of / is not scanned' -r
+complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l scan-path -d 'Add extra scan paths for non-RPM software detection (repeatable)' -r
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l inspect-only -d 'Write JSON snapshot only, skip tarball/artifact generation'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l no-redaction -d 'Skip the redaction phase — secrets remain unmasked in output'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l ack-sensitive -l acknowledge-sensitive -d 'Acknowledge sensitive data in the snapshot (required with --preserve or --no-redaction)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s v -l verbose -d 'Show sub-step detail for all inspectors, including fast ones'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s q -l quiet -d 'Suppress the scan progress checklist (completion summary still prints)'
+complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l include-unmanaged -d 'Catalog and bundle unmanaged files from /opt, /srv, /usr/local. Prompts with total size before bundling (suppressed by -y/--yes)'
+complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s y -l yes -d 'Assume yes to all interactive prompts (for CI/automation)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l port -d 'Port to bind (default: 8642, use 0 for ephemeral)' -r
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l open -d 'Open browser automatically (use --no-open to suppress)' -r -f -a "true\t''
 false\t''"
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l fresh -d 'Start a fresh session, discarding any saved progress'
+complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -s y -l yes -d 'Assume yes to all interactive prompts (for CI/automation)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -s h -l help -d 'Print help'
 complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l target-image -d 'Override the target image reference for baseline comparison' -r
 complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l output-dir -d 'Output directory for the aggregate tarball' -r -F
-complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l output-file -d 'Output file path for the aggregate tarball' -r -F
+complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -s o -l output-file -d 'Output file path for the aggregate tarball' -r -F
 complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l json-only -d 'Write JSON snapshot instead of tarball (to stdout, --output-file, or --output-dir)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l strict -d 'Treat warnings as errors'
 complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -s v -l verbose -d 'Show per-host detail in output'
 complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l ack-sensitive -l acknowledge-sensitive -d 'Acknowledge that the merged output may contain sensitive data (subscription certs, password hashes, SSH keys)'
+complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -s y -l yes -d 'Assume yes to all interactive prompts (for CI/automation)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -s h -l help -d 'Print help'
 complete -c inspectah -n "__fish_inspectah_using_subcommand build" -s t -l tag -d 'Image tag (must include version, e.g., \'myimage:v1\')' -r
 complete -c inspectah -n "__fish_inspectah_using_subcommand build" -l dry-run -d 'Show the build command without executing it'
 complete -c inspectah -n "__fish_inspectah_using_subcommand build" -l keep-context -d 'Keep the extracted build context after build completes'
+complete -c inspectah -n "__fish_inspectah_using_subcommand build" -s y -l yes -d 'Assume yes to all interactive prompts (for CI/automation)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand build" -s h -l help -d 'Print help'
+complete -c inspectah -n "__fish_inspectah_using_subcommand version" -s y -l yes -d 'Assume yes to all interactive prompts (for CI/automation)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand version" -s h -l help -d 'Print help'
+complete -c inspectah -n "__fish_inspectah_using_subcommand completions" -s y -l yes -d 'Assume yes to all interactive prompts (for CI/automation)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand completions" -s h -l help -d 'Print help'
 complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "scan" -d 'Scan the current system and produce a migration snapshot'
 complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "refine" -d 'Interactively refine scan output and re-render'

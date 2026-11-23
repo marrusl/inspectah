@@ -65,7 +65,7 @@ _inspectah() {
 
     case "${cmd}" in
         inspectah)
-            opts="-h -V --markdown-help --help --version scan refine aggregate build version completions help"
+            opts="-y -h -V --markdown-help --yes --help --version scan refine aggregate build version completions help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -79,7 +79,7 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__aggregate)
-            opts="-v -h --target-image --output-dir --output-file --json-only --strict --verbose --acknowledge-sensitive --ack-sensitive --help [INPUTS]..."
+            opts="-o -v -y -h --target-image --output-dir --output-file --json-only --strict --verbose --acknowledge-sensitive --ack-sensitive --yes --help [INPUTS]..."
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -97,6 +97,10 @@ _inspectah() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                -o)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -105,7 +109,7 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__build)
-            opts="-t -h --tag --dry-run --keep-context --help <TARBALL> [PODMAN_ARGS]..."
+            opts="-t -y -h --tag --dry-run --keep-context --yes --help <TARBALL> [PODMAN_ARGS]..."
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -127,7 +131,7 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__completions)
-            opts="-h --help bash elvish fish powershell zsh"
+            opts="-y -h --yes --help bash elvish fish powershell zsh"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -253,7 +257,7 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__refine)
-            opts="-h --port --open --fresh --help <TARBALL>"
+            opts="-y -h --port --open --fresh --yes --help <TARBALL>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -275,7 +279,7 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__scan)
-            opts="-o -v -q -h --inspect-only --output --base-image --preserve --no-redaction --acknowledge-sensitive --ack-sensitive --progress --verbose --quiet --help"
+            opts="-o -v -q -y -h --inspect-only --output --base-image --preserve --no-redaction --acknowledge-sensitive --ack-sensitive --progress --verbose --quiet --include-unmanaged --exclude-path --scan-home --scan-path --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -301,6 +305,18 @@ _inspectah() {
                     COMPREPLY=($(compgen -W "pretty flat" -- "${cur}"))
                     return 0
                     ;;
+                --exclude-path)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --scan-home)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --scan-path)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -309,7 +325,7 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__version)
-            opts="-h --help"
+            opts="-y -h --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
