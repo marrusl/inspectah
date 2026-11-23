@@ -96,7 +96,29 @@ first `@` ships the tail; no generic pattern covers an https password,
 so nothing else catches it. Bound the authority first (it ends at `/`,
 `?`, `#` or whitespace), then take its last `@`, so an `@` in the path
 or query never takes the host. `scrub_url_auth` and `PROXY_CRED_RE`
-both follow this rule.
+both follow this rule. Bound the **password**, never the user name: the
+user name may be empty (`https://:pw@host`) or malformed
+(`https://u?name:pw@host`), and excluding `?` and `#` from it to bound
+the authority left those passwords raw.
+
+**A token user name is masked with or without a password after it.**
+`https://<token>:x-oauth-basic@host` and `https://<token>:@host` carry
+the token as the credential; masking only the password, or matching only
+a token followed by `@`, shipped the token. `TOKEN_WITH_PASSWORD_RE`
+masks the token and `PROXY_CRED_RE` the password, as two edits.
+
+**Overlapping credential edits merge; an edit is dropped only when
+another covers all of it.** `merge_credential_edits` unions partly
+overlapping ranges: dropping the token edit of
+`https://<token>@proxy_password=tail@host` because the
+`proxy_password=` value overlapped it shipped the token. The one
+precedence rule: a `proxy_password=` value that is itself one URL with a
+URL edit inside gives way, so `proxy_password=http://u:p@h` keeps its
+user and host. The merge walks sorted lists with advancing cursors,
+never every pair: pairwise filtering made a dense 5 MB line ten billion
+comparisons. `test_url_credential_merge_is_linear_on_a_dense_line` counts
+merge steps (`MERGE_STEPS`), not time, so a loaded machine cannot make it
+flaky.
 
 **Diagnostics are not redacted, so name them from the raw value.** A
 warning, notice or degraded reason is written at collection, before

@@ -136,8 +136,13 @@ fn is_allowlisted_path(path: &str) -> bool {
 /// holds no `@` does the second branch take the first `@` on the line, as
 /// this pattern always did, so a raw `/`, `?` or `#` in a password
 /// (`u:pa/ss@host`) stays masked.
+///
+/// The user name may be empty (`https://:pw@host`) and may hold a raw `?`
+/// or `#` (`https://u?name:pw@host`): such a URL is malformed, but its
+/// password is still a password, and excluding those characters from the
+/// user name once left it unmasked.
 static PROXY_CRED_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(://[^:/?#@\s]+:)([^/?#\s]+|[^@\s]+)(@)").expect("proxy regex"));
+    LazyLock::new(|| Regex::new(r"(://[^:/@\s]*:)([^/?#\s]+|[^@\s]+)(@)").expect("proxy regex"));
 
 /// Compiled regex for bare `proxy_password=VALUE` lines in DNF/Yum configs.
 /// Spacing around `=` is `[ \t]*`, not `\s*`, so an empty value never takes
@@ -158,11 +163,32 @@ static PROXY_PASSWORD_KV_RE: LazyLock<Regex> = LazyLock::new(|| {
 ///      `@` of the authority, as [`PROXY_CRED_RE`]'s password does
 ///   3. `@` (delimiter before host)
 static TOKEN_USERNAME_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(://)((?:ghp_[A-Za-z0-9_]{36,}|gho_[A-Za-z0-9_]{36,}|glpat-[A-Za-z0-9_\-]{20,}|github_pat_[A-Za-z0-9_]{22,}|[A-Za-z0-9_\-]{20,})(?:@[^/?#@\s]*)*)(@)",
-    )
-    .expect("token username regex")
+    Regex::new(&format!(r"(://)({TOKEN_USER_NAME}(?:@[^/?#@\s]*)*)(@)"))
+        .expect("token username regex")
 });
+
+/// A user name that looks like a token: a known token prefix, or a long
+/// run of letters, digits, `_` and `-`.
+const TOKEN_USER_NAME: &str = r"(?:ghp_[A-Za-z0-9_]{36,}|gho_[A-Za-z0-9_]{36,}|glpat-[A-Za-z0-9_\-]{20,}|github_pat_[A-Za-z0-9_]{22,}|[A-Za-z0-9_\-]{20,})";
+
+/// Compiled regex for a token user name with a password after it:
+/// `://token:x-oauth-basic@host`, or an empty one, `://token:@host`.
+/// [`PROXY_CRED_RE`] masks the password; the token is a credential too, so
+/// this masks it, as capture group 2. The password part reads to the
+/// authority's last `@`, or to the line's first, as [`PROXY_CRED_RE`]'s
+/// does, so a long host name before a port (`://long-host-name:8081/`)
+/// with no `@` after it is not taken for a token.
+static TOKEN_WITH_PASSWORD_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"(://)({TOKEN_USER_NAME})(:(?:[^/?#\s]*|[^@\s]*)@)"
+    ))
+    .expect("token with password regex")
+});
+
+/// A value that is one URL and nothing else: a scheme, `://` and no
+/// whitespace.
+static URL_VALUE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[A-Za-z][A-Za-z0-9+.\-]*://\S*$").expect("URL value regex"));
 
 /// Options controlling redaction sensitivity.
 #[derive(Debug, Clone)]
@@ -1216,9 +1242,71 @@ fn credential_edits(re: &Regex, line: &str, finding: &RedactionFinding) -> Vec<C
         .collect()
 }
 
-/// Whether two byte ranges share a byte.
-fn overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
-    a.start < b.end && b.start < a.end
+#[cfg(test)]
+thread_local! {
+    /// How many candidates [`merge_credential_edits`] has examined, so a
+    /// test can hold the merge to linear work without timing it.
+    static MERGE_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count one step of [`merge_credential_edits`] in a test build.
+fn note_merge_step() {
+    #[cfg(test)]
+    MERGE_STEPS.with(|n| n.set(n.get() + 1));
+}
+
+/// The credential edits of one line as one ordered, disjoint list.
+///
+/// `url` holds the URL maskers' edits, `key_values` the `proxy_password=`
+/// values. A value that is itself one URL (`proxy_password=http://u:p@h`)
+/// and holds a URL edit is that URL's credential, so it is dropped and the
+/// URL keeps its user and host. Any other overlap becomes one edit over
+/// the union of both ranges, never a drop: an edit is dropped only when
+/// another covers all of its bytes, since dropping a partly covered one
+/// shipped the bytes only it covered. The merged edit keeps the finding of
+/// the edit that starts first, a URL edit before a value on a tie.
+///
+/// Every list is walked once in order, so the work is linear in the
+/// number of edits after the sort, however densely they sit on the line.
+fn merge_credential_edits(
+    line: &str,
+    mut url: Vec<CredentialEdit>,
+    mut key_values: Vec<CredentialEdit>,
+) -> Vec<CredentialEdit> {
+    url.sort_by_key(|e| e.range.start);
+    key_values.sort_by_key(|e| e.range.start);
+    // The first URL edit that can still overlap a value: one ending at or
+    // before a value's start ends before every later value's start too.
+    let mut next_url = 0;
+    key_values.retain(|kv| {
+        note_merge_step();
+        while url
+            .get(next_url)
+            .is_some_and(|u| u.range.end <= kv.range.start)
+        {
+            note_merge_step();
+            next_url += 1;
+        }
+        let holds_url_edit = url
+            .get(next_url)
+            .is_some_and(|u| u.range.start < kv.range.end);
+        !(holds_url_edit && URL_VALUE_RE.is_match(&line[kv.range.clone()]))
+    });
+    let mut edits = url;
+    edits.append(&mut key_values);
+    // Stable: a URL edit stays ahead of a value with the same range.
+    edits.sort_by_key(|e| (e.range.start, std::cmp::Reverse(e.range.end)));
+    let mut merged: Vec<CredentialEdit> = Vec::with_capacity(edits.len());
+    for edit in edits {
+        note_merge_step();
+        match merged.last_mut() {
+            Some(last) if edit.range.start < last.range.end => {
+                last.range.end = last.range.end.max(edit.range.end);
+            }
+            _ => merged.push(edit),
+        }
+    }
+    merged
 }
 
 /// `line` with every edit's range replaced by [`URL_CREDENTIAL_MASK`].
@@ -1239,9 +1327,19 @@ fn apply_credential_edits<'a>(line: &'a str, edits: &[CredentialEdit]) -> Cow<'a
 }
 
 /// The proxy credentials in `line`, in order: every password in a
-/// `://user:password@` URL, and every `proxy_password=VALUE` value that
-/// is not already inside one of those.
+/// `://user:password@` URL, and every `proxy_password=VALUE` value
+/// ([`merge_credential_edits`] decides their overlaps).
 fn proxy_credential_edits(line: &str, source_path: &str) -> Vec<CredentialEdit> {
+    let (passwords, key_values) = proxy_credential_parts(line, source_path);
+    merge_credential_edits(line, passwords, key_values)
+}
+
+/// The URL passwords and the `proxy_password=` values in `line`, apart,
+/// each in order.
+fn proxy_credential_parts(
+    line: &str,
+    source_path: &str,
+) -> (Vec<CredentialEdit>, Vec<CredentialEdit>) {
     let finding = |remediation: &str| RedactionFinding {
         path: source_path.to_string(),
         source: "proxy_credential".into(),
@@ -1254,7 +1352,7 @@ fn proxy_credential_edits(line: &str, source_path: &str) -> Vec<CredentialEdit> 
         confidence: Some(Confidence::High),
         finding_kind: Some(FindingKind::Password),
     };
-    let mut edits = credential_edits(
+    let passwords = credential_edits(
         &PROXY_CRED_RE,
         line,
         &finding(
@@ -1268,16 +1366,11 @@ fn proxy_credential_edits(line: &str, source_path: &str) -> Vec<CredentialEdit> 
             "Remove plaintext proxy_password from DNF/Yum configuration; use repository-level auth instead",
         ),
     );
-    let key_values: Vec<_> = key_values
-        .into_iter()
-        .filter(|kv| !edits.iter().any(|url| overlaps(&kv.range, &url.range)))
-        .collect();
-    edits.extend(key_values);
-    edits.sort_by_key(|e| e.range.start);
-    edits
+    (passwords, key_values)
 }
 
-/// The token user names in `line`, in order: every `://token@` URL.
+/// The token user names in `line`, in order: every `://token@` URL, and
+/// every token before a password, `://token:password@`.
 fn token_username_edits(line: &str, source_path: &str) -> Vec<CredentialEdit> {
     let finding = RedactionFinding {
         path: source_path.to_string(),
@@ -1292,7 +1385,10 @@ fn token_username_edits(line: &str, source_path: &str) -> Vec<CredentialEdit> {
         confidence: Some(Confidence::High),
         finding_kind: Some(FindingKind::Password),
     };
-    credential_edits(&TOKEN_USERNAME_RE, line, &finding)
+    let mut edits = credential_edits(&TOKEN_USERNAME_RE, line, &finding);
+    edits.extend(credential_edits(&TOKEN_WITH_PASSWORD_RE, line, &finding));
+    edits.sort_by_key(|e| e.range.start);
+    edits
 }
 
 /// Mask embedded credentials in a proxy URL line.
@@ -1319,10 +1415,10 @@ pub fn mask_proxy_credentials<'a>(
 /// Mask username-only token credentials in URLs.
 ///
 /// Catches `://ghp_xxx@github.com`, `://glpat-xxx@gitlab.com`, and generic
-/// long alphanumeric usernames (>= 20 chars) used as tokens without a
-/// colon/password separator. These slip past `mask_proxy_credentials()`
-/// which requires the `://user:password@` shape. Every token on the line
-/// is masked, each with its own finding.
+/// long alphanumeric usernames (>= 20 chars) used as tokens, with no
+/// password or before one (`://token:x-oauth-basic@`, `://token:@`), which
+/// `mask_proxy_credentials()` masks apart. Every token on the line is
+/// masked, each with its own finding.
 ///
 /// Returns the line, borrowed when nothing matched, and one finding per
 /// token masked.
@@ -1917,22 +2013,20 @@ fn line_edit(line: &str, masked: &str) -> (Range<usize>, String) {
 /// Each credential is its own edit, carrying its own finding
 /// ([`apply_payload_edits`] keeps it only if the rewrite is written), so
 /// a masker edit spans only the credential it masked and never joins two
-/// pattern matches on one line. A token match inside a password is that
-/// password's credential and is not a second edit. A credential the line
-/// already holds masked is not rewritten; its finding is returned apart.
+/// pattern matches on one line. Overlapping credentials are one edit over
+/// both ([`merge_credential_edits`]): a token match inside a password is
+/// that password's credential and is not a second edit. A credential the
+/// line already holds masked is not rewritten; its finding is returned
+/// apart.
 fn url_credential_edits(content: &str, path: &str) -> (Vec<PayloadEdit>, Vec<RedactionFinding>) {
     let mut edits = Vec::new();
     let mut unedited = Vec::new();
     let mut offset = 0;
     for (number, line) in content.split_inclusive('\n').enumerate() {
         let line_number = i32::try_from(number + 1).ok();
-        let mut found = proxy_credential_edits(line, path);
-        let tokens = token_username_edits(line, path);
-        let tokens: Vec<_> = tokens
-            .into_iter()
-            .filter(|token| !found.iter().any(|p| overlaps(&token.range, &p.range)))
-            .collect();
-        found.extend(tokens);
+        let (mut url, key_values) = proxy_credential_parts(line, path);
+        url.extend(token_username_edits(line, path));
+        let found = merge_credential_edits(line, url, key_values);
         for CredentialEdit { range, finding } in found {
             let finding = RedactionFinding {
                 line: line_number,
@@ -5481,6 +5575,112 @@ baseurl = https://cdn.redhat.com
             mask_proxy_credentials("proxy_password =\thunter2", "/etc/dnf/dnf.conf");
         assert_eq!(out, "proxy_password =\t[REDACTED]");
         assert_eq!(findings.len(), 1);
+    }
+
+    /// A user name with a raw `?` or `#` is malformed, but its password is
+    /// still masked, as it was before the last-`@` rule; an empty user
+    /// name is masked too. Each runs through the git remote's sequential
+    /// maskers and through the payload pass.
+    #[test]
+    fn test_url_password_masked_under_any_user_name() {
+        let cases = [
+            (
+                "https://u?name:qmarkpw8812@host/r",
+                "https://u?name:[REDACTED]@host/r",
+            ),
+            (
+                "https://u#name:hashpw8812@host/r",
+                "https://u#name:[REDACTED]@host/r",
+            ),
+            (
+                "https://:emptyuserpw8812@host/r",
+                "https://:[REDACTED]@host/r",
+            ),
+        ];
+        for (input, want) in cases {
+            let (out, findings) = mask_proxy_credentials(input, "/etc/environment");
+            assert_eq!(out, want, "{input}");
+            assert_eq!(findings.len(), 1, "{input}");
+            let (text, findings) =
+                redact_payload(&format!("M={input}\n"), "/opt/app/.env").expect("redacted");
+            assert_eq!(text, format!("M={want}\n"), "{input}");
+            assert_eq!(findings.len(), 1, "{input}");
+        }
+    }
+
+    /// A token standing as the user name is masked when a password
+    /// follows it, empty or not: the password does not make the token any
+    /// less of a credential.
+    #[test]
+    fn test_token_user_name_masked_beside_a_password() {
+        let token = "abcdefghijklmnopqrstuvwx";
+        let cases = [
+            (
+                format!("https://{token}:x-oauth-basic@host/r"),
+                "https://[REDACTED]:[REDACTED]@host/r",
+                2,
+            ),
+            (
+                format!("https://{token}:@host/r"),
+                "https://[REDACTED]:@host/r",
+                1,
+            ),
+            (
+                format!("https://ghp_{}:x-oauth-basic@github.com/r", "y".repeat(36)),
+                "https://[REDACTED]:[REDACTED]@github.com/r",
+                2,
+            ),
+        ];
+        for (input, want, count) in cases {
+            let (text, findings) =
+                redact_payload(&format!("{input}\n"), "/opt/app/repo.cfg").expect("redacted");
+            assert_eq!(text, format!("{want}\n"), "{input}");
+            assert_eq!(findings.len(), count, "{input}");
+            // The git remote pass masks the password, then the token.
+            let (masked, _) = mask_proxy_credentials(&input, "/srv/app");
+            let (masked, _) = mask_token_username(&masked, "/srv/app");
+            assert_eq!(masked, want, "{input}");
+        }
+        // A long host name before a port is no token user name.
+        let host = "https://artifactory-prod-server01:8081/r";
+        assert_eq!(mask_token_username(host, "/srv/app").0, host);
+    }
+
+    /// Two credentials whose ranges partly overlap are masked as one span
+    /// over both, never by dropping one of them.
+    #[test]
+    fn test_partially_overlapping_url_credentials_are_merged() {
+        let token = "abcdefghijklmnopqrstuvwx";
+        let line = format!("https://{token}@proxy_password=tail@host\n");
+        let (text, findings) = redact_payload(&line, "/opt/app/.env").expect("redacted");
+        for secret in [token, "tail"] {
+            assert!(!text.contains(secret), "{secret} survives: {text}");
+        }
+        assert_eq!(findings.len(), 1, "{text}");
+
+        // A proxy_password value with a password before a URL in it.
+        let (out, findings) =
+            mask_proxy_credentials("proxy_password=hunter2,https://u:pw@h", "/etc/dnf/dnf.conf");
+        assert!(!out.contains("hunter2"), "{out}");
+        assert!(!out.contains(":pw@"), "{out}");
+        assert_eq!(findings.len(), 1, "{out}");
+    }
+
+    /// The merge of the URL maskers' edits does a bounded amount of work
+    /// per credential, however many share a line: each candidate is
+    /// compared with a constant number of others, not with every one.
+    #[test]
+    fn test_url_credential_merge_is_linear_on_a_dense_line() {
+        const PAIRS: usize = 5_000;
+        let unit = "https://u:p@h https://deploytoken0123456789xyz@h proxy_password=x ";
+        let line = unit.repeat(PAIRS);
+        MERGE_STEPS.with(|n| n.set(0));
+        let (text, findings) = redact_payload(&line, "/opt/app/.env").expect("redacted");
+        let steps = MERGE_STEPS.with(std::cell::Cell::get);
+        assert_eq!(findings.len(), 3 * PAIRS);
+        assert!(!text.contains("deploytoken"));
+        // Three credentials per unit, each touched a few times.
+        assert!(steps <= 12 * PAIRS, "{steps} merge steps for {PAIRS} units");
     }
 
     // --- Comment-line filtering tests (Gap 1) ---
