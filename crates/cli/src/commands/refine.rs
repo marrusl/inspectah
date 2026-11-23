@@ -13,7 +13,7 @@ pub struct RefineArgs {
     #[arg(long, default_value = "8642")]
     pub port: u16,
 
-    /// Open browser automatically (use --no-open to suppress)
+    /// Open browser automatically (pass `--open false` to suppress)
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub open: bool,
 

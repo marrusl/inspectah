@@ -55,7 +55,7 @@ complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -l include-unm
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s y -l yes -d 'Assume yes to all interactive prompts (for CI/automation)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l port -d 'Port to bind (default: 8642, use 0 for ephemeral)' -r
-complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l open -d 'Open browser automatically (use --no-open to suppress)' -r -f -a "true\t''
+complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l open -d 'Open browser automatically (pass `--open false` to suppress)' -r -f -a "true\t''
 false\t''"
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l fresh -d 'Start a fresh session, discarding any saved progress'
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -s y -l yes -d 'Assume yes to all interactive prompts (for CI/automation)'

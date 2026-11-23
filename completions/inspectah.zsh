@@ -60,7 +60,7 @@ flat\:"Numbered sequential lines, no ANSI (CI / piped output)"))' \
 (refine)
 _arguments "${_arguments_options[@]}" : \
 '--port=[Port to bind (default\: 8642, use 0 for ephemeral)]:PORT:_default' \
-'--open=[Open browser automatically (use --no-open to suppress)]:OPEN:(true false)' \
+'--open=[Open browser automatically (pass \`--open false\` to suppress)]:OPEN:(true false)' \
 '--fresh[Start a fresh session, discarding any saved progress]' \
 '-y[Assume yes to all interactive prompts (for CI/automation)]' \
 '--yes[Assume yes to all interactive prompts (for CI/automation)]' \
