@@ -236,9 +236,11 @@ whether to include it:
 Regular files under `/opt` and `/usr/local` render as `COPY`
 directives. When a directory holds more than one regular file, the
 renderer emits one `COPY` for the whole directory; when it holds exactly
-one, the `COPY` names that file. Symlinks render as `RUN ln -sf`
-directives instead of `COPY`, so the image keeps the original link
-layout:
+one, the `COPY` names that file. Symlinks render as a `RUN` line
+instead of `COPY`: it creates the link's directory with `mkdir -p`, then
+recreates the link with `ln -sf`. The link keeps the target the host
+gives (`readlink`, not `readlink -f`), so a relative or chained link
+stays as it is on the host:
 
 ```dockerfile
 # === Unmanaged files (no package manager provenance) ===
@@ -246,18 +248,28 @@ layout:
 # no upstream update path and must be manually maintained.
 COPY unmanaged/opt/legacy-app/requirements.txt /opt/legacy-app/requirements.txt
 COPY unmanaged/opt/myapp/ /opt/myapp/
-RUN ln -sf '/usr/lib64/myapp' '/opt/myapp/lib'
+RUN mkdir -p -- '/opt/myapp' && ln -sf -- '/usr/lib64/myapp' '/opt/myapp/lib'
 COPY unmanaged/usr/local/bin/ /usr/local/bin/
-RUN ln -sf '/usr/local/lib/node_modules/pm2/bin/pm2-runtime' '/usr/local/bin/pm2-runtime'
-RUN ln -sf '/usr/local/lib/node_modules/typescript/bin/tsc' '/usr/local/bin/tsc'
-RUN ln -sf '/usr/local/lib/node_modules/pm2/bin/pm2' '/usr/local/bin/pm2'
-RUN ln -sf '/usr/local/lib/node_modules/pm2/bin/pm2-dev' '/usr/local/bin/pm2-dev'
-RUN ln -sf '/usr/local/lib/node_modules/pm2/bin/pm2-docker' '/usr/local/bin/pm2-docker'
-RUN ln -sf '/usr/local/lib/node_modules/@angular/cli/bin/ng.js' '/usr/local/bin/ng'
+RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/pm2/bin/pm2-runtime' '/usr/local/bin/pm2-runtime'
+RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/typescript/bin/tsc' '/usr/local/bin/tsc'
+RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/pm2/bin/pm2' '/usr/local/bin/pm2'
+RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/pm2/bin/pm2-dev' '/usr/local/bin/pm2-dev'
+RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/pm2/bin/pm2-docker' '/usr/local/bin/pm2-docker'
+RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/@angular/cli/bin/ng.js' '/usr/local/bin/ng'
 ```
 
 *Sample output from a RHEL 9.8 test host. Command: `sudo inspectah scan
---include-unmanaged`. Lines 114 to 126 of the Containerfile.*
+--include-unmanaged`. The symlink lines are rewritten to the current
+renderer's format; the rest is as captured.*
+
+When redaction replaced credentials in any included file, the section
+adds a two-line comment after its header saying so and pointing to
+`secrets-review.md`. A file that redaction could not check is not
+copied: the Configuration section names it in a `FIXME`. A symlink whose
+path or target the renderer cannot quote safely, such as a target with a
+line break, gets a `FIXME` comment in place of the `RUN` line, and a
+link with no recorded target gets a `# SYMLINK: ... unknown` comment to
+recreate by hand.
 
 Findings under `/srv` get no `COPY`. On bootc images `/srv` is a symlink
 to `/var/srv`, so that content is machine-local data that belongs to
