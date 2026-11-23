@@ -966,6 +966,101 @@ fn every_url_credential_on_one_line_ships_masked() {
     }
 }
 
+/// One host file per credential class the redaction rework closed, each
+/// holding fake secrets no other test plants: a URL password in an
+/// ordinary config file, which only the URL pass reads; database URL
+/// passwords holding an `@`, in a config file and a compose file; a
+/// compact lockfile with two credentialed members; and values that run
+/// past a space, an INI password and a quoted Wi-Fi PSK.
+fn credential_class_files() -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "/etc/e2e/proxy.conf",
+            "HTTPS_PROXY=https://u:cfgurlpw5521@proxy.example.test:3128\n".into(),
+        ),
+        (
+            "/etc/e2e/cache.conf",
+            "CACHE_URL=redis://:p@redistail5521@cache.example.test/0\n".into(),
+        ),
+        (
+            "/opt/e2e/docker-compose.yml",
+            "services:\n  web:\n    environment:\n      \
+             DATABASE_URL: postgres://u:p@pgtail5521@db.example.test/app\n"
+                .into(),
+        ),
+        (
+            "/opt/e2enpm/package-lock.json",
+            r#"{"name":"e2enpm","lockfileVersion":3,"packages":{"node_modules/a":{"resolved":"https://u:lockfirst5521@npm.example.test/a.tgz"},"node_modules/b":{"resolved":"https://v:locksecond5521@npm.example.test/b.tgz"}}}"#
+                .to_string()
+                + "\n",
+        ),
+        (
+            "/etc/e2e/app.ini",
+            "[db]\npassword=inialpha5521 inibravo5521\n".into(),
+        ),
+        (
+            "/opt/e2e/app.ini",
+            "[db]\npassword=optalpha5521 optbravo5521\n".into(),
+        ),
+        (
+            "/etc/wpa_supplicant/wpa_supplicant.conf",
+            "network={\n  ssid=\"home\"\n  psk=\"pskcorrect5521 pskhorse5521\"\n}\n".into(),
+        ),
+    ]
+}
+
+/// Every fake secret [`credential_class_files`] plants.
+const CREDENTIAL_CLASS_SECRETS: &[&str] = &[
+    "cfgurlpw5521",
+    "redistail5521",
+    "pgtail5521",
+    "lockfirst5521",
+    "locksecond5521",
+    "inialpha5521",
+    "inibravo5521",
+    "optalpha5521",
+    "optbravo5521",
+    "pskcorrect5521",
+    "pskhorse5521",
+];
+
+/// No credential of any class the redaction rework closed survives in the
+/// snapshot, the scan export or the refine export: each file goes through
+/// the collectors that read it, redaction and both export paths.
+#[test]
+fn every_credential_class_ships_masked_on_both_export_paths() {
+    let files = credential_class_files();
+    let planted: Vec<(&str, Vec<u8>)> = files
+        .iter()
+        .map(|(path, text)| (*path, text.clone().into_bytes()))
+        .collect();
+    let (exec, root) = host_of(&planted);
+    let Exported {
+        snap,
+        scan_tree,
+        session,
+        _packed,
+    } = export(&exec, root.path(), false);
+    let refine_tree = export_session(&session);
+
+    let snapshot = serde_json::to_vec(&snap).expect("the snapshot serializes");
+    // Each file reached the snapshot, so the sweep below reads them all.
+    for (path, _) in &files {
+        assert!(
+            contains(&snapshot, &path[1..]),
+            "{path} is not in the snapshot"
+        );
+    }
+    let mut all = vec![("snapshot".to_string(), snapshot)];
+    all.extend(self::files(scan_tree.path()));
+    all.extend(self::files(refine_tree.path()));
+    for secret in CREDENTIAL_CLASS_SECRETS {
+        for (where_, bytes) in &all {
+            assert!(!contains(bytes, secret), "{where_} holds {secret}");
+        }
+    }
+}
+
 /// A link alone in its directory, as driftify plants it: no regular file
 /// beside it, so no `COPY` creates the directory.
 const LONE_LINK: &str = "/opt/tool/bin/run";
