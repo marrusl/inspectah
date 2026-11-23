@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MachineStateGroup } from "../MachineStateGroup";
+import { MachineStateGroup, NVME_HOST_ID_LINE } from "../MachineStateGroup";
 import type { MachineStateRowDto, ViewResponse } from "../../api/types";
 
 const FIXTURES = import.meta.glob<{ default: ViewResponse }>(
@@ -38,6 +38,7 @@ const KEYTAB = "/etc/krb5.keytab";
 const SSH_KEY = "/etc/ssh/ssh_host_ed25519_key";
 const INSIGHTS = "/etc/insights-client/machine-id";
 const TUNED = "/etc/grub.d/00_tuned";
+const NVME_HOSTNQN = "/etc/nvme/hostnqn";
 
 function rowEl(path: string): HTMLElement {
   return screen.getByTestId(`machine-state-row-${path}`);
@@ -143,6 +144,21 @@ describe("MachineStateGroup", () => {
       "Set at provisioning by the installer, cloud-init or DHCP",
     );
     expect(rowEl(TUNED)).toHaveTextContent("Not needed in the image");
+  });
+
+  it("does not say first boot recreates the NVMe host id", async () => {
+    // The recorded scan has no NVMe files; the member shares the iSCSI
+    // name's class and first-boot notice, so derive its row from that one.
+    const nvme: MachineStateRowDto = {
+      ...row(VIEW.machine_state, IQN),
+      path: NVME_HOSTNQN,
+      member: "nvme_host_id",
+    };
+    expect(nvme.notice).toEqual({ kind: "automatic", by: "first_boot" });
+    await renderExpanded([...VIEW.machine_state, nvme]);
+    expect(rowEl(NVME_HOSTNQN)).not.toHaveTextContent("first boot");
+    expect(rowEl(NVME_HOSTNQN)).toHaveTextContent(NVME_HOST_ID_LINE);
+    expect(rowEl(SSH_KEY)).toHaveTextContent("Recreated at first boot");
   });
 
   it("shows what was not captured, and unknown for a failed stat", async () => {

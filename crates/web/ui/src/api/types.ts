@@ -48,7 +48,8 @@ export type CarriableMember =
 
 /**
  * Rust: MachineStateMember, a flat snake_case string whichever enum holds
- * it. Display only: the UI never derives a row's treatment from it.
+ * it. Display only: the UI never derives a row's treatment from it, and
+ * reads it only to replace `nvme_host_id`'s notice text.
  */
 export type MachineStateMember =
   | "machine_id"
@@ -1118,6 +1119,12 @@ export interface ViewResponse extends RefinedView {
    */
   not_carried_notice: ExportWarning | null;
   /**
+   * Carried tmpfiles.d lines naming a user or group the image does not
+   * create, in the order the export's Containerfile and audit reports name
+   * them. Absent when there are none.
+   */
+  tmpfiles_missing_owners?: TmpfilesMissingOwner[];
+  /**
    * One row per machine-state class row, sorted by path. Class rows are in
    * no other list. Always present.
    */
@@ -1129,6 +1136,22 @@ export interface ViewResponse extends RefinedView {
    * for byte. Always present.
    */
   machine_state_notices: ExportWarning[];
+}
+
+/**
+ * One carried tmpfiles.d line whose user or group the image lacks
+ * (Rust: `tmpfiles_accounts::MissingOwner`). At least one of `user` and
+ * `group` is set.
+ */
+export interface TmpfilesMissingOwner {
+  /** Where the fragment lands in the image. */
+  file: string;
+  /** The path the line names. */
+  path: string;
+  /** The user field, when the image lacks that user. */
+  user: string | null;
+  /** The group field, when the image lacks that group. */
+  group: string | null;
 }
 
 /** One row of `not_carried_packages` (Rust: `NotCarriedRow`). */

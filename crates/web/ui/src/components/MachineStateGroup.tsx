@@ -67,6 +67,20 @@ const AUTOMATIC_LINES: Record<string, string> = {
   carried_setting: "Rewritten from a setting the image carries",
 };
 
+/**
+ * The NVMe host id member's line in place of its `automatic` notice, which
+ * says first boot recreates the files. That is false on RHEL 9: the
+ * rhel-bootc 9 base image ships one hostnqn and hostid that nothing
+ * regenerates. Mirrors `NVME_HOST_ID_NOTICE` in
+ * `crates/pipeline/src/render/machine_state.rs`, the audit report's text,
+ * until the member's own notice is corrected.
+ */
+export const NVME_HOST_ID_LINE =
+  "The RHEL 9 bootc base image ships its own /etc/nvme/hostnqn and hostid, " +
+  "so every machine built from it shares one NVMe host identity until you " +
+  "delete both files in the Containerfile or write new ones at provisioning. " +
+  "RHEL 10 derives it from each machine's firmware UUID";
+
 /** A row's notice line before any override: what replaces the file. */
 function replacementLine(row: MachineStateRowDto): string {
   const notice = row.notice;
@@ -74,6 +88,7 @@ function replacementLine(row: MachineStateRowDto): string {
     case "owed":
       return `At provisioning: ${notice.command}`;
     case "automatic":
+      if (row.member === "nvme_host_id") return NVME_HOST_ID_LINE;
       return AUTOMATIC_LINES[notice.by] ?? UNKNOWN_NOTICE;
     case "none":
       return "Not needed in the image";

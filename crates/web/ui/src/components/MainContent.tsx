@@ -51,6 +51,7 @@ import {
   machineStateItemId,
 } from "./MachineStateGroup";
 import type { MachineStateFailure } from "./MachineStateGroup";
+import { TmpfilesOwnerNotice } from "./TmpfilesOwnerNotice";
 import { buildShadowOwners } from "./shadowOwner";
 import { repoFailure, type RepoFailure } from "./repoControl";
 import { Content } from "@patternfly/react-core";
@@ -1001,6 +1002,7 @@ export function MainContent({
             }
           />
         )}
+        <TmpfilesOwnerNotice rows={viewData?.tmpfiles_missing_owners} />
         {decisionArea}
         {/* At the foot of the section whatever the list area shows. */}
         <MachineStateGroup
