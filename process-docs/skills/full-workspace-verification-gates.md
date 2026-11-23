@@ -42,8 +42,10 @@ adds its target on every run, so a bump needs nothing more for releases
 
 **The hook type-checks TypeScript but runs no web test.** It gates
 every commit that changes a path outside `.githooks/docs-only-paths`, a
-frontend-only commit included, and runs only the three cargo gates, one
-output line each. `crates/web/build.rs:35-40` runs `npm run build`
+frontend-only commit included, and runs four gates, one output line
+each: `scripts/tests/docs-only-paths-test.sh` (the docs-only read check CI
+also runs, about 10 s, first because it is the cheapest), then the three
+cargo gates. `crates/web/build.rs:35-40` runs `npm run build`
 (`tsc && vite build`) inside the clippy gate whenever the UI source or
 build files changed, and the hook unsets `INSPECTAH_SKIP_UI`, so setting
 it does not skip that step. The unset only works because `build.rs`
@@ -69,6 +71,14 @@ input of another kind can still be tested without being committed. With
 classifies a merge by its changes against every parent. A docs-only
 commit skips all of this and is never refused for other files. The git
 and shell traps behind these checks are in `git-hook-shell-pitfalls.md`.
+A script the hook runs inherits git's repository variables:
+`GIT_INDEX_FILE` always, and `GIT_DIR` in a linked worktree. One that makes
+throwaway repositories must clear them first
+(`unset $(git rev-parse --local-env-vars)`), or its commits land on the
+real branch and its `git init` sets `core.bare = true` in the shared
+config, which breaks the main checkout. `docs-only-paths-test.sh` clears
+them and restores `GIT_INDEX_FILE` only for its final check of the
+repository.
 
 **Never run cargo and vitest at the same time.** `crates/web/build.rs`
 runs `npm ci` in `crates/web/ui` whenever the build script reruns, and `npm ci`

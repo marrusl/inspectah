@@ -233,7 +233,9 @@ file, renames one, or changes a `.snap` file, a fixture under
    under `crates/`, which the gates would compile but the commit would
    leave out. It names every such path: commit it, delete it, or ignore
    it (an ignored Rust source can only be committed or deleted).
-2. Runs three gates, in order: `cargo fmt --check`,
+2. Runs four gates, in order: `scripts/tests/docs-only-paths-test.sh`,
+   the check that no Rust source under `crates/` reads a docs-only path,
+   then `cargo fmt --check`,
    `cargo clippy --workspace --all-targets -- -D clippy::all`, and
    `cargo test --workspace`. Each prints one line, such as
    `pre-commit: clippy ok (41 s)`. The first to fail prints its output
@@ -279,12 +281,12 @@ Staged sets and the hook's verdict:
 |---|---|
 | `docs/contributing/testing.md` only | skips the gates |
 | a `docs/` edit, with `crates/core/src/lib.rs` edited and not staged | skips the gates and passes |
-| `crates/web/ui/src/App.tsx` only | runs all three gates |
-| `Cargo.lock` only | runs all three gates |
+| `crates/web/ui/src/App.tsx` only | runs all four gates |
+| `Cargo.lock` only | runs all four gates |
 | `crates/core/src/lib.rs` edited, with a clippy fix left unstaged | refuses before the gates, naming `crates/core/src/lib.rs` |
 | `crates/core/src/lib.rs`, with an untracked `crates/core/src/new.rs` | refuses before the gates, naming `crates/core/src/new.rs` |
-| a deleted `.rs` file only | runs all three gates |
-| `crates/web/tests/snapshots/integration__contract_snapshots__contract_view.snap` only | runs all three gates |
+| a deleted `.rs` file only | runs all four gates |
+| `crates/web/tests/snapshots/integration__contract_snapshots__contract_view.snap` only | runs all four gates |
 | `testdata/e2e-fixture.tar.gz` only, produced with `--preserve` | refuses, before the docs-only check |
 
 ### Fixture tarballs are local-only

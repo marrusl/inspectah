@@ -3,8 +3,9 @@
 #
 # Each case builds a fresh throwaway repository seeded with the real hook,
 # the docs-only list and the sensitive-tarball check, then commits into it
-# with a stub cargo first on PATH. The stub records every call, so a case
-# can assert which gates ran, in which order, and with what environment.
+# with a stub cargo first on PATH and a stub in place of
+# scripts/tests/docs-only-paths-test.sh. The stubs record every call, so a
+# case can assert which gates ran, in which order, and with what environment.
 # Run from anywhere: scripts/tests/pre-commit-hook-test.sh
 # Written for bash 3.2 (macOS /bin/bash): no mapfile, no associative arrays.
 set -euo pipefail
@@ -13,6 +14,7 @@ REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 HOOK="$REPO_ROOT/.githooks/pre-commit"
 DOCS_ONLY="$REPO_ROOT/.githooks/docs-only-paths"
 TARBALL_CHECK="$REPO_ROOT/scripts/check-sensitive-tarballs.sh"
+DOCS_CHECK="$REPO_ROOT/scripts/tests/docs-only-paths-test.sh"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -32,7 +34,7 @@ ok() {
 
 REFUSED='pre-commit: commit refused:'
 DOCS_ONLY_LINE='pre-commit: docs-only, cargo gates skipped'
-# A passing commit prints three gate lines and the closing line; the bound
+# A passing commit prints four gate lines and the closing line; the bound
 # leaves room for git's own output without letting gate output through.
 QUIET_OUTPUT_MAX_LINES=10
 STUB_NOISE_LINES=500
@@ -76,6 +78,25 @@ fi
 exit 0
 EOF
 chmod +x "$STUB_BIN/cargo"
+
+# --- stub docs-only read check ---
+#
+# Seeded at scripts/tests/docs-only-paths-test.sh in each repository.
+# Appends "docs-only-paths-test INSPECTAH_SKIP_UI=<value or unset>" to
+# $STUB_LOG; with STUB_FAIL=docs-only-paths it prints
+# "stub docs-only-paths failed" and exits 1.
+STUB_DOCS_CHECK="$WORK/docs-only-paths-test.sh"
+cat > "$STUB_DOCS_CHECK" <<'STUB'
+#!/usr/bin/env bash
+set -eu
+echo "docs-only-paths-test INSPECTAH_SKIP_UI=${INSPECTAH_SKIP_UI-unset}" >> "$STUB_LOG"
+if [ "${STUB_FAIL-}" = docs-only-paths ]; then
+    echo "stub docs-only-paths failed"
+    exit 1
+fi
+exit 0
+STUB
+chmod +x "$STUB_DOCS_CHECK"
 PATH="$STUB_BIN:$PATH"
 export PATH
 
@@ -98,10 +119,11 @@ new_repo() {
     git -C "$R" config user.email "test@example.invalid"
     git -C "$R" config commit.gpgsign false
     git -C "$R" config core.hooksPath .githooks
-    mkdir -p "$R/.githooks" "$R/scripts" "$R/crates/a/src" "$R/crates/a/tests" "$R/docs"
+    mkdir -p "$R/.githooks" "$R/scripts/tests" "$R/crates/a/src" "$R/crates/a/tests" "$R/docs"
     cp "$HOOK" "$R/.githooks/pre-commit"
     cp "$DOCS_ONLY" "$R/.githooks/docs-only-paths"
     cp "$TARBALL_CHECK" "$R/scripts/check-sensitive-tarballs.sh"
+    cp "$STUB_DOCS_CHECK" "$R/scripts/tests/docs-only-paths-test.sh"
     echo "pub fn a() {}" > "$R/crates/a/src/lib.rs"
     echo "#[test] fn t() {}" > "$R/crates/a/tests/t.rs"
     echo "# Guide" > "$R/docs/guide.md"
@@ -172,17 +194,18 @@ stub_has() {
 stub_lacks() {
     if grep -qE -- "^$1( |\$)" "$STUB_LOG"; then report "stub log has a '$1' line"; fi
 }
-# want_gated: accepted, and the stub log is exactly the three gates, run
+# want_gated: accepted, and the stub log is exactly the four gates, run
 # once each in order. A hook that stops after fmt, or refuses after the
 # gates, fails it.
 want_gated() {
     want_accepted || return 1
     local lines
     lines=$(wc -l < "$STUB_LOG" | tr -d ' ')
-    [ "$lines" -eq 3 ] || { report "stub log is $lines lines, want 3"; return 1; }
-    case "$(sed -n 1p "$STUB_LOG")" in "fmt --check "*) ;; *) report "line 1 is not fmt --check"; return 1 ;; esac
-    case "$(sed -n 2p "$STUB_LOG")" in "clippy --workspace --all-targets -- -D clippy::all "*) ;; *) report "line 2 is not the clippy gate"; return 1 ;; esac
-    case "$(sed -n 3p "$STUB_LOG")" in "test --workspace "*) ;; *) report "line 3 is not test --workspace"; return 1 ;; esac
+    [ "$lines" -eq 4 ] || { report "stub log is $lines lines, want 4"; return 1; }
+    case "$(sed -n 1p "$STUB_LOG")" in "docs-only-paths-test "*) ;; *) report "line 1 is not the docs-only read check"; return 1 ;; esac
+    case "$(sed -n 2p "$STUB_LOG")" in "fmt --check "*) ;; *) report "line 2 is not fmt --check"; return 1 ;; esac
+    case "$(sed -n 3p "$STUB_LOG")" in "clippy --workspace --all-targets -- -D clippy::all "*) ;; *) report "line 3 is not the clippy gate"; return 1 ;; esac
+    case "$(sed -n 4p "$STUB_LOG")" in "test --workspace "*) ;; *) report "line 4 is not test --workspace"; return 1 ;; esac
 }
 # want_exit <n>: the hook exited with status n.
 want_exit() { [ "$RC" -eq "$1" ] || report "exit $RC, want $1"; }
@@ -224,12 +247,13 @@ case_order() {
     new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs; commit
     want_gated
 }
-check "a code commit runs fmt, clippy and test in order" case_order
+check "a code commit runs the docs-only read check, fmt, clippy and test in order" case_order
 
 case_quiet() {
     new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
     commit_env STUB_NOISE=1
-    want_accepted && has "pre-commit: fmt ok (" && has "pre-commit: clippy ok (" \
+    want_accepted && has "pre-commit: docs-only-paths ok (" \
+        && has "pre-commit: fmt ok (" && has "pre-commit: clippy ok (" \
         && has "pre-commit: test ok (" && lacks "stub noise" || return 1
     local lines
     lines=$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')
@@ -245,6 +269,39 @@ case_gate_fails() {
         && has "clippy warnings found" && stub_lacks test
 }
 check "a failing gate prints its output" case_gate_fails
+
+case_docs_check_fails() {
+    new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs
+    commit_env STUB_FAIL=docs-only-paths
+    [ "$RC" -eq 1 ] || { report "exit $RC, want 1"; return 1; }
+    has "pre-commit: docs-only-paths FAILED (" && has "stub docs-only-paths failed" \
+        && has "a build input reads a docs-only path" && stub_lacks fmt
+}
+check "a failing docs-only read check prints its output and stops before fmt" case_docs_check_fails
+
+# In a linked worktree git runs the hook with GIT_DIR set. The real check
+# makes throwaway repositories of its own, and once committed its seed
+# commits onto the worktree's branch and its git init set core.bare in the
+# shared config. Here it fails (its allowlist names files this repository
+# lacks), but must leave the repository as it found it.
+case_docs_check_leaves_worktree_alone() {
+    new_repo
+    local wt="$WORK/wt-$case_no" before after
+    git -C "$R" worktree add -q -b wt "$wt"
+    cp "$DOCS_CHECK" "$wt/scripts/tests/docs-only-paths-test.sh"
+    git -C "$wt" add scripts/tests/docs-only-paths-test.sh
+    git -C "$wt" commit -q --no-verify -m "test: real docs-only read check"
+    before=$(git -C "$R" rev-parse wt)
+    echo "// change $RANDOM" >> "$wt/crates/a/src/lib.rs"
+    git -C "$wt" add crates/a/src/lib.rs
+    RC=0
+    OUT=$(cd "$wt" && git commit -q -m "test: commit" 2>&1) || RC=$?
+    has "pre-commit: docs-only-paths FAILED (" || return 1
+    after=$(git -C "$R" rev-parse wt)
+    [ "$after" = "$before" ] || { report "the worktree's branch moved"; return 1; }
+    [ "$(git -C "$R" config --bool core.bare)" = false ] || report "core.bare changed"
+}
+check "the real docs-only read check leaves a worktree's repository alone" case_docs_check_leaves_worktree_alone
 
 case_skip_ui() {
     new_repo; edit crates/a/src/lib.rs; stage crates/a/src/lib.rs

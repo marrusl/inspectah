@@ -239,6 +239,16 @@ exit($failures ? 1 : 0);
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
+# The pre-commit hook runs this with git's repository variables set:
+# GIT_INDEX_FILE names the index being committed, and in a linked worktree
+# GIT_DIR names its git directory. The throwaway trees below would read
+# them, staging and committing into the real repository, and their git init
+# would set core.bare there. Clear every one, and hold GIT_INDEX_FILE back
+# for the repository check at the end, which must read the commit's index.
+REPO_INDEX_FILE=${GIT_INDEX_FILE-}
+# shellcheck disable=SC2046 # one variable name per word
+unset $(command git rev-parse --local-env-vars)
+
 failures=0
 passes=0
 
@@ -418,6 +428,9 @@ new_tree ''
 expect_scan "a tree with no Rust source fails" "$TREE" "" fail \
     "no tracked crates/**/*.rs file"
 
+if [ -n "$REPO_INDEX_FILE" ]; then
+    export GIT_INDEX_FILE=$REPO_INDEX_FILE
+fi
 rc=0
 out=$(check_tree "$REPO_ROOT" "$REPO_ALLOWLIST" 2>&1) || rc=$?
 if [ "$rc" -eq 0 ]; then

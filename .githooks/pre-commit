@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# inspectah pre-commit hook: sensitive-tarball check, then fmt, clippy and
-# the workspace tests on the content being committed.
+# inspectah pre-commit hook: sensitive-tarball check, then the docs-only
+# read check, fmt, clippy and the workspace tests on the content being
+# committed.
 #
 # USAGE:
 #   pre-commit            git calls it with no argument before each commit
@@ -31,8 +32,17 @@
 #      compile but the commit would leave out. With --head, also refuse
 #      while the index differs from HEAD, since the gates must test HEAD.
 #      Then record the index's tree.
-#   6. fmt, clippy and test, each with its output in a file and one line
-#      printed per gate; a failed gate prints its file.
+#   6. The gates, each with its output in a file and one line printed per
+#      gate; a failed gate prints its file:
+#        docs-only-paths  scripts/tests/docs-only-paths-test.sh, the check CI
+#                         runs that no Rust source under crates/ reads a path
+#                         on the docs-only list. Its inputs, crates/**/*.rs,
+#                         the list and the script, are all outside the list,
+#                         so a docs-only commit cannot change its result and
+#                         the fast path skips it with the cargo gates. It
+#                         runs first because it takes seconds.
+#        fmt, clippy, test
+#                         the cargo gates.
 #   7. The same refuse check again, and refuse if the index's tree changed
 #      while the gates ran.
 #
@@ -219,12 +229,26 @@ fi
 refuse_if_dirty first
 tree_before=$(git write-tree)
 
-# --- gates: fmt, clippy, test ---
+# --- gates: docs-only read check, fmt, clippy, test ---
 
 GATE_DIR=$(mktemp -d)
 
 banner() {
     case "$1" in
+        docs-only-paths)
+            cat <<'EOF'
+
+    !! COMMIT BLOCKED: a build input reads a docs-only path !!
+
+    A docs-only commit skips the gates, so no Rust source under crates/
+    may read a path on .githooks/docs-only-paths. Fix the findings above,
+    or allowlist a literal that is not a read from the repository in
+    scripts/tests/docs-only-paths-test.sh, then retry your commit.
+
+    Bypass (last resort): git commit --no-verify
+
+EOF
+            ;;
         fmt)
             cat <<'EOF'
 
@@ -285,6 +309,7 @@ run_gate() {
     exit 1
 }
 
+run_gate docs-only-paths scripts/tests/docs-only-paths-test.sh
 run_gate fmt cargo fmt --check
 # -D, not -W: -W exits 0 however many warnings it prints. --all-targets is
 # equally load-bearing: without it clippy checks lib and bin only, and every
