@@ -373,7 +373,7 @@ Each leg runs `rustup target add <triple>`, installs `musl-tools` on the
 Linux legs, and then builds:
 
 ```bash
-cargo build -p inspectah-cli --release --target x86_64-unknown-linux-musl
+cargo build -p inspectah-cli --release --target <triple>
 ```
 
 The Linux binaries are static musl builds. The macOS binary builds on the
