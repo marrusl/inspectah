@@ -48,7 +48,9 @@ warning. The consumer cert is used only to extract `org_id`,
 
 ## Cert expiry parsing
 
-**Crate:** `x509-parser` 0.16 (already in `crates/collect/Cargo.toml`)
+**Crate:** `x509-parser` 0.18 (already in `crates/collect/Cargo.toml`).
+`test_real_cert_subject_issuer_and_expiry_parse` feeds it a real
+certificate; run it after any bump of the crate.
 
 **Flow:** For each entitlement PEM that is not a key file (`-key.pem`):
 1. Base64-decode the stored content back to raw PEM text
@@ -86,9 +88,8 @@ because *any* expired cert breaks the builds that need that content set.
   paths that resolve outside `/etc/pki/entitlement`, `/etc/rhsm`, or
   `/etc/yum.repos.d/redhat.repo`.
 
-- **`time` crate, not `chrono`:** The codebase uses `time` 0.3 for
-  datetime handling in subscription types. The `chrono` crate exists in
-  some Cargo.tomls but is not used for subscription expiry. Don't mix them.
+- **`time` crate, not `chrono`:** The codebase uses `time` 0.3 for all
+  datetime handling; `chrono` is no longer a dependency. Don't add it back.
 
 - **CLI crate needs `time` dependency:** The `format_cert_expiry_line()`
   function in scan.rs uses `time::format_description` and
