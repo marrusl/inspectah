@@ -98,6 +98,8 @@ fn scan(exec: &MockExecutor, raw: bool, extra: Vec<Box<dyn Inspector>>) -> Inspe
         &[],
         &[],
     ));
+    // As the scan does: the walk runs after redaction.
+    inspectah_pipeline::redaction::engine::redact_unmanaged_link_targets(&mut snap);
     reload(&snap)
 }
 
@@ -1226,5 +1228,147 @@ fn lone_unmanaged_symlink_gets_its_directory_and_own_target() {
                 "{via}"
             );
         }
+    }
+}
+
+/// Every link name in the gzipped tarball at `path`, with its target.
+fn tarball_links(path: &std::path::Path) -> Vec<(String, String)> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(
+        std::fs::File::open(path).unwrap(),
+    ));
+    archive
+        .entries()
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter_map(|entry| {
+            let target = entry.link_name().unwrap()?.display().to_string();
+            Some((entry.path().unwrap().display().to_string(), target))
+        })
+        .collect()
+}
+
+/// A credentialed unmanaged link the walk reads after redaction ran.
+const CRED_LINK: &str = "/opt/tool/bin/source";
+const CRED_LINK_TARGET: &str = "https://u:linkpw8812@host.example/repo";
+const CRED_LINK_SECRET: &str = "linkpw8812";
+
+/// An `--include-unmanaged` symlink whose target holds a URL credential
+/// is withheld: the snapshot keeps the target masked, neither export's
+/// Containerfile recreates it (a FIXME names it), and neither archive
+/// holds the link or the credential. An ordinary link beside it is still
+/// recreated with its own target.
+#[test]
+fn credentialed_unmanaged_link_does_not_ship() {
+    let host = SysctlHost::new()
+        .link(CRED_LINK, CRED_LINK_TARGET)
+        .command(&format!("test -L {CRED_LINK}"), 0, "", "")
+        .link(LONE_LINK, LONE_LINK_TARGET)
+        .command(&format!("test -L {LONE_LINK}"), 0, "", "");
+    let (exec, root) = host_with(host, &[(PLAIN_PATH, PLAIN.as_bytes().to_vec())]);
+    for (link, target) in [(CRED_LINK, CRED_LINK_TARGET), (LONE_LINK, LONE_LINK_TARGET)] {
+        let on_disk = root.path().join(&link[1..]);
+        std::fs::create_dir_all(on_disk.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(target, on_disk).unwrap();
+    }
+    let Exported {
+        snap,
+        scan_tree,
+        session,
+        _packed,
+    } = export(&exec, root.path(), false);
+
+    let item = |path: &str| {
+        snap.unmanaged_files
+            .as_ref()
+            .expect("a section")
+            .items
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("{path} is an item"))
+            .clone()
+    };
+    let cred = item(CRED_LINK);
+    assert_eq!(
+        cred.payload_redaction,
+        PayloadRedaction::LinkTargetCredential
+    );
+    assert!(
+        cred.link_target.contains("host.example/repo"),
+        "{}",
+        cred.link_target
+    );
+    assert_eq!(item(LONE_LINK).link_target, LONE_LINK_TARGET);
+    let json = serde_json::to_string(&snap).expect("the snapshot serializes");
+    assert!(!json.contains(CRED_LINK_SECRET), "the snapshot holds it");
+
+    // The refine export, packed as `refine` writes it.
+    let refine_dir = tempfile::tempdir().unwrap();
+    let refine_tarball = refine_dir.path().join("export.tar.gz");
+    session
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&refine_tarball)
+        .expect("the export writes");
+    let unpacked = refine_dir.path().join("unpacked");
+    tar::Archive::new(flate2::read::GzDecoder::new(
+        std::fs::File::open(&refine_tarball).unwrap(),
+    ))
+    .unpack(&unpacked)
+    .expect("the export unpacks");
+    let refine_root = std::fs::read_dir(&unpacked)
+        .unwrap()
+        .next()
+        .expect("one top-level directory")
+        .unwrap()
+        .path();
+
+    for (via, tree) in [
+        ("scan", scan_tree.path()),
+        ("refine", refine_root.as_path()),
+    ] {
+        let containerfile = std::fs::read_to_string(tree.join("Containerfile")).unwrap();
+        assert!(
+            !containerfile.contains(CRED_LINK_SECRET),
+            "{via}:\n{containerfile}"
+        );
+        assert!(
+            containerfile
+                .lines()
+                .any(|l| l.starts_with("# FIXME:") && l.contains(CRED_LINK)),
+            "{via}: no FIXME for {CRED_LINK} in:\n{containerfile}"
+        );
+        assert!(
+            !containerfile
+                .lines()
+                .any(|l| l.contains("ln -sf") && l.contains(CRED_LINK)),
+            "{via}: {CRED_LINK} recreated in:\n{containerfile}"
+        );
+        let control = format!("ln -sf -- '{LONE_LINK_TARGET}' '{LONE_LINK}'");
+        assert!(containerfile.contains(&control), "{via}:\n{containerfile}");
+        assert!(
+            std::fs::symlink_metadata(tree.join("unmanaged").join(&CRED_LINK[1..])).is_err(),
+            "{via}: the link ships"
+        );
+        for (where_, bytes) in files(tree) {
+            assert!(
+                !contains(&bytes, CRED_LINK_SECRET),
+                "{via}: {where_} holds it"
+            );
+        }
+    }
+
+    let scan_tarball = _packed.path().join("scan.tar.gz");
+    for archive in [scan_tarball.as_path(), refine_tarball.as_path()] {
+        let links = tarball_links(archive);
+        assert!(
+            links.iter().any(|(_, t)| t == LONE_LINK_TARGET),
+            "{}: the control link is archived: {links:?}",
+            archive.display()
+        );
+        assert!(
+            !links.iter().any(|(_, t)| t.contains(CRED_LINK_SECRET)),
+            "{}: {links:?}",
+            archive.display()
+        );
     }
 }

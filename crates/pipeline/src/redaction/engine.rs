@@ -2180,6 +2180,71 @@ pub fn redact_payload(content: &str, path: &str) -> Option<(String, Vec<Redactio
     (text != content).then_some((text, findings))
 }
 
+/// The target of the unmanaged symlink at `path` with its credentials
+/// masked, and the finding that records leaving the link out, or `None`
+/// when the content pass changes nothing in it.
+///
+/// `readlink` returns arbitrary bytes, so a target can be
+/// `https://u:pw@host/repo`. A masked target points nowhere, so the link
+/// is withheld rather than recreated with it
+/// ([`PayloadRedaction::LinkTargetCredential`]); the masked text is what
+/// the snapshot keeps, so the operator can see where it pointed.
+///
+/// [`PayloadRedaction::LinkTargetCredential`]: inspectah_core::types::nonrpm::PayloadRedaction::LinkTargetCredential
+pub fn screen_link_target(path: &str, target: &str) -> Option<(String, RedactionFinding)> {
+    let mut masked = target.to_owned();
+    let findings = scan_and_redact_field(&mut masked, path, &mut CounterRegistry::default());
+    if masked == target {
+        return None;
+    }
+    let finding = RedactionFinding {
+        path: path.to_owned(),
+        source: "unmanaged_link_target".into(),
+        kind: RedactionKind::Excluded,
+        pattern: "credential_link_target".into(),
+        remediation: "The symlink's target holds a credential, masked in the snapshot. \
+                      Left out of the export; recreate the link at deploy time"
+            .into(),
+        line: None,
+        replacement: None,
+        detection_method: DetectionMethod::Pattern,
+        confidence: Some(Confidence::High),
+        finding_kind: findings.iter().find_map(|f| f.finding_kind.clone()),
+    };
+    Some((masked, finding))
+}
+
+/// Screen every unmanaged symlink's recorded target
+/// ([`screen_link_target`]) and withhold each that holds a credential,
+/// recording its finding. A no-op on a raw (`--no-redaction`) snapshot,
+/// which keeps every target by design.
+///
+/// The unmanaged walk runs after [`redact`], so its section needs this
+/// pass of its own; the scan calls it as soon as the walk returns, so
+/// `--inspect-only` JSON is screened too. The bundler screens again what
+/// it would recreate, its fallback `read_link` included.
+pub fn redact_unmanaged_link_targets(snapshot: &mut InspectionSnapshot) {
+    use inspectah_core::types::nonrpm::{FileType, PayloadRedaction};
+    if matches!(snapshot.redaction_state, Some(RedactionState::Raw)) {
+        return;
+    }
+    let Some(section) = snapshot.unmanaged_files.as_mut() else {
+        return;
+    };
+    let mut findings = Vec::new();
+    for item in &mut section.items {
+        if item.file_type != FileType::Symlink || item.link_target.is_empty() {
+            continue;
+        }
+        if let Some((masked, finding)) = screen_link_target(&item.path, &item.link_target) {
+            item.link_target = masked;
+            item.payload_redaction = PayloadRedaction::LinkTargetCredential;
+            findings.push(finding);
+        }
+    }
+    record_late_findings(snapshot, findings);
+}
+
 /// Append findings recorded after `redact` ran, such as an unmanaged
 /// payload's, and settle `redaction_state` again over the whole list, as
 /// `redact` settles it.

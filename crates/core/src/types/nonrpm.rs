@@ -195,6 +195,11 @@ pub enum PayloadRedaction {
     /// Text redaction could not check it, so the export leaves it out:
     /// the bundle has no copy, and no export or image carries it.
     Withheld(UncheckedPayload),
+    /// A symlink whose target held a credential. `link_target` holds the
+    /// target with the credential masked, and the export leaves the link
+    /// out: recreating it with the credential ships it, and with the mask
+    /// makes a link that points nowhere.
+    LinkTargetCredential,
 }
 
 /// Why redaction could not check a text payload.
@@ -235,11 +240,13 @@ impl PayloadRedaction {
         self != Self::Unchanged
     }
 
-    /// Why the export leaves the payload out, if it does.
+    /// Why the export leaves out a payload redaction could not check, if
+    /// it does. A link left out for its target's credential is
+    /// [`Self::LinkTargetCredential`], which was checked.
     pub fn withheld(self) -> Option<UncheckedPayload> {
         match self {
             Self::Withheld(why) => Some(why),
-            Self::Unchanged | Self::Redacted => None,
+            Self::Unchanged | Self::Redacted | Self::LinkTargetCredential => None,
         }
     }
 }

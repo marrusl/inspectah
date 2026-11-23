@@ -43,7 +43,7 @@ use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::orchestrate::finish_scan;
-use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
+use inspectah_pipeline::redaction::engine::{RedactOptions, redact, redact_unmanaged_link_targets};
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::baseline_fmt;
 use inspectah_pipeline::render::not_carried::not_carried_notice;
@@ -822,6 +822,9 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
             &language_env_paths,
             &args.exclude_path,
         ));
+        // The walk runs after `redact()`, so its link targets are
+        // screened here, before any JSON is written.
+        redact_unmanaged_link_targets(&mut snapshot);
     }
 
     // The scan's last snapshot changes (`finish_scan`): the repo-less
@@ -1158,6 +1161,10 @@ fn unmanaged_redaction_notice(
         .iter()
         .filter(|f| f.payload_redaction.withheld().is_some())
         .count();
+    let links = items
+        .iter()
+        .filter(|f| f.payload_redaction == PayloadRedaction::LinkTargetCredential)
+        .count();
     let mut parts = Vec::new();
     if redacted > 0 {
         parts.push(format!(
@@ -1169,6 +1176,12 @@ fn unmanaged_redaction_notice(
         parts.push(format!(
             "{withheld} unmanaged {} left out, not checkable for credentials",
             files(withheld)
+        ));
+    }
+    if links > 0 {
+        let noun = if links == 1 { "symlink" } else { "symlinks" };
+        parts.push(format!(
+            "{links} unmanaged {noun} left out, the target holding a credential"
         ));
     }
     (!parts.is_empty()).then(|| format!("Note: {}; see secrets-review.md.", parts.join("; ")))

@@ -20,7 +20,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderError;
 use inspectah_core::types::config::AUTHSELECT_CONF_PATH;
 use inspectah_core::types::machine_state::MachineStateMember;
-use inspectah_core::types::nonrpm::{UncheckedPayload, UnmanagedFile};
+use inspectah_core::types::nonrpm::{PayloadRedaction, UncheckedPayload, UnmanagedFile};
 use inspectah_core::types::units::{UNIT_TYPE_SUFFIXES, UnitName};
 use regex::Regex;
 use std::borrow::Cow;
@@ -101,6 +101,10 @@ pub enum WithheldWhy {
     /// An unmanaged text file redaction could not check: the scan's
     /// bundler left it out rather than ship it as read.
     UncheckedPayload { reason: UncheckedPayload },
+    /// An unmanaged symlink whose target held a credential
+    /// ([`PayloadRedaction::LinkTargetCredential`]): the export does not
+    /// recreate it.
+    LinkTargetCredential,
 }
 
 /// How the collected unit a generated unit's name collides with is known
@@ -128,6 +132,7 @@ impl WithheldWhy {
             Self::UnmanagedUnitPath => "UnmanagedUnitPath",
             Self::MachineState { .. } => "MachineState",
             Self::UncheckedPayload { .. } => "UncheckedPayload",
+            Self::LinkTargetCredential => "LinkTargetCredential",
         }
     }
 
@@ -180,9 +185,15 @@ impl WithheldWhy {
                  supply it yourself",
                 reason.describe()
             ),
+            Self::LinkTargetCredential => LINK_TARGET_CREDENTIAL.to_owned(),
         }
     }
 }
+
+/// [`WithheldWhy::LinkTargetCredential`]'s text.
+const LINK_TARGET_CREDENTIAL: &str = "this unmanaged symlink's target holds a credential, so the \
+     export leaves the link out rather than recreate it with the credential or with a masked \
+     target that points nowhere; recreate it at deploy time with the real value";
 
 /// [`WithheldWhy::UnmanagedUnitPath`]'s text.
 const UNMANAGED_UNIT_PATH: &str = "an unmanaged file is not written under /etc/systemd/system, \
@@ -251,15 +262,15 @@ pub fn unmanaged_withheld(path: &str) -> Option<WithheldWhy> {
     }
 }
 
-/// [`unmanaged_withheld`] for an unmanaged item: its path, then what the
-/// scan's bundler recorded for its payload. The one decision every
+/// [`unmanaged_withheld`] for an unmanaged item: its path, then what
+/// redaction recorded for its payload or its link target. The one decision every
 /// consumer of an item asks, so a payload the bundle left out has no
 /// `COPY`, no extraction and no shipped-copy advice.
 pub fn unmanaged_file_withheld(file: &UnmanagedFile) -> Option<WithheldWhy> {
-    unmanaged_withheld(&file.path).or_else(|| {
-        file.payload_redaction
-            .withheld()
-            .map(|reason| WithheldWhy::UncheckedPayload { reason })
+    unmanaged_withheld(&file.path).or(match file.payload_redaction {
+        PayloadRedaction::Withheld(reason) => Some(WithheldWhy::UncheckedPayload { reason }),
+        PayloadRedaction::LinkTargetCredential => Some(WithheldWhy::LinkTargetCredential),
+        PayloadRedaction::Unchanged | PayloadRedaction::Redacted => None,
     })
 }
 

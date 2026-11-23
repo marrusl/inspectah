@@ -11,10 +11,10 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 
 use crate::redaction::engine::{
-    SnapshotText, is_redacted_copy_of, record_late_findings, redact_payload,
+    SnapshotText, is_redacted_copy_of, record_late_findings, redact_payload, screen_link_target,
 };
 
-use super::configtree::{unmanaged_file_withheld, unmanaged_withheld, validate_path};
+use super::configtree::{unmanaged_file_withheld, validate_path};
 use super::language_packages::sanitize_for_comment;
 use super::safety::{CopyToken, has_line_break_or_control};
 
@@ -512,7 +512,9 @@ fn unchecked_finding(path: &str, reason: UncheckedPayload) -> RedactionFinding {
 /// the copies this wrote.
 ///
 /// Symlinks are recreated as symlinks, not followed, so nothing outside
-/// the scan roots is copied through one.
+/// the scan roots is copied through one. Unless the snapshot is raw, one
+/// whose target holds a credential is withheld instead
+/// ([`screen_link_target`]).
 ///
 /// Every included regular file is first asked of the scan's read gate
 /// again, through the walk's own check
@@ -555,7 +557,7 @@ pub fn bundle_unmanaged_files(
         .iter()
         .enumerate()
         .filter(|(_, item)| {
-            item.disposition.is_included() && unmanaged_withheld(&item.path).is_none()
+            item.disposition.is_included() && unmanaged_file_withheld(item).is_none()
         })
         .map(|(i, _)| i)
         .collect();
@@ -585,10 +587,6 @@ pub fn bundle_unmanaged_files(
         let dest = render_dir.join("unmanaged").join(rel_path);
         let source = host_root.join(rel_path);
         if item.file_type == FileType::Symlink {
-            if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create dir for {}", dest.display()))?;
-            }
             // Recreate the link rather than following its target, from
             // the recorded target when there is one.
             let target = if !item.link_target.is_empty() {
@@ -598,6 +596,20 @@ pub fn bundle_unmanaged_files(
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default()
             };
+            // Whichever read it came from, a target holding a credential
+            // is withheld, never recreated: the scan's own pass
+            // (`redact_unmanaged_link_targets`) never saw a target only
+            // the fallback read.
+            if redacting && let Some((masked, finding)) = screen_link_target(&item.path, &target) {
+                item.link_target = masked;
+                item.payload_redaction = PayloadRedaction::LinkTargetCredential;
+                findings.push(finding);
+                continue;
+            }
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create dir for {}", dest.display()))?;
+            }
             if !target.is_empty() {
                 std::os::unix::fs::symlink(&target, &dest)
                     .with_context(|| format!("failed to recreate symlink {}", item.path))?;
@@ -1017,6 +1029,101 @@ mod tests {
                 .expect("the control symlink is bundled"),
             std::path::Path::new("/opt/app/releases/1")
         );
+    }
+
+    /// A symlink whose target holds a URL credential is withheld, from
+    /// the recorded target and from the fallback read of the link on disk
+    /// when none was recorded: no link is written, the snapshot keeps the
+    /// target masked, an excluded finding names it, and the Containerfile
+    /// has a FIXME for it and no `ln`. An ordinary link is still
+    /// recreated, and a raw snapshot keeps every target as read.
+    #[test]
+    fn bundling_withholds_a_link_whose_target_holds_a_credential() {
+        use inspectah_collect::executor::mock::MockExecutor;
+        use inspectah_core::machine_state::ScreenedExecutor;
+        const SECRET: &str = "linkpw8812";
+        const RECORDED: &str = "/opt/tool/bin/source";
+        const FALLBACK: &str = "/opt/tool/bin/mirror";
+        const CONTROL: &str = "/opt/tool/bin/run";
+        const TARGET: &str = "https://u:linkpw8812@host.example/repo";
+        let host_root = tempfile::tempdir().expect("a host root");
+        std::fs::create_dir_all(host_root.path().join("opt/tool/bin")).unwrap();
+        std::os::unix::fs::symlink(TARGET, host_root.path().join(&FALLBACK[1..])).unwrap();
+        let host = MockExecutor::new();
+        let gate = ScreenedExecutor::new(&host);
+        let items = || {
+            vec![
+                link(RECORDED, TARGET),
+                // No recorded target: the bundler reads the link itself.
+                link(FALLBACK, ""),
+                link(CONTROL, "/usr/local/bin/run-tool"),
+            ]
+        };
+
+        let mut snap = test_snapshot_with_unmanaged(items());
+        let render = tempfile::tempdir().expect("a render directory");
+        bundle_unmanaged_files(&mut snap, render.path(), host_root.path(), &gate)
+            .expect("bundling succeeds");
+        let unmanaged = render.path().join("unmanaged");
+        for path in [RECORDED, FALLBACK] {
+            assert!(
+                std::fs::symlink_metadata(unmanaged.join(&path[1..])).is_err(),
+                "{path} is not written"
+            );
+            assert_eq!(
+                redaction_of(&snap, path),
+                PayloadRedaction::LinkTargetCredential
+            );
+            assert!(
+                snap.redactions
+                    .iter()
+                    .any(|f| f.path == path && f.kind == RedactionKind::Excluded),
+                "{path}: {:?}",
+                snap.redactions
+            );
+        }
+        assert_eq!(
+            std::fs::read_link(unmanaged.join(&CONTROL[1..])).expect("the control is bundled"),
+            std::path::Path::new("/usr/local/bin/run-tool")
+        );
+        let json = serde_json::to_string(&snap).unwrap();
+        assert!(!json.contains(SECRET), "{json}");
+        assert!(
+            json.contains("host.example/repo"),
+            "the masked target stays"
+        );
+        let containerfile = super::super::containerfile::render_containerfile(&snap, None, None);
+        assert!(!containerfile.contains(SECRET), "{containerfile}");
+        for path in [RECORDED, FALLBACK] {
+            assert!(
+                containerfile
+                    .lines()
+                    .any(|l| l.starts_with("# FIXME:") && l.contains(path)),
+                "{path}: no FIXME in:\n{containerfile}"
+            );
+            assert!(
+                !containerfile
+                    .lines()
+                    .any(|l| l.contains("ln -sf") && l.contains(path)),
+                "{path}: recreated in:\n{containerfile}"
+            );
+        }
+        assert!(containerfile.contains("ln -sf -- '/usr/local/bin/run-tool' '/opt/tool/bin/run'"));
+
+        // `--no-redaction` keeps the targets, as it keeps every payload.
+        let mut raw = test_snapshot_with_unmanaged(items());
+        raw.redaction_state = Some(RedactionState::Raw);
+        let render = tempfile::tempdir().expect("a render directory");
+        bundle_unmanaged_files(&mut raw, render.path(), host_root.path(), &gate)
+            .expect("bundling succeeds");
+        for path in [RECORDED, FALLBACK] {
+            assert_eq!(
+                std::fs::read_link(render.path().join("unmanaged").join(&path[1..]))
+                    .expect("a raw scan recreates the link"),
+                std::path::Path::new(TARGET)
+            );
+            assert_eq!(redaction_of(&raw, path), PayloadRedaction::Unchanged);
+        }
     }
 
     /// The start of an x86-64 ELF executable: its 64-byte header, the first
