@@ -378,7 +378,7 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     lines.push("| `secrets-review.md` | Redacted items requiring manual handling |".into());
     lines.push("| `kickstart-suggestion.ks` | Suggested deploy-time settings |".into());
     lines.push(
-        "| `inspection-snapshot.json` | Raw data for re-rendering (`--from-snapshot`) |".into(),
+        "| `inspection-snapshot.json` | Raw scan data that `inspectah refine` loads to re-render this export |".into(),
     );
     lines.push(String::new());
 
@@ -499,6 +499,10 @@ mod tests {
         assert!(md.contains("audit-report.html"));
         assert!(md.contains("secrets-review.md"));
         assert!(md.contains("kickstart-suggestion.ks"));
+        // The snapshot row names a command that exists: no subcommand
+        // has `--from-snapshot`, and refine is what re-renders an export.
+        assert!(md.contains("`inspectah refine` loads to re-render"));
+        assert!(!md.contains("--from-snapshot"));
     }
 
     #[test]
