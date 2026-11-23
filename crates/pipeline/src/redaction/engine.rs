@@ -1425,45 +1425,65 @@ fn scan_and_redact_field(
     findings
 }
 
-/// Redact compose file content in place and return the findings. Two
-/// passes, because neither alone covers the other's cases:
-///
-/// 1. `scrub_compose_secrets` keys on its own name list and rewrites
-///    credentials in a URL of any scheme, which the generic patterns do
-///    not (they cover postgres, mongodb, redis and jdbc only). It emits
-///    no finding of its own.
-/// 2. The generic pass detects and reports, and catches the case that
-///    defeats pass 1 entirely: a connection string whose key name carries
-///    no secret-like word, which also means the collector's hint never
-///    fires for it either.
-///
-/// Pass 1 runs first so the generic pass sees its output and can still
-/// report on a line it rewrote. Assigning only when the marker count
-/// rises keeps a secret-free compose file byte-identical, because
-/// `scrub_compose_secrets` normalizes trailing whitespace and appends a
-/// final newline regardless.
-fn redact_compose_content(
-    raw: &mut String,
-    path: &str,
+/// The pattern pass's replacements in `content`, as edits of that text,
+/// with their findings: what [`scan_and_redact_field`] replaces, its
+/// tokens minted in the same order.
+fn pattern_edits(
+    content: &str,
+    source_path: &str,
     registry: &mut CounterRegistry,
-) -> Vec<RedactionFinding> {
-    let scrubbed = scrub_compose_secrets(raw);
-    let compose_pass_fired = scrubbed.matches(COMPOSE_REDACTED_MARKER).count()
-        > raw.matches(COMPOSE_REDACTED_MARKER).count();
-    if compose_pass_fired {
-        *raw = scrubbed;
+) -> (Vec<PayloadEdit>, Vec<RedactionFinding>) {
+    let findings = scan_content(content, source_path);
+    if findings.is_empty() {
+        return (Vec::new(), findings);
     }
-
-    let mut findings = scan_and_redact_field(raw, path, registry);
-    let generic_pass_fired = !findings.is_empty();
-
-    // Only when pass 1 found something pass 2 did not report, so one
-    // secret does not produce two findings. A file with both kinds is
-    // reported once rather than twice; it is never reported as clean.
-    if compose_pass_fired && !generic_pass_fired {
-        findings.push(compose_secret_finding(path));
+    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+    for (idx, pat) in PATTERNS.iter().enumerate() {
+        for em in collect_eligible_matches(pat, content, Some(source_path)) {
+            all_matches.push((idx, em));
+        }
     }
-    findings
+    dedup_overlapping_matches(&mut all_matches);
+    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+    let edits = all_matches
+        .into_iter()
+        .map(|(pat_idx, em)| {
+            let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+            PayloadEdit {
+                range: em.start..em.end,
+                text: build_replacement(&em, content, registry, &kind_label),
+                token: true,
+            }
+        })
+        .collect();
+    (edits, findings)
+}
+
+/// The edits the compose pass (`scrub_compose_secrets`) makes in
+/// `content`, each read off its line of the original text. That pass
+/// keys on its own name list and rewrites credentials in a URL of any
+/// scheme. It rewrites line by line, so each line is scrubbed alone; a
+/// line it only trims, or whose value is already its marker, is not an
+/// edit, which keeps a secret-free compose file byte-identical. Line
+/// endings are left as they are.
+fn compose_scrub_edits(content: &str) -> Vec<PayloadEdit> {
+    let mut edits = Vec::new();
+    let mut offset = 0;
+    for line in content.split_inclusive('\n') {
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        let body = body.strip_suffix('\r').unwrap_or(body);
+        let scrubbed = scrub_compose_secrets(body);
+        if scrubbed != body && scrubbed != body.trim_end() {
+            let (range, text) = line_edit(body, &scrubbed);
+            edits.push(PayloadEdit {
+                range: offset + range.start..offset + range.end,
+                text,
+                token: false,
+            });
+        }
+        offset += line.len();
+    }
+    edits
 }
 
 /// The finding for a compose file whose credentials only the compose
@@ -1498,16 +1518,41 @@ pub enum SnapshotText {
 /// The pass `redact` runs on a `kind` field holding the text of the file
 /// at `path`: the one function both `redact` and
 /// [`is_redacted_copy_of`] call, so the two cannot drift apart.
+///
+/// Every edit is found in the original text before any is applied, so no
+/// pass can hide a match from another: the pattern pass
+/// ([`pattern_edits`]), the URL credential maskers
+/// ([`url_credential_edits`]), which cover a password in a URL of any
+/// scheme where the patterns cover a few, and for a compose file the
+/// compose pass ([`compose_scrub_edits`]). Overlapping edits become one,
+/// under the pattern token ([`apply_payload_edits`]). A compose pass that
+/// rewrote a line before the patterns read it removed a private key's
+/// `BEGIN` marker and left its body.
+///
+/// The compose pass emits no finding of its own: when it alone replaced
+/// something, the file gets one compose finding, so one secret is not
+/// reported twice and a file with a secret is never reported as clean.
 fn redact_snapshot_text(
     kind: SnapshotText,
     content: &mut String,
     path: &str,
     registry: &mut CounterRegistry,
 ) -> Vec<RedactionFinding> {
-    match kind {
-        SnapshotText::EnvFile => scan_and_redact_field(content, path, registry),
-        SnapshotText::ComposeFile => redact_compose_content(content, path, registry),
+    let (mut edits, mut findings) = pattern_edits(content, path, registry);
+    let (url_edits, url_findings) = url_credential_edits(content, path);
+    edits.extend(url_edits);
+    findings.extend(url_findings);
+    if kind == SnapshotText::ComposeFile {
+        let scrub_edits = compose_scrub_edits(content);
+        if !scrub_edits.is_empty() && findings.is_empty() {
+            findings.push(compose_secret_finding(path));
+        }
+        edits.extend(scrub_edits);
     }
+    if !edits.is_empty() {
+        *content = apply_payload_edits(content, edits);
+    }
+    findings
 }
 
 /// A placeholder's number, which depends on what else the snapshot holds.
@@ -2265,7 +2310,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             ));
         }
 
-        // Compose file content: see `redact_compose_content`.
+        // Compose file content: see `redact_snapshot_text`.
         for compose in &mut containers.compose_files {
             let Some(raw) = compose.raw_content.as_mut() else {
                 continue;
@@ -7510,5 +7555,83 @@ baseurl = https://cdn.redhat.com
             compose_copy,
             &format!("{compose}    ports: [\"80:80\"]\n")
         ));
+    }
+
+    /// The snapshot pass finds every edit in the original text: an `.env`
+    /// URL password the patterns have no rule for is masked, a compose
+    /// private key whose `BEGIN` marker the compose pass rewrites loses
+    /// its body too, the twin check accepts both copies, and files with
+    /// no credential come out byte-identical.
+    #[test]
+    fn snapshot_pass_matches_on_the_original_text() {
+        let run = |kind, path: &str, text: &str| {
+            let mut out = text.to_owned();
+            let findings =
+                redact_snapshot_text(kind, &mut out, path, &mut CounterRegistry::default());
+            assert!(is_redacted_copy_of(kind, path, &out, text), "{out}");
+            (out, findings)
+        };
+
+        let env = "SERVICE_URL=https://deploy:orchid92@api.example.test/v1
+PORT=8080
+";
+        let (out, findings) = run(SnapshotText::EnvFile, "opt/app/.env", env);
+        assert!(!out.contains("orchid92"), "{out}");
+        assert!(out.contains("https://deploy:"), "{out}");
+        assert!(out.ends_with("@api.example.test/v1\nPORT=8080\n"), "{out}");
+        assert!(!findings.is_empty());
+
+        let compose = "services:\n  app:\n    environment:\n      \
+            PRIVATE_KEY: -----BEGIN PRIVATE KEY-----\n        MC4C AQAw BQYD K2Vw BCIE IBQh \
+            0WfR 6aXE BHdg fX4i x5qD YmYR BZGZ EmNF dzJ1 Owlp\n        \
+            -----END PRIVATE KEY-----\n      LOG_LEVEL: info\n";
+        let (out, findings) = run(
+            SnapshotText::ComposeFile,
+            "opt/app/docker-compose.yml",
+            compose,
+        );
+        let packed: String = out.chars().filter(|c| !c.is_whitespace()).collect();
+        for run in [
+            "MC4CAQAwBQYDK2VwBCIEIBQh0WfR6aXE",
+            "BHdgfX4ix5qDYmYRBZGZEmNFdzJ1Owlp",
+        ] {
+            assert!(!packed.contains(run), "{out}");
+        }
+        assert!(out.contains("PRIVATE_KEY: "), "{out}");
+        assert!(out.ends_with("      LOG_LEVEL: info\n"), "{out}");
+        assert!(!findings.is_empty());
+
+        // The compose pass alone still reports, once.
+        let (out, findings) = run(
+            SnapshotText::ComposeFile,
+            "opt/app/docker-compose.yml",
+            "services:\n  app:\n    environment:\n      AUTH_HEADER: Basic\r\n",
+        );
+        assert_eq!(
+            out,
+            "services:\n  app:\n    environment:\n      AUTH_HEADER: <REDACTED>\r\n"
+        );
+        assert_eq!(
+            findings,
+            vec![compose_secret_finding("opt/app/docker-compose.yml")]
+        );
+
+        for (kind, path, text) in [
+            (
+                SnapshotText::EnvFile,
+                "opt/app/.env",
+                "PORT=8080\r\nLOG_LEVEL=info  \n",
+            ),
+            (
+                SnapshotText::ComposeFile,
+                "opt/app/docker-compose.yml",
+                "services:\r\n  web:\n    image: nginx  \n    environment:\n      \
+                 TZ: UTC  \n      PORT: 80",
+            ),
+        ] {
+            let (out, findings) = run(kind, path, text);
+            assert_eq!(out, text);
+            assert!(findings.is_empty(), "{findings:?}");
+        }
     }
 }

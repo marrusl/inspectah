@@ -236,6 +236,11 @@ through as read. Otherwise:
   withheld (`ChangedSinceScan`), and one that is not UTF-8 is withheld,
   never shipped as binary. Never redact a twin afresh and write it back:
   a second pass with another order can recover what the first removed.
+  `redact_snapshot_text` itself finds every edit in the original text:
+  the patterns (`pattern_edits`), the URL credential maskers, and for a
+  compose file `scrub_compose_secrets` run per line (`compose_scrub_edits`),
+  applied once by `apply_payload_edits`. A compose rewrite run first
+  removed a key's `BEGIN` marker and left its body.
 - Other text goes through `redaction::engine::redact_payload` with its
   path. Every match is found in the original text before anything is
   replaced: the patterns (`payload_matches`) and, outside compose files,
@@ -256,8 +261,9 @@ through as read. Otherwise:
 Refine's `is_sensitive` reads `payload_redaction`. Tokens in a payload
 only the bundle holds are numbered per file. Test the routes with
 `unmanaged_credentials_ship_redacted_on_both_export_paths`,
-`unmanaged_reproducers_never_ship_a_credential` and
-`nul_bytes_and_masked_key_markers_never_ship_a_credential`.
+`unmanaged_reproducers_never_ship_a_credential`,
+`nul_bytes_and_masked_key_markers_never_ship_a_credential` and
+`snapshot_twins_match_secrets_on_the_original_text`.
 
 Not covered, and caught only by review: a file-opening route not on the
 lint list (a new dependency, a `libc` call) and a command whose output is a

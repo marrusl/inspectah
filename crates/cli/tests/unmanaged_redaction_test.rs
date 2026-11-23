@@ -574,3 +574,126 @@ fn nul_bytes_and_masked_key_markers_never_ship_a_credential() {
     }
     assert!(session.is_sensitive(), "refine asks for the acknowledgment");
 }
+
+const URL_ENV: &str = "/opt/svc/.env";
+const PEM_COMPOSE: &str = "/opt/pem/docker-compose.yml";
+const PLAIN_ENV: &str = "/opt/plain/.env";
+const PLAIN_COMPOSE: &str = "/opt/plain/docker-compose.yml";
+
+/// The URL password the `.env` reproducer holds under a neutral name.
+const URL_PASSWORD: &str = "orchid92";
+
+/// The round-three reproducers, both in files the snapshot also holds: an
+/// `.env` URL password under a name no hint reads, and a compose private
+/// key whose `BEGIN` marker sits on a line the compose pass rewrites,
+/// with its body split by spaces. Controls: an `.env` and a compose file
+/// with no credential.
+fn original_text_reproducers() -> Vec<(&'static str, Vec<u8>)> {
+    let url_env = format!("SERVICE_URL=https://deploy:{URL_PASSWORD}@api.example.test/v1\n");
+    let pem_compose = format!(
+        "services:\n  app:\n    image: docker.io/library/nginx:1.27\n    environment:\n      \
+         PRIVATE_KEY: -----BEGIN PRIVATE KEY-----\n        {KEY_BODY}\n        \
+         -----END PRIVATE KEY-----\n"
+    );
+    vec![
+        (URL_ENV, url_env.into_bytes()),
+        (PEM_COMPOSE, pem_compose.into_bytes()),
+        (PLAIN_ENV, b"PORT=8080\nLOG_LEVEL=info\n".to_vec()),
+        (
+            PLAIN_COMPOSE,
+            b"services:\n  web:\n    image: docker.io/library/nginx:1.27\n    environment:\n      TZ: UTC\n"
+                .to_vec(),
+        ),
+    ]
+}
+
+/// The snapshot pass matches on the original text, so neither reproducer
+/// ships its credential on either export path: not in `unmanaged/`,
+/// `env-files/`, the snapshot JSON (compose `raw_content` included) or
+/// any `COPY` source. The controls ship byte for byte everywhere.
+#[test]
+fn snapshot_twins_match_secrets_on_the_original_text() {
+    let reproducers = original_text_reproducers();
+    let (exec, root) = host_of(&reproducers);
+    let Exported {
+        snap,
+        scan_tree,
+        session,
+        _packed,
+    } = export(&exec, root.path(), false);
+
+    let original = |path: &str| {
+        reproducers
+            .iter()
+            .find(|(p, _)| *p == path)
+            .map(|(_, bytes)| String::from_utf8(bytes.clone()).unwrap())
+            .unwrap()
+    };
+    let compose_copy = |path: &str| {
+        snap.containers
+            .iter()
+            .flat_map(|c| &c.compose_files)
+            .find(|c| c.path.trim_start_matches('/') == &path[1..])
+            .and_then(|c| c.raw_content.clone())
+            .unwrap_or_else(|| panic!("the snapshot holds {path}"))
+    };
+    let env_copy = |path: &str| {
+        snap.non_rpm_software
+            .iter()
+            .flat_map(|n| &n.env_files)
+            .find(|e| e.path.trim_start_matches('/') == &path[1..])
+            .map(|e| e.content.clone())
+            .unwrap_or_else(|| panic!("the snapshot holds {path}"))
+    };
+    assert_eq!(env_copy(PLAIN_ENV), original(PLAIN_ENV));
+    assert_eq!(compose_copy(PLAIN_COMPOSE), original(PLAIN_COMPOSE));
+    assert!(compose_copy(PEM_COMPOSE).contains("PRIVATE_KEY: "));
+
+    let items = &snap.unmanaged_files.as_ref().expect("a section").items;
+    let state = |path: &str| {
+        items
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("{path} is an item"))
+            .payload_redaction
+    };
+    assert_eq!(state(URL_ENV), PayloadRedaction::Redacted);
+    assert_eq!(state(PEM_COMPOSE), PayloadRedaction::Redacted);
+    assert_eq!(state(PLAIN_ENV), PayloadRedaction::Unchanged);
+    assert_eq!(state(PLAIN_COMPOSE), PayloadRedaction::Unchanged);
+
+    let refine_tree = export_session(&session);
+    let mut all = vec![(
+        "snapshot".to_string(),
+        serde_json::to_vec(&snap).expect("the snapshot serializes"),
+    )];
+    all.extend(files(scan_tree.path()));
+    all.extend(files(refine_tree.path()));
+    for (where_, bytes) in &all {
+        let text = String::from_utf8_lossy(bytes);
+        assert!(!text.contains(URL_PASSWORD), "{where_} holds the password");
+        let packed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        for run in KEY_RUNS {
+            assert!(!packed.contains(run), "{where_} holds key material");
+        }
+    }
+
+    for (via, tree) in [("scan", scan_tree.path()), ("refine", refine_tree.path())] {
+        crate::copy_source_exists_test::assert_every_copy_source_exists(via, tree);
+        let bundled = |path: &str| {
+            std::fs::read_to_string(tree.join("unmanaged").join(&path[1..]))
+                .unwrap_or_else(|e| panic!("{via}: {path} ships: {e}"))
+        };
+        let env_file = |path: &str| {
+            std::fs::read_to_string(tree.join("env-files").join(&path[1..]))
+                .unwrap_or_else(|e| panic!("{via}: {path} is in env-files: {e}"))
+        };
+        assert_eq!(bundled(URL_ENV), env_file(URL_ENV), "{via}");
+        assert_eq!(bundled(URL_ENV), env_copy(URL_ENV), "{via}");
+        assert_eq!(bundled(PEM_COMPOSE), compose_copy(PEM_COMPOSE), "{via}");
+        for path in [PLAIN_ENV, PLAIN_COMPOSE] {
+            assert_eq!(bundled(path), original(path), "{via}: {path} ships as read");
+        }
+        assert_eq!(env_file(PLAIN_ENV), original(PLAIN_ENV), "{via}");
+    }
+}
