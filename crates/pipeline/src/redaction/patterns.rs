@@ -208,17 +208,22 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             remediation: "Use connection pooling with externalized credentials",
         },
         // PostgreSQL connection URI with password. Only the password is
-        // replaced; the scheme, user and `@host` stay. The user and
-        // password classes exclude CR and LF: with `[^:]+` / `[^@]+` a
-        // password-less URI paired with a `contact: ops@host` line below
-        // it. They exclude nothing else, so a password with a space or tab
-        // in it (`postgres://u:two words@db`) is still redacted, and so is
-        // one with a literal `/`, at the cost of a password-less URI whose
-        // query holds an `@`: in `postgres://host:5432/db?u=a@b` the port,
-        // path and query up to the `@` are taken as the password. The two
-        // read the same.
+        // replaced; the scheme, user and `@host` stay. The password runs
+        // to the last `@` of the authority, which ends at the first `/`,
+        // `?`, `#` or whitespace, so a password holding an `@`
+        // (`u:p@s3cret@db`) is replaced whole; stopping at the first `@`
+        // shipped its tail. When the authority holds no `@`, the second
+        // branch takes the first `@` on the line, as this pattern always
+        // did. The user and that branch's password exclude CR and LF:
+        // with `[^:]+` / `[^@]+` a password-less URI paired with a
+        // `contact: ops@host` line below it. They exclude nothing else, so
+        // a password with a space or tab in it (`postgres://u:two
+        // words@db`) is still redacted, and so is one with a literal `/`,
+        // at the cost of a password-less URI whose query holds an `@`: in
+        // `postgres://host:5432/db?u=a@b` the port, path and query up to
+        // the `@` are taken as the password. The two read the same.
         SecretPattern {
-            regex: Regex::new(r"postgres(?:ql)?://[^:\r\n]+:(?P<secret>[^@\r\n]+)@").unwrap(),
+            regex: Regex::new(r"postgres(?:ql)?://[^:\r\n]+:(?P<secret>[^/?#\s]+|[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::PostgresPassword,
             filter_nss_pam_tokens: false,
             spares_repo_id_headers: false,
@@ -227,9 +232,10 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             accept: None,
             remediation: "Use .pgpass or environment variables for PostgreSQL credentials",
         },
-        // MongoDB connection URI with password; one line, as Postgres.
+        // MongoDB connection URI with password; one line, and to the
+        // authority's last `@`, as Postgres.
         SecretPattern {
-            regex: Regex::new(r"mongodb(?:\+srv)?://[^:\r\n]+:(?P<secret>[^@\r\n]+)@").unwrap(),
+            regex: Regex::new(r"mongodb(?:\+srv)?://[^:\r\n]+:(?P<secret>[^/?#\s]+|[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::MongodbPassword,
             filter_nss_pam_tokens: false,
             spares_repo_id_headers: false,
@@ -238,9 +244,10 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             accept: None,
             remediation: "Use environment variables for MongoDB credentials",
         },
-        // Redis connection URI with password; one line, as Postgres.
+        // Redis connection URI with password; one line, and to the
+        // authority's last `@`, as Postgres.
         SecretPattern {
-            regex: Regex::new(r"redis://:(?P<secret>[^@\r\n]+)@").unwrap(),
+            regex: Regex::new(r"redis://:(?P<secret>[^/?#\s]+|[^@\r\n]+)@").unwrap(),
             finding_kind: FindingKind::RedisPassword,
             filter_nss_pam_tokens: false,
             spares_repo_id_headers: false,

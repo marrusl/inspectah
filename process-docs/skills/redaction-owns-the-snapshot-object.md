@@ -95,8 +95,12 @@ may hold an `@` (`deploy:p@s3cret@host`), and a masker that stops at the
 first `@` ships the tail; no generic pattern covers an https password,
 so nothing else catches it. Bound the authority first (it ends at `/`,
 `?`, `#` or whitespace), then take its last `@`, so an `@` in the path
-or query never takes the host. `scrub_url_auth` and `PROXY_CRED_RE`
-both follow this rule. Bound the **password**, never the user name: the
+or query never takes the host. `scrub_url_auth`, `PROXY_CRED_RE`, the
+PostgreSQL, MongoDB and Redis patterns and the compose scrubber all
+follow this rule: a secret capture group never stops at the first `@`.
+Each keeps a fallback to the first `@` on the line for an authority with
+no `@` in it, which is what still covers a password with a space or a
+raw `/` (`u:two words@db`, `u:pa/ss@db`). Bound the **password**, never the user name: the
 user name may be empty (`https://:pw@host`) or malformed
 (`https://u?name:pw@host`), and excluding `?` and `#` from it to bound
 the authority left those passwords raw.

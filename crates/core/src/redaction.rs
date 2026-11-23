@@ -250,6 +250,22 @@ pub fn scrub_compose_secrets(content: &str) -> String {
         Some(len)
     }
 
+    /// Where the userinfo after a URL's `://` ends: at the last `@` of
+    /// its authority, which ends at the first `/`, `?`, `#` or
+    /// whitespace, so a password holding an `@` (`:p@s3cret@db`) is
+    /// userinfo whole; stopping at the first `@` shipped its tail. When
+    /// the authority holds no `@`, at the first `@` after it, as this
+    /// scrubber always read it, so a password with a space or a raw `/`
+    /// in it is still userinfo.
+    fn userinfo_end(after_scheme: &str) -> Option<usize> {
+        let authority = after_scheme
+            .find(|c: char| matches!(c, '/' | '?' | '#') || c.is_whitespace())
+            .unwrap_or(after_scheme.len());
+        after_scheme[..authority]
+            .rfind('@')
+            .or_else(|| after_scheme.find('@'))
+    }
+
     /// Check if a value contains a URL with embedded credentials
     /// (e.g., `postgres://user:pass@host/db`).
     fn has_url_credentials(value: &str) -> bool {
@@ -257,7 +273,7 @@ pub fn scrub_compose_secrets(content: &str) -> String {
         if let Some(scheme_end) = value.find("://") {
             let after_scheme = &value[scheme_end + 3..];
             // Must have user:pass@host pattern
-            if let Some(at_pos) = after_scheme.find('@') {
+            if let Some(at_pos) = userinfo_end(after_scheme) {
                 let userinfo = &after_scheme[..at_pos];
                 return userinfo.contains(':');
             }
@@ -271,7 +287,7 @@ pub fn scrub_compose_secrets(content: &str) -> String {
         if let Some(scheme_end) = value.find("://") {
             let scheme = &value[..scheme_end + 3];
             let after_scheme = &value[scheme_end + 3..];
-            if let Some(at_pos) = after_scheme.find('@') {
+            if let Some(at_pos) = userinfo_end(after_scheme) {
                 let after_at = &after_scheme[at_pos..];
                 return format!("{scheme}<REDACTED>:<REDACTED>{after_at}");
             }
@@ -752,6 +768,35 @@ mod tests {
         );
         assert!(!scrubbed.contains("admin"));
         assert!(!scrubbed.contains("s3cret"));
+    }
+
+    /// A URL password holding an `@` is scrubbed through the last `@` of
+    /// its authority, not cut at the first; an `@` in the path or query
+    /// stays, and a password with a space or a raw `/` in it is still
+    /// scrubbed whole, as before.
+    #[test]
+    fn scrub_compose_secrets_reads_url_credentials_to_the_last_at() {
+        let cases = [
+            (
+                "    DATABASE_URL=redis://:p@s3cret@db/0\n",
+                "    DATABASE_URL=redis://<REDACTED>:<REDACTED>@db/0\n",
+            ),
+            (
+                "    DATABASE_URL: postgres://u:p@s3cret@db/app?x=a@b\n",
+                "    DATABASE_URL: postgres://<REDACTED>:<REDACTED>@db/app?x=a@b\n",
+            ),
+            (
+                "    DATABASE_URL=postgres://u:two words@db/app\n",
+                "    DATABASE_URL=postgres://<REDACTED>:<REDACTED>@db/app\n",
+            ),
+            (
+                "    DATABASE_URL=postgres://u:pa/ss@db/app\n",
+                "    DATABASE_URL=postgres://<REDACTED>:<REDACTED>@db/app\n",
+            ),
+        ];
+        for (input, want) in cases {
+            assert_eq!(scrub_compose_secrets(input), want, "{input}");
+        }
     }
 
     #[test]

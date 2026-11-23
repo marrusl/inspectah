@@ -7524,6 +7524,23 @@ baseurl = https://cdn.redhat.com
                 "password=REDACTED_PASSWORD_2 token=REDACTED_PASSWORD_1 c",
                 &["za", "zb"],
             ),
+            // A database URL password holding an `@` is read to the last
+            // `@` of its authority, not cut at the first.
+            (
+                "url=postgres://u:p@pgtail9@db/app",
+                "url=postgres://u:REDACTED_POSTGRESPASSWORD_1@db/app",
+                &["pgtail9"],
+            ),
+            (
+                "url=mongodb://u:p@mgtail9@db/app",
+                "url=mongodb://u:REDACTED_MONGODBPASSWORD_1@db/app",
+                &["mgtail9"],
+            ),
+            (
+                "url=redis://:p@rdtail9@db/0",
+                "url=redis://:REDACTED_REDISPASSWORD_1@db/0",
+                &["rdtail9"],
+            ),
         ];
         for (input, want, secrets) in cases {
             let once = redact_string(input).into_owned();
