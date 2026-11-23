@@ -1861,8 +1861,8 @@ fn url_credential_edits(content: &str, path: &str) -> (Vec<PayloadEdit>, Vec<Red
 /// Redact the text of a file only the bundle holds, at `path`. Every
 /// match is found in the original text, before anything is replaced, so
 /// no pass can hide a match from another: the pattern matches
-/// ([`payload_matches`]) and, for any file but a compose file, the URL
-/// credential maskers ([`url_credential_edits`]), all applied once. A
+/// ([`payload_matches`]) and the URL credential maskers
+/// ([`url_credential_edits`]), all applied once. A
 /// compose file by name then takes the compose pass
 /// (`scrub_compose_secrets`) over that result, which can only replace
 /// more. Path-scoped format rules apply as they do to a config file.
@@ -1898,11 +1898,9 @@ pub fn redact_payload(content: &str, path: &str) -> Option<(String, Vec<Redactio
             }
         })
         .collect();
-    if !is_compose {
-        let (url_edits, url_findings) = url_credential_edits(content, path);
-        edits.extend(url_edits);
-        findings.extend(url_findings);
-    }
+    let (url_edits, url_findings) = url_credential_edits(content, path);
+    edits.extend(url_edits);
+    findings.extend(url_findings);
     let mut text = apply_payload_edits(content, edits);
     if is_compose {
         let scrubbed = scrub_compose_secrets(&text);
@@ -7454,6 +7452,30 @@ baseurl = https://cdn.redhat.com
                 .any(|f| f.source == "proxy_credential" && f.line == Some(4)),
             "{findings:?}"
         );
+    }
+
+    /// A compose file takes the URL credential maskers too: a password in
+    /// a `command:` URL, which the compose pass does not read as an
+    /// assignment, is masked. A compose file with no credential is left
+    /// as it is.
+    #[test]
+    fn compose_payload_masks_url_credentials() {
+        let compose = "services:\n  app:\n    image: docker.io/library/nginx:1.27\n    \
+                       command: curl https://deploy:orchid92@api.example.test/v1\n";
+        let (text, findings) =
+            redact_payload(compose, "/usr/local/app/docker-compose.yml").expect("redacted");
+        assert!(!text.contains("orchid92"), "{text}");
+        assert!(text.contains("api.example.test/v1"), "{text}");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.source == "proxy_credential" && f.line == Some(4)),
+            "{findings:?}"
+        );
+
+        let plain = "services:\n  web:\n    image: docker.io/library/nginx:1.27\n    \
+                     command: curl https://api.example.test/v1\n";
+        assert_eq!(redact_payload(plain, "/usr/local/app/compose.yaml"), None);
     }
 
     /// Edits that overlap are applied as one, over all their bytes, and a

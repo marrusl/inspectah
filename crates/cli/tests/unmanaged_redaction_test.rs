@@ -697,3 +697,68 @@ fn snapshot_twins_match_secrets_on_the_original_text() {
         assert_eq!(env_file(PLAIN_ENV), original(PLAIN_ENV), "{via}");
     }
 }
+
+/// A compose file the snapshot holds no copy of: `/usr/local` is an
+/// unmanaged walk root but not a compose search root.
+const LONE_COMPOSE: &str = "/usr/local/deploy/docker-compose.yml";
+const LONE_PLAIN_COMPOSE: &str = "/usr/local/web/compose.yaml";
+
+/// A compose file only the bundle holds takes the URL credential maskers:
+/// the password in a `command:` URL is in no export tree and not in the
+/// snapshot, on either export path. A secret-free compose file ships byte
+/// for byte.
+#[test]
+fn lone_compose_files_mask_url_credentials() {
+    let lone = format!(
+        "services:\n  app:\n    image: docker.io/library/nginx:1.27\n    \
+         command: curl https://deploy:{URL_PASSWORD}@api.example.test/v1\n"
+    );
+    let plain = b"services:\n  web:\n    image: docker.io/library/nginx:1.27\n    environment:\n      TZ: UTC\n";
+    let (exec, root) = host_of(&[
+        (LONE_COMPOSE, lone.into_bytes()),
+        (LONE_PLAIN_COMPOSE, plain.to_vec()),
+    ]);
+    let Exported {
+        snap,
+        scan_tree,
+        session,
+        _packed,
+    } = export(&exec, root.path(), false);
+
+    let items = &snap.unmanaged_files.as_ref().expect("a section").items;
+    let state = |path: &str| {
+        items
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("{path} is an item"))
+            .payload_redaction
+    };
+    assert_eq!(state(LONE_COMPOSE), PayloadRedaction::Redacted);
+    assert_eq!(state(LONE_PLAIN_COMPOSE), PayloadRedaction::Unchanged);
+
+    let refine_tree = export_session(&session);
+    let mut all = vec![(
+        "snapshot".to_string(),
+        serde_json::to_vec(&snap).expect("the snapshot serializes"),
+    )];
+    all.extend(files(scan_tree.path()));
+    all.extend(files(refine_tree.path()));
+    for (where_, bytes) in &all {
+        assert!(
+            !contains(bytes, URL_PASSWORD),
+            "{where_} holds the password"
+        );
+    }
+
+    for (via, tree) in [("scan", scan_tree.path()), ("refine", refine_tree.path())] {
+        let bundled = |path: &str| {
+            std::fs::read(tree.join("unmanaged").join(&path[1..]))
+                .unwrap_or_else(|e| panic!("{via}: {path} ships: {e}"))
+        };
+        assert!(
+            contains(&bundled(LONE_COMPOSE), "api.example.test/v1"),
+            "{via}"
+        );
+        assert_eq!(bundled(LONE_PLAIN_COMPOSE), plain, "{via}");
+    }
+}
