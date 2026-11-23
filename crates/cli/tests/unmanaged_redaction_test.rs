@@ -893,6 +893,73 @@ fn mixed_url_credentials_on_one_line_each_name_a_shipped_placeholder() {
     }
 }
 
+/// Several URL credentials on one line that no pattern has a rule for:
+/// two `user:password@` URLs and a token standing as a user name. The
+/// `.env` copy takes the snapshot pass, the `.conf` file the bundle's
+/// payload pass.
+const MULTI_ENV: &str = "/opt/multi/.env";
+const MULTI_CONF: &str = "/opt/multi/mirrors.conf";
+const MULTI_SECRETS: [&str; 3] = ["firstpw8812", "secondpw3307", "deploytoken0123456789xyz"];
+
+/// Every URL credential on a line is masked, not only the first: no
+/// secret survives in the snapshot, the scan export or the refine
+/// export, and each is one inline row naming a placeholder the shipped
+/// file holds.
+#[test]
+fn every_url_credential_on_one_line_ships_masked() {
+    let [first, second, token] = MULTI_SECRETS;
+    let line = format!(
+        "MIRRORS=https://a:{first}@h1.example.test https://b:{second}@h2.example.test \
+         https://{token}@git.example.test/repo\n"
+    );
+    let (exec, root) = host_of(&[
+        (MULTI_ENV, line.clone().into_bytes()),
+        (MULTI_CONF, line.into_bytes()),
+    ]);
+    let Exported {
+        snap,
+        scan_tree,
+        session,
+        _packed,
+    } = export(&exec, root.path(), false);
+    let refine_tree = export_session(&session);
+
+    let mut all = vec![(
+        "snapshot".to_string(),
+        serde_json::to_vec(&snap).expect("the snapshot serializes"),
+    )];
+    all.extend(files(scan_tree.path()));
+    all.extend(files(refine_tree.path()));
+    for secret in MULTI_SECRETS {
+        for (where_, bytes) in &all {
+            assert!(!contains(bytes, secret), "{where_} holds {secret}");
+        }
+    }
+
+    for path in [MULTI_ENV, MULTI_CONF] {
+        let inline: Vec<_> = snap
+            .redactions
+            .iter()
+            .filter(|f| f.path.trim_start_matches('/') == &path[1..])
+            .filter(|f| f.kind == inspectah_core::types::redaction::RedactionKind::Inline)
+            .collect();
+        assert_eq!(
+            inline.len(),
+            MULTI_SECRETS.len(),
+            "{path}: one row per credential: {inline:#?}"
+        );
+        for (via, tree) in [("scan", scan_tree.path()), ("refine", refine_tree.path())] {
+            let shipped = std::fs::read_to_string(tree.join("unmanaged").join(&path[1..]))
+                .unwrap_or_else(|e| panic!("{via}: {path} ships: {e}"));
+            assert_eq!(
+                shipped.matches("[REDACTED]").count(),
+                MULTI_SECRETS.len(),
+                "{via}: {path}:\n{shipped}"
+            );
+        }
+    }
+}
+
 /// A link alone in its directory, as driftify plants it: no regular file
 /// beside it, so no `COPY` creates the directory.
 const LONE_LINK: &str = "/opt/tool/bin/run";

@@ -1182,62 +1182,128 @@ fn keyword_survives_with_its_value(
     })
 }
 
+/// What a URL credential masker writes in place of the credential.
+const URL_CREDENTIAL_MASK: &str = "[REDACTED]";
+
+/// One credential a URL credential masker found in a line: the bytes of
+/// the credential alone, which [`URL_CREDENTIAL_MASK`] replaces, and its
+/// finding.
+struct CredentialEdit {
+    range: Range<usize>,
+    finding: RedactionFinding,
+}
+
+/// One edit per match of `re` in `line`, each replacing capture group 2,
+/// the credential. Every match is taken, not only the first: a line can
+/// hold several credentials.
+fn credential_edits(re: &Regex, line: &str, finding: &RedactionFinding) -> Vec<CredentialEdit> {
+    re.captures_iter(line)
+        .filter_map(|caps| caps.get(2))
+        .map(|m| CredentialEdit {
+            range: m.range(),
+            finding: finding.clone(),
+        })
+        .collect()
+}
+
+/// Whether two byte ranges share a byte.
+fn overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
+    a.start < b.end && b.start < a.end
+}
+
+/// `line` with every edit's range replaced by [`URL_CREDENTIAL_MASK`].
+/// The edits are in order and do not overlap.
+fn apply_credential_edits<'a>(line: &'a str, edits: &[CredentialEdit]) -> Cow<'a, str> {
+    if edits.is_empty() {
+        return Cow::Borrowed(line);
+    }
+    let mut out = String::with_capacity(line.len());
+    let mut at = 0;
+    for edit in edits {
+        out.push_str(&line[at..edit.range.start]);
+        out.push_str(URL_CREDENTIAL_MASK);
+        at = edit.range.end;
+    }
+    out.push_str(&line[at..]);
+    Cow::Owned(out)
+}
+
+/// The proxy credentials in `line`, in order: every password in a
+/// `://user:password@` URL, and every `proxy_password=VALUE` value that
+/// is not already inside one of those.
+fn proxy_credential_edits(line: &str, source_path: &str) -> Vec<CredentialEdit> {
+    let finding = |remediation: &str| RedactionFinding {
+        path: source_path.to_string(),
+        source: "proxy_credential".into(),
+        kind: RedactionKind::Inline,
+        pattern: "proxy_password".into(),
+        remediation: remediation.to_string(),
+        line: None,
+        replacement: None,
+        detection_method: DetectionMethod::Pattern,
+        confidence: Some(Confidence::High),
+        finding_kind: Some(FindingKind::Password),
+    };
+    let mut edits = credential_edits(
+        &PROXY_CRED_RE,
+        line,
+        &finding(
+            "Remove embedded credentials from proxy URL; use environment-specific auth configuration",
+        ),
+    );
+    let key_values = credential_edits(
+        &PROXY_PASSWORD_KV_RE,
+        line,
+        &finding(
+            "Remove plaintext proxy_password from DNF/Yum configuration; use repository-level auth instead",
+        ),
+    );
+    let key_values: Vec<_> = key_values
+        .into_iter()
+        .filter(|kv| !edits.iter().any(|url| overlaps(&kv.range, &url.range)))
+        .collect();
+    edits.extend(key_values);
+    edits.sort_by_key(|e| e.range.start);
+    edits
+}
+
+/// The token user names in `line`, in order: every `://token@` URL.
+fn token_username_edits(line: &str, source_path: &str) -> Vec<CredentialEdit> {
+    let finding = RedactionFinding {
+        path: source_path.to_string(),
+        source: "token_credential".into(),
+        kind: RedactionKind::Inline,
+        pattern: "token_username".into(),
+        remediation: "Remove embedded token from URL; use credential helpers or SSH keys"
+            .to_string(),
+        line: None,
+        replacement: None,
+        detection_method: DetectionMethod::Pattern,
+        confidence: Some(Confidence::High),
+        finding_kind: Some(FindingKind::Password),
+    };
+    credential_edits(&TOKEN_USERNAME_RE, line, &finding)
+}
+
 /// Mask embedded credentials in a proxy URL line.
 ///
 /// Replaces only the password segment in `://user:password@` patterns,
-/// preserving the rest of the URL structure. This is a dedicated function
-/// because `PATTERNS` has no rule for a password in an arbitrary URL's
-/// authority, only for PostgreSQL, MongoDB, Redis and JDBC URLs, so
-/// `redact_string()`, which also replaces only the secret, would not find
-/// this one.
+/// preserving the rest of the URL structure, and the value of a bare
+/// `proxy_password=VALUE`. Every credential on the line is masked, each
+/// with its own finding. This is a dedicated function because `PATTERNS`
+/// has no rule for a password in an arbitrary URL's authority, only for
+/// PostgreSQL, MongoDB, Redis and JDBC URLs, so `redact_string()`, which
+/// also replaces only the secret, would not find this one.
 ///
-/// Returns `(Cow<str>, Option<RedactionFinding>)` — borrowed if no match,
-/// owned with a finding if credentials were masked.
+/// Returns the line, borrowed when nothing matched, and one finding per
+/// credential masked.
 pub fn mask_proxy_credentials<'a>(
     line: &'a str,
     source_path: &str,
-) -> (Cow<'a, str>, Option<RedactionFinding>) {
-    // First: check for URL-shaped credentials (://user:password@host)
-    if PROXY_CRED_RE.is_match(line) {
-        let masked = PROXY_CRED_RE
-            .replace(line, "${1}[REDACTED]${3}")
-            .into_owned();
-        let finding = RedactionFinding {
-            path: source_path.to_string(),
-            source: "proxy_credential".into(),
-            kind: RedactionKind::Inline,
-            pattern: "proxy_password".into(),
-            remediation: "Remove embedded credentials from proxy URL; use environment-specific auth configuration".to_string(),
-            line: None,
-            replacement: None,
-            detection_method: DetectionMethod::Pattern,
-            confidence: Some(Confidence::High),
-            finding_kind: Some(FindingKind::Password),
-        };
-        return (Cow::Owned(masked), Some(finding));
-    }
-
-    // Second: check for bare proxy_password=VALUE lines (DNF/Yum config)
-    if PROXY_PASSWORD_KV_RE.is_match(line) {
-        let masked = PROXY_PASSWORD_KV_RE
-            .replace(line, "${1}[REDACTED]")
-            .into_owned();
-        let finding = RedactionFinding {
-            path: source_path.to_string(),
-            source: "proxy_credential".into(),
-            kind: RedactionKind::Inline,
-            pattern: "proxy_password".into(),
-            remediation: "Remove plaintext proxy_password from DNF/Yum configuration; use repository-level auth instead".to_string(),
-            line: None,
-            replacement: None,
-            detection_method: DetectionMethod::Pattern,
-            confidence: Some(Confidence::High),
-            finding_kind: Some(FindingKind::Password),
-        };
-        return (Cow::Owned(masked), Some(finding));
-    }
-
-    (Cow::Borrowed(line), None)
+) -> (Cow<'a, str>, Vec<RedactionFinding>) {
+    let edits = proxy_credential_edits(line, source_path);
+    let masked = apply_credential_edits(line, &edits);
+    (masked, edits.into_iter().map(|e| e.finding).collect())
 }
 
 /// Mask username-only token credentials in URLs.
@@ -1245,34 +1311,18 @@ pub fn mask_proxy_credentials<'a>(
 /// Catches `://ghp_xxx@github.com`, `://glpat-xxx@gitlab.com`, and generic
 /// long alphanumeric usernames (>= 20 chars) used as tokens without a
 /// colon/password separator. These slip past `mask_proxy_credentials()`
-/// which requires the `://user:password@` shape.
+/// which requires the `://user:password@` shape. Every token on the line
+/// is masked, each with its own finding.
 ///
-/// Returns `(Cow<str>, Option<RedactionFinding>)` — borrowed if no match.
+/// Returns the line, borrowed when nothing matched, and one finding per
+/// token masked.
 pub fn mask_token_username<'a>(
     line: &'a str,
     source_path: &str,
-) -> (Cow<'a, str>, Option<RedactionFinding>) {
-    if TOKEN_USERNAME_RE.is_match(line) {
-        let masked = TOKEN_USERNAME_RE
-            .replace(line, "${1}[REDACTED]${3}")
-            .into_owned();
-        let finding = RedactionFinding {
-            path: source_path.to_string(),
-            source: "token_credential".into(),
-            kind: RedactionKind::Inline,
-            pattern: "token_username".into(),
-            remediation: "Remove embedded token from URL; use credential helpers or SSH keys"
-                .to_string(),
-            line: None,
-            replacement: None,
-            detection_method: DetectionMethod::Pattern,
-            confidence: Some(Confidence::High),
-            finding_kind: Some(FindingKind::Password),
-        };
-        return (Cow::Owned(masked), Some(finding));
-    }
-
-    (Cow::Borrowed(line), None)
+) -> (Cow<'a, str>, Vec<RedactionFinding>) {
+    let edits = token_username_edits(line, source_path);
+    let masked = apply_credential_edits(line, &edits);
+    (masked, edits.into_iter().map(|e| e.finding).collect())
 }
 
 /// Scan content for secrets. Returns findings for all detected patterns.
@@ -1848,85 +1898,50 @@ fn line_edit(line: &str, masked: &str) -> (Range<usize>, String) {
 }
 
 /// The edits that mask a credential in a URL's user information on each
-/// line of `content`, as the git remote pass masks a remote: a password
-/// ([`mask_proxy_credentials`]), then a token standing as the user name
-/// ([`mask_token_username`]). The generic patterns cover such a password
-/// for a few schemes only. Each edit is read off the original line, so
-/// it never decides what the pattern pass sees.
+/// line of `content`, as the git remote pass masks a remote: every
+/// password ([`mask_proxy_credentials`]) and every token standing as the
+/// user name ([`mask_token_username`]). The generic patterns cover such a
+/// password for a few schemes only. Each edit is read off the original
+/// line, so it never decides what the pattern pass sees.
 ///
-/// Each masker's rewrite is its own edit, carrying its own finding
+/// Each credential is its own edit, carrying its own finding
 /// ([`apply_payload_edits`] keeps it only if the rewrite is written), so
 /// a masker edit spans only the credential it masked and never joins two
-/// pattern matches on one line. Only a token rewrite that touches the
-/// password rewrite's text is one edit with it. A finding whose masker
-/// left the line as it was is returned apart.
+/// pattern matches on one line. A token match inside a password is that
+/// password's credential and is not a second edit. A credential the line
+/// already holds masked is not rewritten; its finding is returned apart.
 fn url_credential_edits(content: &str, path: &str) -> (Vec<PayloadEdit>, Vec<RedactionFinding>) {
     let mut edits = Vec::new();
     let mut unedited = Vec::new();
     let mut offset = 0;
     for (number, line) in content.split_inclusive('\n').enumerate() {
         let line_number = i32::try_from(number + 1).ok();
-        let at_line = |finding: RedactionFinding| RedactionFinding {
-            line: line_number,
-            ..finding
-        };
-        let (masked, password) = mask_proxy_credentials(line, path);
-        let (token_masked, token) = mask_token_username(&masked, path);
-        let (password, token) = (password.map(at_line), token.map(at_line));
-        let password_edit = (masked != line).then(|| line_edit(line, &masked));
-        let token_edit = (token_masked != masked).then(|| line_edit(&masked, &token_masked));
-        // Each rewrite as a range of `line`, its text, and its findings.
-        let mut rewrites: Vec<(Range<usize>, String, Vec<RedactionFinding>)> = Vec::new();
-        match (password_edit, token_edit) {
-            (Some(first), Some((range, text))) => match rebase_edit(&first, range) {
-                Some(range) => {
-                    rewrites.push((first.0, first.1, password.into_iter().collect()));
-                    rewrites.push((range, text, token.into_iter().collect()));
-                }
-                None => {
-                    let (range, text) = line_edit(line, &token_masked);
-                    rewrites.push((range, text, password.into_iter().chain(token).collect()));
-                }
-            },
-            // With no password rewrite, the token rewrite's range is
-            // already a range of `line`.
-            (first, second) => {
-                for (edit, finding) in [(first, password), (second, token)] {
-                    match edit {
-                        Some((range, text)) => {
-                            rewrites.push((range, text, finding.into_iter().collect()))
-                        }
-                        None => unedited.extend(finding),
-                    }
-                }
+        let mut found = proxy_credential_edits(line, path);
+        let tokens = token_username_edits(line, path);
+        let tokens: Vec<_> = tokens
+            .into_iter()
+            .filter(|token| !found.iter().any(|p| overlaps(&token.range, &p.range)))
+            .collect();
+        found.extend(tokens);
+        for CredentialEdit { range, finding } in found {
+            let finding = RedactionFinding {
+                line: line_number,
+                ..finding
+            };
+            if &line[range.clone()] == URL_CREDENTIAL_MASK {
+                unedited.push(finding);
+                continue;
             }
-        }
-        for (range, text, findings) in rewrites {
             edits.push(PayloadEdit {
                 range: offset + range.start..offset + range.end,
-                text,
+                text: URL_CREDENTIAL_MASK.to_owned(),
                 token: false,
-                findings,
+                findings: vec![finding],
             });
         }
         offset += line.len();
     }
     (edits, unedited)
-}
-
-/// `range`, a range of the text an edit `first` wrote, as a range of the
-/// text `first` was applied to, or `None` when it touches the bytes
-/// `first` wrote.
-fn rebase_edit(first: &(Range<usize>, String), range: Range<usize>) -> Option<Range<usize>> {
-    let (replaced, text) = first;
-    let written_end = replaced.start + text.len();
-    if range.end <= replaced.start {
-        Some(range)
-    } else if range.start >= written_end {
-        Some(range.start - written_end + replaced.end..range.end - written_end + replaced.end)
-    } else {
-        None
-    }
 }
 
 /// Redact the text of a file only the bundle holds, at `path`. Every
@@ -2332,10 +2347,10 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // Scan proxy lines for embedded credentials (dedicated masker, NOT generic pass).
     if let Some(ref mut network) = snapshot.network {
         for entry in &mut network.proxy {
-            let (masked, finding) = mask_proxy_credentials(&entry.line, &entry.source);
-            if let Some(f) = finding {
+            let (masked, findings) = mask_proxy_credentials(&entry.line, &entry.source);
+            if !findings.is_empty() {
                 entry.line = masked.into_owned();
-                all_findings.push(f);
+                all_findings.extend(findings);
             }
         }
     }
@@ -2622,16 +2637,16 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             }
 
             if !item.git_remote.is_empty() {
-                let (masked, finding) = mask_proxy_credentials(&item.git_remote, &item.path);
-                if let Some(f) = finding {
+                let (masked, findings) = mask_proxy_credentials(&item.git_remote, &item.path);
+                if !findings.is_empty() {
                     item.git_remote = masked.into_owned();
-                    all_findings.push(f);
+                    all_findings.extend(findings);
                 }
                 // Username-only token remotes: ://ghp_xxx@host, ://glpat-xxx@host
-                let (masked, finding) = mask_token_username(&item.git_remote, &item.path);
-                if let Some(f) = finding {
+                let (masked, findings) = mask_token_username(&item.git_remote, &item.path);
+                if !findings.is_empty() {
                     item.git_remote = masked.into_owned();
-                    all_findings.push(f);
+                    all_findings.extend(findings);
                 }
                 // Also run generic pattern scan for other secret patterns
                 let findings = scan_content(&item.git_remote, &item.path);
@@ -5282,20 +5297,122 @@ baseurl = https://cdn.redhat.com
         assert_eq!(lines, vec![Some(1), Some(2)]);
     }
 
+    /// Every credential on a line is masked, each with its own finding,
+    /// not only the first match of each masker.
+    #[test]
+    fn test_url_maskers_mask_every_credential_on_a_line() {
+        const PATH: &str = "/etc/environment";
+        let token = "deploytoken0123456789xyz";
+        let proxy_cases = [
+            // Two passwords.
+            (
+                "M=https://a:pw1@h1 https://b:pw2@h2".to_string(),
+                "M=https://a:[REDACTED]@h1 https://b:[REDACTED]@h2".to_string(),
+                2,
+            ),
+            // Three passwords.
+            (
+                "https://a:pw1@h1,https://b:pw2@h2 ftp://c:pw3@h3".into(),
+                "https://a:[REDACTED]@h1,https://b:[REDACTED]@h2 ftp://c:[REDACTED]@h3".into(),
+                3,
+            ),
+            // The same credential repeated.
+            (
+                "https://a:same@h1 https://a:same@h1".into(),
+                "https://a:[REDACTED]@h1 https://a:[REDACTED]@h1".into(),
+                2,
+            ),
+            // A URL password and a bare proxy_password value on one line.
+            (
+                "proxy=http://u:pw1@p proxy_password=pw2".into(),
+                "proxy=http://u:[REDACTED]@p proxy_password=[REDACTED]".into(),
+                2,
+            ),
+            // A proxy_password value that is a URL is masked once, as the
+            // URL's password.
+            (
+                "proxy_password=http://u:pw1@p".into(),
+                "proxy_password=http://u:[REDACTED]@p".into(),
+                1,
+            ),
+        ];
+        for (input, want, count) in proxy_cases {
+            let (out, findings) = mask_proxy_credentials(&input, PATH);
+            assert_eq!(out, want, "{input}");
+            assert_eq!(findings.len(), count, "{input}");
+        }
+
+        let token_cases = [
+            (
+                format!("https://{token}@h1 https://{token}@h2"),
+                "https://[REDACTED]@h1 https://[REDACTED]@h2".to_string(),
+                2,
+            ),
+            (
+                format!(
+                    "https://{token}@h1 https://ghp_{}@github.com",
+                    "x".repeat(36)
+                ),
+                "https://[REDACTED]@h1 https://[REDACTED]@github.com".into(),
+                2,
+            ),
+        ];
+        for (input, want, count) in token_cases {
+            let (out, findings) = mask_token_username(&input, PATH);
+            assert_eq!(out, want, "{input}");
+            assert_eq!(findings.len(), count, "{input}");
+        }
+    }
+
+    /// The URL credential edits a payload takes: one per credential, mixed
+    /// password and token forms alike, each with its own finding on the
+    /// right line, and none of the secrets left in the output.
+    #[test]
+    fn test_url_credential_edits_are_one_per_credential() {
+        let token = "deploytoken0123456789xyz";
+        let content = format!(
+            "clean line\n\
+             M=https://a:pw1@h1 https://{token}@h2 https://b:pw2@h3 https://a:pw1@h1\n"
+        );
+        let (edits, unedited) = url_credential_edits(&content, "/opt/app/.env");
+        assert!(unedited.is_empty());
+        assert_eq!(edits.len(), 4);
+        let sources: Vec<&str> = edits
+            .iter()
+            .map(|e| {
+                assert_eq!(e.findings.len(), 1);
+                assert_eq!(e.findings[0].line, Some(2));
+                assert_eq!(e.text, "[REDACTED]");
+                e.findings[0].source.as_str()
+            })
+            .collect();
+        assert_eq!(
+            sources.iter().filter(|s| **s == "token_credential").count(),
+            1,
+            "{sources:?}"
+        );
+        let (out, findings) = apply_payload_edits(&content, edits);
+        assert_eq!(findings.len(), 4);
+        for secret in ["pw1", "pw2", token] {
+            assert!(!out.contains(secret), "{secret} survives: {out}");
+        }
+        assert_eq!(out.matches("[REDACTED]").count(), 4, "{out}");
+    }
+
     /// The proxy masker's `proxy_password =` stays on its line: with an
     /// empty value it matches nothing, rather than taking the next line as
     /// the password, as the generic credential pattern already does.
     #[test]
     fn test_proxy_password_masking_stays_on_its_line() {
         for input in ["proxy_password =\nnext=1", "proxy_password\n= next"] {
-            let (out, finding) = mask_proxy_credentials(input, "/etc/dnf/dnf.conf");
+            let (out, findings) = mask_proxy_credentials(input, "/etc/dnf/dnf.conf");
             assert_eq!(out, input, "{input:?}");
-            assert!(finding.is_none(), "{input:?}");
+            assert!(findings.is_empty(), "{input:?}");
         }
-        let (out, finding) =
+        let (out, findings) =
             mask_proxy_credentials("proxy_password =\thunter2", "/etc/dnf/dnf.conf");
         assert_eq!(out, "proxy_password =\t[REDACTED]");
-        assert!(finding.is_some());
+        assert_eq!(findings.len(), 1);
     }
 
     // --- Comment-line filtering tests (Gap 1) ---

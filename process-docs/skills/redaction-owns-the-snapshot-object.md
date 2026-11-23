@@ -78,6 +78,18 @@ admin`), never a credential byte. A repo URL's credential becomes
 `REDACTED` in the authority, so the operator can see where to supply it.
 A raw (`--no-redaction`) scan keeps it, by design.
 
+**Mask every match on the line, never the first.** A line can hold
+several credentials (`MIRRORS=https://a:pw1@h1 https://b:pw2@h2`), so a
+masker over credential text takes every match: `captures_iter`,
+`find_iter` or `replace_all`, never `Regex::replace`, `find` or
+`captures`, which stop at the first and ship the rest raw. The URL
+maskers (`mask_proxy_credentials`, `mask_token_username`) once used
+`Regex::replace` and leaked the second URL's password into the snapshot
+and both exports. Each credential is its own edit carrying its own
+finding, so the payload merge reports one row per credential. Test a
+masker with two and three credentials on a line, the same one repeated,
+and mixed forms.
+
 **Diagnostics are not redacted, so name them from the raw value.** A
 warning, notice or degraded reason is written at collection, before
 `redact()` runs, and `redact()` never reads it. Sanitizing a reference
