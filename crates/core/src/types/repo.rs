@@ -601,6 +601,8 @@ fn offset_in(content: &str, part: &str) -> usize {
 /// The header match is on the exact spelling, since dnf keys repos
 /// case-sensitively; [`RepoId`]'s folded equality is not used here.
 pub fn parse_repo_sections(content: &str) -> Vec<RepoSectionDef> {
+    #[cfg(any(test, feature = "test-support"))]
+    parse_count::record();
     let spans = repo_credential_spans(content);
     let mut sections: Vec<(SectionId, SectionValues)> = Vec::new();
     let mut current: Option<usize> = None;
@@ -827,6 +829,34 @@ pub fn effective_sections<'a>(
         .into_iter()
         .filter_map(|(id, defs)| first_in_read_order(defs.into_iter()).map(|def| (id, def)))
         .collect()
+}
+
+/// Calls to [`parse_repo_sections`] on the current thread, so a test can
+/// pin how many times a caller parses repo files. Built for this crate's
+/// tests and for the `test-support` feature, which other crates enable
+/// only as a dev-dependency, so release builds carry none of it.
+#[cfg(any(test, feature = "test-support"))]
+pub mod parse_count {
+    use std::cell::Cell;
+
+    thread_local! {
+        static CALLS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn record() {
+        CALLS.with(|n| n.set(n.get() + 1));
+    }
+
+    /// Sets this thread's count back to zero.
+    pub fn reset() {
+        CALLS.with(|n| n.set(0));
+    }
+
+    /// Calls to [`super::parse_repo_sections`] on this thread since the
+    /// last [`reset`].
+    pub fn get() -> usize {
+        CALLS.with(Cell::get)
+    }
 }
 
 /// The first of `defs` in dnf's read order, ties broken by content.
@@ -1357,6 +1387,32 @@ enabled=1
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn two_definitions_at_one_path_resolve_by_content_in_either_order() {
+        // A host cannot hold two files at one path, but the resolver still
+        // answers the same in any order: the lesser content wins, here the
+        // disabled one, since `enabled=0` sorts before `enabled=1`.
+        const PATH: &str = "/etc/yum.repos.d/site.repo";
+        let enabled = "[site]\nbaseurl=https://s.example/\nenabled=1\n";
+        let disabled = "[site]\nbaseurl=https://s.example/\nenabled=0\n";
+        let id = SectionId::new("site");
+        for files in [
+            [(PATH, enabled), (PATH, disabled)],
+            [(PATH, disabled), (PATH, enabled)],
+        ] {
+            let (path, sec) = effective_section_in(files, &id).expect("site is defined");
+            assert_eq!((path, sec.enabled), (PATH, false), "{files:?}");
+
+            let all = effective_sections(files.into_iter().flat_map(|(path, content)| {
+                parse_repo_sections(content)
+                    .into_iter()
+                    .map(move |sec| (path, content, sec))
+            }));
+            let (path, sec) = &all[&id];
+            assert_eq!((*path, sec.enabled), (PATH, false), "{files:?}");
         }
     }
 

@@ -437,19 +437,10 @@ type SectionDefs<'a> = BTreeMap<SectionId, (&'a str, RepoSectionDef)>;
 /// once.
 fn section_defs<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> SectionDefs<'a> {
     effective_sections(files.into_iter().flat_map(|(path, content)| {
-        parse_sections(content)
+        parse_repo_sections(content)
             .into_iter()
             .map(move |sec| (path, content, sec))
     }))
-}
-
-/// [`parse_repo_sections`], with the sections it returns counted in tests,
-/// which pin that routing parses each repo file once.
-fn parse_sections(content: &str) -> Vec<RepoSectionDef> {
-    let sections = parse_repo_sections(content);
-    #[cfg(test)]
-    tests::SECTIONS_PARSED.with(|n| n.set(n.get() + sections.len()));
-    sections
 }
 
 /// The route-loss decision: whether the build cannot install, from a
@@ -744,12 +735,6 @@ mod tests {
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::repo::PseudoRepo;
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
-
-    thread_local! {
-        /// Sections [`parse_sections`] returned on this thread.
-        pub(super) static SECTIONS_PARSED: std::cell::Cell<usize> =
-            const { std::cell::Cell::new(0) };
-    }
 
     /// The rendered Containerfile, line by line: repo-less packages are
     /// planned here and rendered in the package phase's combined install,
@@ -2035,20 +2020,40 @@ mod tests {
         !export.is_some_and(|export| serves(rpm, repos, &export))
     }
 
+    /// Every section the route-loss decision considers, read from the
+    /// snapshot itself rather than from [`InstallRepos`], so the reference
+    /// does not share candidate discovery with the code it checks: each
+    /// section any stored repo file defines, and each package's section by
+    /// its recorded attribution, or else by the spelling of its repo.
+    fn reference_candidates(rpm: &RpmSection) -> BTreeSet<SectionId> {
+        let defined: BTreeSet<SectionId> = rpm
+            .repo_files
+            .iter()
+            .flat_map(|f| parse_repo_sections(&f.content))
+            .map(|sec| sec.id)
+            .collect();
+        let packages: Vec<SectionId> = rpm
+            .packages_added
+            .iter()
+            .filter(|p| !p.source_repo.is_empty())
+            .filter_map(|p| match &p.repo_attribution {
+                RepoAttribution::Exact { id } | RepoAttribution::Resolved { id, .. } => {
+                    Some(SectionId::new(id.as_str()))
+                }
+                _ => section_spelling(defined.iter().map(SectionId::as_str), &p.source_repo)
+                    .map(SectionId::new),
+            })
+            .collect();
+        defined.into_iter().chain(packages).collect()
+    }
+
     #[test]
     fn parsing_each_repo_file_once_loses_the_same_routes_as_per_candidate_lookup() {
         for include_custom in [true, false] {
             let snap = routing_fixture(40, include_custom);
             let rpm = snap.rpm.as_ref().expect("an rpm section");
             let repos = InstallRepos::of(&snap);
-            let mut candidates: BTreeSet<SectionId> =
-                repos.spellings.iter().map(SectionId::new).collect();
-            candidates.extend(
-                rpm.packages_added
-                    .iter()
-                    .filter_map(|p| repos.route_section(p)),
-            );
-            let expected: BTreeSet<SectionId> = candidates
+            let expected: BTreeSet<SectionId> = reference_candidates(rpm)
                 .into_iter()
                 .filter(|section| route_lost_per_candidate(rpm, &repos, section))
                 .collect();
@@ -2073,28 +2078,19 @@ mod tests {
 
     #[test]
     fn routing_parses_each_repo_file_once() {
+        use inspectah_core::types::repo::parse_count;
         const SECTIONS: usize = 200;
         let snap = routing_fixture(SECTIONS, true);
         let rpm = snap.rpm.as_ref().expect("an rpm section");
         let staged = staged_writes(&snap);
-        let host_sections: usize = rpm
-            .repo_files
-            .iter()
-            .map(|f| parse_repo_sections(&f.content).len())
-            .sum();
-        SECTIONS_PARSED.with(|n| n.set(0));
+        parse_count::reset();
         let repos = InstallRepos::from_staged(&snap, &staged);
-        let staged_sections: usize = repos
-            .staged_files()
-            .map(|(_, content)| parse_repo_sections(content).len())
-            .sum();
-        assert!(
-            staged_sections > SECTIONS,
-            "the fixture stages the mirror file"
-        );
+        let parses = parse_count::get();
+        let staged_files = repos.staged_files().count();
+        assert!(staged_files > 0, "the fixture stages repo files");
         assert_eq!(
-            SECTIONS_PARSED.with(std::cell::Cell::get),
-            host_sections + staged_sections,
+            parses,
+            rpm.repo_files.len() + staged_files,
             "each host file and each staged file parsed once"
         );
     }
