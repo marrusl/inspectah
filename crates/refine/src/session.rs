@@ -5016,6 +5016,15 @@ pub fn render_refine_export(
     {
         warnings.insert(first_failure + i, notice);
     }
+    // A failed `rpm -Va` leads the failures, so the header's cap never
+    // drops it behind a run of unproved uploads.
+    if let Some(failure) = inspectah_pipeline::render::rpm_verify::rpm_va_failed_notice(snap) {
+        let first_failure = warnings
+            .iter()
+            .position(|w| w.kind() != inspectah_pipeline::export_warning::ExportWarningKind::Notice)
+            .unwrap_or(warnings.len());
+        warnings.insert(first_failure, failure);
+    }
 
     // 2e. Extract payload files from source tarball for unmanaged files
     //     and repo-less RPMs. These were bundled at scan time and must be
@@ -6393,6 +6402,52 @@ mod tests {
         assert!(
             err.to_string().contains("balanced"),
             "error must name the unknown target, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_failed_rpm_va_reaches_the_export_warnings_once() {
+        use inspectah_core::types::rpm::RPM_VA_FAILED_WARNING;
+        let mut snap = test_snapshot();
+        snap.warnings
+            .push(inspectah_core::types::warnings::Warning {
+                inspector: "rpm".into(),
+                message: RPM_VA_FAILED_WARNING.into(),
+                ..Default::default()
+            });
+        let tmpdir = tempfile::tempdir().unwrap();
+        let warnings = render_refine_export(
+            &snap,
+            &tmpdir.path().join("export.tar.gz"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let failed: Vec<&ExportWarning> = warnings
+            .iter()
+            .filter(|w| w.text() == RPM_VA_FAILED_WARNING)
+            .collect();
+        assert_eq!(failed.len(), 1, "{warnings:?}");
+        assert_eq!(
+            failed[0].kind(),
+            inspectah_pipeline::export_warning::ExportWarningKind::Failure
+        );
+
+        // A clean verify adds nothing.
+        let clean = render_refine_export(
+            &test_snapshot(),
+            &tmpdir.path().join("clean.tar.gz"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(
+            clean.iter().all(|w| w.text() != RPM_VA_FAILED_WARNING),
+            "{clean:?}"
         );
     }
 

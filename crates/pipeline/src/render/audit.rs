@@ -1551,6 +1551,25 @@ mod tests {
         }
     }
 
+    /// A failed `rpm -Va` is listed once under Warnings, in the collector's
+    /// words, which say what may be missing and what to do.
+    #[test]
+    fn a_failed_rpm_va_is_listed_under_warnings() {
+        use inspectah_core::types::rpm::RPM_VA_FAILED_WARNING;
+        let snap = InspectionSnapshot {
+            warnings: vec![inspectah_core::types::warnings::Warning {
+                inspector: "rpm".into(),
+                message: RPM_VA_FAILED_WARNING.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let md = render_audit(&snap);
+        let warnings = md.split("## Warnings").nth(1).expect("a Warnings section");
+        assert_eq!(warnings.matches(RPM_VA_FAILED_WARNING).count(), 1, "{md}");
+        assert_eq!(md.matches(RPM_VA_FAILED_WARNING).count(), 1, "{md}");
+    }
+
     /// Config-borne advisories are the only advisory source the report has
     /// to dig out of a disposition. Every table in the System Configuration
     /// group filters on `is_included()`, which is false for an advisory, so

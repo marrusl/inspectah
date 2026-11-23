@@ -548,6 +548,15 @@ impl Inspector for RpmInspector {
             });
         }
 
+        // A package-mode host where `rpm -Va` failed: the config section
+        // sees no modified RPM-owned file, so say what may be missing.
+        if matches!(ctx.source_system, SourceSystem::PackageBased { .. }) && supp.rpm_va.is_none() {
+            warnings.push(Warning {
+                inspector: "rpm".into(),
+                message: inspectah_core::types::rpm::RPM_VA_FAILED_WARNING.into(),
+                ..Default::default()
+            });
+        }
         warnings.extend(supp.gpg_key_warnings);
         let left_out = supp.left_out;
 
@@ -1821,6 +1830,13 @@ mod tests {
         if let SectionData::Rpm(rpm) = &output.section {
             assert!(rpm.rpm_va.is_empty(), "bootc should skip rpm -Va");
             assert!(!rpm.rpm_va_complete, "a skipped rpm -Va verified nothing");
+            assert!(
+                !output
+                    .warnings
+                    .iter()
+                    .any(|w| w.message == inspectah_core::types::rpm::RPM_VA_FAILED_WARNING),
+                "a skipped rpm -Va is not a failed one"
+            );
         } else {
             panic!("expected SectionData::Rpm");
         }
@@ -5390,6 +5406,92 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 "{}: EPEL's key is owned by epel-release, not in the base, and carried",
                 case.name
             );
+        }
+    }
+
+    /// A package-mode scan whose `rpm -Va` fails records one warning that
+    /// says modified RPM-owned configuration files may be missing. rpm's
+    /// own non-zero exit (1 with a report of modified files) is not a
+    /// failure; 1 with nothing reported, any other exit, a kill or timeout
+    /// (-1) and a command that cannot run (127) are.
+    #[test]
+    fn a_failed_rpm_va_raises_one_warning() {
+        const MODIFIED: &str = "S.5....T.  c /etc/bashrc\n";
+        struct Case {
+            name: &'static str,
+            /// `rpm -Va`'s output and exit code.
+            va: (&'static str, i32),
+            warns: bool,
+        }
+        let cases = [
+            Case {
+                name: "clean verify",
+                va: ("", 0),
+                warns: false,
+            },
+            Case {
+                name: "rpm reports a modified file",
+                va: (MODIFIED, 1),
+                warns: false,
+            },
+            Case {
+                name: "exit 1 with nothing reported",
+                va: ("", 1),
+                warns: true,
+            },
+            Case {
+                name: "killed or timed out after partial output",
+                va: (MODIFIED, -1),
+                warns: true,
+            },
+            Case {
+                name: "exit 2 with output",
+                va: (MODIFIED, 2),
+                warns: true,
+            },
+            Case {
+                // The real executor answers 127 when it cannot spawn.
+                name: "rpm -Va cannot run",
+                va: ("", 127),
+                warns: true,
+            },
+        ];
+        for case in &cases {
+            let (stdout, exit_code) = case.va;
+            let exec = with_el10_release(build_rpm_mock_executor()).with_command(
+                "rpm -Va",
+                ExecResult {
+                    stdout: stdout.into(),
+                    exit_code,
+                    ..Default::default()
+                },
+            );
+            let source = SourceSystem::PackageBased {
+                os_release: test_os_release(),
+            };
+            let ctx = InspectionContext {
+                source_system: &source,
+                executor: &inspectah_core::machine_state::ScreenedExecutor::new(&exec),
+                rpm_state: None,
+                baseline_data: None,
+            };
+            let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
+            let failed: Vec<&Warning> = output
+                .warnings
+                .iter()
+                .filter(|w| w.message == inspectah_core::types::rpm::RPM_VA_FAILED_WARNING)
+                .collect();
+            assert_eq!(failed.len(), usize::from(case.warns), "{}", case.name);
+            if let Some(w) = failed.first() {
+                assert_eq!(w.inspector, "rpm", "{}", case.name);
+                for text in [
+                    "modified RPM-owned configuration files may be missing",
+                    "check the exported configuration against the host",
+                    "fix the cause and re-scan",
+                ] {
+                    assert!(w.message.contains(text), "{}: {}", case.name, w.message);
+                }
+            }
         }
     }
 

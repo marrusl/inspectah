@@ -992,6 +992,13 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
             ) {
                 eprintln!("{notice}");
             }
+            // A failed `rpm -Va`: the snapshot warning the audit report
+            // lists, repeated here so the scan does not lose it silently.
+            if let Some(failure) =
+                inspectah_pipeline::render::rpm_verify::rpm_va_failed_notice(&snapshot)
+            {
+                eprintln!("{failure}");
+            }
             Ok(outcome)
         }
         Err(e) => {

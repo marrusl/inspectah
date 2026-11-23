@@ -137,6 +137,7 @@ Artifact generators invoked after triage decisions finalized:
 - `language_packages.rs` — Tier 1 pip/npm/gem Containerfile rendering
 - `unmanaged.rs`: Tier 2 unmanaged file COPY directives and symlink `ln -sf`; `bundle_unmanaged_files`, which copies the payloads into the scan tarball after the read gate checks each again
 - `repoless.rs`: package routing (`route_for`, with the routes an export lost in `InstallRepos::lost_route`), repo-less install planning for the combined local and disabled-repo install, and the scan tarball's cached RPM writer
+- `rpm_verify.rs`: `rpm_va_failed_notice`, the export warning for a snapshot whose `rpm -Va` failed, repeating the collector's `RPM_VA_FAILED_WARNING` on scan stderr and in the refine export
 - `safety.rs` — Safety checks and destructive-action warnings
 - `configtree.rs`: the staged file tree. `staged_writes` is the one decision of which offered files the export writes, keyed by `Destination` (a normalized image path), with every withheld and refused offer; `is_staged` asks it
 - `baseline_fmt.rs` — Baseline comparison formatting

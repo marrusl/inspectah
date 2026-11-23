@@ -4,6 +4,17 @@ use super::repo::{RepoAttribution, RepoId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The snapshot warning a package-mode scan records when `rpm -Va` fails:
+/// it exits with neither a clean verify (0) nor a report of modified
+/// files (1 with output), is killed, or cannot run. With no verification,
+/// no RPM-owned file reads as modified, so the configuration section
+/// leaves every modified one out. The export notice that repeats it on
+/// stderr and in refine finds it by this exact text.
+pub const RPM_VA_FAILED_WARNING: &str = "rpm -Va did not finish, so inspectah could not tell \
+     which RPM-owned files were modified: modified RPM-owned configuration files may be \
+     missing from the output. Run rpm -Va on the host to see why it failed, check the \
+     exported configuration against the host, fix the cause and re-scan.";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageState {

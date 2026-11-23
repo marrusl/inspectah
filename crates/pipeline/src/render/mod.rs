@@ -42,6 +42,7 @@ pub mod unit_plan;
 pub mod repo_enabling;
 pub mod repo_owned;
 pub mod repoless;
+pub mod rpm_verify;
 pub mod unmanaged;
 
 use inspectah_core::snapshot::InspectionSnapshot;

@@ -335,6 +335,29 @@ providers in one batch. A fixture where every capability has the same
 provider, or only one capability exists, passes under per-batch
 attribution, which is how this shipped.
 
+## `rpm -Va`: a non-zero exit is not a failure
+
+`rpm -Va` exits 1 whenever it reports a file that does not verify, so
+exit 1 with output is its normal report. The collector
+(`collect_supplementary` in `inspectors/rpm/mod.rs`) reads exit 0 with
+no output as a clean verify and exit 0 or 1 with output as a report.
+Everything else is a failed verification (`SupplementaryData::rpm_va` is
+`None`): exit 1 with nothing reported, any other exit even with output,
+-1 from `RealExecutor` (a signal kill, or its 30 s `COMMAND_TIMEOUT`,
+which returns no stdout) and 127 (the command could not spawn). A run
+that stops partway yet exits 1 looks like a full report and cannot be
+caught.
+
+A failure is not an empty report: with no verification, the config
+section sees no modified RPM-owned file and carries none. On a
+package-based host the collector records `RPM_VA_FAILED_WARNING`
+(`core::types::rpm`) in the snapshot's warnings, which the audit and HTML
+reports list, and `render::rpm_verify::rpm_va_failed_notice` repeats that
+exact text on scan stderr and in the refine export's warnings. An
+image-based host skips `rpm -Va`, which is not a failure and warns
+nothing. `RpmSection::rpm_va_complete` is `false` in both cases, so it
+cannot tell them apart; read the warning.
+
 ## Where this applies
 
 - `crates/collect/src/inspectors/rpm/mod.rs`: `ProviderIndex`, the
