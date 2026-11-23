@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::machine_state::{
-    MachineStateMember, OverrideLevel, ProvisioningNotice, ProvisioningStep,
+    CarriableMember, MachineStateMember, OverrideLevel, ProvisioningNotice, ProvisioningStep,
 };
 
 use super::comment::escape_comment_text;
@@ -30,6 +30,16 @@ const NOTICE_PATH_MAX: usize = 200;
 
 /// How a deployed machine gets a kernel argument the image leaves out.
 const KARGS_INSTALL_STEP: &str = "bootc install to-disk --karg";
+
+/// The audit report's notice for the NVMe host id files. Their member's
+/// [`ProvisioningNotice`] says first boot recreates them, which is false on
+/// a RHEL 9 bootc base: it bakes one identity into the image and nothing
+/// regenerates it. This text says what holds on both RHEL 9 and RHEL 10
+/// until the member's notice itself is corrected.
+const NVME_HOST_ID_NOTICE: &str = "the RHEL 9 bootc base image ships its own \
+     /etc/nvme/hostnqn and hostid, so every machine built from it shares one NVMe host \
+     identity until you delete both files in the Containerfile or write new ones at \
+     provisioning. RHEL 10 derives it from each machine's firmware UUID";
 
 /// One machine-state row, from any of the snapshot's three class lists.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,6 +327,8 @@ pub fn audit_table(snap: &InspectionSnapshot) -> Vec<String> {
         };
         let notice = if row.included {
             "included in the image by override".to_string()
+        } else if row.member == MachineStateMember::Carriable(CarriableMember::NvmeHostId) {
+            NVME_HOST_ID_NOTICE.to_string()
         } else {
             notice_text(row.member.notice())
         };
@@ -497,6 +509,35 @@ mod tests {
             .collect();
         assert_eq!(notices.len(), 2, "{notices:?}");
         assert_eq!(notices[1], notice);
+    }
+
+    /// Nothing recreates the NVMe host id on a RHEL 9 bootc host, so its
+    /// row says what the base image does instead; other first-boot rows
+    /// keep their text.
+    #[test]
+    fn the_nvme_host_id_row_does_not_claim_first_boot_recreates_it() {
+        let mut snap = snap();
+        snap.config.as_mut().unwrap().files.push(ConfigFileEntry {
+            path: "/etc/nvme/hostnqn".into(),
+            disposition: FindingKind::MachineState {
+                member: CarriableMember::NvmeHostId,
+                include: false,
+            },
+            ..Default::default()
+        });
+        let table = audit_table(&snap);
+        let row = |path: &str| {
+            table
+                .iter()
+                .find(|l| l.contains(path))
+                .unwrap_or_else(|| panic!("{path}: {table:?}"))
+                .clone()
+        };
+        let nvme = row("/etc/nvme/hostnqn");
+        assert!(nvme.contains(NVME_HOST_ID_NOTICE), "{nvme}");
+        assert!(!nvme.contains("first boot"), "{nvme}");
+        assert!(!nvme.contains('\u{2014}'), "{nvme}");
+        assert!(row("/etc/machine-id").contains("recreated at first boot"));
     }
 
     #[test]
