@@ -826,6 +826,73 @@ fn each_url_credential_is_one_row_naming_a_shipped_placeholder() {
     }
 }
 
+/// Two URL credentials on one line, each also matched by a pattern: a
+/// `mongodb://` password and an AWS key standing as a user name. The
+/// `.env` copy takes the snapshot pass, the `.conf` file the bundle's
+/// payload pass.
+const MIXED_ENV: &str = "/opt/mixed/.env";
+const MIXED_CONF: &str = "/opt/mixed/app.conf";
+const MIXED_PASSWORD: &str = "mixedpw4471";
+const MIXED_AWS_KEY: &str = "AKIA0123456789ABCDEF";
+
+/// Each credential on a line holding two is masked under its own
+/// placeholder, and every inline row names a placeholder the shipped file
+/// holds, on both export paths and through both redaction passes: the
+/// URL maskers' rewrites are separate edits, so one never joins the two
+/// pattern tokens into one span that writes only the first.
+#[test]
+fn mixed_url_credentials_on_one_line_each_name_a_shipped_placeholder() {
+    let line = format!("mongodb://u:{MIXED_PASSWORD}@db https://{MIXED_AWS_KEY}@host/\n");
+    let (exec, root) = host_of(&[
+        (MIXED_ENV, line.clone().into_bytes()),
+        (MIXED_CONF, line.into_bytes()),
+    ]);
+    let Exported {
+        snap,
+        scan_tree,
+        session,
+        _packed,
+    } = export(&exec, root.path(), false);
+    let refine_tree = export_session(&session);
+
+    let mut all = vec![(
+        "snapshot".to_string(),
+        serde_json::to_vec(&snap).expect("the snapshot serializes"),
+    )];
+    all.extend(files(scan_tree.path()));
+    all.extend(files(refine_tree.path()));
+    for secret in [MIXED_PASSWORD, MIXED_AWS_KEY] {
+        for (where_, bytes) in &all {
+            assert!(!contains(bytes, secret), "{where_} holds {secret}");
+        }
+    }
+
+    for path in [MIXED_ENV, MIXED_CONF] {
+        let inline: Vec<_> = snap
+            .redactions
+            .iter()
+            .filter(|f| f.path.trim_start_matches('/') == &path[1..])
+            .filter(|f| f.kind == inspectah_core::types::redaction::RedactionKind::Inline)
+            .collect();
+        assert_eq!(
+            inline.len(),
+            2,
+            "{path}: one row per credential: {inline:#?}"
+        );
+        for (via, tree) in [("scan", scan_tree.path()), ("refine", refine_tree.path())] {
+            let shipped = std::fs::read_to_string(tree.join("unmanaged").join(&path[1..]))
+                .unwrap_or_else(|e| panic!("{via}: {path} ships: {e}"));
+            for f in &inline {
+                let form = placeholder_form(f);
+                assert!(
+                    shipped.contains(&form),
+                    "{via}: {path} row names {form}, which the file does not hold:\n{shipped}"
+                );
+            }
+        }
+    }
+}
+
 /// A link alone in its directory, as driftify plants it: no regular file
 /// beside it, so no `COPY` creates the directory.
 const LONE_LINK: &str = "/opt/tool/bin/run";

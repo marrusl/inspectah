@@ -1426,17 +1426,13 @@ fn scan_and_redact_field(
 }
 
 /// The pattern pass's replacements in `content`, as edits of that text,
-/// with their findings: what [`scan_and_redact_field`] replaces, its
-/// tokens minted in the same order.
+/// each carrying its match's finding: what [`scan_and_redact_field`]
+/// replaces, its tokens minted in the same order.
 fn pattern_edits(
     content: &str,
     source_path: &str,
     registry: &mut CounterRegistry,
-) -> (Vec<PayloadEdit>, Vec<RedactionFinding>) {
-    let findings = scan_content(content, source_path);
-    if findings.is_empty() {
-        return (Vec::new(), findings);
-    }
+) -> Vec<PayloadEdit> {
     let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
     for (idx, pat) in PATTERNS.iter().enumerate() {
         for em in collect_eligible_matches(pat, content, Some(source_path)) {
@@ -1445,19 +1441,19 @@ fn pattern_edits(
     }
     dedup_overlapping_matches(&mut all_matches);
     all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-    let edits = all_matches
+    all_matches
         .into_iter()
         .map(|(pat_idx, em)| {
-            let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+            let pat = &PATTERNS[pat_idx];
+            let kind_label = format!("{:?}", pat.finding_kind).to_lowercase();
             PayloadEdit {
                 range: em.start..em.end,
                 text: build_replacement(&em, content, registry, &kind_label),
                 token: true,
-                findings: Vec::new(),
+                findings: vec![pattern_finding(pat, em.line_num, source_path)],
             }
         })
-        .collect();
-    (edits, findings)
+        .collect()
 }
 
 /// The edits the compose pass (`scrub_compose_secrets`) makes in
@@ -1531,9 +1527,11 @@ pub enum SnapshotText {
 /// rewrote a line before the patterns read it removed a private key's
 /// `BEGIN` marker and left its body.
 ///
-/// A masker's finding is kept only when its rewrite is what the file
-/// holds: one merged into a pattern edit is reported by the pattern's
-/// finding, under the token the file shows. The compose pass emits no
+/// Every finding rides on its edit and is kept only when that edit's text
+/// is what the file holds: a masker's rewrite merged into a pattern edit
+/// is reported by the pattern's finding, under the token the file shows,
+/// and a pattern token merged under another token is not reported, since
+/// the file shows only the other. The compose pass emits no
 /// finding of its own: when it alone replaced something, the file gets
 /// one compose finding, so one secret is not reported twice and a file
 /// with a secret is never reported as clean.
@@ -1543,10 +1541,9 @@ fn redact_snapshot_text(
     path: &str,
     registry: &mut CounterRegistry,
 ) -> Vec<RedactionFinding> {
-    let (mut edits, mut findings) = pattern_edits(content, path, registry);
-    let (url_edits, url_unedited) = url_credential_edits(content, path);
+    let mut edits = pattern_edits(content, path, registry);
+    let (url_edits, mut findings) = url_credential_edits(content, path);
     edits.extend(url_edits);
-    findings.extend(url_unedited);
     let mut compose_scrubbed = false;
     if kind == SnapshotText::ComposeFile {
         let scrub_edits = compose_scrub_edits(content);
@@ -1774,18 +1771,20 @@ struct PayloadEdit {
     /// than a masker's rewrite of the span, which keeps the bytes around
     /// the credential it masked.
     token: bool,
-    /// The findings that name `text`'s placeholder. They are reported only
-    /// when `text` is what the file ends up holding.
+    /// The findings that name `text`'s placeholder: a pattern match's
+    /// own, or a masker's. They are reported only when `text` is what the
+    /// file ends up holding.
     findings: Vec<RedactionFinding>,
 }
 
 /// `content` with every edit applied once, and the findings of the edits
-/// whose text it holds. Edits that overlap become one edit over all their
-/// bytes, replaced by a pattern token: a masker's rewrite keeps text the
-/// pattern edit removes, so it never stands for the merged span. Every
-/// byte any edit replaces is replaced. An edit whose text is not written
-/// drops its findings, which would name a placeholder the file does not
-/// hold.
+/// whose text it holds: the findings reported are exactly those whose
+/// replacement is in the output. Edits that overlap become one edit over
+/// all their bytes, replaced by a pattern token: a masker's rewrite keeps
+/// text the pattern edit removes, so it never stands for the merged span.
+/// Every byte any edit replaces is replaced. An edit whose text is not
+/// written, a masker's or a second pattern token's, drops its findings,
+/// which would name a placeholder the file does not hold.
 fn apply_payload_edits(
     content: &str,
     mut edits: Vec<PayloadEdit>,
@@ -1853,35 +1852,81 @@ fn line_edit(line: &str, masked: &str) -> (Range<usize>, String) {
 /// ([`mask_proxy_credentials`]), then a token standing as the user name
 /// ([`mask_token_username`]). The generic patterns cover such a password
 /// for a few schemes only. Each edit is read off the original line, so
-/// it never decides what the pattern pass sees. Each masked line's
-/// findings ride on its edit ([`apply_payload_edits`] keeps them only if
-/// the rewrite is written); findings on a line the maskers left as it
-/// was are returned apart.
+/// it never decides what the pattern pass sees.
+///
+/// Each masker's rewrite is its own edit, carrying its own finding
+/// ([`apply_payload_edits`] keeps it only if the rewrite is written), so
+/// a masker edit spans only the credential it masked and never joins two
+/// pattern matches on one line. Only a token rewrite that touches the
+/// password rewrite's text is one edit with it. A finding whose masker
+/// left the line as it was is returned apart.
 fn url_credential_edits(content: &str, path: &str) -> (Vec<PayloadEdit>, Vec<RedactionFinding>) {
     let mut edits = Vec::new();
     let mut unedited = Vec::new();
     let mut offset = 0;
     for (number, line) in content.split_inclusive('\n').enumerate() {
+        let line_number = i32::try_from(number + 1).ok();
+        let at_line = |finding: RedactionFinding| RedactionFinding {
+            line: line_number,
+            ..finding
+        };
         let (masked, password) = mask_proxy_credentials(line, path);
-        let (masked, token) = mask_token_username(&masked, path);
-        let mut findings: Vec<RedactionFinding> = password.into_iter().chain(token).collect();
-        for finding in &mut findings {
-            finding.line = i32::try_from(number + 1).ok();
+        let (token_masked, token) = mask_token_username(&masked, path);
+        let (password, token) = (password.map(at_line), token.map(at_line));
+        let password_edit = (masked != line).then(|| line_edit(line, &masked));
+        let token_edit = (token_masked != masked).then(|| line_edit(&masked, &token_masked));
+        // Each rewrite as a range of `line`, its text, and its findings.
+        let mut rewrites: Vec<(Range<usize>, String, Vec<RedactionFinding>)> = Vec::new();
+        match (password_edit, token_edit) {
+            (Some(first), Some((range, text))) => match rebase_edit(&first, range) {
+                Some(range) => {
+                    rewrites.push((first.0, first.1, password.into_iter().collect()));
+                    rewrites.push((range, text, token.into_iter().collect()));
+                }
+                None => {
+                    let (range, text) = line_edit(line, &token_masked);
+                    rewrites.push((range, text, password.into_iter().chain(token).collect()));
+                }
+            },
+            // With no password rewrite, the token rewrite's range is
+            // already a range of `line`.
+            (first, second) => {
+                for (edit, finding) in [(first, password), (second, token)] {
+                    match edit {
+                        Some((range, text)) => {
+                            rewrites.push((range, text, finding.into_iter().collect()))
+                        }
+                        None => unedited.extend(finding),
+                    }
+                }
+            }
         }
-        if masked != line {
-            let (range, text) = line_edit(line, &masked);
+        for (range, text, findings) in rewrites {
             edits.push(PayloadEdit {
                 range: offset + range.start..offset + range.end,
                 text,
                 token: false,
                 findings,
             });
-        } else {
-            unedited.extend(findings);
         }
         offset += line.len();
     }
     (edits, unedited)
+}
+
+/// `range`, a range of the text an edit `first` wrote, as a range of the
+/// text `first` was applied to, or `None` when it touches the bytes
+/// `first` wrote.
+fn rebase_edit(first: &(Range<usize>, String), range: Range<usize>) -> Option<Range<usize>> {
+    let (replaced, text) = first;
+    let written_end = replaced.start + text.len();
+    if range.end <= replaced.start {
+        Some(range)
+    } else if range.start >= written_end {
+        Some(range.start - written_end + replaced.end..range.end - written_end + replaced.end)
+    } else {
+        None
+    }
 }
 
 /// Redact the text of a file only the bundle holds, at `path`. Every
@@ -1906,28 +1951,24 @@ pub fn redact_payload(content: &str, path: &str) -> Option<(String, Vec<Redactio
         .and_then(|n| n.to_str())
         .is_some_and(is_compose_file_name);
     let mut matches = payload_matches(content, path);
-    let mut findings: Vec<RedactionFinding> = matches
-        .iter()
-        .map(|(idx, em)| pattern_finding(&PATTERNS[*idx], em.line_num, path))
-        .collect();
     // Tokens are minted last match first, as every pattern pass mints
     // them.
     matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
     let mut edits: Vec<PayloadEdit> = matches
         .iter()
         .map(|(idx, em)| {
-            let kind_label = format!("{:?}", PATTERNS[*idx].finding_kind).to_lowercase();
+            let pat = &PATTERNS[*idx];
+            let kind_label = format!("{:?}", pat.finding_kind).to_lowercase();
             PayloadEdit {
                 range: em.start..em.end,
                 text: build_replacement(em, content, &mut registry, &kind_label),
                 token: true,
-                findings: Vec::new(),
+                findings: vec![pattern_finding(pat, em.line_num, path)],
             }
         })
         .collect();
-    let (url_edits, url_unedited) = url_credential_edits(content, path);
+    let (url_edits, mut findings) = url_credential_edits(content, path);
     edits.extend(url_edits);
-    findings.extend(url_unedited);
     let (mut text, kept) = apply_payload_edits(content, edits);
     findings.extend(kept);
     if is_compose {
@@ -7504,6 +7545,23 @@ baseurl = https://cdn.redhat.com
         let plain = "services:\n  web:\n    image: docker.io/library/nginx:1.27\n    \
                      command: curl https://api.example.test/v1\n";
         assert_eq!(redact_payload(plain, "/usr/local/app/compose.yaml"), None);
+    }
+
+    /// Two URL credentials on one line, each also a pattern match, keep
+    /// the text between them and each take their own token: the URL
+    /// maskers' rewrites are separate edits, and each pattern finding is
+    /// reported because its token is written.
+    #[test]
+    fn mixed_url_credentials_keep_separate_tokens() {
+        let line = "mongodb://u:pw@db https://AKIA0123456789ABCDEF@host/\n";
+        let (text, findings) = redact_payload(line, "/opt/mixed/app.conf").expect("redacted");
+        assert_eq!(
+            text,
+            "mongodb://u:REDACTED_MONGODBPASSWORD_1@db https://REDACTED_AWSKEY_1@host/\n"
+        );
+        let mut patterns: Vec<_> = findings.iter().map(|f| f.pattern.as_str()).collect();
+        patterns.sort_unstable();
+        assert_eq!(patterns, ["awskey", "mongodbpassword"], "{findings:#?}");
     }
 
     /// Edits that overlap are applied as one, over all their bytes, and a
