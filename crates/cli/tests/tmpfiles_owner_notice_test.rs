@@ -11,6 +11,7 @@
 use crate::sysctl_hosts::{SysctlHost, export_session, render_export, scan_with, session};
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
+use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_collect::inspectors::users::UsersGroupsInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::users::UserContainerfileStrategy;
@@ -72,6 +73,50 @@ fn scan_host(fragment: &str, passwd: &str, group: &str) -> InspectionSnapshot {
             Box::new(RpmInspector::new()),
             Box::new(ConfigInspector::new()),
             Box::new(UsersGroupsInspector::new()),
+        ],
+    )
+}
+
+/// The export's own `/var` provisioning fragment.
+const VAR_TMPFILES: &str = "config/usr/lib/tmpfiles.d/inspectah-var.conf";
+
+/// A host whose `/var/lib/appone/cache` exists, owned by `appuser`, and
+/// whose carried fragment quotes that path on a line naming `appuser`.
+/// The storage inspector runs too, so the directory's backing comes from
+/// the collector and its provisioning from the export.
+fn scan_quoted_backing_host() -> InspectionSnapshot {
+    let host = SysctlHost::new()
+        .file(
+            FRAGMENT,
+            "d \"/var/lib/appone/cache\" 0750 appuser appgroup -\n",
+        )
+        .file(
+            "/etc/passwd",
+            "root:x:0:0:root:/root:/bin/bash\n\
+             appuser:x:1001:1001::/home/appuser:/bin/bash\n",
+        )
+        .file("/etc/group", "root:x:0:\nappgroup:x:1001:\n")
+        .file("/etc/fstab", "")
+        .command("findmnt --json", 0, r#"{"filesystems":[]}"#, "")
+        .command(
+            "find /var/lib -mindepth 1 -maxdepth 2 -type d ! -empty",
+            0,
+            "/var/lib/appone\n/var/lib/appone/cache\n",
+            "",
+        )
+        .command(
+            "stat -c %04a %u %g %U %G /var/lib/appone/cache",
+            0,
+            "0750 1001 1001 appuser appgroup\n",
+            "",
+        );
+    scan_with(
+        host,
+        vec![
+            Box::new(RpmInspector::new()),
+            Box::new(ConfigInspector::new()),
+            Box::new(UsersGroupsInspector::new()),
+            Box::new(StorageInspector::new()),
         ],
     )
 }
@@ -382,5 +427,47 @@ fn an_adjust_only_line_gets_operation_neutral_wording_on_both_export_paths() {
         for text in [&containerfile, &audit] {
             assert!(!text.contains("not be created"), "{label}:\n{text}");
         }
+    }
+}
+
+/// The notice changes what is named, never what is provisioned. A line
+/// quoting its path, whose accounts stay on Skip, is skipped by systemd
+/// on the deployed host, so the export still provisions the directory
+/// itself with numeric ownership, and names the line too.
+#[test]
+fn a_quoted_line_with_skipped_owners_keeps_the_directory_provisioned() {
+    let snap = scan_quoted_backing_host();
+    let dirs = &snap
+        .storage
+        .as_ref()
+        .expect("storage section")
+        .var_directories;
+    assert_eq!(
+        dirs.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(),
+        vec!["/var/lib/appone/cache"],
+        "the fixture proves nothing unless the directory is discovered"
+    );
+    assert_eq!(
+        refine_rows(&snap),
+        vec![row(
+            "/var/lib/appone/cache",
+            Some("appuser"),
+            Some("appgroup")
+        )]
+    );
+    for (label, root) in both_exports(&snap, None) {
+        let containerfile = read(root.path(), "Containerfile");
+        assert_eq!(
+            named_rows(&containerfile, "#   "),
+            vec![CONTAINERFILE_ROW],
+            "{label}:\n{containerfile}"
+        );
+        let var_conf = read(root.path(), VAR_TMPFILES);
+        assert!(
+            var_conf
+                .lines()
+                .any(|l| l == "d /var/lib/appone/cache 0750 1001 1001 -"),
+            "{label}: the directory is provisioned with numeric ownership:\n{var_conf}"
+        );
     }
 }

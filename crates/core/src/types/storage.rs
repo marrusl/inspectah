@@ -66,9 +66,10 @@ pub const USR_TMPFILES_PREFIX: &str = "/usr/lib/tmpfiles.d/";
 /// The leading fields of one tmpfiles.d entry, split and unquoted as
 /// `systemd-tmpfiles` reads them. Fields past the group are not kept.
 ///
-/// This is the one tmpfiles.d line parser: the collector's `/var`
-/// backing index and the export's account checks both read lines through
-/// it. systemd reads the type, path, mode, user, group and age fields with
+/// The export's account checks read lines through it. The collector's
+/// `/var` backing index does not: it still matches each line's raw,
+/// whitespace-split path, so decoding quoted paths changes what the
+/// export names and not what it provisions. systemd reads the type, path, mode, user, group and age fields with
 /// `extract_many_words(..., EXTRACT_UNQUOTE | EXTRACT_CUNESCAPE, ...)`:
 /// whitespace separates fields, a `"` or `'` quoted run may hold
 /// whitespace, and a backslash starts a C escape inside or outside quotes.

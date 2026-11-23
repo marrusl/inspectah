@@ -145,7 +145,7 @@ Artifact generators invoked after triage decisions finalized:
 - `advisory.rs`, `repo_enabling.rs`: advisory rendering and repository enablement
 - `selinux.rs` — SELinux file context rule rendering and the build-time equivalence table (`selinux_equivalences`)
 - `var_dirs.rs` — Effective `/var` directory backing at export time (`VarDirOutcome`, `EffectiveBacking`)
-- `tmpfiles_accounts.rs`: carried `tmpfiles.d` lines naming a local account the image does not create, for the Containerfile's Configuration Files notice, both audit reports and refine's `tmpfiles_missing_owners`; lines are parsed by `TmpfilesEntry` in `crates/core/src/types/storage.rs`, the one `tmpfiles.d` line parser, which unquotes and unescapes fields as systemd does and which the collector's `/var` backing index also uses
+- `tmpfiles_accounts.rs`: carried `tmpfiles.d` lines naming a local account the image does not create, for the Containerfile's Configuration Files notice, both audit reports and refine's `tmpfiles_missing_owners`; lines are parsed by `TmpfilesEntry` in `crates/core/src/types/storage.rs`, the one `tmpfiles.d` line parser, which unquotes and unescapes fields as systemd does. The collector's `/var` backing index deliberately does not use it: it matches the raw, whitespace-split path, because a matched line counts as backing whether or not systemd can run it, so decoding paths there would drop the export's fallback provisioning for a quoted line whose owner the image lacks
 
 **Section grouping:** `crates/pipeline/src/section_group.rs` — groups findings into report sections
 

@@ -9,8 +9,8 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::AdvisoryType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::storage::{
-    CredentialRef, FstabEntry, LvmVolume, MountPoint, StorageSection, TmpfilesEntry,
-    UnbackedVarAdvisory, VarDirBacking,
+    CredentialRef, FstabEntry, LvmVolume, MountPoint, StorageSection, UnbackedVarAdvisory,
+    VarDirBacking,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use serde::Deserialize;
@@ -486,13 +486,33 @@ fn load_tmpfiles_index(exec: &dyn Executor) -> TmpfilesIndex {
     index
 }
 
+/// The type character and path of one tmpfiles.d line, split on
+/// whitespace alone, with no unquoting or unescaping; `None` for a blank
+/// line, a comment, or a line with no path field.
+///
+/// Deliberately not
+/// [`TmpfilesEntry::parse`](inspectah_core::types::storage::TmpfilesEntry::parse),
+/// which reads quoted and escaped paths as systemd does. The index counts
+/// a matched line as backing whether or not systemd can run it, and a
+/// line whose owner the image lacks does not run. Matching decoded paths
+/// would count a quoted line as backing and drop the fallback the export
+/// provisions for its directory, so the index keeps matching exactly the
+/// lines it always has until effective backing accounts for whether a
+/// line can run.
+fn raw_type_and_path(line: &str) -> Option<(char, &str)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let mut fields = line.split_whitespace();
+    let entry_type = fields.next()?.chars().next()?;
+    Some((entry_type, fields.next()?))
+}
+
 /// Index one fragment's directory-creating entries into `index`.
 fn index_tmpfiles_fragment(conf: &str, content: &str, index: &mut TmpfilesIndex) {
     for raw in content.lines() {
-        let Some(TmpfilesEntry {
-            entry_type, path, ..
-        }) = TmpfilesEntry::parse(raw)
-        else {
+        let Some((entry_type, path)) = raw_type_and_path(raw) else {
             continue;
         };
         let line = raw.trim();
@@ -504,10 +524,12 @@ fn index_tmpfiles_fragment(conf: &str, content: &str, index: &mut TmpfilesIndex)
         if !DIRECTORY_CREATING_TYPES.contains(&entry_type) {
             continue;
         }
-        index.entry(path).or_insert_with(|| TmpfilesDirEntry {
-            conf: conf.to_string(),
-            line: line.to_string(),
-        });
+        index
+            .entry(path.to_string())
+            .or_insert_with(|| TmpfilesDirEntry {
+                conf: conf.to_string(),
+                line: line.to_string(),
+            });
     }
 }
 
@@ -834,6 +856,23 @@ mod tests {
                 creates_directory,
                 "type token {type_token:?}"
             );
+        }
+    }
+
+    /// The index matches the raw, whitespace-split path, so a quoted or
+    /// escaped path backs nothing, as before quoted fields were decoded.
+    #[test]
+    fn a_quoted_or_escaped_path_backs_nothing() {
+        let mut index = TmpfilesIndex::new();
+        index_tmpfiles_fragment(
+            "/etc/tmpfiles.d/quoted.conf",
+            "d \"/var/lib/quoted\" 0750 appuser appgroup -\n\
+             d '/var/lib/single' 0750 appuser appgroup -\n\
+             d /var/lib/x\\x2dy 0750 appuser appgroup -\n",
+            &mut index,
+        );
+        for path in ["/var/lib/quoted", "/var/lib/single", "/var/lib/x-y"] {
+            assert!(!index.contains_key(path), "{path}");
         }
     }
 
