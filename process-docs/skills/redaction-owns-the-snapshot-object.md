@@ -555,8 +555,11 @@ the line's end where whitespace ends it: a command
 (`DB_PASSWORD=x /usr/bin/backup`), a shell file, a kernel argument list
 and a key inside another value (`opts = password=x retries=3`) keep what
 follows. The same holds for the dedicated maskers: `PROXY_PASSWORD_LINE_RE`
-reads a `proxy_password=` that opens its line to the end of it, and a
-quoted `proxy_password` or Wi-Fi `psk` is taken whole. A quoted run
+reads a `proxy_password=` that opens its line to the end of it only in a
+file `value_runs_to_line_end` names, since it runs on every content field:
+unscoped, it turned `proxy_password=alpha /usr/bin/backup --full` in a
+shell script into a line with no command. A quoted `proxy_password` or
+Wi-Fi `psk` is taken whole. A quoted run
 (`quoted_run`, `json_strings`) ends at its closing quote, never at a
 backslash-escaped one.
 

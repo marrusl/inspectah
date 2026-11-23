@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 
 use crate::redaction::patterns::{
     GENERIC_CREDENTIAL_PATTERN, PATTERNS, SECRET_GROUP, SecretPattern, is_credential_name,
-    scan_shadow,
+    scan_shadow, value_runs_to_line_end,
 };
 use crate::render::language_packages::scrub_manifest_auth;
 use crate::render::safety::{KernelArg, kernel_args};
@@ -163,8 +163,9 @@ static PROXY_PASSWORD_KV_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Compiled regex for a `proxy_password=` that opens its line, as dnf's
 /// ini reader reads one: the value is the rest of the line, spaces
 /// included, to its last non-blank character. `\S+` alone shipped
-/// `bravo` from `proxy_password=alpha bravo`. Captures the same two
-/// groups as [`PROXY_PASSWORD_KV_RE`].
+/// `bravo` from `proxy_password=alpha bravo`. Applied only in a file
+/// [`value_runs_to_line_end`] names. Captures the same two groups as
+/// [`PROXY_PASSWORD_KV_RE`].
 static PROXY_PASSWORD_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?im)^[ \t]*(proxy_password[ \t]*=[ \t]*)([^\r\n]*[^ \t\r\n])")
         .expect("proxy_password line regex")
@@ -1387,11 +1388,17 @@ fn proxy_credential_parts(
         "Remove plaintext proxy_password from DNF/Yum configuration; use repository-level auth instead",
     );
     let mut key_values = credential_edits(&PROXY_PASSWORD_KV_RE, line, &key_value_finding);
-    key_values.extend(credential_edits(
-        &PROXY_PASSWORD_LINE_RE,
-        line,
-        &key_value_finding,
-    ));
+    // Only where the file's format reads a value to the end of its line,
+    // as the INI end-of-line pattern is scoped: in a shell file or a
+    // command, whitespace ends the value and what follows is the command,
+    // which taking the rest of the line deleted.
+    if value_runs_to_line_end(source_path) {
+        key_values.extend(credential_edits(
+            &PROXY_PASSWORD_LINE_RE,
+            line,
+            &key_value_finding,
+        ));
+    }
     (passwords, key_values)
 }
 
@@ -5530,6 +5537,33 @@ baseurl = https://cdn.redhat.com
             assert_eq!(out, want, "{input}");
             assert_eq!(findings.len(), 1, "{input}");
         }
+    }
+
+    /// A `proxy_password=` that opens a line runs to the line's end only
+    /// in a file whose format reads it so. In a shell file or a command,
+    /// whitespace ends the value and the command after it stays.
+    #[test]
+    fn proxy_password_in_shell_keeps_the_command() {
+        let (out, _) = redact_payload(
+            "proxy_password=alpha /usr/bin/backup --full\n",
+            "/opt/jobs/backup.sh",
+        )
+        .unwrap();
+        assert!(!out.contains("alpha"), "{out}");
+        assert!(out.contains("/usr/bin/backup --full"), "{out}");
+
+        for path in ["/opt/jobs/backup.sh", "etc/profile.d/proxy.sh"] {
+            let (out, findings) =
+                mask_proxy_credentials("proxy_password=alpha /usr/bin/backup --full", path);
+            assert_eq!(
+                out, "proxy_password=[REDACTED] /usr/bin/backup --full",
+                "{path}"
+            );
+            assert_eq!(findings.len(), 1, "{path}");
+        }
+        // The INI form still takes the rest of the line.
+        let (out, _) = mask_proxy_credentials("proxy_password=alpha bravo", "etc/dnf/dnf.conf");
+        assert_eq!(out, "proxy_password=[REDACTED]");
     }
 
     /// The URL credential edits a payload takes: one per credential, mixed
