@@ -159,6 +159,14 @@ fn next_tmpfiles_field(rest: &mut &str) -> Result<Option<String>, TmpfilesSplitE
         .map_err(|_| TmpfilesSplitError)
 }
 
+/// The noncharacters systemd's `unichar_is_valid` rejects beyond what a
+/// `char` already excludes (surrogates and code points past U+10FFFF):
+/// U+FDD0..U+FDEF, and U+xFFFE and U+xFFFF in every plane.
+fn is_unicode_noncharacter(c: char) -> bool {
+    let v = u32::from(c);
+    (0xFDD0..=0xFDEF).contains(&v) || v & 0xFFFE == 0xFFFE
+}
+
 /// Append the character systemd's `cunescape_one` decodes for the escape
 /// starting with `e` (the character after the backslash), reading any
 /// further digits from `chars`. A NUL is refused, as systemd refuses it.
@@ -207,10 +215,13 @@ fn unescape_one(
             let rest = digits(2, 8)?;
             out.push(byte(first * 64 + rest)?);
         }
+        // `\u` refuses only NUL; `\U` also refuses what systemd's
+        // `unichar_is_valid` rejects.
         'u' | 'U' => {
             let n = if e == 'u' { 4 } else { 8 };
             let c = char::from_u32(digits(n, 16)?)
                 .filter(|c| *c != '\0')
+                .filter(|c| e == 'u' || !is_unicode_noncharacter(*c))
                 .ok_or(TmpfilesSplitError)?;
             let mut buf = [0; 4];
             out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
@@ -458,6 +469,34 @@ mod tests {
                 )
             });
             assert_eq!(got, want, "{line}");
+        }
+    }
+
+    /// systemd's `\U` escape refuses the code points `unichar_is_valid`
+    /// rejects: surrogates, past U+10FFFF, U+FDD0..U+FDEF, and U+xFFFE
+    /// and U+xFFFF in every plane. Its `\u` escape refuses only NUL, so
+    /// a BMP noncharacter written that way is kept.
+    #[test]
+    fn a_unicode_escape_keeps_only_code_points_systemd_accepts() {
+        let cases = [
+            ("\\U0000FFFF", None),
+            ("\\U0000FFFE", None),
+            ("\\U0000FDD0", None),
+            ("\\U0000FDEF", None),
+            ("\\U0001FFFE", None),
+            ("\\U0010FFFE", None),
+            ("\\U0010FFFF", None),
+            ("\\U0000D800", None),
+            ("\\U00110000", None),
+            ("\\U0001F600", Some("/var/lib/a\u{1F600}")),
+            ("\\U0000FDCF", Some("/var/lib/a\u{FDCF}")),
+            ("\\U0000FDF0", Some("/var/lib/a\u{FDF0}")),
+            ("\\uFFFF", Some("/var/lib/a\u{FFFF}")),
+        ];
+        for (escape, want) in cases {
+            let line = format!("d /var/lib/a{escape} 0750 appuser appgroup -");
+            let got = TmpfilesEntry::parse(&line).map(|e| e.path);
+            assert_eq!(got.as_deref(), want, "{line}");
         }
     }
 
