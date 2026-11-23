@@ -109,12 +109,12 @@ const stages = [
   {
     id: 'snapshot',
     label: 'InspectionSnapshot',
-    sublabel: 'Schema v18',
+    sublabel: 'Versioned JSON document',
     color: 'blue',
     glow: true,
     tooltip: 'Structured JSON aggregating all inspector outputs into a single document.',
     children: [
-      { text: 'schema_version: 18', detail: 'Versioned format for forward/backward compatibility' },
+      { text: 'schema_version', detail: 'Exact match on load, no migration: re-scan after an upgrade. Current number: reference/snapshot-schema' },
       { text: 'rpm: RpmSection', detail: 'Packages, repos, GPG keys, module streams, version locks' },
       { text: 'config: ConfigSection', detail: 'Modified and unowned config file contents' },
       { text: 'units: UnitSection', detail: 'systemd unit inventory with state and actions' },
