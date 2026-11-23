@@ -845,4 +845,45 @@ mod tests {
         // Should warn about missing entitlement pair, rhsm.conf, CA certs, redhat.repo
         assert!(warnings.len() >= 4);
     }
+
+    /// A real certificate through `x509-parser`: the fields read from the
+    /// subject, the issuer and `notAfter`. Self-signed with an EC P-256 key
+    /// by `openssl req -x509 -subj "/O=7654321/CN=0f3c2a1e-test-uuid"`.
+    const REAL_CERT_PEM: &str = "\
+-----BEGIN CERTIFICATE-----\n\
+MIIBkjCCATigAwIBAgIUbwEQcd8cKKHFM8ztyufA2euHyO0wCgYIKoZIzj0EAwIw\n\
+LzEQMA4GA1UECgwHNzY1NDMyMTEbMBkGA1UEAwwSMGYzYzJhMWUtdGVzdC11dWlk\n\
+MB4XDTI2MTEyMzIyMjUyM1oXDTM2MTEyMDIyMjUyM1owLzEQMA4GA1UECgwHNzY1\n\
+NDMyMTEbMBkGA1UEAwwSMGYzYzJhMWUtdGVzdC11dWlkMFkwEwYHKoZIzj0CAQYI\n\
+KoZIzj0DAQcDQgAEKF3b+weK5rDYKIqOYJ8o3jInIo3fMl457utFK6N+BQWhck9W\n\
+b3tabziIz0bw0bvv9/OCfgAHc16QTfVHsSVClKMyMDAwHQYDVR0OBBYEFNTK5TE5\n\
+yNaMqn/GFSFXWSaEzjvcMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAw\n\
+RQIgLheqCV4Uv9BI1r5WONUgkNJInLtJQmyoCmMGR95FsEACIQDLWbfps2W0B5/o\n\
+/esvBCPy5q4qpyfvJBVMGmZABhIjEg==\n\
+-----END CERTIFICATE-----\n";
+
+    /// `notAfter` of [`REAL_CERT_PEM`], 2036-11-20 22:25:23 UTC.
+    const REAL_CERT_NOT_AFTER_UNIX: i64 = 2_110_832_723;
+
+    #[test]
+    fn test_real_cert_subject_issuer_and_expiry_parse() {
+        let exec = MockExecutor::new().with_file(CONSUMER_CERT, REAL_CERT_PEM);
+        let mut section = SubscriptionSection::default();
+        parse_org_metadata(&exec, CONSUMER_CERT, &mut section);
+        assert_eq!(section.org_id.as_deref(), Some("7654321"));
+        assert_eq!(section.system_uuid.as_deref(), Some("0f3c2a1e-test-uuid"));
+        assert_eq!(section.rhsm_server.as_deref(), Some("7654321"));
+
+        section.entitlement_certs.push(SubscriptionFile {
+            path: "/etc/pki/entitlement/1.pem".into(),
+            content: base64::engine::general_purpose::STANDARD.encode(REAL_CERT_PEM),
+            size_bytes: REAL_CERT_PEM.len() as u64,
+            cert_expiry: None,
+        });
+        parse_cert_expiries(&mut section);
+        let expected = time::OffsetDateTime::from_unix_timestamp(REAL_CERT_NOT_AFTER_UNIX)
+            .expect("a valid timestamp");
+        assert_eq!(section.entitlement_certs[0].cert_expiry, Some(expected));
+        assert_eq!(section.earliest_expiry, Some(expected));
+    }
 }
