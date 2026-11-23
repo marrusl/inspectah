@@ -316,6 +316,7 @@ mod tests {
         };
         use inspectah_core::types::rpm::RepoFile;
         use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, SystemdTimer};
+        use inspectah_core::types::selinux::{FcontextRule, SelinuxPortLabel, SelinuxSection};
         use inspectah_core::types::storage::{FstabEntry, MountPoint};
         use inspectah_core::types::sysctl::{SysctlFile, SysctlFileBody, SysctlSection};
         use inspectah_core::types::units::{
@@ -624,6 +625,53 @@ mod tests {
             subgid_entries: _,  // name and id ranges
         } = UserGroupSection::default();
 
+        // `selinux`.
+        let SelinuxSection {
+            mode: _,              // exempt: enforcing, permissive or disabled
+            custom_modules: _,    // exempt: module names from the store listing
+            disabled_modules: _,  // exempt: module names and an origin
+            boolean_overrides: _, // exempt: boolean names and values
+            boolean_conflicts: _, // exempt: boolean names and host names
+            fcontext_rules: _,    // each variant classified below
+            fcontext_source: _,   // classification
+            fips_mode: _,         // a flag
+            port_labels: _,       // classified below
+        } = SelinuxSection::default();
+        fn _classify_fcontext_rule(rule: FcontextRule) {
+            match rule {
+                FcontextRule::Label {
+                    spec: _, // scrubbed: the URL pass; a path expression
+                    file_type: _,
+                    context: _, // exempt: user, role, type and level names
+                    disposition: _,
+                    aggregate: _,
+                } => {}
+                FcontextRule::Unlabel {
+                    spec: _, // scrubbed: the URL pass; a path expression
+                    file_type: _,
+                    disposition: _,
+                    aggregate: _,
+                } => {}
+                FcontextRule::Equivalence {
+                    subject: _,      // scrubbed: the URL pass; a path
+                    labeled_like: _, // scrubbed: the URL pass; a path
+                    disposition: _,
+                    aggregate: _,
+                } => {}
+                // scrubbed: the content pass. A line the parser could not
+                // place, which the Containerfile's FIXME prints.
+                FcontextRule::Unparsed { raw: _ } => {}
+            }
+        }
+        let SelinuxPortLabel {
+            protocol: _,   // exempt: tcp, udp, dccp or sctp
+            port: _,       // exempt: a port or range
+            label_type: _, // exempt: a type name
+            disposition: _,
+            locked: _,
+            aggregate: _,
+        } = SelinuxPortLabel::default();
+
         // `non_rpm_software.items[]`.
         let NonRpmItem {
             manifest_files: _, // scrubbed: key scrubbers, then the URL pass
@@ -787,6 +835,10 @@ mod tests {
             "SENTINEL-URL-NRSCONTENT",
             "SENTINEL-URL-SUDOERS",
             "SENTINEL-URL-VERSIONLOCK",
+            "SENTINEL-URL-FCSPEC",
+            "SENTINEL-URL-FCEQUIV",
+            "SENTINEL-URL-SELINUX",
+            "SENTINEL-SELINUX",
             // Moved from the exempt group: the zone XML and
             // `NonRpmItem.content` now take the content pass.
             "SENTINEL-FIREWALL",
@@ -1062,6 +1114,42 @@ mod tests {
             ],
             ..Default::default()
         });
+
+        // A line `file_contexts.local` holds that the parser could not
+        // place keeps its raw text, and a rule's operands are paths.
+        {
+            use inspectah_core::types::selinux::{
+                FcontextFileType, FcontextRule, SelinuxContext, SelinuxSection,
+            };
+            snap.selinux = Some(SelinuxSection {
+                fcontext_rules: vec![
+                    FcontextRule::Label {
+                        spec: "https://u:SENTINEL-URL-FCSPEC@h.example/".into(),
+                        file_type: FcontextFileType::All,
+                        context: SelinuxContext {
+                            user: "system_u".into(),
+                            role: "object_r".into(),
+                            type_: "httpd_sys_content_t".into(),
+                            level: Some("s0".into()),
+                        },
+                        disposition: FindingKind::included(),
+                        aggregate: None,
+                    },
+                    FcontextRule::Equivalence {
+                        subject: "https://u:SENTINEL-URL-FCEQUIV@h.example/".into(),
+                        labeled_like: "/var/www".into(),
+                        disposition: FindingKind::included(),
+                        aggregate: None,
+                    },
+                    FcontextRule::Unparsed {
+                        raw: "https://u:SENTINEL-URL-SELINUX@repo.example/ \
+                              password=SENTINEL-SELINUX"
+                            .into(),
+                    },
+                ],
+                ..Default::default()
+            });
+        }
 
         // Planted field by field, not a host layout: the collector-driven
         // cases are in `crates/cli/tests/sysctl_scan_test.rs`.

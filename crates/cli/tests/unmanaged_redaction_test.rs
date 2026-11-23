@@ -12,6 +12,7 @@ use inspectah_collect::inspectors::containers::ContainersInspector;
 use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
 use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
+use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::inspector::Inspector;
@@ -1038,6 +1039,10 @@ const KERNEL_CMDLINE: &str =
 const FSTAB: &str = "https://u:fstabpw5521@files.example.test/share /srv/webdav davfs \
                      _netdev 0 0\n";
 const FINDMNT_JSON: &str = r#"{"filesystems":[{"target":"/srv/webdav","source":"https://u:mountpw5521@files.example.test/share","fstype":"fuse","options":"rw,nosuid"}]}"#;
+/// A line the SELinux inspector cannot place as a rule, which it keeps
+/// raw for the Containerfile's FIXME.
+const FCONTEXT_LOCAL_PATH: &str = "/etc/selinux/targeted/contexts/files/file_contexts.local";
+const FCONTEXT_LOCAL: &str = "https://u:selinuxpw8812@repo.example/\n";
 
 /// Every fake secret [`credential_class_files`] plants.
 const CREDENTIAL_CLASS_SECRETS: &[&str] = &[
@@ -1056,6 +1061,7 @@ const CREDENTIAL_CLASS_SECRETS: &[&str] = &[
     "cmdlinepw5521",
     "fstabpw5521",
     "mountpw5521",
+    "selinuxpw8812",
 ];
 
 /// No credential of any class the redaction rework closed survives in the
@@ -1070,6 +1076,7 @@ fn every_credential_class_ships_masked_on_both_export_paths() {
         .collect();
     planted.push(("/proc/cmdline", KERNEL_CMDLINE.as_bytes().to_vec()));
     planted.push(("/etc/fstab", FSTAB.as_bytes().to_vec()));
+    planted.push((FCONTEXT_LOCAL_PATH, FCONTEXT_LOCAL.as_bytes().to_vec()));
     let host = SysctlHost::new().command("findmnt --json", 0, FINDMNT_JSON, "");
     let (exec, root) = host_with(host, &planted);
     let Exported {
@@ -1084,6 +1091,7 @@ fn every_credential_class_ships_masked_on_both_export_paths() {
         vec![
             Box::new(KernelbootInspector::new()),
             Box::new(StorageInspector::new()),
+            Box::new(SelinuxInspector::new()),
         ],
     );
     let refine_tree = export_session(&session);
@@ -1102,6 +1110,15 @@ fn every_credential_class_ships_masked_on_both_export_paths() {
     let storage = snap.storage.as_ref().expect("a storage section");
     assert_eq!(storage.fstab_entries.len(), 1, "{storage:#?}");
     assert_eq!(storage.mount_points.len(), 1, "{storage:#?}");
+    let selinux = snap.selinux.as_ref().expect("an SELinux section");
+    assert!(
+        selinux.fcontext_rules.iter().any(|rule| matches!(
+            rule,
+            inspectah_core::types::selinux::FcontextRule::Unparsed { raw }
+                if raw.contains("repo.example")
+        )),
+        "{selinux:#?}"
+    );
     let mut all = vec![("snapshot".to_string(), snapshot)];
     all.extend(self::files(scan_tree.path()));
     all.extend(self::files(refine_tree.path()));

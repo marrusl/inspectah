@@ -7,6 +7,7 @@ use inspectah_core::types::redaction::{
     Confidence, DetectionMethod, FindingKind, RedactionFinding, RedactionHint, RedactionKind,
     RedactionState,
 };
+use inspectah_core::types::selinux::FcontextRule;
 use inspectah_core::types::sysctl::{SysctlFileBody, SysctlSection};
 use regex::{Captures, Regex};
 use std::borrow::Cow;
@@ -2211,6 +2212,10 @@ const HOSTS_PATH: &str = "/etc/hosts";
 const SUDOERS_PATH: &str = "/etc/sudoers";
 /// `rpm.versionlock_command_output`.
 const VERSIONLOCK_OUTPUT_PATH: &str = "dnf versionlock list";
+/// `selinux.fcontext_rules`, read from the policy store's
+/// `file_contexts.local` and `file_contexts.subs`, or from `semanage
+/// fcontext -l -C`.
+const SELINUX_FCONTEXT_PATH: &str = "selinux:local file contexts";
 
 /// Scrub every host-text field of the sysctl section in place and return
 /// the findings.
@@ -2861,6 +2866,37 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             }
             // A command in a rule can take a URL with a credential.
             all_findings.extend(redact_url_credentials(rule, SUDOERS_PATH));
+        }
+    }
+
+    // Local file context rules. A line the parser could not place keeps
+    // its raw text, which the Containerfile's FIXME prints, so it takes
+    // the content pass. A rule's operands are path expressions and type
+    // names; the URL pass alone covers one that holds a URL, and leaves
+    // a regular expression otherwise untouched.
+    if let Some(ref mut selinux) = snapshot.selinux {
+        for rule in &mut selinux.fcontext_rules {
+            match rule {
+                FcontextRule::Unparsed { raw } => {
+                    all_findings.extend(scan_and_redact_field(
+                        raw,
+                        SELINUX_FCONTEXT_PATH,
+                        &mut registry,
+                    ));
+                }
+                FcontextRule::Label { spec, .. } | FcontextRule::Unlabel { spec, .. } => {
+                    all_findings.extend(redact_url_credentials(spec, SELINUX_FCONTEXT_PATH));
+                }
+                FcontextRule::Equivalence {
+                    subject,
+                    labeled_like,
+                    ..
+                } => {
+                    all_findings.extend(redact_url_credentials(subject, SELINUX_FCONTEXT_PATH));
+                    all_findings
+                        .extend(redact_url_credentials(labeled_like, SELINUX_FCONTEXT_PATH));
+                }
+            }
         }
     }
 
