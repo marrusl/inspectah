@@ -69,8 +69,9 @@ for `.env` and compose files. A field the pattern pass would misread,
 or that a dedicated pass has already scrubbed for patterns, takes the
 URL pass alone (`redact_url_credentials`): mount sources and options,
 Flatpak remote URLs, proxy lines, manifests after their key scrubbers,
-dependency versions, firewall rich and direct rules, `/etc/hosts` lines
-and sudoers rules. The kernel command line finds URL credentials per
+dependency versions, firewall rich and direct rules, `/etc/hosts` lines,
+sudoers rules and SELinux file context operands (an unplaced
+`file_contexts.local` line takes the content pass). The kernel command line finds URL credentials per
 argument (`url_credentials_in_line` in `kernel_cmdline_matches`), so the
 argument's whole value is replaced and the kargs writer leaves it out,
 and a sysctl runtime value holding one is removed. Each of these once
@@ -121,7 +122,7 @@ scrubber bounds it and falls back differently, so state each one's own:
 
 | scrubber | authority ends at | authority with no `@` |
 |---|---|---|
-| `scrub_url_auth` (manifests) | `/`, `?`, `#`; its caller hands it one value or token, so whitespace never reaches it | nothing is scrubbed; no fallback |
+| `scrub_url_auth` (manifests) | `/`, `?`, `#`, never whitespace: a caller usually hands it one value or token, but `located()`'s fallback for a value it cannot locate hands it the whole line | nothing is scrubbed; no fallback |
 | `PROXY_CRED_RE` (URL pass) | `/`, `?`, `#`, whitespace | the first `@` before whitespace |
 | PostgreSQL, MongoDB, Redis patterns | `/`, `?`, `#`, whitespace | the first `@` before a line break, so `u:two words@db` and `u:pa/ss@db` stay covered |
 | compose scrubber (`userinfo_end`) | `/`, `?`, `#`, whitespace | the first `@` after the scheme, anywhere on the line |
@@ -779,6 +780,21 @@ added, not found later: `SysctlSection.runtime` values,
 `SysctlFile.dir` and `name`, `Read.redacted` and `redacted_runtime` are
 exempt. No sysctl type has a `Default`, so its patterns sit in
 never-called functions the compiler still checks for completeness.
+
+**A field written after `redact()` needs its own pass.** The unmanaged
+walk runs after `redact()` (`scan.rs`), so no engine traversal sees
+`UnmanagedFile.link_target`: `readlink` returns arbitrary bytes, and a
+target of `https://u:pw@host/repo` shipped in the snapshot, the `ln -sf`
+line and the bundled link. `redact_unmanaged_link_targets` runs as soon
+as the walk returns, so `--inspect-only` JSON is covered, and the
+bundler screens again whatever target it is about to recreate,
+`read_link` fallback included (`screen_link_target`). A credentialed
+target is kept masked and the link withheld
+(`PayloadRedaction::LinkTargetCredential`), never recreated with the
+mask: a masked target points nowhere. The guard now destructures
+`InspectionSnapshot` and every section, so a new section field fails to
+compile until it is classified; nested types below a section are
+destructured only where they carry host text.
 
 None of these was a parsing bug. Each was a content-bearing field nobody
 wired into `redact()`. The quadlet one is the sharpest: a
