@@ -309,16 +309,26 @@ mod tests {
     /// declared. This half proves the groups are complete.
     #[test]
     fn every_field_of_a_content_bearing_type_is_classified() {
-        use inspectah_core::types::containers::{ComposeFile, FlatpakApp, QuadletUnit};
+        use inspectah_core::types::config::ConfigSection;
+        use inspectah_core::types::containers::{
+            ComposeFile, ContainerMount, ContainerSection, FlatpakApp, QuadletUnit,
+            RunningContainer,
+        };
         use inspectah_core::types::kernelboot::KernelBootSection;
         use inspectah_core::types::network::{
             FirewallDirectRule, FirewallZone, NetworkSection, ProxyEntry,
         };
-        use inspectah_core::types::rpm::RepoFile;
+        use inspectah_core::types::nonrpm::{
+            LanguagePackage, NonRpmSoftwareSection, UnmanagedFile, UnmanagedFileSection,
+        };
+        use inspectah_core::types::rpm::{RepoFile, RpmSection};
+        use inspectah_core::types::scheduled::ScheduledTaskSection;
         use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, SystemdTimer};
         use inspectah_core::types::selinux::{FcontextRule, SelinuxPortLabel, SelinuxSection};
+        use inspectah_core::types::storage::StorageSection;
         use inspectah_core::types::storage::{FstabEntry, MountPoint};
         use inspectah_core::types::sysctl::{SysctlFile, SysctlFileBody, SysctlSection};
+        use inspectah_core::types::units::UnitSection;
         use inspectah_core::types::units::{
             AlsoMember, DefaultTarget, ManualLink, MountUnitFinding, SystemdDropIn,
             UndeterminedInstall, UnitInventoryEntry,
@@ -703,6 +713,174 @@ mod tests {
             aggregate: _,
             review_status: _,
         } = NonRpmItem::default();
+
+        // The snapshot itself and every section: a field added to any of
+        // them stops the build here too, so a new list of host text is
+        // classified the day it lands, not when a review finds it.
+        fn _classify_snapshot(snap: InspectionSnapshot) {
+            let InspectionSnapshot {
+                schema_version: _,        // a number
+                meta: _,                  // scan roots, home users and extra paths
+                os_release: _,            // `os-release` identity fields
+                system_type: _,           // classification
+                rpm: _,                   // classified below
+                config: _,                // classified below
+                units: _,                 // classified below
+                network: _,               // classified above
+                storage: _,               // classified below
+                scheduled_tasks: _,       // classified below
+                containers: _,            // classified below
+                non_rpm_software: _,      // classified below
+                unmanaged_files: _,       // classified below
+                kernel_boot: _,           // classified above
+                selinux: _,               // classified above
+                users_groups: _,          // classified above
+                preflight: _,             // checks and their results
+                warnings: _,              // diagnostics, named from the raw value at collection
+                redactions: _,            // findings: path, pattern and placeholder
+                redaction_hints: _,       // collector hints: path and reason
+                redaction_state: _,       // classification
+                completeness: _,          // section states and degraded reasons
+                target_image: _,          // an image reference and digest
+                baseline: _,              // the target image's package and unit data
+                sensitive_snapshot: _,    // a flag
+                preserved_credentials: _, // a flag
+                preserved_ssh_keys: _,    // a flag
+                // exempt: collected only when the operator preserves it,
+                // which marks the snapshot sensitive
+                subscription: _,
+                preserved_subscription: _, // a flag
+                redaction_skipped: _,      // a flag
+                aggregate_meta: _,         // fleet host names and counts
+                rpm_repo_conflicts: _,     // repo ids and package names
+            } = snap;
+        }
+        let RpmSection {
+            packages_added: _,          // package identities
+            base_image_only: _,         // package identities
+            rpm_va: _,                  // paths, verify flags and package names
+            rpm_va_complete: _,         // a flag
+            repo_files: _,              // classified above
+            gpg_keys: _,                // classified above, as `RepoFile`
+            dnf_history_removed: _,     // package names
+            version_changes: _,         // package names and versions
+            leaf_packages: _,           // package identities
+            auto_packages: _,           // package identities
+            leaf_dep_tree: _,           // package identities
+            dep_closures: _,            // package identities
+            dep_alternatives: _,        // package identities
+            unresolved_requirements: _, // capability names
+            module_streams: _,          // module, stream and profile names
+            // package specs from the versionlock list, and their parts
+            version_locks: _,
+            module_stream_conflicts: _,    // module names
+            baseline_module_streams: _,    // module and stream names
+            versionlock_command_output: _, // scrubbed: the content pass
+            multiarch_packages: _,         // package names
+            duplicate_packages: _,         // package names
+            ostree_overrides: _,           // package names and NEVRAs
+            ostree_removals: _,            // package names
+            base_image: _,                 // an image reference
+            baseline_suppressed: _,        // package names
+            baseline_package_names: _,     // package names
+            leaf_authority_hosts: _,       // a count
+            leaf_total_hosts: _,           // a count
+            file_ownership: _,             // package names and paths
+            installed_groups: _,           // group and package names
+        } = RpmSection::default();
+        let ConfigSection {
+            files: _,    // classified above
+            withheld: _, // machine-state paths and members, no content
+        } = ConfigSection::default();
+        let UnitSection {
+            state_changes: _,         // classified in `units.rs`
+            inventory: _,             // classified above
+            drop_ins: _,              // classified above
+            mount_findings: _,        // classified above
+            manual_links: _,          // classified above
+            undetermined_installs: _, // classified above
+            default_target: _,        // classified above
+            enabled_on_any_host: _,   // proved unit names
+        } = UnitSection::default();
+        let StorageSection {
+            fstab_entries: _,         // classified above
+            mount_points: _,          // classified above
+            lvm_info: _,              // `lvs` output: volume names and sizes
+            var_directories: _,       // paths and sizes
+            credential_refs: _,       // mount points and credential file paths
+            unbacked_var_advisory: _, // paths
+        } = StorageSection::default();
+        let ScheduledTaskSection {
+            cron_jobs: _,             // paths: the files are config entries
+            systemd_timers: _,        // classified above
+            at_jobs: _,               // classified above
+            generated_timer_units: _, // classified above
+        } = ScheduledTaskSection::default();
+        let ContainerSection {
+            quadlet_units: _,      // classified above
+            compose_files: _,      // classified above
+            running_containers: _, // classified below
+            flatpak_apps: _,       // classified above
+        } = ContainerSection::default();
+        let RunningContainer {
+            env: _, // scrubbed: the content pass, entry by entry
+            id: _,
+            name: _,
+            image: _, // an image reference; a registry credential is in
+            // the pull secret, not here
+            image_id: _,
+            status: _,
+            restart_policy: _,
+            mounts: _,   // classified below
+            networks: _, // `podman inspect` network names and addresses
+            ports: _,    // `podman inspect` port bindings
+            inspect_data: _,
+            disposition: _,
+            locked: _,
+            acknowledged: _,
+            aggregate: _,
+        } = RunningContainer::default();
+        let ContainerMount {
+            mount_type: _,
+            source: _,      // identifier: a host path or volume name
+            destination: _, // identifier: a container path
+            mode: _,
+            rw: _,
+        } = ContainerMount::default();
+        let NonRpmSoftwareSection {
+            items: _,     // classified above
+            env_files: _, // classified above, as `ConfigFileEntry`
+        } = NonRpmSoftwareSection::default();
+        let LanguagePackage {
+            name: _,    // a package name
+            version: _, // scrubbed: the URL pass; a spec can be a URL
+            pinned: _,
+        } = LanguagePackage::default();
+        let UnmanagedFileSection {
+            items: _,       // classified below
+            usr_entries: _, // paths, counts and sizes
+            total_size: _,
+            total_count: _,
+            withheld: _, // machine-state paths and members, no content
+        } = UnmanagedFileSection::default();
+        let UnmanagedFile {
+            path: _, // identifier: a path
+            size: _,
+            file_type: _,
+            provenance: _, // owner, mode and times
+            disposition: _,
+            locked: _,
+            acknowledged: _,
+            under_var: _,
+            // scrubbed: the content pass, after the unmanaged walk, which
+            // runs after `redact()`; a credentialed link is withheld
+            // (`redact_unmanaged_link_targets`)
+            link_target: _,
+            aggregate: _,
+            content_hash: _,
+            variant_selection: _,
+            payload_redaction: _, // classification
+        } = UnmanagedFile::default();
 
         // `kernel_boot.sysctl`. No sysctl type has a `Default`, so each
         // pattern sits in a function that is never called: the compiler
