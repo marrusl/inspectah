@@ -715,32 +715,36 @@ pub fn is_redaction_active(snap: &InspectionSnapshot) -> bool {
 /// belongs to the path or query, not to the userinfo.
 const AUTHORITY_TERMINATORS: [char; 3] = ['/', '?', '#'];
 
-/// Scrub embedded auth credentials from a URL string.
+/// Scrub embedded auth credentials from every URL in a string.
 /// Replaces `://user:pass@host` with `://REDACTED@host` and
-/// `://token@host` with `://REDACTED@host`. The redaction pass applies it
-/// to the URLs in `.repo` files too.
-pub(crate) fn scrub_url_auth(url: &str) -> String {
-    // Find the authority section: everything between :// and the end of
-    // the authority. If there's no ://, or no @ in the authority, the URL
-    // has no embedded auth.
-    let Some(scheme_end) = url.find("://") else {
-        return url.to_string();
-    };
-    let authority_start = scheme_end + 3;
-    let rest = &url[authority_start..];
-
-    // RFC 3986: userinfo runs to the LAST `@` before the authority ends.
-    // A password may legitimately contain an `@`, and real clients read it
-    // that way (pip masks `deploy:p@s3cret` whole). Taking the first `@`
-    // instead left the tail of such a password in the output. Bounding the
-    // search by the terminator first is what makes `rfind` safe: an `@`
-    // in a query string must not be mistaken for the end of userinfo.
-    let authority_end = rest.find(AUTHORITY_TERMINATORS).unwrap_or(rest.len());
-    let Some(at_pos) = rest[..authority_end].rfind('@') else {
-        return url.to_string();
-    };
-
-    format!("{}://REDACTED@{}", &url[..scheme_end], &rest[at_pos + 1..])
+/// `://token@host` with `://REDACTED@host`, for each `://` in `text`: one
+/// argument can hold several URLs (`https://u:a@h1/,https://v:b@h2/`),
+/// and scrubbing only the first shipped the rest.
+pub(crate) fn scrub_url_auth(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut search = 0;
+    while let Some(found) = text[search..].find("://") {
+        let authority_start = search + found + 3;
+        let rest = &text[authority_start..];
+        // RFC 3986: userinfo runs to the LAST `@` before the authority
+        // ends. A password may legitimately contain an `@`, and real
+        // clients read it that way (pip masks `deploy:p@s3cret` whole).
+        // Taking the first `@` instead left the tail of such a password in
+        // the output. Bounding the search by the terminator first is what
+        // makes `rfind` safe: an `@` in a query string must not be
+        // mistaken for the end of userinfo. A terminator also ends the
+        // authority before the next URL's `//`, so spans never overlap.
+        let authority_end = rest.find(AUTHORITY_TERMINATORS).unwrap_or(rest.len());
+        if let Some(at_pos) = rest[..authority_end].rfind('@') {
+            out.push_str(&text[copied..authority_start]);
+            out.push_str("REDACTED");
+            copied = authority_start + at_pos;
+        }
+        search = authority_start;
+    }
+    out.push_str(&text[copied..]);
+    out
 }
 
 /// What one line's scrubber decided about the line it was given.
@@ -750,10 +754,11 @@ enum LineOutcome {
     /// Handled. The rewritten line, which may be identical.
     Rewritten(String),
     /// A key matched and routed this line here, and the value that key
-    /// names could not be located. The line is emitted unchanged and
-    /// the caller has to say so: this is the state that used to pass in
+    /// names could not be located. The line is emitted as given, with any
+    /// other value the scrubber did locate on it rewritten, and the
+    /// caller has to say so: this is the state that used to pass in
     /// silence under a `FullyRedacted` label.
-    Unlocatable(&'static str),
+    Unlocatable(String, &'static str),
 }
 
 /// Run a per-line scrubber over `content`, collecting the lines it was
@@ -770,12 +775,12 @@ fn scrub_lines(content: &str, mut scrub: impl FnMut(&str) -> LineOutcome) -> Scr
         match scrub(line) {
             LineOutcome::Rewritten(new_line) => out.push_str(&new_line),
             LineOutcome::NotMine => out.push_str(line),
-            LineOutcome::Unlocatable(key) => {
+            LineOutcome::Unlocatable(new_line, key) => {
                 unscrubbed.push(UnscrubbedLine {
                     line: idx as u32 + 1,
                     key: key.to_string(),
                 });
-                out.push_str(line);
+                out.push_str(&new_line);
             }
         }
         if lines.peek().is_some() {
@@ -791,13 +796,53 @@ fn scrub_lines(content: &str, mut scrub: impl FnMut(&str) -> LineOutcome) -> Scr
     }
 }
 
-/// Rebuild `line` with `span` replaced, leaving every other byte alone.
+/// Rebuild `line` with the URLs in each of `spans` (in order, apart)
+/// scrubbed, leaving every other byte alone.
 ///
 /// Every scrubber reconstructs through here rather than through
 /// `replace`, which rewrote every occurrence of the matched text on the
 /// line instead of the one it had located.
-fn replace_span(line: &str, span: std::ops::Range<usize>, with: &str) -> String {
-    format!("{}{}{}", &line[..span.start], with, &line[span.end..])
+fn scrub_spans(line: &str, spans: &[std::ops::Range<usize>]) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut copied = 0;
+    for span in spans {
+        out.push_str(&line[copied..span.start]);
+        out.push_str(&scrub_url_auth(&line[span.clone()]));
+        copied = span.end;
+    }
+    out.push_str(&line[copied..]);
+    out
+}
+
+/// What a scrubber that located `spans` on `line`, and could not locate
+/// the value of `missed`, returns: nothing routed is [`LineOutcome::NotMine`].
+fn located(
+    line: &str,
+    routed: bool,
+    spans: &[std::ops::Range<usize>],
+    missed: Option<&'static str>,
+) -> LineOutcome {
+    if !routed {
+        return LineOutcome::NotMine;
+    }
+    let out = scrub_spans(line, spans);
+    match missed {
+        Some(key) => LineOutcome::Unlocatable(out, key),
+        None => LineOutcome::Rewritten(out),
+    }
+}
+
+/// Byte offsets of the starts of `line`'s whitespace-separated tokens.
+fn token_starts(line: &str) -> impl Iterator<Item = usize> + '_ {
+    line.char_indices()
+        .filter(|&(i, c)| {
+            !c.is_whitespace()
+                && line[..i]
+                    .chars()
+                    .next_back()
+                    .is_none_or(char::is_whitespace)
+        })
+        .map(|(i, _)| i)
 }
 
 /// Scrub auth tokens from manifest file content based on the filename.
@@ -825,93 +870,180 @@ pub fn scrub_manifest_auth(filename: &str, content: &str) -> ScrubOutcome {
 /// longer directive's argument.
 const PIP_INDEX_DIRECTIVES: [&str; 3] = ["--extra-index-url", "--index-url", "-i"];
 
-/// Scrub the URL argument of a pip index directive.
+/// Scrub the URL argument of every pip index directive on a line.
 ///
 /// `--index-url=URL` and `-i URL` are both valid requirements-file
 /// syntax, confirmed against pip. The previous `splitn` on whitespace
 /// returned `None` for the `=` form and the prefix test never matched
-/// the short form, so each passed through untouched.
+/// the short form, so each passed through untouched. A line can hold
+/// several directives (`--index-url A --extra-index-url B`); each is
+/// scrubbed, up to a `#` comment, which pip drops. A directive that
+/// opens the line routes it, as before; a later token routes only when it
+/// is a directive exactly, alone or before `=`.
 fn scrub_requirements_line(line: &str) -> LineOutcome {
-    let trimmed = line.trim_start();
-    let indent_len = line.len() - trimmed.len();
-    let Some(directive) = PIP_INDEX_DIRECTIVES
-        .iter()
-        .find(|d| trimmed.starts_with(**d))
-    else {
-        return LineOutcome::NotMine;
-    };
-    match value_span_after_key(trimmed, directive.len(), ValueSyntax::OptionArgument) {
-        Some(span) => {
-            let scrubbed = scrub_url_auth(&trimmed[span.clone()]);
-            LineOutcome::Rewritten(format!(
-                "{}{}",
-                &line[..indent_len],
-                replace_span(trimmed, span, &scrubbed)
-            ))
+    let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut routed = false;
+    let mut missed = None;
+    for start in token_starts(line) {
+        let token = &line[start..];
+        if token.starts_with('#') {
+            break;
         }
-        None => LineOutcome::Unlocatable(directive),
+        if spans.last().is_some_and(|s| start < s.end) {
+            continue;
+        }
+        let leading = !routed && line[..start].trim().is_empty();
+        let Some(directive) = PIP_INDEX_DIRECTIVES.iter().find(|d| {
+            token.starts_with(**d)
+                && (leading
+                    || token[d.len()..]
+                        .chars()
+                        .next()
+                        .is_none_or(|c| c == '=' || c.is_whitespace()))
+        }) else {
+            continue;
+        };
+        routed = true;
+        match value_span_after_key(line, start + directive.len(), ValueSyntax::OptionArgument) {
+            Some(span) => spans.push(span),
+            None => missed = missed.or(Some(*directive)),
+        }
     }
+    located(line, routed, &spans, missed)
 }
 
 const JSON_REGISTRY_KEY: &str = "\"registry\"";
 const JSON_RESOLVED_KEY: &str = "\"resolved\"";
 
-/// Scrub the URL value of a JSON member whose key is `key`.
-///
-/// The value is located from the end of the matched key, not from the
-/// line's first colon. A compact `"publishConfig": { "registry": "…" }`
-/// put the key-value colon of a *different* member first on the line,
-/// so the old search took `publishConfig`'s colon, read `registry` as
-/// the value, found no `://` in it and gave up.
-fn scrub_json_line(line: &str, key: &'static str) -> LineOutcome {
-    let Some(key_pos) = line.find(key) else {
-        return LineOutcome::NotMine;
-    };
-    match value_span_after_key(line, key_pos + key.len(), ValueSyntax::JsonMember) {
-        Some(span) => {
-            let scrubbed = scrub_url_auth(&line[span.clone()]);
-            LineOutcome::Rewritten(replace_span(line, span, &scrubbed))
+/// The byte ranges inside the quotes of every JSON string on `line`, in
+/// order, read as JSON reads them: a backslash escapes the byte after it,
+/// so an escaped quote does not close a string. A string the line leaves
+/// open is not one.
+fn json_strings(line: &str) -> Vec<std::ops::Range<usize>> {
+    let bytes = line.as_bytes();
+    let mut strings = Vec::new();
+    let mut i = 0;
+    while let Some(open) = bytes[i..].iter().position(|&b| b == b'"') {
+        let start = i + open + 1;
+        let mut j = start;
+        let mut close = None;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'\\' => j += 2,
+                b'"' => {
+                    close = Some(j);
+                    break;
+                }
+                _ => j += 1,
+            }
         }
-        None => LineOutcome::Unlocatable(key),
+        let Some(end) = close else {
+            break;
+        };
+        strings.push(start..end);
+        i = end + 1;
     }
+    strings
+}
+
+/// Scrub the URL value of every JSON member on `line` whose key is
+/// `key`.
+///
+/// The line is read as JSON strings, each value found after its own key's
+/// colon, never after the line's first colon or the key's first textual
+/// occurrence. A compact `"publishConfig": { "registry": "…" }` put the
+/// key-value colon of a *different* member first on the line, so the
+/// old search took `publishConfig`'s colon; and a compact lockfile holds
+/// one `"resolved"` member per package, so taking the first left the
+/// rest. A string equal to the key that a `,`, `}`, `]` or the line's end
+/// follows is a value, not a member; one that anything but a colon
+/// follows, or whose member value is no string, is a miss.
+fn scrub_json_line(line: &str, key: &'static str) -> LineOutcome {
+    let name = key.trim_matches('"');
+    let strings = json_strings(line);
+    let mut spans = Vec::new();
+    let mut routed = false;
+    let mut missed = None;
+    for (i, string) in strings.iter().enumerate() {
+        if &line[string.clone()] != name {
+            continue;
+        }
+        let after = string.end + 1;
+        let colon = after + leading_whitespace_len(&line[after..]);
+        match line[colon..].chars().next() {
+            None | Some(',' | '}' | ']') => continue,
+            Some(':') => {}
+            Some(_) => {
+                routed = true;
+                missed = Some(key);
+                continue;
+            }
+        }
+        routed = true;
+        let value = colon + 1 + leading_whitespace_len(&line[colon + 1..]);
+        match strings.get(i + 1) {
+            Some(next) if next.start == value + 1 => spans.push(next.clone()),
+            _ => missed = Some(key),
+        }
+    }
+    located(line, routed, &spans, missed)
+}
+
+/// The byte length of the whitespace `s` starts with.
+fn leading_whitespace_len(s: &str) -> usize {
+    s.len() - s.trim_start().len()
 }
 
 const GEMFILE_SOURCE_KEY: &str = "source";
 
-/// Scrub the URL argument of a Gemfile `source` line.
+/// Scrub the URL argument of every Gemfile `source` on a line: a
+/// `source` statement, and a `source:` option to `gem`.
 ///
 /// The quoted run has to start at the first non-whitespace character
 /// after `source`, and it ends at a quote of the *same* kind. The old
 /// loop tried `"` before `'` and broke on the first quote character
 /// anywhere on the line, so `source 'url' # see "runbook"` extracted
-/// `runbook`.
+/// `runbook`. Every `source` on the line is read, not the first: a
+/// second statement after `;`, or a `source:` option, held a credential
+/// nothing examined. A `source` statement that opens the line routes it
+/// and is a miss when its argument is not a quoted run, as before; a later
+/// one is scrubbed when its quoted run is found.
 fn scrub_gemfile_line(line: &str) -> LineOutcome {
-    let trimmed = line.trim_start();
-    let indent_len = line.len() - trimmed.len();
-    if !trimmed.starts_with(GEMFILE_SOURCE_KEY) {
-        return LineOutcome::NotMine;
-    }
-    // `source` must be a whole word here, or `sources = [...]` would be
-    // routed to a scrubber and then reported as unlocatable.
-    let after = &trimmed[GEMFILE_SOURCE_KEY.len()..];
-    if !after.starts_with(|c: char| c.is_whitespace() || c == '"' || c == '\'') {
-        return LineOutcome::NotMine;
-    }
-    match value_span_after_key(
-        trimmed,
-        GEMFILE_SOURCE_KEY.len(),
-        ValueSyntax::QuotedArgument,
-    ) {
-        Some(span) => {
-            let scrubbed = scrub_url_auth(&trimmed[span.clone()]);
-            LineOutcome::Rewritten(format!(
-                "{}{}",
-                &line[..indent_len],
-                replace_span(trimmed, span, &scrubbed)
-            ))
+    let indent_len = leading_whitespace_len(line);
+    let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut routed = false;
+    let mut missed = None;
+    for (at, _) in line.match_indices(GEMFILE_SOURCE_KEY) {
+        if spans.last().is_some_and(|s| at < s.end)
+            || line[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            continue;
         }
-        None => LineOutcome::Unlocatable(GEMFILE_SOURCE_KEY),
+        // `source` must be a whole word here, or `sources = [...]` would
+        // be routed to a scrubber and then reported as unlocatable.
+        let after = at + GEMFILE_SOURCE_KEY.len();
+        let key_end = match line[after..].chars().next() {
+            Some(':') => after + 1,
+            Some(c) if c.is_whitespace() || c == '"' || c == '\'' => after,
+            _ => continue,
+        };
+        let statement_opens_line = at == indent_len && key_end == after;
+        match value_span_after_key(line, key_end, ValueSyntax::QuotedArgument) {
+            Some(span) => {
+                routed = true;
+                spans.push(span);
+            }
+            None if statement_opens_line => {
+                routed = true;
+                missed = Some(GEMFILE_SOURCE_KEY);
+            }
+            None => {}
+        }
     }
+    located(line, routed, &spans, missed)
 }
 
 /// Byte ranges of every whitespace- or quote-delimited token on `line`
@@ -2800,6 +2932,83 @@ mod tests {
         let input = "--index-url https://pypi.corp.example.com/simple?contact=ops@example.com";
         let out = scrub_manifest_auth("requirements.txt", input);
         assert_eq!(out.content, input, "nothing here is a credential");
+    }
+
+    /// Every member, argument and URL a manifest line routes to a
+    /// scrubber is scrubbed, not only the first: two `resolved` or
+    /// `registry` members on a compact JSON line, two index directives,
+    /// two URLs in one argument, two Gemfile sources, and comma-joined
+    /// URLs in a Gemfile.lock.
+    #[test]
+    fn every_credential_on_a_manifest_line_is_scrubbed() {
+        let cases = [
+            (
+                "package-lock.json",
+                r#"{"packages":{"a":{"resolved":"https://u:first9@h/a"},"b":{"resolved":"https://v:second9@h/b"}}}"#,
+            ),
+            (
+                "package.json",
+                r#"{"publishConfig":{"registry":"https://u:first9@h/"},"x":{"registry":"https://v:second9@h/"}}"#,
+            ),
+            (
+                "requirements.txt",
+                "--index-url https://u:first9@h1/simple --extra-index-url https://v:second9@h2/simple",
+            ),
+            (
+                "requirements.txt",
+                "-i https://u:first9@h1/simple,https://v:second9@h2/simple",
+            ),
+            (
+                "Gemfile",
+                r#"source "https://u:first9@h1"; source 'https://v:second9@h2'"#,
+            ),
+            (
+                "Gemfile",
+                r#"gem "x", source: "https://u:first9@h1"; gem "y", source: "https://v:second9@h2""#,
+            ),
+            (
+                "Gemfile.lock",
+                "  remote: https://u:first9@h/a,https://v:second9@h/b",
+            ),
+        ];
+        for (name, input) in cases {
+            let out = scrub_manifest_auth(name, input);
+            for secret in ["first9", "second9"] {
+                assert!(
+                    !out.content.contains(secret),
+                    "{name}: {secret} survives: {}",
+                    out.content
+                );
+            }
+            assert_eq!(
+                out.content.matches("://REDACTED@").count(),
+                2,
+                "{name}: {}",
+                out.content
+            );
+            assert!(out.unscrubbed.is_empty(), "{name}: {:?}", out.unscrubbed);
+        }
+    }
+
+    /// A JSON string value ends at its closing quote, not at an escaped
+    /// quote inside it, so a credential after `\"` is still scrubbed.
+    #[test]
+    fn a_json_value_runs_past_an_escaped_quote() {
+        let input = r#"{"registry":"https://u:head\"tail9@host/"}"#;
+        let out = scrub_manifest_auth("package.json", input);
+        assert_eq!(out.content, r#"{"registry":"https://REDACTED@host/"}"#);
+        assert!(out.unscrubbed.is_empty());
+    }
+
+    /// A located member is scrubbed even when another member on its line
+    /// cannot be located, and that one is still reported.
+    #[test]
+    fn a_miss_does_not_keep_a_located_credential() {
+        let input = r#"{"resolved": 1, "x": {"resolved": "https://u:found9@h/x"}}"#;
+        let out = scrub_manifest_auth("package-lock.json", input);
+        assert!(!out.content.contains("found9"), "{}", out.content);
+        assert_eq!(out.unscrubbed.len(), 1);
+        assert_eq!(out.unscrubbed[0].key, JSON_RESOLVED_KEY);
     }
 
     /// The scrubber must say so when it cannot find the value it was

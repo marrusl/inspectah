@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Refine is fast again on hosts with large repo files**: on a subscribed RHEL 9 host, whose `redhat.repo` holds about 500 sections, each refine operation took around 13 s, and so did starting refine and downloading the export. Refine operations, startup, and export downloads are substantially faster on hosts with large repo files.
 - **Every URL credential on a line is redacted**: a second `user:password@` or token URL on the same line, or a second `proxy_password=` value, shipped raw into the snapshot, the exports and the image. Each credential is now masked and reported as its own finding. A URL password holding an `@` is masked whole, in PostgreSQL, MongoDB, Redis and compose URLs too: its tail after the first `@` also shipped raw.
+- **Every credential on a language-package manifest line is redacted**: a compact `package-lock.json` or `package.json` with several `resolved` or `registry` members, a requirements line with several index options, a Gemfile line with several sources, comma-joined URLs, and a JSON value with an escaped quote before the credential kept credentials raw in the snapshot and exports.
 - **URL credentials in every user-name form are redacted**: a password after an empty user name (`https://:pw@host`), and a token used as the user name before a password (`https://<token>:x-oauth-basic@host` or `https://<token>:@host`), shipped raw. Both are now masked.
 
 ## [0.9.0-beta.7] - 2026-11-23

@@ -201,6 +201,19 @@ For "every URL on this line" — `Gemfile.lock` — tokenize and replace in
 **descending offset order**, so an earlier rewrite cannot invalidate a
 later span. Same discipline the regex engine uses.
 
+**Every key on the line, every URL in the value.** A located key is not
+the line's only one: a compact `package-lock.json` holds a `"resolved"`
+member per package on one line, pip takes several index options on one
+line, and a Gemfile line can hold `source "a"; source "b"` or a
+`gem "x", source: "..."` option. Each scrubber enumerates every key and
+collects every span (`scrub_spans`), and `scrub_url_auth` scrubs every
+`://` in a value, so `https://u:a@h1/,https://v:b@h2/` loses both. JSON
+is read as JSON strings (`json_strings`), escapes included: a value
+ends at its closing quote, not at a `\"` inside it, and a string equal
+to the key that is followed by `,`, `}` or `]` is a value, not a member.
+A miss on one key does not leave another located credential on its line
+in place (`LineOutcome::Unlocatable` carries the rewritten line).
+
 ## Detect on the marker, not on string inequality
 
 A scrubber rebuilds the lines it handles, so the output string can
