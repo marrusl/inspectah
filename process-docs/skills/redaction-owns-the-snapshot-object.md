@@ -65,15 +65,27 @@ only, so `https://user:pass@host/` passes the generic pass untouched.
 is the one pass for a field of host text: pattern edits and URL
 credential edits (`url_credential_edits`), both read off the original
 text and merged by `apply_payload_edits`, as `redact_snapshot_text` does
-for `.env` and compose files. Config file copies, drop-ins, quadlets,
-container environments, generated timers, `at` jobs and sysctl files ran
-the patterns alone, so `HTTPS_PROXY=https://u:secret@host` shipped from
-each into the snapshot, the exports and the image. A new content field
-calls `scan_and_redact_field`, never an inlined pattern loop, and
+for `.env` and compose files. A field the pattern pass would misread,
+or that a dedicated pass has already scrubbed for patterns, takes the
+URL pass alone (`redact_url_credentials`): mount sources and options,
+Flatpak remote URLs, proxy lines, manifests after their key scrubbers,
+dependency versions, firewall rich and direct rules, `/etc/hosts` lines
+and sudoers rules. The kernel command line finds URL credentials per
+argument (`url_credentials_in_line` in `kernel_cmdline_matches`), so the
+argument's whole value is replaced and the kargs writer leaves it out,
+and a sysctl runtime value holding one is removed. Each of these once
+ran the patterns alone or nothing, and `https://u:secret@host` shipped
+from it into the snapshot, the exports and the image: inventory every
+`String` of a new snapshot type the day it lands. A new content field
+calls `scan_and_redact_field` or `redact_url_credentials`, never an
+inlined loop; `every_field_of_a_content_bearing_type_is_classified`
+fails to compile until a new field of a covered type is classified, and
 `exactly_the_exempt_fields_survive_the_export` plants a keyword-free URL
-password (`SENTINEL-URL-*`) beside each keyword sentinel to prove it. Other
+password (`SENTINEL-URL-*`) in each covered field and checks the
+serialized snapshot and every exported file for it. Other
 URL forms have dedicated scrubs in `redact()`: manifests use
-`scrub_manifest_auth`, proxy lines `mask_proxy_credentials`, and `.repo`
+`scrub_manifest_auth` first, git remotes `mask_proxy_credentials` and
+`mask_token_username` in turn, and `.repo`
 files and their Configuration rows `scrub_repo_urls`, which applies core's `scrub_repo_credentials`: a
 URL begins at each `scheme://`, and its credential runs to the last `@`
 before the first `/` or `?` of its option value, reading on through the
@@ -103,14 +115,18 @@ and mixed forms.
 **A URL's userinfo runs to the last `@` of the authority.** A password
 may hold an `@` (`deploy:p@s3cret@host`), and a masker that stops at the
 first `@` ships the tail; no generic pattern covers an https password,
-so nothing else catches it. Bound the authority first (it ends at `/`,
-`?`, `#` or whitespace), then take its last `@`, so an `@` in the path
-or query never takes the host. `scrub_url_auth`, `PROXY_CRED_RE`, the
-PostgreSQL, MongoDB and Redis patterns and the compose scrubber all
-follow this rule: a secret capture group never stops at the first `@`.
-Each keeps a fallback to the first `@` on the line for an authority with
-no `@` in it, which is what still covers a password with a space or a
-raw `/` (`u:two words@db`, `u:pa/ss@db`). Bound the **password**, never the user name: the
+so nothing else catches it. Bound the authority first, then take its
+last `@`, so an `@` in the path or query never takes the host. Each
+scrubber bounds it and falls back differently, so state each one's own:
+
+| scrubber | authority ends at | authority with no `@` |
+|---|---|---|
+| `scrub_url_auth` (manifests) | `/`, `?`, `#`; its caller hands it one value or token, so whitespace never reaches it | nothing is scrubbed; no fallback |
+| `PROXY_CRED_RE` (URL pass) | `/`, `?`, `#`, whitespace | the first `@` before whitespace |
+| PostgreSQL, MongoDB, Redis patterns | `/`, `?`, `#`, whitespace | the first `@` before a line break, so `u:two words@db` and `u:pa/ss@db` stay covered |
+| compose scrubber (`userinfo_end`) | `/`, `?`, `#`, whitespace | the first `@` after the scheme, anywhere on the line |
+
+A secret capture group never stops at the first `@` of the authority. Bound the **password**, never the user name: the
 user name may be empty (`https://:pw@host`) or malformed
 (`https://u?name:pw@host`), and excluding `?` and `#` from it to bound
 the authority left those passwords raw.
@@ -278,6 +294,13 @@ scrubber was asked to handle and could not is reported at
 downgrades the snapshot out of `FullyRedacted`. That is deliberate: the
 label the import path trusts must stop being applied over content
 nothing examined.
+
+**Reported is not shipped as given.** An unlocatable line still has
+every URL on it scrubbed (`scrub_url_auth` over the whole line, in
+`located`), and the URL pass then runs over the whole manifest. A value
+whose quote the line never closes (`source "https://u:pw@host/\"`) is
+unlocatable once quoted runs read escapes, and emitting that line
+unchanged shipped a password the scrubber had removed before.
 
 Two constraints on that report:
 
