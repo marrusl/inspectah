@@ -9,8 +9,10 @@ use crate::sysctl_hosts::{
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::containers::ContainersInspector;
+use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
 use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
+use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::types::nonrpm::{PayloadRedaction, UncheckedPayload};
@@ -58,8 +60,12 @@ fn host() -> (MockExecutor, tempfile::TempDir) {
 /// `files` in the mock host and on disk under the host root the bundler
 /// copies from.
 fn host_of(files: &[(&str, Vec<u8>)]) -> (MockExecutor, tempfile::TempDir) {
+    host_with(SysctlHost::new(), files)
+}
+
+/// [`host_of`] over a host that already answers some commands.
+fn host_with(mut host: SysctlHost, files: &[(&str, Vec<u8>)]) -> (MockExecutor, tempfile::TempDir) {
     let root = tempfile::tempdir().expect("a host root");
-    let mut host = SysctlHost::new();
     for (path, content) in files {
         host = host.file_bytes(path, content);
         let on_disk = root.path().join(path.trim_start_matches('/'));
@@ -72,13 +78,14 @@ fn host_of(files: &[(&str, Vec<u8>)]) -> (MockExecutor, tempfile::TempDir) {
 /// The scan with `--include-unmanaged`: the collectors that read these
 /// files, redaction (none when `raw`, as `--no-redaction` runs), then
 /// the unmanaged walk through the read gate.
-fn scan(exec: &MockExecutor, raw: bool) -> InspectionSnapshot {
-    let inspectors: Vec<Box<dyn Inspector>> = vec![
+fn scan(exec: &MockExecutor, raw: bool, extra: Vec<Box<dyn Inspector>>) -> InspectionSnapshot {
+    let mut inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
         Box::new(ConfigInspector::new()),
         Box::new(NonRpmInspector::with_roots(vec!["/opt".into()])),
         Box::new(ContainersInspector::new()),
     ];
+    inspectors.extend(extra);
     let mut snap = if raw {
         scan_exec_raw(exec, inspectors)
     } else {
@@ -104,7 +111,17 @@ struct Exported {
 }
 
 fn export(exec: &MockExecutor, root: &std::path::Path, raw: bool) -> Exported {
-    let mut snap = scan(exec, raw);
+    export_with(exec, root, raw, Vec::new())
+}
+
+/// [`export`] with `extra` inspectors run beside the four it always runs.
+fn export_with(
+    exec: &MockExecutor,
+    root: &std::path::Path,
+    raw: bool,
+    extra: Vec<Box<dyn Inspector>>,
+) -> Exported {
+    let mut snap = scan(exec, raw, extra);
     let scan_tree = bundled_export(&mut snap, exec, root);
     let packed = tempfile::tempdir().unwrap();
     let tarball = packed.path().join("scan.tar.gz");
@@ -1006,8 +1023,21 @@ fn credential_class_files() -> Vec<(&'static str, String)> {
             "/etc/wpa_supplicant/wpa_supplicant.conf",
             "network={\n  ssid=\"home\"\n  psk=\"pskcorrect5521 pskhorse5521\"\n}\n".into(),
         ),
+        (
+            "/opt/e2epip/requirements.txt",
+            "widget @ https://u:pipdirect5521@pypi.example.test/widget.whl\n".into(),
+        ),
     ]
 }
+
+/// URL credentials the kernel and storage inspectors read, which no file
+/// the config pass scrubs holds: a kernel argument, an fstab source and
+/// the runtime mount table's copy of it.
+const KERNEL_CMDLINE: &str =
+    "root=/dev/vda1 ro inst.repo=https://u:cmdlinepw5521@repo.example.test/os/\n";
+const FSTAB: &str = "https://u:fstabpw5521@files.example.test/share /srv/webdav davfs \
+                     _netdev 0 0\n";
+const FINDMNT_JSON: &str = r#"{"filesystems":[{"target":"/srv/webdav","source":"https://u:mountpw5521@files.example.test/share","fstype":"fuse","options":"rw,nosuid"}]}"#;
 
 /// Every fake secret [`credential_class_files`] plants.
 const CREDENTIAL_CLASS_SECRETS: &[&str] = &[
@@ -1022,6 +1052,10 @@ const CREDENTIAL_CLASS_SECRETS: &[&str] = &[
     "optbravo5521",
     "pskcorrect5521",
     "pskhorse5521",
+    "pipdirect5521",
+    "cmdlinepw5521",
+    "fstabpw5521",
+    "mountpw5521",
 ];
 
 /// No credential of any class the redaction rework closed survives in the
@@ -1030,17 +1064,28 @@ const CREDENTIAL_CLASS_SECRETS: &[&str] = &[
 #[test]
 fn every_credential_class_ships_masked_on_both_export_paths() {
     let files = credential_class_files();
-    let planted: Vec<(&str, Vec<u8>)> = files
+    let mut planted: Vec<(&str, Vec<u8>)> = files
         .iter()
         .map(|(path, text)| (*path, text.clone().into_bytes()))
         .collect();
-    let (exec, root) = host_of(&planted);
+    planted.push(("/proc/cmdline", KERNEL_CMDLINE.as_bytes().to_vec()));
+    planted.push(("/etc/fstab", FSTAB.as_bytes().to_vec()));
+    let host = SysctlHost::new().command("findmnt --json", 0, FINDMNT_JSON, "");
+    let (exec, root) = host_with(host, &planted);
     let Exported {
         snap,
         scan_tree,
         session,
         _packed,
-    } = export(&exec, root.path(), false);
+    } = export_with(
+        &exec,
+        root.path(),
+        false,
+        vec![
+            Box::new(KernelbootInspector::new()),
+            Box::new(StorageInspector::new()),
+        ],
+    );
     let refine_tree = export_session(&session);
 
     let snapshot = serde_json::to_vec(&snap).expect("the snapshot serializes");
@@ -1051,6 +1096,12 @@ fn every_credential_class_ships_masked_on_both_export_paths() {
             "{path} is not in the snapshot"
         );
     }
+    // So did each copy the kernel and storage inspectors read.
+    let kernel = snap.kernel_boot.as_ref().expect("a kernel section");
+    assert!(kernel.cmdline.contains("inst.repo="), "{}", kernel.cmdline);
+    let storage = snap.storage.as_ref().expect("a storage section");
+    assert_eq!(storage.fstab_entries.len(), 1, "{storage:#?}");
+    assert_eq!(storage.mount_points.len(), 1, "{storage:#?}");
     let mut all = vec![("snapshot".to_string(), snapshot)];
     all.extend(self::files(scan_tree.path()));
     all.extend(self::files(refine_tree.path()));

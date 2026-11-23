@@ -309,15 +309,20 @@ mod tests {
     /// declared. This half proves the groups are complete.
     #[test]
     fn every_field_of_a_content_bearing_type_is_classified() {
-        use inspectah_core::types::containers::{ComposeFile, QuadletUnit};
-        use inspectah_core::types::network::FirewallZone;
+        use inspectah_core::types::containers::{ComposeFile, FlatpakApp, QuadletUnit};
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        use inspectah_core::types::network::{
+            FirewallDirectRule, FirewallZone, NetworkSection, ProxyEntry,
+        };
         use inspectah_core::types::rpm::RepoFile;
         use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, SystemdTimer};
+        use inspectah_core::types::storage::{FstabEntry, MountPoint};
         use inspectah_core::types::sysctl::{SysctlFile, SysctlFileBody, SysctlSection};
         use inspectah_core::types::units::{
             AlsoMember, DefaultTarget, ManualLink, MountUnitFinding, SystemdDropIn,
             UndeterminedInstall, UnitInventoryEntry,
         };
+        use inspectah_core::types::users::UserGroupSection;
 
         // `config.files[]` and `non_rpm_software.env_files[]`.
         let ConfigFileEntry {
@@ -516,30 +521,115 @@ mod tests {
 
         // `network.firewall_zones[]`.
         let FirewallZone {
-            // EXEMPT, deliberately, and pinned by SENTINEL-FIREWALL in
-            // the sweep below. firewalld zone XML has no field that
-            // holds a credential: services, ports and rich rules are
-            // addresses and protocol names. Revisit if a zone ever
-            // carries an arbitrary value.
+            // scrubbed: the content pass, under the zone's path, as its
+            // config entry is. A `<description>` and a comment are free
+            // text, so "zone XML holds no credential" did not hold.
             content: _,
             path: _,
             name: _,
-            services: _,
-            ports: _,
+            services: _, // service names
+            ports: _,    // port/protocol pairs
+            // scrubbed: the URL pass; a `log prefix` is free text
             rich_rules: _,
             disposition: _,
             locked: _,
             aggregate: _,
         } = FirewallZone::default();
 
+        // `network`: the rest of the section.
+        let NetworkSection {
+            connections: _,    // identifiers: path, id, method, type
+            firewall_zones: _, // classified above
+            // classified below
+            firewall_direct_rules: _,
+            static_routes: _,     // identifiers: path and name, no content
+            ip_routes: _,         // `ip route` output: addresses and devices
+            ip_rules: _,          // `ip rule` output: selectors and tables
+            resolv_provenance: _, // classification
+            hosts_additions: _,   // scrubbed: the URL pass; a line can end in a comment
+            proxy: _,             // classified below
+        } = NetworkSection::default();
+        let FirewallDirectRule {
+            ipv: _,
+            table: _,
+            chain: _,
+            priority: _,
+            args: _, // scrubbed: the URL pass; `--comment` is free text
+            disposition: _,
+            locked: _,
+        } = FirewallDirectRule::default();
+        let ProxyEntry {
+            source: _, // identifier: the file path
+            line: _,   // scrubbed: the URL pass, passwords and token user names
+        } = ProxyEntry::default();
+
+        // `storage`.
+        let FstabEntry {
+            device: _,      // scrubbed: the URL pass; a source can be a URL
+            options: _,     // scrubbed: `password=` rule and the URL pass
+            mount_point: _, // identifier: a path
+            fstype: _,
+            disposition: _,
+            locked: _,
+            acknowledged: _,
+            aggregate: _,
+            attention_reason: _, // generated prose
+        } = FstabEntry::default();
+        let MountPoint {
+            source: _,  // scrubbed: the URL pass
+            options: _, // scrubbed: the URL pass
+            target: _,  // identifier: a path
+            fstype: _,
+        } = MountPoint::default();
+
+        // `containers.flatpak_apps[]`.
+        let FlatpakApp {
+            remote_url: _, // scrubbed: the URL pass; reaches the provisioning service
+            app_id: _,
+            origin: _,
+            branch: _,
+            remote: _,
+            disposition: _,
+            locked: _,
+            aggregate: _,
+        } = FlatpakApp::default();
+
+        // `kernel_boot`.
+        let KernelBootSection {
+            // scrubbed: patterns and URL credentials, argument by argument
+            cmdline: _,
+            // scrubbed: the content pass; no collector writes it today
+            grub_defaults: _,
+            sysctl: _,         // classified below
+            loaded_modules: _, // `lsmod`: names, sizes, users
+            tuned_active: _,   // a profile name
+            tuned_disposition: _,
+            locale: _,       // a locale name
+            timezone: _,     // a zone name
+            alternatives: _, // `alternatives`: names and paths
+        } = KernelBootSection::default();
+
+        // `users_groups`.
+        let UserGroupSection {
+            users: _,                    // name, ids, shell, home; ssh keys only when preserved
+            groups: _,                   // names, ids, members
+            sudoers_rules: _,            // scrubbed: patterns, then the URL pass
+            ssh_authorized_keys_refs: _, // user, key count, path
+            // a passwd line: GECOS cannot hold `:`, so no URL credential
+            passwd_entries: _,
+            shadow_entries: _,  // scrubbed: the shadow pass, unless preserved
+            group_entries: _,   // name, id, members
+            gshadow_entries: _, // written with `!` for the password
+            subuid_entries: _,  // name and id ranges
+            subgid_entries: _,  // name and id ranges
+        } = UserGroupSection::default();
+
         // `non_rpm_software.items[]`.
         let NonRpmItem {
-            manifest_files: _, // scrubbed (Finding 1)
+            manifest_files: _, // scrubbed: key scrubbers, then the URL pass
             git_remote: _,     // scrubbed
-            // EXEMPT, pinned by SENTINEL-NRSCONTENT in the sweep below:
-            // no collector writes this field as of this commit. If one
-            // starts, it holds file content and must be scrubbed, and
-            // the sweep says so when it stops surviving.
+            // scrubbed: the content pass. No collector writes it today;
+            // when one does, it holds file content.
             content: _,
             notes: _, // operator-authored in refine, not host content
             path: _,
@@ -554,6 +644,8 @@ mod tests {
             version: _,
             shared_libs: _,
             system_site_packages: _,
+            // each `version` scrubbed: the URL pass; a dependency spec
+            // can be a URL
             packages: _,
             has_c_extensions: _,
             git_commit: _,
@@ -671,6 +763,34 @@ mod tests {
             "SENTINEL-URL-SYSTIMER-DESC",
             "SENTINEL-URL-ATJOB",
             "SENTINEL-URL-SYSCTL-CONTENT",
+            "SENTINEL-URL-SYSCTL-RUNTIME",
+            "SENTINEL-URL-REPOFILE",
+            "SENTINEL-URL-ENVFILE",
+            "SENTINEL-URL-COMPOSE",
+            "SENTINEL-URL-CMDLINE",
+            "SENTINEL-URL-GRUB",
+            "SENTINEL-URL-FSTAB-DEVICE",
+            "SENTINEL-URL-FSTAB-OPTIONS",
+            "SENTINEL-URL-MOUNT-SOURCE",
+            "SENTINEL-URL-MOUNT-OPTIONS",
+            "SENTINEL-URL-FLATPAK",
+            // A token user name before a password: the token is the
+            // credential, so it is its own sentinel.
+            "SENTINEL-URL-PROXYTOKEN",
+            "SENTINEL-URL-ZONE",
+            "SENTINEL-URL-RICHRULE",
+            "SENTINEL-URL-DIRECTRULE",
+            "SENTINEL-URL-HOSTS",
+            "SENTINEL-URL-REQUIREMENT",
+            "SENTINEL-URL-JSONDEP",
+            "SENTINEL-URL-PKGVERSION",
+            "SENTINEL-URL-NRSCONTENT",
+            "SENTINEL-URL-SUDOERS",
+            "SENTINEL-URL-VERSIONLOCK",
+            // Moved from the exempt group: the zone XML and
+            // `NonRpmItem.content` now take the content pass.
+            "SENTINEL-FIREWALL",
+            "SENTINEL-NRSCONTENT",
         ];
 
         // Declared exempt, and planted anyway so the exemption is a
@@ -678,10 +798,15 @@ mod tests {
         // one's reason is recorded beside its field in
         // `every_field_of_a_content_bearing_type_is_classified`.
         const EXEMPT: &[&str] = &[
-            "SENTINEL-FIREWALL",    // firewalld zone XML holds no credential
-            "SENTINEL-NRSCONTENT",  // no collector writes NonRpmItem.content
             "SENTINEL-MOUNT-POINT", // MountUnitFinding.mount_point is a path
         ];
+
+        // The sweep matches by substring, so no sentinel may hold another.
+        for a in SCRUBBED.iter().chain(EXEMPT) {
+            for b in SCRUBBED.iter().chain(EXEMPT) {
+                assert!(a == b || !b.contains(a), "{a} is inside {b}");
+            }
+        }
 
         let mut snap = test_snapshot();
 
@@ -716,9 +841,13 @@ mod tests {
         if let Some(ref mut rpm) = snap.rpm {
             rpm.repo_files = vec![inspectah_core::types::rpm::RepoFile {
                 path: "/etc/yum.repos.d/corp.repo".into(),
-                content: "[corp]\npassword=SENTINEL-REPOFILE\n".into(),
+                content: "[corp]\npassword=SENTINEL-REPOFILE\n\
+                          baseurl=https://u:SENTINEL-URL-REPOFILE@repo.example/\n"
+                    .into(),
                 ..Default::default()
             }];
+            rpm.versionlock_command_output =
+                Some("mirror https://u:SENTINEL-URL-VERSIONLOCK@m.example/\n".into());
             rpm.gpg_keys = vec![inspectah_core::types::rpm::RepoFile {
                 path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-corp".into(),
                 content: "password=SENTINEL-GPGKEY\n\
@@ -819,13 +948,22 @@ mod tests {
                 path: "opt/myapp/docker-compose.yml".into(),
                 raw_content: Some(
                     "services:\n  db:\n    environment:\n      \
-                     POSTGRES_PASSWORD: SENTINEL-COMPOSE\n"
+                     POSTGRES_PASSWORD: SENTINEL-COMPOSE\n      \
+                     MIRROR: https://u:SENTINEL-URL-COMPOSE@m.example\n"
                         .into(),
                 ),
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
-            ..Default::default()
+            flatpak_apps: vec![inspectah_core::types::containers::FlatpakApp {
+                app_id: "org.example.App".into(),
+                origin: "corp".into(),
+                branch: "stable".into(),
+                remote: "corp".into(),
+                remote_url: "https://u:SENTINEL-URL-FLATPAK@flatpak.example/repo/".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
         });
 
         let mut manifest_files = std::collections::HashMap::new();
@@ -834,11 +972,28 @@ mod tests {
             "{\n  \"resolved\": \"https://u:SENTINEL-MANIFEST@npm.corp.example.com/x.tgz\"\n}\n"
                 .to_string(),
         );
+        // Direct dependency URLs, under no key the manifest scrubbers read.
+        manifest_files.insert(
+            "requirements.txt".to_string(),
+            "widget @ https://u:SENTINEL-URL-REQUIREMENT@pypi.example/widget.whl\n".to_string(),
+        );
+        manifest_files.insert(
+            "package.json".to_string(),
+            "{\"dependencies\":{\"widget\":\"git+https://u:SENTINEL-URL-JSONDEP@git.example/w.git\"}}\n"
+                .to_string(),
+        );
         snap.non_rpm_software = Some(NonRpmSoftwareSection {
             items: vec![NonRpmItem {
                 path: "opt/webapp".into(),
                 name: "webapp".into(),
-                content: "password=SENTINEL-NRSCONTENT\n".into(),
+                content: "password=SENTINEL-NRSCONTENT\n\
+                          url=https://u:SENTINEL-URL-NRSCONTENT@h.example\n"
+                    .into(),
+                packages: vec![inspectah_core::types::nonrpm::LanguagePackage {
+                    name: "widget".into(),
+                    version: "git+https://u:SENTINEL-URL-PKGVERSION@git.example/w.git".into(),
+                    pinned: false,
+                }],
                 method: inspectah_core::util::METHOD_NPM_LOCKFILE.into(),
                 git_remote: "https://u:SENTINEL-GITREMOTE@git.corp.example.com/webapp.git".into(),
                 manifest_files,
@@ -846,7 +1001,9 @@ mod tests {
             }],
             env_files: vec![ConfigFileEntry {
                 path: "opt/webapp/.env".into(),
-                content: "DB_PASSWORD=SENTINEL-ENVFILE\n".into(),
+                content: "DB_PASSWORD=SENTINEL-ENVFILE\n\
+                          MIRROR=https://u:SENTINEL-URL-ENVFILE@m.example\n"
+                    .into(),
                 ..Default::default()
             }],
         });
@@ -855,15 +1012,65 @@ mod tests {
             firewall_zones: vec![inspectah_core::types::network::FirewallZone {
                 path: "/etc/firewalld/zones/corp.xml".into(),
                 name: "corp".into(),
-                content: "<zone>\n  <!-- password=SENTINEL-FIREWALL -->\n</zone>\n".into(),
+                content: "<zone>\n  <!-- password=SENTINEL-FIREWALL -->\n  \
+                          <description>https://u:SENTINEL-URL-ZONE@h.example/</description>\n\
+                          </zone>\n"
+                    .into(),
+                rich_rules: vec![
+                    "rule family=\"ipv4\" log prefix=\"https://u:SENTINEL-URL-RICHRULE@h\" accept"
+                        .into(),
+                ],
                 ..Default::default()
             }],
+            firewall_direct_rules: vec![inspectah_core::types::network::FirewallDirectRule {
+                ipv: "ipv4".into(),
+                table: "filter".into(),
+                chain: "INPUT".into(),
+                priority: "0".into(),
+                args: "-p tcp -m comment --comment https://u:SENTINEL-URL-DIRECTRULE@h -j ACCEPT"
+                    .into(),
+                ..Default::default()
+            }],
+            hosts_additions: vec!["10.0.0.5 db.internal # https://u:SENTINEL-URL-HOSTS@h".into()],
+            proxy: vec![inspectah_core::types::network::ProxyEntry {
+                source: "etc/environment".into(),
+                line: "https_proxy=https://SENTINEL-URL-PROXYTOKEN:x-oauth-basic@p.example".into(),
+            }],
+            ..Default::default()
+        });
+
+        snap.storage = Some(inspectah_core::types::storage::StorageSection {
+            fstab_entries: vec![inspectah_core::types::storage::FstabEntry {
+                device: "https://u:SENTINEL-URL-FSTAB-DEVICE@files.example/share".into(),
+                mount_point: "/srv/webdav".into(),
+                fstype: "davfs".into(),
+                options: "_netdev,proxy=https://u:SENTINEL-URL-FSTAB-OPTIONS@p.example".into(),
+                ..Default::default()
+            }],
+            mount_points: vec![inspectah_core::types::storage::MountPoint {
+                target: "/srv/webdav".into(),
+                source: "https://u:SENTINEL-URL-MOUNT-SOURCE@files.example/share".into(),
+                fstype: "fuse".into(),
+                options: "rw,proxy=https://u:SENTINEL-URL-MOUNT-OPTIONS@p.example".into(),
+            }],
+            ..Default::default()
+        });
+
+        snap.users_groups = Some(inspectah_core::types::users::UserGroupSection {
+            sudoers_rules: vec![
+                "alice ALL=(ALL) /usr/bin/curl https://u:SENTINEL-URL-SUDOERS@h.example/x".into(),
+            ],
             ..Default::default()
         });
 
         // Planted field by field, not a host layout: the collector-driven
         // cases are in `crates/cli/tests/sysctl_scan_test.rs`.
         snap.kernel_boot = Some(KernelBootSection {
+            cmdline: "root=/dev/vda1 ro inst.repo=https://u:SENTINEL-URL-CMDLINE@repo.example/os/"
+                .into(),
+            grub_defaults:
+                "GRUB_CMDLINE_LINUX=\"inst.repo=https://u:SENTINEL-URL-GRUB@repo.example/\"\n"
+                    .into(),
             sysctl: Some(SysctlSection {
                 files: vec![
                     SysctlFile {
@@ -894,10 +1101,16 @@ mod tests {
                         },
                     },
                 ],
-                runtime: [(
-                    SysctlKey::normalize("kernel.core_pattern"),
-                    "password=SENTINEL-SYSCTL-RUNTIME".to_string(),
-                )]
+                runtime: [
+                    (
+                        SysctlKey::normalize("kernel.core_pattern"),
+                        "password=SENTINEL-SYSCTL-RUNTIME".to_string(),
+                    ),
+                    (
+                        SysctlKey::normalize("kernel.hostname"),
+                        "https://u:SENTINEL-URL-SYSCTL-RUNTIME@h".to_string(),
+                    ),
+                ]
                 .into(),
                 redacted_runtime: Vec::new(),
             }),
@@ -912,6 +1125,15 @@ mod tests {
         }
 
         crate::redaction::engine::redact(&mut snap, &Default::default());
+
+        // The snapshot object itself, serialized: what both export paths
+        // and `aggregate` start from.
+        let json = serde_json::to_string(&snap).unwrap();
+        let in_json: Vec<&&str> = SCRUBBED.iter().filter(|s| json.contains(**s)).collect();
+        assert!(
+            in_json.is_empty(),
+            "fields declared scrubbed are in the redacted snapshot: {in_json:?}"
+        );
 
         let context = RenderContext { target: None };
         let dir = TempDir::new().unwrap();

@@ -2397,6 +2397,43 @@ mod tests {
         );
     }
 
+    /// A Flatpak remote whose URL held a credential reaches the
+    /// provisioning service masked, and a masked URL is no bare word the
+    /// service runs: it becomes a FIXME, never a `remote-add` that fails
+    /// at every boot, and the credential is in neither.
+    #[test]
+    fn a_flatpak_remote_url_credential_never_reaches_the_service() {
+        let mut snap = InspectionSnapshot::new();
+        snap.containers = Some(ContainerSection {
+            flatpak_apps: vec![FlatpakApp {
+                app_id: "org.example.App".to_string(),
+                origin: "corp".to_string(),
+                branch: "stable".to_string(),
+                disposition: FindingKind::included(),
+                locked: false,
+                aggregate: None,
+                remote: "corp".to_string(),
+                remote_url: "https://u:flatpakpw8812@flatpak.example/repo/".to_string(),
+            }],
+            ..Default::default()
+        });
+        crate::redaction::engine::redact(&mut snap, &Default::default());
+        let apps: Vec<&FlatpakApp> = snap
+            .containers
+            .as_ref()
+            .unwrap()
+            .flatpak_apps
+            .iter()
+            .collect();
+        let svc = flatpak_provision_service(&apps);
+        assert!(!svc.contains("flatpakpw8812"), "{svc}");
+        assert!(!svc.contains("remote-add"), "{svc}");
+        assert!(
+            svc.contains("# FIXME: flatpak remote corp not added"),
+            "{svc}"
+        );
+    }
+
     /// A sysctl file is materialized on its own disposition and on nothing
     /// else: it is an ordinary config entry, copied verbatim.
     #[test]

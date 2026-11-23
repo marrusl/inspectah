@@ -1131,6 +1131,23 @@ fn kernel_cmdline_matches(cmdline: &str) -> Vec<(usize, EligibleMatch)> {
                 ));
             }
         }
+        // A credential in a URL (`inst.repo=https://u:pw@host/os/`): no
+        // pattern reads a password in an arbitrary URL's authority, so
+        // the URL maskers find it, and it is the argument's secret as a
+        // pattern match is, which [`redact_kernel_cmdline`] widens to
+        // the whole value and the kargs writer then leaves out.
+        for edit in url_credentials_in_line(arg.raw(), KERNEL_CMDLINE_PATH) {
+            let span = raw.start + edit.range.start..raw.start + edit.range.end;
+            matches.push((
+                generic,
+                EligibleMatch {
+                    claim: span.clone(),
+                    start: span.start,
+                    end: span.end,
+                    line_num: line_num(span.start),
+                },
+            ));
+        }
         if !by_name {
             continue;
         }
@@ -2060,10 +2077,7 @@ fn url_credential_edits(content: &str, path: &str) -> (Vec<PayloadEdit>, Vec<Red
     let mut offset = 0;
     for (number, line) in content.split_inclusive('\n').enumerate() {
         let line_number = i32::try_from(number + 1).ok();
-        let (mut url, key_values) = proxy_credential_parts(line, path);
-        url.extend(token_username_edits(line, path));
-        let found = merge_credential_edits(line, url, key_values);
-        for CredentialEdit { range, finding } in found {
+        for CredentialEdit { range, finding } in url_credentials_in_line(line, path) {
             let finding = RedactionFinding {
                 line: line_number,
                 ..finding
@@ -2082,6 +2096,31 @@ fn url_credential_edits(content: &str, path: &str) -> (Vec<PayloadEdit>, Vec<Red
         offset += line.len();
     }
     (edits, unedited)
+}
+
+/// Every URL credential in `line`, in order and apart: each password
+/// ([`mask_proxy_credentials`]) and each token standing as the user name
+/// ([`mask_token_username`]), overlaps merged
+/// ([`merge_credential_edits`]).
+fn url_credentials_in_line(line: &str, path: &str) -> Vec<CredentialEdit> {
+    let (mut url, key_values) = proxy_credential_parts(line, path);
+    url.extend(token_username_edits(line, path));
+    merge_credential_edits(line, url, key_values)
+}
+
+/// Mask the URL credentials in one field of host text in place
+/// ([`url_credential_edits`]), and return their findings: the URL pass
+/// alone, for a field whose format the pattern pass would misread (a
+/// manifest, a mount option list, a proxy line), or which a dedicated
+/// pass has already scrubbed for patterns.
+fn redact_url_credentials(content: &mut String, source_path: &str) -> Vec<RedactionFinding> {
+    let (edits, mut findings) = url_credential_edits(content, source_path);
+    if !edits.is_empty() {
+        let (text, kept) = apply_payload_edits(content, edits);
+        *content = text;
+        findings.extend(kept);
+    }
+    findings
 }
 
 /// Redact the text of a file only the bundle holds, at `path`. Every
@@ -2155,6 +2194,23 @@ pub fn record_late_findings(snapshot: &mut InspectionSnapshot, findings: Vec<Red
 /// The path a sysctl runtime value is scanned under: it came from the
 /// kernel's `/proc/sys` tree, not from a file.
 const SYSCTL_RUNTIME_PATH: &str = "/proc/sys";
+
+// Where a finding in a snapshot field with no file of its own says the
+// field was read from.
+/// `storage.fstab_entries`.
+const FSTAB_PATH: &str = "/etc/fstab";
+/// `storage.mount_points`, which `findmnt` reads from the mount table.
+const MOUNT_TABLE_PATH: &str = "/proc/self/mountinfo";
+/// `kernel_boot.grub_defaults`.
+const GRUB_DEFAULTS_PATH: &str = "/etc/default/grub";
+/// `network.firewall_direct_rules`.
+const FIREWALL_DIRECT_PATH: &str = "/etc/firewalld/direct.xml";
+/// `network.hosts_additions`.
+const HOSTS_PATH: &str = "/etc/hosts";
+/// `users_groups.sudoers_rules`.
+const SUDOERS_PATH: &str = "/etc/sudoers";
+/// `rpm.versionlock_command_output`.
+const VERSIONLOCK_OUTPUT_PATH: &str = "dnf versionlock list";
 
 /// Scrub every host-text field of the sysctl section in place and return
 /// the findings.
@@ -2234,7 +2290,11 @@ fn redact_sysctl_section(
     let mut removed = Vec::new();
     section.runtime.retain(|key, value| {
         let line = format!("{} = {value}", key.as_str());
-        let line_findings = scan_content(&line, SYSCTL_RUNTIME_PATH);
+        let mut line_findings = scan_content(&line, SYSCTL_RUNTIME_PATH);
+        // A URL credential removes the value too.
+        let (url_edits, already_masked) = url_credential_edits(&line, SYSCTL_RUNTIME_PATH);
+        line_findings.extend(already_masked);
+        line_findings.extend(url_edits.into_iter().flat_map(|edit| edit.findings));
         if line_findings.is_empty() {
             return true;
         }
@@ -2344,6 +2404,16 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 &mut registry,
             ));
         }
+
+        // Command output no collector writes today; it would hold repo
+        // and package text, so it takes the content pass if one does.
+        if let Some(output) = rpm.versionlock_command_output.as_mut() {
+            all_findings.extend(scan_and_redact_field(
+                output,
+                VERSIONLOCK_OUTPUT_PATH,
+                &mut registry,
+            ));
+        }
     }
 
     // Scan systemd drop-in contents in services section. The units
@@ -2386,6 +2456,16 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 });
                 entry.options = redacted_options;
             }
+            // A mount source can be a URL (`https://u:pw@host/share` for
+            // davfs, `curlftpfs#ftp://u:pw@host/`), and an option can
+            // hold one; the option rule above reads `password=` only.
+            all_findings.extend(redact_url_credentials(&mut entry.device, FSTAB_PATH));
+            all_findings.extend(redact_url_credentials(&mut entry.options, FSTAB_PATH));
+        }
+        // The runtime mount table repeats each source and its options.
+        for mount in &mut storage.mount_points {
+            all_findings.extend(redact_url_credentials(&mut mount.source, MOUNT_TABLE_PATH));
+            all_findings.extend(redact_url_credentials(&mut mount.options, MOUNT_TABLE_PATH));
         }
         for cred in &storage.credential_refs {
             all_findings.push(RedactionFinding {
@@ -2415,6 +2495,16 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             all_findings.extend(cmdline_findings);
         }
 
+        // `/etc/default/grub`, which no collector writes today: its
+        // `GRUB_CMDLINE_LINUX` holds kernel arguments.
+        if !kernelboot.grub_defaults.is_empty() {
+            all_findings.extend(scan_and_redact_field(
+                &mut kernelboot.grub_defaults,
+                GRUB_DEFAULTS_PATH,
+                &mut registry,
+            ));
+        }
+
         // The sysctl section: vendor, runtime and link-read files and
         // kernel values that no other pass sees.
         if let Some(ref mut sysctl) = kernelboot.sysctl {
@@ -2428,14 +2518,34 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         // which exempts comment lines, as it does for every config file.
     }
 
-    // Scan proxy lines for embedded credentials (dedicated masker, NOT generic pass).
+    // Scan proxy lines for embedded credentials: the URL pass, NOT the
+    // generic one, so a password and a token user name are both masked
+    // and the line keeps its form.
     if let Some(ref mut network) = snapshot.network {
         for entry in &mut network.proxy {
-            let (masked, findings) = mask_proxy_credentials(&entry.line, &entry.source);
-            if !findings.is_empty() {
-                entry.line = masked.into_owned();
-                all_findings.extend(findings);
+            all_findings.extend(redact_url_credentials(&mut entry.line, &entry.source));
+        }
+
+        // A zone file's whole XML, a second copy of what the config pass
+        // scrubs at the same path, so the two copies agree. A
+        // `<description>` or a rich rule's `log prefix` is free text.
+        for zone in &mut network.firewall_zones {
+            all_findings.extend(scan_and_redact_field(
+                &mut zone.content,
+                &zone.path,
+                &mut registry,
+            ));
+            for rule in &mut zone.rich_rules {
+                all_findings.extend(redact_url_credentials(rule, &zone.path));
             }
+        }
+        // A direct rule's arguments can carry a `--comment`.
+        for rule in &mut network.firewall_direct_rules {
+            all_findings.extend(redact_url_credentials(&mut rule.args, FIREWALL_DIRECT_PATH));
+        }
+        // An `/etc/hosts` line can end in a comment.
+        for line in &mut network.hosts_additions {
+            all_findings.extend(redact_url_credentials(line, HOSTS_PATH));
         }
     }
 
@@ -2486,6 +2596,14 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 &compose.path,
                 &mut registry,
             ));
+        }
+
+        // A Flatpak remote's URL, which the generated provisioning
+        // service passes to `flatpak remote-add`. A masked URL is no
+        // bare word that service accepts, so it becomes a FIXME there.
+        for app in &mut containers.flatpak_apps {
+            let source_path = format!("flatpak-remote:{}", app.remote);
+            all_findings.extend(redact_url_credentials(&mut app.remote_url, &source_path));
         }
     }
 
@@ -2660,6 +2778,27 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 }
 
                 *content = outcome.content;
+                // Every other URL in the manifest: the scrubbers above
+                // read their keys only, and a direct dependency
+                // (`widget @ https://u:pw@host/w.whl`,
+                // `"git+https://u:pw@host/w.git"`) is under none of them.
+                all_findings.extend(redact_url_credentials(content, &manifest_path));
+            }
+
+            // A dependency's version is the spec as written, which can be
+            // a URL (`"widget": "git+https://u:pw@host/w.git"`).
+            for package in &mut item.packages {
+                all_findings.extend(redact_url_credentials(&mut package.version, &item.path));
+            }
+
+            // No collector writes this today; if one does, it is file
+            // content.
+            if !item.content.is_empty() {
+                all_findings.extend(scan_and_redact_field(
+                    &mut item.content,
+                    &item.path,
+                    &mut registry,
+                ));
             }
 
             if !item.git_remote.is_empty() {
@@ -2720,6 +2859,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                     *rule = format!("{}{}", &rule[..prefix_len], new_body);
                 }
             }
+            // A command in a rule can take a URL with a credential.
+            all_findings.extend(redact_url_credentials(rule, SUDOERS_PATH));
         }
     }
 
@@ -5564,6 +5705,46 @@ baseurl = https://cdn.redhat.com
         // The INI form still takes the rest of the line.
         let (out, _) = mask_proxy_credentials("proxy_password=alpha bravo", "etc/dnf/dnf.conf");
         assert_eq!(out, "proxy_password=[REDACTED]");
+    }
+
+    /// A URL credential in a kernel argument is that argument's secret,
+    /// password or token user name alike: its whole value becomes one
+    /// token, as a credential parameter's does, so the kargs file leaves
+    /// the argument out and names it as owed. A URL with no credential is
+    /// carried as written.
+    #[test]
+    fn a_url_credential_in_a_kernel_argument_replaces_its_value() {
+        let token = "deploytoken0123456789xyz";
+        let cmdline = format!(
+            "root=/dev/vda1 inst.repo=https://u:cmdlinepw8812@host/os/ \
+             ignition.config.url=https://{token}@h/c.ign \
+             inst.stage2=https://mirror.example/os/ quiet"
+        );
+        assert_eq!(scan_content(&cmdline, KERNEL_CMDLINE_PATH).len(), 2);
+        let redacted = redacted_kernel_cmdline(&cmdline);
+        for secret in ["cmdlinepw8812", token, "u:", "@host"] {
+            assert!(!redacted.contains(secret), "{secret}: {redacted}");
+        }
+
+        let mut snap = InspectionSnapshot::new();
+        snap.kernel_boot = Some(inspectah_core::types::kernelboot::KernelBootSection {
+            cmdline: cmdline.clone(),
+            ..Default::default()
+        });
+        redact(&mut snap, &RedactOptions::default());
+        let shipped = &snap.kernel_boot.as_ref().unwrap().cmdline;
+        assert_eq!(
+            TOKEN_NUMBER.replace_all(shipped, "$1"),
+            TOKEN_NUMBER.replace_all(&redacted, "$1"),
+        );
+        assert!(
+            shipped.contains("inst.stage2=https://mirror.example/os/"),
+            "{shipped}"
+        );
+        assert_eq!(
+            crate::render::configtree::owed_kernel_arguments(&snap),
+            ["inst.repo=<value>", "ignition.config.url=<value>"]
+        );
     }
 
     /// The URL credential edits a payload takes: one per credential, mixed
