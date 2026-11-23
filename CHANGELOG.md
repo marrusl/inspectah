@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-beta.7] - 2026-11-22
+
 ### Added
 - **Exports name the provisioning steps a deployed machine owes**: when a keytab, registration or other machine-state file is left out, the Containerfile, the audit report, the README, the scan's output and the refine export's warnings name the step to run, such as `realm join` or `subscription-manager register`.
 - **Exports name `tmpfiles.d` lines whose account the image lacks**: a carried `tmpfiles.d` file whose line names a local user or group the image does not create, such as a user left on Skip, is listed in the Containerfile and the audit report with the path and the account. `systemd-tmpfiles` skips such a line at boot, and `systemd-tmpfiles-setup.service` still reports success. Create the account in refine (useradd) or provision it.
@@ -65,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The scan README no longer cites `--from-snapshot`**: its file table said `inspection-snapshot.json` was for re-rendering with `--from-snapshot`, a flag no subcommand has. It now says `inspectah refine` loads it to re-render the export.
 
 ### Security
-- **`--include-unmanaged` no longer ships credentials in clear**: text files bundled under `unmanaged/`, such as `/opt/myapp/.env` or a compose file, were copied byte for byte into the export and the image while `secrets-review.md` called them redacted. Their credentials are now replaced with `REDACTED_*` placeholders, and text inspectah cannot check, not UTF-8, over 8 MiB, or an `.env` or compose file changed since the scan, is left out. `secrets-review.md` names each file, refine asks for the sensitive-data acknowledgment, and `--no-redaction` still ships them raw.
+- **`--include-unmanaged` no longer ships credentials in clear**: text files bundled under `unmanaged/`, such as `/opt/myapp/.env`, were copied byte for byte into the export and the image while `secrets-review.md` called them redacted. Their credentials are now replaced with `REDACTED_*` placeholders, and text inspectah cannot check, not UTF-8, over 8 MiB, or an `.env` or compose file changed since the scan, is left out. `secrets-review.md` names each file, refine asks for the sensitive-data acknowledgment, and `--no-redaction` still ships them raw.
 - **SSSD bind passwords are redacted**: `ldap_default_authtok` and other `*_authtok` values in collected configuration are now redacted whole, spaces and quotes included. Before, an SSSD LDAP bind password in `sssd.conf` would have shipped in the export.
 - **Paths through a linked directory are checked under both names**: with a symbolic link in a directory above it, such as `/etc/app/state` linking to `/etc`, a path could reach a key file, `/etc/shadow` or `/etc/machine-id` under a name no exclusion matched. Every exclusion now applies to both names, and a warning names any packaged path left out. Other configuration, packaged or not, is carried where the application reads it; a link to a directory above it is followed once.
 - **Configuration warnings no longer quote file content**: the crypto policy warnings quoted the first line of `/etc/crypto-policies/config`, so a link from there to a credentials or key file put a secret in the scan and both exports, and a failed `authselect check` was quoted although it can repeat `authselect.conf`. Warnings are not redacted. They now give paths and fixed text only, and the policy file is read only as collected configuration is.
@@ -73,21 +75,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Encrypted private keys are redacted**: a PEM block labeled `ENCRYPTED PRIVATE KEY`, or any other label ending in `PRIVATE KEY`, inside a collected configuration file is now redacted like the RSA, EC and OpenSSH key blocks were.
 - **Repo URL credentials are redacted**: a password or token in a `.repo` file's `baseurl=`, `mirrorlist=`, `metalink=` or `gpgkey=` URL, such as `https://build:secret@repo.example/`, was kept in the snapshot and the copied `.repo` file. Redacted scans now write `https://REDACTED@repo.example/`, so you supply the credential at build time. A password holding a comma, `;`, `#`, whitespace or a continued line is replaced whole, and a warning about an unreadable `gpgkey=` file names no piece of it.
 - **Armored OpenPGP private keys are kept out of the scan**: a file holding a `PGP PRIVATE KEY BLOCK` is withheld like a PEM private key, under `/etc` and in `--include-unmanaged` payloads, and such a block in other configuration is redacted. A `gpgkey=` file the scan refuses to store no longer keeps its content in configuration rows, the refine view or fleet alternatives. A public key block still ships. Binary OpenPGP secret key packets are not detected.
-
-### Known limitations
-- **Redaction, kernel command lines**: a command line embedded in another file, such as `kernel_cmdline=` in `/etc/dracut.conf.d`, can keep part of a credential after partial replacement, so review those files before sharing an export. A `rd.luks.key=` value that starts with a Unicode space is not redacted; it is a key-file path, not the key.
-- **Redaction, shell-quoted values**: a value written with shell escaping or `$'...'` quoting, such as `GRUB_CMDLINE_LINUX="rd.iscsi.password=\"a b\""` in `/etc/default/grub`, can be only partly redacted in the snapshot. Review such files before sharing an export.
-- **Redaction, repositories and `--no-redaction`**: redaction can remove URL text or configuration syntax as well as credentials. Inspect the exported `.repo` files and restore non-secret text before building. A package whose usable repository route is lost gets a `FIXME` naming a switch that restores it or an RPM upload. `--no-redaction` keeps credentials in exports.
-- **`/etc/default/grub`**: the file is never copied. It gets an advisory when it sets arguments kargs.d does not carry, or when the scan cannot compare it confidently, as with shell constructs the reader does not model. Review the file and put any additional required arguments in a kargs.d file yourself.
-- **Unmanaged files under `/opt` and `/srv`**: private keys in DER or PKCS#12 form and binary OpenPGP packets are not detected, though PEM keys are. A PEM key with odd line breaks (`&#10;`, `%0A`, `<br>`), a UTF-16, compressed or double-encoded file, or a key cut off below the minimum length can also be missed. A file can change between the check and the copy.
-- **Repositories on other distributions**: on a host that is not RHEL, CentOS or Fedora, such as AlmaLinux or Rocky Linux, inspectah treats the build's dnf version as unknown. It can then require a key the build would not check, and an installable package can get an upload `FIXME`. Check the Containerfile's `FIXME` lines before building.
-- **Repositories, repeated signature options**: inspectah uses the last assignment across `gpgcheck` and `pkg_gpgcheck`, but dnf 5 updates each name's value and applies the names in first-occurrence order. On Fedora, a section that mixes the two names with repeats can fail the build for a missing key or leave out an installable package. Use one signature option per section before scanning.
-- **When `rpm -Va` fails**: modified RPM-owned configuration files may be left out with no general warning. On Fedora, a stock repo file is then not counted as the base image's, so excluding it can leave its packages with an upload `FIXME`. Check the exported configuration against the host, resolve the failure and re-scan.
-- **Packages and units**: an enabled unit's owner whose dependencies need a repo disabled on the host is not carried by default. The notice names it and says why, and you can include it. Refine rows do not show the hold reason; the Containerfile and the audit report do. Guarded unit commands are not shown in refine.
-- **Package dependencies**: `Supplements` conditions are judged on the source host, and the dnf fallback ignores weak dependencies. Review the built image's packages and unit commands, and include any required package the export leaves out.
-- **SELinux mode**: the recorded running mode has no export command. An unowned or content-modified `/etc/selinux/config` can still be copied as configuration, but a `%ghost` copy is skipped. Check the file and set the image's intended mode yourself.
-- **`/etc/crypttab`**: storage does not parse encrypted-volume mappings. An unowned or content-modified copy can appear under Configuration Files, where refine locks it out as merge-hostile; a `%ghost` copy is skipped. Provide any encrypted-volume configuration yourself.
-- **Locale and timezone**: the recorded values have no export command, and `/etc/localtime` is not copied. An unowned or content-modified `/etc/locale.conf` can still be copied as configuration; a `%ghost` copy is skipped. Set any missing locale and timezone settings in the image.
 
 ## [0.9.0-beta.6] - 2026-11-20
 
@@ -681,7 +668,8 @@ Final release of the Go implementation before the Rust rewrite.
 
 ---
 
-[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.6...HEAD
+[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.7...HEAD
+[0.9.0-beta.7]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.6...v0.9.0-beta.7
 [0.9.0-beta.6]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.5...v0.9.0-beta.6
 [0.9.0-beta.5]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.4...v0.9.0-beta.5
 [0.9.0-beta.4]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.3...v0.9.0-beta.4
