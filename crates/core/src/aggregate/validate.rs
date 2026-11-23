@@ -1,5 +1,6 @@
 use crate::snapshot::InspectionSnapshot;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use time::format_description::well_known::Rfc3339;
 
 // ---------------------------------------------------------------------------
 // Error and warning types
@@ -257,7 +258,7 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
     // the check, which is then incomplete: it gets a warning of its own,
     // so `--strict` does not pass on dates it never compared.
     {
-        let mut timestamps: Vec<(chrono::DateTime<chrono::FixedOffset>, &str)> = Vec::new();
+        let mut timestamps: Vec<(time::OffsetDateTime, &str)> = Vec::new();
         let mut unreadable: Vec<String> = Vec::new();
         for snap in snapshots {
             let Some(value) = snap.meta.get("timestamp") else {
@@ -265,7 +266,7 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
             };
             match value
                 .as_str()
-                .and_then(|ts| Some((chrono::DateTime::parse_from_rfc3339(ts).ok()?, ts)))
+                .and_then(|ts| Some((time::OffsetDateTime::parse(ts, &Rfc3339).ok()?, ts)))
             {
                 Some(parsed) => timestamps.push(parsed),
                 None => unreadable.push(HostIdentity::of(snap).to_string()),
@@ -279,8 +280,8 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> AggregateValidati
             });
         }
         if let (Some(min), Some(max)) = (timestamps.iter().min(), timestamps.iter().max()) {
-            let spread = max.0.signed_duration_since(min.0);
-            if spread > chrono::Duration::days(STALE_SCAN_SPREAD_DAYS) {
+            let spread = max.0 - min.0;
+            if spread > time::Duration::days(STALE_SCAN_SPREAD_DAYS) {
                 result.warnings.push(AggregateWarning::StaleScanDates {
                     spread_description: format!(
                         "scans span {}, more than {STALE_SCAN_SPREAD_DAYS} days: from {} to {}",
@@ -416,12 +417,12 @@ fn extract_meta_string(snap: &InspectionSnapshot, key: &str) -> Option<String> {
 /// [`STALE_SCAN_SPREAD_DAYS`] never reads as exactly that many days:
 /// "7 days and 1 second", "8 days, 2 hours and 1 minute". A remainder
 /// under a second is "less than a second".
-fn describe_spread(spread: chrono::Duration) -> String {
-    let days = spread.num_days();
-    let rest = spread - chrono::Duration::days(days);
-    let hours = rest.num_hours();
-    let minutes = rest.num_minutes() % 60;
-    let seconds = rest.num_seconds() % 60;
+fn describe_spread(spread: time::Duration) -> String {
+    let days = spread.whole_days();
+    let rest = spread - time::Duration::days(days);
+    let hours = rest.whole_hours();
+    let minutes = rest.whole_minutes() % 60;
+    let seconds = rest.whole_seconds() % 60;
     let unit = |n: i64, name: &str| format!("{n} {name}{}", if n == 1 { "" } else { "s" });
     let mut parts = vec![unit(days, "day")];
     for (n, name) in [(hours, "hour"), (minutes, "minute"), (seconds, "second")] {
@@ -429,7 +430,7 @@ fn describe_spread(spread: chrono::Duration) -> String {
             parts.push(unit(n, name));
         }
     }
-    if parts.len() == 1 && rest > chrono::Duration::zero() {
+    if parts.len() == 1 && rest > time::Duration::ZERO {
         parts.push("less than a second".to_string());
     }
     match parts.split_last() {

@@ -21,11 +21,14 @@ Source of truth: `crates/pipeline/src/render/mod.rs` (scan),
 ### Tarball naming
 
 ```
-<hostname>-<YYYYMMDD>-<HHMMSS>.tar.gz
+<hostname>-<YYYYMMDD>-<HHMMSS>Z.tar.gz
 ```
 
 This pattern is schematic: it has placeholders, so there is nothing to
 capture. A real name from the sample host is `rhel9-20261104-222606.tar.gz`.
+
+The date and time are UTC, which the `Z` marks. Tarballs from releases
+before 0.9.0-beta.8 used the scanning host's local time and no `Z`.
 
 The tarball wraps a single prefix directory with the same name as the stamp.
 Naming is produced by `get_output_stamp()` in `render/tarball.rs`.
@@ -245,7 +248,7 @@ snapshot and renders a combined tarball.
 ### Tarball naming
 
 ```
-aggregate-<label>-<YYYYMMDD>-<HHMMSS>.tar.gz
+aggregate-<label>-<YYYYMMDD>-<HHMMSS>Z.tar.gz
 ```
 
 This pattern is schematic: it has placeholders, so there is nothing to

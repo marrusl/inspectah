@@ -80,7 +80,7 @@ pub fn merge_snapshots(
         label: label.unwrap_or("aggregate").to_string(),
         host_count: total,
         hostnames: hostnames.clone(),
-        merged_at: chrono::Utc::now().to_rfc3339(),
+        merged_at: crate::util::now_rfc3339_utc(),
         baseline_provisional,
         section_host_counts,
     };

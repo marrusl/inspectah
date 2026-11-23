@@ -229,7 +229,7 @@ pub fn collect(
     );
     snapshot.meta.insert(
         "timestamp".into(),
-        serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
+        serde_json::Value::String(inspectah_core::util::now_rfc3339_utc()),
     );
     snapshot.meta.insert(
         "inspectah_version".into(),

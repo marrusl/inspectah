@@ -82,11 +82,11 @@ From there, refine and build:
 
 ## Output
 
-The default output is a tarball (`hostname-YYYYMMDD-HHMMSS.tar.gz`) containing:
+The default output is a tarball (`hostname-YYYYMMDD-HHMMSSZ.tar.gz`, in UTC) containing:
 
 ```
-hostname-20260312-143000.tar.gz
-└── hostname-20260312-143000/
+hostname-20260312-143000Z.tar.gz
+└── hostname-20260312-143000Z/
     ├── Containerfile                 # Layered image definition (cache-optimized)
     ├── README.md                     # Build/deploy commands, FIXME checklist
     ├── audit-report.md               # Detailed findings, storage plan, version drift

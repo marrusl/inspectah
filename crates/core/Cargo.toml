@@ -6,7 +6,6 @@ license.workspace = true
 autotests = false
 
 [dependencies]
-chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
 serde.workspace = true
 serde_json.workspace = true

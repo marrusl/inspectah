@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Tarball names are in UTC**: `scan` and `aggregate` name their tarball with the UTC time and a `Z` suffix, such as `rhel9-20261123-070502Z.tar.gz`, instead of the host's local time. The directory inside the tarball follows the same name. Tarballs named the old way still load in `refine` and `aggregate`.
+
 ### Fixed
 - **Refine is fast again on hosts with large repo files**: on a subscribed RHEL 9 host, whose `redhat.repo` holds about 500 sections, each refine operation took around 13 s, and so did starting refine and downloading the export. Refine operations, startup, and export downloads are substantially faster on hosts with large repo files.
 

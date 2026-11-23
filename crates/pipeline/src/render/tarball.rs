@@ -24,11 +24,29 @@ pub fn sanitize_hostname(hostname: &str) -> String {
     }
 }
 
-/// Returns "HOSTNAME-YYYYMMDD-HHMMSS" for tarball naming.
+/// Returns "HOSTNAME-YYYYMMDD-HHMMSSZ" for tarball naming, the current
+/// time in UTC.
+///
+/// UTC because the `time` crate refuses the local offset in a
+/// multi-threaded Unix process, and because a fleet's tarballs then name
+/// one clock wherever each host was scanned. The `Z` says so in the name.
 pub fn get_output_stamp(hostname: &str) -> String {
+    output_stamp_at(hostname, time::OffsetDateTime::now_utc())
+}
+
+/// [`get_output_stamp`] at a given instant, converted to UTC.
+fn output_stamp_at(hostname: &str, at: time::OffsetDateTime) -> String {
     let resolved = sanitize_hostname(hostname);
-    let now = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    format!("{resolved}-{now}")
+    let at = at.to_offset(time::UtcOffset::UTC);
+    format!(
+        "{resolved}-{:04}{:02}{:02}-{:02}{:02}{:02}Z",
+        at.year(),
+        u8::from(at.month()),
+        at.day(),
+        at.hour(),
+        at.minute(),
+        at.second()
+    )
 }
 
 /// Create a gzipped tarball from source_dir with entries under prefix/.
@@ -241,13 +259,30 @@ mod tests {
     }
 
     #[test]
+    fn test_output_stamp_is_utc_with_z_suffix() {
+        // 2026-11-23T07:05:02 UTC, given at +05:30 to show the conversion.
+        let at = time::OffsetDateTime::from_unix_timestamp(1_795_417_502)
+            .expect("a valid timestamp")
+            .to_offset(time::UtcOffset::from_hms(5, 30, 0).expect("a valid offset"));
+        assert_eq!(output_stamp_at("myhost", at), "myhost-20261123-070502Z");
+    }
+
+    #[test]
     fn test_get_output_stamp_format() {
         let stamp = get_output_stamp("myhost");
-        assert!(stamp.starts_with("myhost-"));
-        // Should match YYYYMMDD-HHMMSS pattern
-        let parts: Vec<_> = stamp.splitn(2, '-').collect();
-        assert_eq!(parts[0], "myhost");
-        // Rest should be date-time
-        assert!(parts[1].len() >= 15); // YYYYMMDD-HHMMSS
+        let time_part = stamp
+            .strip_prefix("myhost-")
+            .expect("the stamp starts with the hostname");
+        let bytes = time_part.as_bytes();
+        assert_eq!(bytes.len(), "YYYYMMDD-HHMMSSZ".len(), "{stamp}");
+        assert_eq!(bytes[8], b'-', "{stamp}");
+        assert_eq!(bytes[15], b'Z', "{stamp}");
+        assert!(
+            bytes[..8]
+                .iter()
+                .chain(&bytes[9..15])
+                .all(u8::is_ascii_digit),
+            "{stamp}"
+        );
     }
 }

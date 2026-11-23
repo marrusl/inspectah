@@ -37,6 +37,38 @@ pub fn env_hash(path: &str) -> String {
     hex::encode(&result[..6])
 }
 
+/// `at` in UTC as RFC 3339, written the way the snapshot `timestamp` and
+/// the aggregate `merged_at` have always been written: a `+00:00` offset,
+/// and a fraction of 3, 6 or 9 digits, whichever is the shortest exact
+/// one, or none for a whole second (`2026-11-23T07:15:02.120+00:00`).
+pub fn rfc3339_utc(at: time::OffsetDateTime) -> String {
+    let at = at.to_offset(time::UtcOffset::UTC);
+    let nanos = at.nanosecond();
+    let fraction = if nanos == 0 {
+        String::new()
+    } else if nanos.is_multiple_of(1_000_000) {
+        format!(".{:03}", nanos / 1_000_000)
+    } else if nanos.is_multiple_of(1_000) {
+        format!(".{:06}", nanos / 1_000)
+    } else {
+        format!(".{nanos:09}")
+    };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{fraction}+00:00",
+        at.year(),
+        u8::from(at.month()),
+        at.day(),
+        at.hour(),
+        at.minute(),
+        at.second()
+    )
+}
+
+/// The current time as [`rfc3339_utc`] writes it.
+pub fn now_rfc3339_utc() -> String {
+    rfc3339_utc(time::OffsetDateTime::now_utc())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,6 +90,30 @@ mod tests {
             hash1, hash2,
             "different paths should produce different hashes"
         );
+    }
+
+    #[test]
+    fn test_rfc3339_utc_matches_the_recorded_format() {
+        let base = 1_795_418_102; // 2026-11-23T07:15:02Z
+        let cases = [
+            (0, "2026-11-23T07:15:02+00:00"),
+            (120_000_000, "2026-11-23T07:15:02.120+00:00"),
+            (120_500_000, "2026-11-23T07:15:02.120500+00:00"),
+            (120_500_001, "2026-11-23T07:15:02.120500001+00:00"),
+        ];
+        for (nanos, expected) in cases {
+            let at = time::OffsetDateTime::from_unix_timestamp(base)
+                .expect("a valid timestamp")
+                .replace_nanosecond(nanos)
+                .expect("a valid nanosecond");
+            assert_eq!(rfc3339_utc(at), expected);
+            let parsed = time::OffsetDateTime::parse(
+                expected,
+                &time::format_description::well_known::Rfc3339,
+            )
+            .expect("the output parses as RFC 3339");
+            assert_eq!(parsed, at);
+        }
     }
 
     #[test]
