@@ -30,6 +30,17 @@ The line also carries a schema number in parentheses (e.g.
 `SCHEMA_VERSION` in `crates/core/src/snapshot.rs` too, don't just swap
 the version string. It has drifted from the actual value before.
 
+**Docs schema number.** When `SCHEMA_VERSION` changed since the last
+tag, update `docs/reference/snapshot-schema.md`: the `Schema version`
+line and the numbers in the "Loading and schema version" paragraph and
+its sample error. That page is the only docs page that names the
+current number. Then look for stale copies elsewhere and fix every hit
+outside it, preferably by removing the number:
+
+```sh
+grep -rniE 'schema[ _]?(version)?[":= v]+[0-9]{1,2}\b' docs README.md | grep -v 'docs/reference/snapshot-schema.md'
+```
+
 ## CHANGELOG.md
 
 Move all entries from `## [Unreleased]` into a new dated section:
