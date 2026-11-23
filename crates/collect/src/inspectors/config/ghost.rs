@@ -615,16 +615,6 @@ setup cn '/etc/hosts'
     /// with-mkhomedir --force`: the generated files, `authselect test`
     /// output, and `authselect check` after edits.
     mod measured {
-        macro_rules! fixture {
-            ($release:literal, $name:literal) => {
-                include_str!(concat!(
-                    "../../../../../testdata/fixtures/config/authselect/",
-                    $release,
-                    "/",
-                    $name
-                ))
-            };
-        }
         pub(super) struct Release {
             pub conf: &'static str,
             pub system_auth: &'static str,
@@ -641,30 +631,85 @@ setup cn '/etc/hosts'
             /// over the `/etc/pam.d/smartcard-auth` link.
             pub check_mode_and_links: (i32, &'static str, &'static str),
         }
-        macro_rules! release {
-            ($release:literal, $content_exit:literal) => {
-                Release {
-                    conf: fixture!($release, "authselect.conf"),
-                    system_auth: fixture!($release, "system-auth"),
-                    system_auth_edited: fixture!($release, "system-auth.edited"),
-                    nsswitch: fixture!($release, "nsswitch.conf"),
-                    test_system_auth: fixture!($release, "test-system-auth.stdout"),
-                    test_nsswitch: fixture!($release, "test-nsswitch.stdout"),
-                    check_content_edit: (
-                        $content_exit,
-                        fixture!($release, "check-content-edit.stdout"),
-                        fixture!($release, "check-content-edit.stderr"),
-                    ),
-                    check_mode_and_links: (
-                        3,
-                        fixture!($release, "check-mode-and-links.stdout"),
-                        fixture!($release, "check-mode-and-links.stderr"),
-                    ),
-                }
-            };
-        }
-        pub(super) const EL9: Release = release!("rhel-9.8", 3);
-        pub(super) const EL10: Release = release!("rhel-10.2", 0);
+        // Each path is written out in full, not built by a macro, so that
+        // scripts/tests/docs-only-paths-test.sh can resolve every
+        // include_str! argument.
+        pub(super) const EL9: Release = Release {
+            conf: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-9.8/authselect.conf"
+            ),
+            system_auth: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-9.8/system-auth"
+            ),
+            system_auth_edited: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-9.8/system-auth.edited"
+            ),
+            nsswitch: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-9.8/nsswitch.conf"
+            ),
+            test_system_auth: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-9.8/test-system-auth.stdout"
+            ),
+            test_nsswitch: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-9.8/test-nsswitch.stdout"
+            ),
+            check_content_edit: (
+                3,
+                include_str!(
+                    "../../../../../testdata/fixtures/config/authselect/rhel-9.8/check-content-edit.stdout"
+                ),
+                include_str!(
+                    "../../../../../testdata/fixtures/config/authselect/rhel-9.8/check-content-edit.stderr"
+                ),
+            ),
+            check_mode_and_links: (
+                3,
+                include_str!(
+                    "../../../../../testdata/fixtures/config/authselect/rhel-9.8/check-mode-and-links.stdout"
+                ),
+                include_str!(
+                    "../../../../../testdata/fixtures/config/authselect/rhel-9.8/check-mode-and-links.stderr"
+                ),
+            ),
+        };
+        pub(super) const EL10: Release = Release {
+            conf: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-10.2/authselect.conf"
+            ),
+            system_auth: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-10.2/system-auth"
+            ),
+            system_auth_edited: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-10.2/system-auth.edited"
+            ),
+            nsswitch: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-10.2/nsswitch.conf"
+            ),
+            test_system_auth: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-10.2/test-system-auth.stdout"
+            ),
+            test_nsswitch: include_str!(
+                "../../../../../testdata/fixtures/config/authselect/rhel-10.2/test-nsswitch.stdout"
+            ),
+            check_content_edit: (
+                0,
+                include_str!(
+                    "../../../../../testdata/fixtures/config/authselect/rhel-10.2/check-content-edit.stdout"
+                ),
+                include_str!(
+                    "../../../../../testdata/fixtures/config/authselect/rhel-10.2/check-content-edit.stderr"
+                ),
+            ),
+            check_mode_and_links: (
+                3,
+                include_str!(
+                    "../../../../../testdata/fixtures/config/authselect/rhel-10.2/check-mode-and-links.stdout"
+                ),
+                include_str!(
+                    "../../../../../testdata/fixtures/config/authselect/rhel-10.2/check-mode-and-links.stderr"
+                ),
+            ),
+        };
     }
 
     /// 1.2.6 names a content edit; 1.5.2 calls the same edit valid. Both

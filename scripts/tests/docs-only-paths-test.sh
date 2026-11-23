@@ -41,6 +41,10 @@ set -euo pipefail
 REPO_ALLOWLIST='
 # expected member of a rendered output tarball
 crates/cli/tests/copy_source_exists_test.rs README.md
+# read from the tempfile::TempDir a scan or refine export renders into
+crates/cli/tests/kargs_file_export_test.rs README.md
+# read from the tempfile::TempDir a scan or refine export renders into
+crates/cli/tests/machine_state_scan_test.rs README.md
 # read from a tempfile::TempDir the test renders into
 crates/cli/tests/units_scan_test.rs README.md
 # name of the rendered output file under test
