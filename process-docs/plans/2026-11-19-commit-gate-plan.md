@@ -25,7 +25,7 @@
 - Worktree cleanup uses `git worktree remove` without `--force`, then `git branch -d`; never `rm`.
 - Keep `incremental = false` in the `.cargo/config.toml` above the repo; a worktree under `inspectah/.worktrees/` picks it up from there.
 - The clippy gate is exactly `cargo clippy --workspace --all-targets -- -D clippy::all`.
-- The docs-only list, verbatim from § 4, one pattern per line: `^docs/`, `^process-docs/`, `^\.github/`, `^packaging/`, `^\.copr/`, `^completions/`, `^[A-Za-z_]+\.md$`, `^LICENSE$`.
+- The docs-only list, verbatim from § 4, one pattern per line: `^docs/`, `^process-docs/`, `^\.github/`, `^packaging/`, `^\.copr/`, `^[A-Za-z_]+\.md$`, `^LICENSE$`.
 - One commit per task at most, each through the existing hook. Step 1 lands before the worktree script is used.
 - Shell code is bash 3.2: no `mapfile`, no associative arrays, no `${var^^}`. Path lists are read with `$(...)` assignment under `set -e`, never from a process substitution (which hides the producer's failure), and matched with a here-string, never a pipe into `grep -q`.
 - Public text in this repo names no AI team member and no private repo. Voice: no em dashes.
@@ -167,7 +167,7 @@ Rewrite the opening comment to describe this order, the docs-only file, `--head`
 **Docs-only read check: scope.** § 4.1 asks that no `include_str!` or runtime path resolve under a docs-only prefix. A static check cannot see every runtime path, so `docs-only-paths-test.sh` checks this, and only this, over every tracked `crates/**/*.rs` file:
 
 - every `include_str!` and `include_bytes!` argument resolves, from the source file's directory, to a path outside the list, and any argument that is not a plain string literal fails as unresolved;
-- no string literal, normalized lexically with its leading `./` and `../` segments stripped, matches the list or names a docs-only directory on its own (`docs`, `process-docs`, `.github`, `packaging`, `.copr`, `completions`, with or without a trailing `/`), unless its file and literal pair is on the allowlist.
+- no string literal, normalized lexically with its leading `./` and `../` segments stripped, matches the list or names a docs-only directory on its own (`docs`, `process-docs`, `.github`, `packaging`, `.copr`, with or without a trailing `/`), unless its file and literal pair is on the allowlist.
 
 The second rule catches `repo_root().join("docs/input.json")`, `"../../README.md"` and `.join("..").join("docs")`. It does not catch a path assembled from fragments none of which names a docs-only path or directory on its own (`format!("{}s/x.md", "doc")`, or a directory walk from the repo root), a path read from the environment or from a file, or a read by a non-Rust build input (`crates/web/ui` sources and config, `crates/pipeline/templates`). Today none of those reaches a docs-only path: the one helper that resolves the repo root (`refine`'s `testdata_tarballs_load`) reads `testdata/`, and a grep of the non-Rust files under `crates/` for a `../` path into a docs-only location found none (2026-11-20). **This is narrower than § 4.1's "no runtime path"; accepted by Mark on 2026-11-20.**
 
