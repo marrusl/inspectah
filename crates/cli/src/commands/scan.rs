@@ -865,53 +865,13 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
 
     // If --inspect-only, write JSON and exit
     if args.inspect_only {
-        let json = snapshot
-            .to_validated_json()
-            .context("failed to write the snapshot")?;
-
-        match &args.output {
-            Some(path) => {
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent).context("failed to create output directory")?;
-                }
-                match std::fs::write(path, &json) {
-                    Ok(()) => {
-                        let end_state = ScanEndState::InspectOnly { path: path.clone() };
-                        progress.finalize(ScanFinalize {
-                            elapsed: scan_start.elapsed(),
-                            end_state: end_state.clone(),
-                            version_changes: version_changes.clone(),
-                        });
-                        if verbosity == crate::progress::Verbosity::Quiet {
-                            print_quiet_footer(scan_start.elapsed(), &end_state, None);
-                        }
-                    }
-                    Err(e) => {
-                        let end_state = ScanEndState::WriteFailure {
-                            error: e.to_string(),
-                        };
-                        progress.finalize(ScanFinalize {
-                            elapsed: scan_start.elapsed(),
-                            end_state,
-                            version_changes: version_changes.clone(),
-                        });
-                        anyhow::bail!("failed to write output: {e}");
-                    }
-                }
-            }
-            None => {
-                println!("{json}");
-                let end_state = ScanEndState::InspectOnlyStdout;
-                progress.finalize(ScanFinalize {
-                    elapsed: scan_start.elapsed(),
-                    end_state: end_state.clone(),
-                    version_changes: version_changes.clone(),
-                });
-                if verbosity == crate::progress::Verbosity::Quiet {
-                    print_quiet_footer(scan_start.elapsed(), &end_state, None);
-                }
-            }
-        }
+        finish_inspect_only(
+            &snapshot,
+            args.output.as_deref(),
+            inspect_only_summary(&progress, verbosity, scan_start, version_changes),
+            &mut std::io::stdout(),
+            &mut std::io::stderr(),
+        )?;
         return Ok(outcome);
     }
 
@@ -992,13 +952,7 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
             ) {
                 eprintln!("{notice}");
             }
-            // A failed `rpm -Va`: the snapshot warning the audit report
-            // lists, repeated here so the scan does not lose it silently.
-            if let Some(failure) =
-                inspectah_pipeline::render::rpm_verify::rpm_va_failed_notice(&snapshot)
-            {
-                eprintln!("{failure}");
-            }
+            print_collection_notices(&snapshot, &mut std::io::stderr());
             Ok(outcome)
         }
         Err(e) => {
@@ -1010,6 +964,83 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
                 version_changes,
             });
             anyhow::bail!("failed to write report: {e}");
+        }
+    }
+}
+
+/// Write the `--inspect-only` snapshot JSON and finish the scan's output.
+///
+/// The JSON goes to `output` when one is given, else to `stdout`, which
+/// then carries nothing else. `summarize` prints the receipt for the end
+/// state; the collection notices follow it on `stderr`.
+fn finish_inspect_only(
+    snapshot: &inspectah_core::snapshot::InspectionSnapshot,
+    output: Option<&Path>,
+    summarize: impl Fn(&ScanEndState),
+    stdout: &mut dyn std::io::Write,
+    stderr: &mut dyn std::io::Write,
+) -> Result<()> {
+    let json = snapshot
+        .to_validated_json()
+        .context("failed to write the snapshot")?;
+    match output {
+        Some(path) => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).context("failed to create output directory")?;
+            }
+            if let Err(e) = std::fs::write(path, &json) {
+                summarize(&ScanEndState::WriteFailure {
+                    error: e.to_string(),
+                });
+                anyhow::bail!("failed to write output: {e}");
+            }
+            summarize(&ScanEndState::InspectOnly {
+                path: path.to_path_buf(),
+            });
+        }
+        None => {
+            writeln!(stdout, "{json}").context("failed to write the snapshot to stdout")?;
+            summarize(&ScanEndState::InspectOnlyStdout);
+        }
+    }
+    print_collection_notices(snapshot, stderr);
+    Ok(())
+}
+
+/// Print, after the summary, the collection warnings a scan repeats on
+/// stderr whatever it wrote: a failed `rpm -Va`, the snapshot warning the
+/// audit report lists, so the scan does not lose it silently. Both output
+/// modes end here, in every verbosity: quiet hides progress, not results.
+fn print_collection_notices(
+    snapshot: &inspectah_core::snapshot::InspectionSnapshot,
+    stderr: &mut dyn std::io::Write,
+) {
+    if let Some(failure) = inspectah_pipeline::render::rpm_verify::rpm_va_failed_notice(snapshot) {
+        // Stderr is where a write failure would be reported, so there is
+        // nowhere left to report one.
+        let _ = writeln!(stderr, "{failure}");
+    }
+}
+
+/// The receipt an `--inspect-only` scan prints once its JSON is written,
+/// and in quiet mode the footer that stands in for it. A write failure
+/// gets no quiet footer: the error itself reports it.
+fn inspect_only_summary(
+    progress: &TerminalProgress,
+    verbosity: crate::progress::Verbosity,
+    scan_start: std::time::Instant,
+    version_changes: Option<VersionChangeSummary>,
+) -> impl Fn(&ScanEndState) + '_ {
+    move |end_state| {
+        progress.finalize(ScanFinalize {
+            elapsed: scan_start.elapsed(),
+            end_state: end_state.clone(),
+            version_changes: version_changes.clone(),
+        });
+        if verbosity == crate::progress::Verbosity::Quiet
+            && !matches!(end_state, ScanEndState::WriteFailure { .. })
+        {
+            print_quiet_footer(scan_start.elapsed(), end_state, None);
         }
     }
 }
@@ -2329,5 +2360,62 @@ VARIANT_ID="workstation"
             roots.contains(&"/var/www2/data".to_string()),
             "/var/www must NOT suppress sibling /var/www2/data via --scan-path"
         );
+    }
+
+    /// `--inspect-only` prints the failed-`rpm -Va` warning on stderr
+    /// exactly once, whether the JSON goes to stdout or to `--output`,
+    /// and in quiet mode too: quiet hides progress, not results. Stdout
+    /// stays the snapshot JSON alone.
+    #[test]
+    fn inspect_only_prints_a_failed_rpm_va_once_on_stderr() {
+        use crate::progress::{Mode, Verbosity};
+        use inspectah_core::types::rpm::RPM_VA_FAILED_WARNING;
+
+        let mut failed = inspectah_core::snapshot::InspectionSnapshot::new();
+        failed
+            .warnings
+            .push(inspectah_core::types::warnings::Warning {
+                inspector: "rpm".into(),
+                message: RPM_VA_FAILED_WARNING.into(),
+                ..Default::default()
+            });
+        let clean = inspectah_core::snapshot::InspectionSnapshot::new();
+        let tmp = tempfile::tempdir().unwrap();
+
+        for verbosity in [Verbosity::Quiet, Verbosity::Normal] {
+            for to_file in [false, true] {
+                for (snap, expected) in [(&failed, 1), (&clean, 0)] {
+                    let case = format!("{verbosity:?}, to_file {to_file}, expected {expected}");
+                    let progress = TerminalProgress::new(Mode::Flat, false, verbosity, false);
+                    let path = tmp.path().join(format!("{verbosity:?}-{expected}.json"));
+                    let output = to_file.then_some(path.as_path());
+                    let (mut out, mut err) = (Vec::new(), Vec::new());
+                    finish_inspect_only(
+                        snap,
+                        output,
+                        inspect_only_summary(&progress, verbosity, std::time::Instant::now(), None),
+                        &mut out,
+                        &mut err,
+                    )
+                    .unwrap();
+
+                    let err = String::from_utf8(err).unwrap();
+                    assert_eq!(
+                        err.matches(RPM_VA_FAILED_WARNING).count(),
+                        expected,
+                        "{case}: {err}"
+                    );
+                    let json = if to_file {
+                        assert!(out.is_empty(), "{case}: stdout carries nothing");
+                        std::fs::read(&path).unwrap()
+                    } else {
+                        out
+                    };
+                    let parsed: serde_json::Value = serde_json::from_slice(&json)
+                        .unwrap_or_else(|e| panic!("{case}: not JSON: {e}"));
+                    assert!(parsed.is_object(), "{case}");
+                }
+            }
+        }
     }
 }
