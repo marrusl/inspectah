@@ -801,6 +801,34 @@ pub fn effective_section_in<'a>(
     }))
 }
 
+/// [`effective_section_in`] for every section at once: each exact
+/// spelling `defs` defines, with the definition dnf uses for it and the
+/// path of the file that holds it.
+///
+/// `defs` is `(path, content, section)` for each section of each file, as
+/// [`parse_repo_sections`] returns them for that file's `content`. The
+/// caller parses each file once and looks every section up here; asking
+/// [`effective_section_in`] per section re-parses every file each time,
+/// which is quadratic in a large file such as a subscribed host's
+/// `redhat.repo`.
+pub fn effective_sections<'a>(
+    defs: impl IntoIterator<Item = (&'a str, &'a str, RepoSectionDef)>,
+) -> std::collections::BTreeMap<SectionId, (&'a str, RepoSectionDef)> {
+    type Candidates<'a> = Vec<(Vec<&'a str>, &'a str, &'a str, RepoSectionDef)>;
+    let mut by_id: std::collections::BTreeMap<SectionId, Candidates<'a>> =
+        std::collections::BTreeMap::new();
+    for (path, content, sec) in defs {
+        by_id
+            .entry(sec.id.clone())
+            .or_default()
+            .push((dnf_read_order(path), content, path, sec));
+    }
+    by_id
+        .into_iter()
+        .filter_map(|(id, defs)| first_in_read_order(defs.into_iter()).map(|def| (id, def)))
+        .collect()
+}
+
 /// The first of `defs` in dnf's read order, ties broken by content.
 fn first_in_read_order<'a>(
     defs: impl Iterator<Item = (Vec<&'a str>, &'a str, &'a str, RepoSectionDef)>,

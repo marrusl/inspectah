@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Refine is fast again on hosts with large repo files**: on a subscribed RHEL 9 host, whose `redhat.repo` holds about 500 sections, each refine operation took around 13 s, and so did starting refine and downloading the export. Each now takes well under a second.
+
 ## [0.9.0-beta.7] - 2026-11-23
 
 ### Added

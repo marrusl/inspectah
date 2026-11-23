@@ -221,10 +221,9 @@ of the two questions that ask it. Never resolve an id by walking
 - **Export questions** (what the image build's dnf uses: the
   disabled-repo route, the repo-enabling proof, its demotion FIXME, the
   route-loss decision and the audit's "Carried by Export") ask
-  `InstallRepos::effective`, or `effective_section` for a section whose
-  exact spelling the caller already holds, which is
-  `effective_definition` over the staged files and nothing when the
-  Custom Repositories `COPY` does not render. The repo-enabling proof
+  `InstallRepos::effective`, which is `effective_definition` over the
+  staged files and nothing when the Custom Repositories `COPY` does not
+  render; the route-loss decision reads the same files by exact spelling. The repo-enabling proof
   accepts that definition only when it is enabled, keyed and has a
   source (`has_source`): an enabled copy with no `baseurl`, `metalink`
   or `mirrorlist`, or one whose source a later assignment cleared,
@@ -291,6 +290,18 @@ of the two questions that ask it. Never resolve an id by walking
   from the repo files, the attribution and the staging, never from
   `repoless_annotation`, which refine's `demote_lost_routes` writes for
   the upload control.
+
+- **Resolve many sections from one parse.** A question asked for every
+  section, such as the route-loss decision over every spelling the
+  snapshot defines, parses each file once and looks each section up in
+  `effective_sections`, the same read-order rule as
+  `effective_section_in` for all sections at once. Calling
+  `effective_section_in` or `effective_definition` per section re-parses
+  every file each time: quadratic in a large file. A subscribed RHEL 9.8
+  host's `redhat.repo` holds about 500 sections, and refine spent about
+  13 s per operation there (beta.7). The routing test
+  `routing_parses_each_repo_file_once` counts parsed sections to hold
+  this.
 
 Both are exact-first and case-aware. dnf keys repos by exact spelling,
 so `[ab]` and `[AB]` are two repos, in one file or in two;

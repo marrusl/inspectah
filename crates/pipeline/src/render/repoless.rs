@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use inspectah_core::rpm_filename::StagedName;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::repo::{
     BuildDnf, RepoAttribution, RepoId, RepoSectionDef, SectionId, effective_definition,
-    effective_section_in, parse_repo_sections, section_spelling,
+    effective_sections, parse_repo_sections, section_spelling,
 };
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
@@ -295,13 +295,17 @@ impl InstallRepos {
                 .map(|k| k.path.clone())
                 .collect()
         });
-        let spellings = snap.rpm.as_ref().map_or_else(BTreeSet::new, |rpm| {
-            rpm.repo_files
-                .iter()
-                .flat_map(|f| parse_repo_sections(&f.content))
-                .map(|sec| sec.id.as_str().to_owned())
-                .collect()
+        // Each repo file is parsed once here, and every section looked up
+        // in the result: `route_lost` runs once per candidate, and a
+        // subscribed RHEL host's `redhat.repo` holds hundreds of sections.
+        let host = snap.rpm.as_ref().map_or_else(SectionDefs::new, |rpm| {
+            section_defs(
+                rpm.repo_files
+                    .iter()
+                    .map(|f| (f.path.as_str(), f.content.as_str())),
+            )
         });
+        let spellings = host.keys().map(|id| id.as_str().to_owned()).collect();
         let mut repos = Self {
             custom,
             files,
@@ -311,6 +315,13 @@ impl InstallRepos {
             dnf: BuildDnf::for_host(snap.os_release.as_ref()),
         };
         if let Some(rpm) = snap.rpm.as_ref() {
+            // What dnf reads when the package phase installs: the staged
+            // files, and only when the Custom Repositories `COPY` renders.
+            let staged = if repos.custom == 0 {
+                SectionDefs::new()
+            } else {
+                section_defs(repos.staged_files())
+            };
             let mut candidates: BTreeSet<SectionId> =
                 repos.spellings.iter().map(SectionId::new).collect();
             candidates.extend(
@@ -318,10 +329,11 @@ impl InstallRepos {
                     .iter()
                     .filter_map(|p| repos.route_section(p)),
             );
-            repos.lost = candidates
+            let lost = candidates
                 .into_iter()
-                .filter(|section| route_lost(rpm, &repos, section))
+                .filter(|section| route_lost(rpm, &repos, &host, &staged, section))
                 .collect();
+            repos.lost = lost;
         }
         repos
     }
@@ -409,21 +421,35 @@ impl InstallRepos {
         effective_definition(self.staged_files(), id)
     }
 
-    /// The definition of the section spelled exactly `section` dnf uses
-    /// when the package phase installs ([`effective_section_in`] over this
-    /// set): no case variant stands in for it.
-    fn effective_section(&self, section: &SectionId) -> Option<RepoSectionDef> {
-        if self.custom == 0 {
-            return None;
-        }
-        effective_section_in(self.staged_files(), section).map(|(_, sec)| sec)
-    }
-
     fn staged_files(&self) -> impl Iterator<Item = (&str, &str)> {
         self.files
             .iter()
             .map(|(path, content)| (path.as_str(), content.as_str()))
     }
+}
+
+/// Each section's effective definition among a set of repo files, by
+/// exact spelling, with the path of the file that holds it
+/// ([`effective_sections`]).
+type SectionDefs<'a> = BTreeMap<SectionId, (&'a str, RepoSectionDef)>;
+
+/// [`effective_sections`] over `files` (`(path, content)`), each parsed
+/// once.
+fn section_defs<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> SectionDefs<'a> {
+    effective_sections(files.into_iter().flat_map(|(path, content)| {
+        parse_sections(content)
+            .into_iter()
+            .map(move |sec| (path, content, sec))
+    }))
+}
+
+/// [`parse_repo_sections`], with the sections it returns counted in tests,
+/// which pin that routing parses each repo file once.
+fn parse_sections(content: &str) -> Vec<RepoSectionDef> {
+    let sections = parse_repo_sections(content);
+    #[cfg(test)]
+    tests::SECTIONS_PARSED.with(|n| n.set(n.get() + sections.len()));
+    sections
 }
 
 /// The route-loss decision: whether the build cannot install, from a
@@ -437,11 +463,11 @@ impl InstallRepos {
 /// Lost exactly when every one of these holds:
 ///
 /// 1. **The host installed by name from it.** The definition the host's
-///    dnf used, among every `.repo` file the snapshot holds
-///    ([`effective_section_in`]), is enabled and has a source. A section
-///    no stored file defines counts too: the collector attributed a
-///    package to it from the files as captured, before redaction, and
-///    nothing the export copies can define it now. So does one whose
+///    dnf used, among every `.repo` file the snapshot holds (`host`), is
+///    enabled and has a source. A section no stored file defines counts
+///    too: the collector attributed a package to it from the files as
+///    captured, before redaction, and nothing the export copies can
+///    define it now. So does one whose
 ///    stored definition redaction changed (`RepoFile::redaction_changed`):
 ///    its scrubbed text says nothing about what the host read.
 /// 2. **The base image does not supply it** ([`base_supplies`]): the
@@ -453,18 +479,20 @@ impl InstallRepos {
 ///    installed from, and the base image's own `baseos`, where it has
 ///    one, need not serve the same packages.
 /// 3. **The export does not serve it.** The definition of that exact
-///    section among the files the build has when it installs
-///    ([`InstallRepos::effective_section`]) is missing, disabled, without
-///    a source, or names a key dnf needs that the image lacks
+///    section among the files the build has when it installs (`staged`,
+///    empty when the Custom Repositories `COPY` does not render) is
+///    missing, disabled, without a source, or names a key dnf needs that the image lacks
 ///    ([`serves`](super::repo_enabling::serves)). A key a section names
 ///    with signature checking off is not needed
 ///    ([`RepoSectionDef::required_keys`]).
-fn route_lost(rpm: &RpmSection, repos: &InstallRepos, section: &SectionId) -> bool {
-    let host_files = rpm
-        .repo_files
-        .iter()
-        .map(|f| (f.path.as_str(), f.content.as_str()));
-    let Some((path, host)) = effective_section_in(host_files, section) else {
+fn route_lost(
+    rpm: &RpmSection,
+    repos: &InstallRepos,
+    host: &SectionDefs<'_>,
+    staged: &SectionDefs<'_>,
+    section: &SectionId,
+) -> bool {
+    let Some(&(path, ref host)) = host.get(section) else {
         return true;
     };
     // A definition redaction changed is not the host's, and nothing is
@@ -477,9 +505,9 @@ fn route_lost(rpm: &RpmSection, repos: &InstallRepos, section: &SectionId) -> bo
     if !(unknown || (host.enabled && host.has_source)) || base_supplies(rpm, path) {
         return false;
     }
-    !repos
-        .effective_section(section)
-        .is_some_and(|export| serves(rpm, repos, &export))
+    !staged
+        .get(section)
+        .is_some_and(|(_, export)| serves(rpm, repos, export))
 }
 
 /// Whether the base image has its own copy of the repo file at `path`,
@@ -716,6 +744,12 @@ mod tests {
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::repo::PseudoRepo;
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
+
+    thread_local! {
+        /// Sections [`parse_sections`] returned on this thread.
+        pub(super) static SECTIONS_PARSED: std::cell::Cell<usize> =
+            const { std::cell::Cell::new(0) };
+    }
 
     /// The rendered Containerfile, line by line: repo-less packages are
     /// planned here and rendered in the package phase's combined install,
@@ -1876,5 +1910,192 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Repo files for the routing pins: a large mirror file, some of whose
+    /// sections name a key the export does not copy; ids defined in two
+    /// files, where the build reads a different definition than the host
+    /// did; a case variant; a default repo file; a section whose
+    /// definition redaction changed; and a package from a section no file
+    /// defines. `include_custom` includes the mirror file and the later
+    /// file, so they are staged; the rest are excluded or default.
+    fn routing_fixture(mirror_sections: usize, include_custom: bool) -> InspectionSnapshot {
+        use std::fmt::Write as _;
+        const KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-mirror";
+        let mut mirror = String::new();
+        for i in 0..mirror_sections {
+            let enabled = i % 3 != 0;
+            let source = if i % 7 == 0 {
+                ""
+            } else {
+                "baseurl=https://m.example/\n"
+            };
+            let key = if i % 5 == 0 {
+                format!("gpgkey=file://{KEY}\n")
+            } else {
+                String::new()
+            };
+            write!(
+                mirror,
+                "[mirror-{i}]\nenabled={}\n{source}{key}",
+                u8::from(enabled)
+            )
+            .expect("write to a String");
+        }
+        mirror.push_str("[dup]\nbaseurl=https://a.example/\nenabled=1\n");
+        let file = |name: &str, content: &str, include: bool, default: bool| RepoFile {
+            path: format!("/etc/yum.repos.d/{name}"),
+            content: content.into(),
+            is_default_repo: default,
+            disposition: FindingKind::from_bool(include),
+            ..Default::default()
+        };
+        let mut redacted = file(
+            "secret.repo",
+            "[scrubbed]\nbaseurl=\nenabled=0\n[plain]\nbaseurl=https://p.example/\nenabled=0\n",
+            false,
+            false,
+        );
+        redacted.redaction_changed = [SectionId::new("scrubbed")].into_iter().collect();
+        let files = vec![
+            // Read first, so the host's `dup`, `shadow` and `over`.
+            file("a-mirror.repo", &mirror, include_custom, false),
+            // Never staged. `Mirror-1` is a case variant of `mirror-1`.
+            file(
+                "b-shadow.repo",
+                "[shadow]\nbaseurl=https://s.example/\nenabled=1\n\
+                 [over]\nbaseurl=https://o.example/\n\
+                 [Mirror-1]\nbaseurl=https://c.example/\n",
+                false,
+                false,
+            ),
+            // Read last: the build's `shadow` and `over` when staged.
+            file(
+                "z-later.repo",
+                "[dup]\nbaseurl=https://z.example/\nenabled=0\n\
+                 [shadow]\nbaseurl=https://z.example/\nenabled=1\n\
+                 [over]\nbaseurl=https://z.example/\nenabled=0\n",
+                include_custom,
+                false,
+            ),
+            file(
+                "redhat.repo",
+                &(0..mirror_sections)
+                    .map(|i| format!("[rh-{i}]\nbaseurl=https://cdn.example/{i}\nenabled=1\n"))
+                    .collect::<String>(),
+                true,
+                true,
+            ),
+            redacted,
+        ];
+        let pkg = |name: &str, repo: &str| PackageEntry {
+            name: name.into(),
+            source_repo: repo.into(),
+            repo_attribution: exact(repo),
+            ..from_repo(repo, exact(repo))
+        };
+        let mut snap = snapshot_with(&pkg("p0", "mirror-1"), files);
+        let rpm = snap.rpm.as_mut().expect("an rpm section");
+        rpm.packages_added.extend([
+            pkg("p1", "dup"),
+            pkg("p2", "shadow"),
+            pkg("p3", "gone"),
+            pkg("p4", "scrubbed"),
+            pkg("p5", "Mirror-1"),
+        ]);
+        snap
+    }
+
+    /// The route-loss decision as it was before routing parsed each file
+    /// once: every candidate re-reads every file through
+    /// [`effective_section_in`]. The pin's reference.
+    fn route_lost_per_candidate(
+        rpm: &RpmSection,
+        repos: &InstallRepos,
+        section: &SectionId,
+    ) -> bool {
+        use inspectah_core::types::repo::effective_section_in;
+        let host_files = rpm
+            .repo_files
+            .iter()
+            .map(|f| (f.path.as_str(), f.content.as_str()));
+        let Some((path, host)) = effective_section_in(host_files, section) else {
+            return true;
+        };
+        let unknown = rpm
+            .repo_files
+            .iter()
+            .any(|f| f.path == path && f.redaction_changed.contains(section));
+        if !(unknown || (host.enabled && host.has_source)) || base_supplies(rpm, path) {
+            return false;
+        }
+        let export = (repos.custom > 0)
+            .then(|| effective_section_in(repos.staged_files(), section).map(|(_, sec)| sec))
+            .flatten();
+        !export.is_some_and(|export| serves(rpm, repos, &export))
+    }
+
+    #[test]
+    fn parsing_each_repo_file_once_loses_the_same_routes_as_per_candidate_lookup() {
+        for include_custom in [true, false] {
+            let snap = routing_fixture(40, include_custom);
+            let rpm = snap.rpm.as_ref().expect("an rpm section");
+            let repos = InstallRepos::of(&snap);
+            let mut candidates: BTreeSet<SectionId> =
+                repos.spellings.iter().map(SectionId::new).collect();
+            candidates.extend(
+                rpm.packages_added
+                    .iter()
+                    .filter_map(|p| repos.route_section(p)),
+            );
+            let expected: BTreeSet<SectionId> = candidates
+                .into_iter()
+                .filter(|section| route_lost_per_candidate(rpm, &repos, section))
+                .collect();
+            assert_eq!(repos.lost, expected, "include_custom={include_custom}");
+            // The fixture reaches both answers, through each rule.
+            let lost = |id: &str| repos.is_lost(&SectionId::new(id));
+            for id in ["gone", "scrubbed", "Mirror-1", "over"] {
+                assert!(lost(id), "{id}, include_custom={include_custom}");
+            }
+            // Served by another file's definition when staged.
+            assert_eq!(lost("shadow"), !include_custom);
+            assert_eq!(lost("dup"), !include_custom);
+            assert!(!lost("rh-0"), "a default repo file");
+            assert!(!lost("plain"), "the host disabled it");
+            assert!(
+                (0..40).any(|i| lost(&format!("mirror-{i}")))
+                    && (0..40).any(|i| !lost(&format!("mirror-{i}"))),
+                "mirror sections both ways, include_custom={include_custom}"
+            );
+        }
+    }
+
+    #[test]
+    fn routing_parses_each_repo_file_once() {
+        const SECTIONS: usize = 200;
+        let snap = routing_fixture(SECTIONS, true);
+        let rpm = snap.rpm.as_ref().expect("an rpm section");
+        let staged = staged_writes(&snap);
+        let host_sections: usize = rpm
+            .repo_files
+            .iter()
+            .map(|f| parse_repo_sections(&f.content).len())
+            .sum();
+        SECTIONS_PARSED.with(|n| n.set(0));
+        let repos = InstallRepos::from_staged(&snap, &staged);
+        let staged_sections: usize = repos
+            .staged_files()
+            .map(|(_, content)| parse_repo_sections(content).len())
+            .sum();
+        assert!(
+            staged_sections > SECTIONS,
+            "the fixture stages the mirror file"
+        );
+        assert_eq!(
+            SECTIONS_PARSED.with(std::cell::Cell::get),
+            host_sections + staged_sections,
+            "each host file and each staged file parsed once"
+        );
     }
 }
