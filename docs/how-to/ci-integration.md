@@ -206,7 +206,7 @@ environment's configuration.
 ## Example: GitHub Actions
 
 The two pipeline examples below are schematic. They are configuration for
-you to adapt: the download URL and the runner are placeholders, and the scan
+you to adapt: the runner is a placeholder, and the scan
 needs root on the host it inspects.
 
 ```yaml
@@ -216,8 +216,8 @@ jobs:
     steps:
       - name: Install inspectah
         run: |
-          curl -LO https://github.com/your-org/inspectah/releases/latest/download/inspectah-x86_64-unknown-linux-gnu.tar.gz
-          tar xzf inspectah-x86_64-unknown-linux-gnu.tar.gz
+          curl -L -o inspectah https://github.com/marrusl/inspectah/releases/latest/download/inspectah-linux-amd64
+          chmod +x inspectah
           sudo mv inspectah /usr/local/bin/
 
       - name: Run scan
@@ -240,8 +240,8 @@ jobs:
 scan:
   stage: analyze
   script:
-    - curl -LO https://github.com/your-org/inspectah/releases/latest/download/inspectah-x86_64-unknown-linux-gnu.tar.gz
-    - tar xzf inspectah-x86_64-unknown-linux-gnu.tar.gz
+    - curl -L -o inspectah https://github.com/marrusl/inspectah/releases/latest/download/inspectah-linux-amd64
+    - chmod +x inspectah
     - sudo mv inspectah /usr/local/bin/
     - sudo inspectah scan
         --base-image quay.io/centos-bootc/centos-bootc:stream9

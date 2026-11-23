@@ -39,7 +39,7 @@ its harness setup in a private team repository.
 | `cargo-insta` | Reviewing snapshot changes. Install with `cargo install cargo-insta`. | `cargo insta --version` |
 | Playwright's Chromium | The e2e suite only. Install from `crates/web/ui` with `npx playwright install chromium`. | Run the install command again: it exits 0 and prints nothing when Chromium is present. |
 | A throwaway Linux VM you can revert | Real-host runs. See [Testing § Real-host runs](testing.md#real-host-runs). | None |
-| `cargo-zigbuild` and `zig` | Release cross-compiles only. See § Cross-compilation. | `cargo-zigbuild --version` |
+| `musl-tools` (Debian and Ubuntu) | Linux release builds only; CI installs it with apt. See § Release builds. | `musl-gcc --version` |
 
 ## Clone and build
 
@@ -358,20 +358,26 @@ hours that way
 6. Add the changelog entry under `## [Unreleased]` when the change is
    user-visible (§ Where changes go).
 
-## Cross-compilation
+## Release builds
 
-Release binaries are static musl builds made with `cargo-zigbuild`. Add
-each target once with `rustup target add <triple>`. For Linux ARM64:
+CI builds the release binaries in `.github/workflows/build-binary.yml`. Each
+target builds on a runner of its own architecture, with no cross-linker:
+
+| Target | Runner | Asset |
+|---|---|---|
+| `x86_64-unknown-linux-musl` | `ubuntu-24.04` | `inspectah-linux-amd64` |
+| `aarch64-unknown-linux-musl` | `ubuntu-24.04-arm` | `inspectah-linux-arm64-bin` |
+| `aarch64-apple-darwin` | `macos-latest` | `inspectah-darwin-arm64` |
+
+Each leg runs `rustup target add <triple>`, installs `musl-tools` on the
+Linux legs, and then builds:
 
 ```bash
-cargo zigbuild --target aarch64-unknown-linux-musl --release
+cargo build -p inspectah-cli --release --target x86_64-unknown-linux-musl
 ```
 
-For Linux x86_64:
-
-```bash
-cargo zigbuild --target x86_64-unknown-linux-musl --release
-```
+The Linux binaries are static musl builds. The macOS binary builds on the
+macOS runner.
 
 The release checklist, including binary naming and publishing, is
 [`process-docs/skills/release-process.md`](https://github.com/marrusl/inspectah/blob/main/process-docs/skills/release-process.md)

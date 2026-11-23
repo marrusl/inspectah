@@ -5,17 +5,20 @@
 The workspace `Cargo.toml` has **no `[profile.release]` section**. Release
 builds use Rust defaults: no LTO, no stripping, default codegen-units.
 
-## Cross-Compilation
+## Release Builds
 
-Linux static binaries (for ARM64 and x86_64) are built via:
+`.github/workflows/build-binary.yml` builds each target natively on a runner
+of its own architecture. It does not cross-compile and does not use
+`cargo-zigbuild` or Zig. Each leg runs `rustup target add <triple>`, installs
+`musl-tools` on the Linux legs, then runs:
 
 ```
-cargo zigbuild --target aarch64-unknown-linux-musl --release
-cargo zigbuild --target x86_64-unknown-linux-musl --release
+cargo build -p inspectah-cli --release --target <triple>
 ```
 
-`cargo zigbuild` uses Zig as a cross-linker. The `musl` target produces
-fully static binaries with no glibc dependency.
+Linux targets are `x86_64-unknown-linux-musl` (`ubuntu-24.04`) and
+`aarch64-unknown-linux-musl` (`ubuntu-24.04-arm`), both static. The Darwin
+build is `aarch64-apple-darwin` on `macos-latest`.
 
 ## Binary Size
 
