@@ -656,6 +656,21 @@ mod tests {
             "SENTINEL-SYSCTL-OUTSIDE",
             "SENTINEL-SYSCTL-RUNTIME",
             "SENTINEL-MOUNT-WHAT",
+            // A URL password with no keyword near it: no pattern reads
+            // it, only the URL credential pass, which every field that
+            // holds content takes.
+            "SENTINEL-URL-CONFIG",
+            "SENTINEL-URL-GPGKEY",
+            "SENTINEL-URL-DROPIN",
+            "SENTINEL-URL-CONTAINERENV",
+            "SENTINEL-URL-QUADLET",
+            "SENTINEL-URL-GENTIMER-SERVICE",
+            "SENTINEL-URL-GENTIMER-TIMER",
+            "SENTINEL-URL-GENTIMER-COMMAND",
+            "SENTINEL-URL-SYSTIMER-EXEC",
+            "SENTINEL-URL-SYSTIMER-DESC",
+            "SENTINEL-URL-ATJOB",
+            "SENTINEL-URL-SYSCTL-CONTENT",
         ];
 
         // Declared exempt, and planted anyway so the exemption is a
@@ -679,7 +694,9 @@ mod tests {
                 ConfigFileEntry {
                     path: "/etc/myapp/app.conf".into(),
                     kind: ConfigFileKind::Unowned,
-                    content: "password=SENTINEL-CONFIG\n".into(),
+                    content: "password=SENTINEL-CONFIG\n\
+                              HTTPS_PROXY=https://u:SENTINEL-URL-CONFIG@proxy.example:3128\n"
+                        .into(),
                     disposition: FindingKind::included(),
                     ..Default::default()
                 },
@@ -704,7 +721,9 @@ mod tests {
             }];
             rpm.gpg_keys = vec![inspectah_core::types::rpm::RepoFile {
                 path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-corp".into(),
-                content: "password=SENTINEL-GPGKEY\n".into(),
+                content: "password=SENTINEL-GPGKEY\n\
+                          Comment: https://u:SENTINEL-URL-GPGKEY@keys.example/\n"
+                    .into(),
                 ..Default::default()
             }];
         }
@@ -718,7 +737,9 @@ mod tests {
             drop_ins: vec![SystemdDropIn {
                 unit: "app.service".into(),
                 path: "/etc/systemd/system/app.service.d/override.conf".into(),
-                content: "[Service]\nEnvironment=DB_PASSWORD=SENTINEL-DROPIN\n".into(),
+                content: "[Service]\nEnvironment=DB_PASSWORD=SENTINEL-DROPIN\n\
+                          Environment=HTTPS_PROXY=https://u:SENTINEL-URL-DROPIN@p.example\n"
+                    .into(),
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
@@ -738,30 +759,40 @@ mod tests {
             generated_timer_units: vec![GeneratedTimerUnit {
                 name: "backup".into(),
                 source_path: "/etc/cron.d/backup".into(),
-                command: "/usr/bin/backup --password=SENTINEL-GENTIMER-COMMAND".into(),
-                service_content: "[Service]\nEnvironment=DB_PASSWORD=SENTINEL-GENTIMER-SERVICE\n"
+                command: "/usr/bin/backup --password=SENTINEL-GENTIMER-COMMAND \
+                          --mirror https://u:SENTINEL-URL-GENTIMER-COMMAND@m.example"
+                    .into(),
+                service_content: "[Service]\nEnvironment=DB_PASSWORD=SENTINEL-GENTIMER-SERVICE\n\
+                                  Environment=HTTPS_PROXY=https://u:SENTINEL-URL-GENTIMER-SERVICE@p\n"
                     .into(),
                 // A `.timer` has no ExecStart= or Environment=, so a
                 // secret in one realistically rides on Description=.
                 // Not a comment line: comment lines are exempt from
                 // scanning on every field, by design.
                 timer_content:
-                    "[Timer]\nOnCalendar=daily\nDescription=sync api_key=SENTINEL-GENTIMER-TIMER\n"
+                    "[Timer]\nOnCalendar=daily\nDescription=sync api_key=SENTINEL-GENTIMER-TIMER \
+                     from https://u:SENTINEL-URL-GENTIMER-TIMER@m.example\n"
                         .into(),
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
             systemd_timers: vec![SystemdTimer {
                 name: "report".into(),
-                description: "report job api_key=SENTINEL-SYSTIMER-DESC".into(),
+                description: "report job api_key=SENTINEL-SYSTIMER-DESC \
+                              to https://u:SENTINEL-URL-SYSTIMER-DESC@r.example"
+                    .into(),
                 source: "local".into(),
                 path: "/etc/systemd/system/report.timer".into(),
-                exec_start: "/usr/bin/report --password=SENTINEL-SYSTIMER-EXEC".into(),
+                exec_start: "/usr/bin/report --password=SENTINEL-SYSTIMER-EXEC \
+                             https://u:SENTINEL-URL-SYSTIMER-EXEC@r.example"
+                    .into(),
                 ..Default::default()
             }],
             at_jobs: vec![AtJob {
                 file: "/var/spool/at/a0001".into(),
-                command: "/usr/bin/sync --password=SENTINEL-ATJOB".into(),
+                command: "/usr/bin/sync --password=SENTINEL-ATJOB \
+                          https://u:SENTINEL-URL-ATJOB@s.example"
+                    .into(),
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
@@ -773,9 +804,15 @@ mod tests {
                 path: "/etc/containers/systemd/app.container".into(),
                 name: "app.container".into(),
                 content: "[Container]\nImage=registry.example.com/app\n\
-                          Environment=DB_PASSWORD=SENTINEL-QUADLET\n"
+                          Environment=DB_PASSWORD=SENTINEL-QUADLET\n\
+                          Environment=HTTPS_PROXY=https://u:SENTINEL-URL-QUADLET@p.example\n"
                     .into(),
                 disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            running_containers: vec![inspectah_core::types::containers::RunningContainer {
+                name: "web".into(),
+                env: vec!["HTTPS_PROXY=https://u:SENTINEL-URL-CONTAINERENV@p.example".into()],
                 ..Default::default()
             }],
             compose_files: vec![ComposeFile {
@@ -834,7 +871,9 @@ mod tests {
                         name: "80-app.conf".into(),
                         body: SysctlFileBody::Read {
                             link_target: None,
-                            content: "password=SENTINEL-SYSCTL-CONTENT\n".into(),
+                            content: "password=SENTINEL-SYSCTL-CONTENT\n\
+                                      x = https://u:SENTINEL-URL-SYSCTL-CONTENT@h\n"
+                                .into(),
                             redacted: false,
                         },
                     },

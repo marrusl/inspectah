@@ -1431,12 +1431,17 @@ pub fn mask_token_username<'a>(
     (masked, edits.into_iter().map(|e| e.finding).collect())
 }
 
+/// Whether `path` is a shadow file, whose hashes [`scan_shadow`] reports.
+fn is_shadow_path(path: &str) -> bool {
+    path.ends_with("/shadow") || path == "/etc/shadow"
+}
+
 /// Scan content for secrets. Returns findings for all detected patterns.
 pub fn scan_content(content: &str, path: &str) -> Vec<RedactionFinding> {
     let mut findings = Vec::new();
 
     // Shadow-specific logic for /etc/shadow paths
-    if path.ends_with("/shadow") || path == "/etc/shadow" {
+    if is_shadow_path(path) {
         findings.extend(scan_shadow(content, path));
     }
 
@@ -1544,39 +1549,37 @@ fn extract_hint_keyword(reason: &str) -> Option<String> {
     None
 }
 
-/// Run the generic pattern pass over one content-bearing field, in place.
+/// Redact one content-bearing field in place: the pass every field of
+/// host text takes. Returns the findings, and leaves `content` untouched
+/// when there are none.
 ///
-/// This is the block `redact()` repeats for every content field it visits:
-/// scan for findings, and when there are any, collect every pattern's
-/// matches, deduplicate overlapping spans, then replace in descending
-/// offset order so an earlier replacement cannot invalidate a later
-/// offset. Returns the findings, and leaves `content` untouched when
-/// there are none.
-///
-/// The older call sites above still inline this block; three of them
-/// call `registry.token_for` directly instead of `build_replacement`,
-/// which is equivalent now that a match's span is the secret alone.
+/// Every edit is found in the original text before any is applied, as
+/// [`redact_snapshot_text`] finds them: the pattern pass
+/// ([`pattern_edits`]) and the URL credential maskers
+/// ([`url_credential_edits`]). The patterns cover a password in a URL of
+/// a few schemes only, so a field without the URL pass shipped
+/// `HTTPS_PROXY=https://u:secret@host` whole. Overlapping edits become
+/// one, under the pattern token ([`apply_payload_edits`]). A shadow file
+/// also gets its hash findings, as [`scan_content`] reports them; its
+/// hashes are replaced by the shadow pass.
 fn scan_and_redact_field(
     content: &mut String,
     source_path: &str,
     registry: &mut CounterRegistry,
 ) -> Vec<RedactionFinding> {
-    let findings = scan_content(content, source_path);
-    if findings.is_empty() {
-        return findings;
-    }
-    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-    for (idx, pat) in PATTERNS.iter().enumerate() {
-        for em in collect_eligible_matches(pat, content, Some(source_path)) {
-            all_matches.push((idx, em));
-        }
-    }
-    dedup_overlapping_matches(&mut all_matches);
-    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-    for (pat_idx, em) in all_matches {
-        let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-        let replacement = build_replacement(&em, content, registry, &kind_label);
-        content.replace_range(em.start..em.end, &replacement);
+    let mut findings = if is_shadow_path(source_path) {
+        scan_shadow(content, source_path)
+    } else {
+        Vec::new()
+    };
+    let mut edits = pattern_edits(content, source_path, registry);
+    let (url_edits, unedited) = url_credential_edits(content, source_path);
+    findings.extend(unedited);
+    edits.extend(url_edits);
+    if !edits.is_empty() {
+        let (text, kept) = apply_payload_edits(content, edits);
+        *content = text;
+        findings.extend(kept);
     }
     findings
 }
@@ -2273,25 +2276,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 file.content = scrubbed;
                 all_findings.push(finding);
             }
-            let findings = scan_content(&file.content, &file.path);
-            if !findings.is_empty() {
-                let mut content = file.content.clone();
-                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-                for (idx, pat) in PATTERNS.iter().enumerate() {
-                    for em in collect_eligible_matches(pat, &content, Some(&file.path)) {
-                        all_matches.push((idx, em));
-                    }
-                }
-                dedup_overlapping_matches(&mut all_matches);
-                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-                for (pat_idx, em) in all_matches {
-                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
-                    content.replace_range(em.start..em.end, &replacement);
-                }
-                file.content = content;
-                all_findings.extend(findings);
-            }
+            all_findings.extend(scan_and_redact_field(
+                &mut file.content,
+                &file.path,
+                &mut registry,
+            ));
         }
     }
 
@@ -2304,25 +2293,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 repo_file.content = scrubbed;
                 all_findings.push(finding);
             }
-            let findings = scan_content(&repo_file.content, &repo_file.path);
-            if !findings.is_empty() {
-                let mut content = repo_file.content.clone();
-                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-                for (idx, pat) in PATTERNS.iter().enumerate() {
-                    for em in collect_eligible_matches(pat, &content, Some(&repo_file.path)) {
-                        all_matches.push((idx, em));
-                    }
-                }
-                dedup_overlapping_matches(&mut all_matches);
-                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-                for (pat_idx, em) in all_matches {
-                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
-                    content.replace_range(em.start..em.end, &replacement);
-                }
-                repo_file.content = content;
-                all_findings.extend(findings);
-            }
+            all_findings.extend(scan_and_redact_field(
+                &mut repo_file.content,
+                &repo_file.path,
+                &mut registry,
+            ));
             repo_file
                 .redaction_changed
                 .extend(sections_redaction_changed(&before, &repo_file.content));
@@ -2330,25 +2305,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
 
         // Scan GPG key contents
         for gpg_key in &mut rpm.gpg_keys {
-            let findings = scan_content(&gpg_key.content, &gpg_key.path);
-            if !findings.is_empty() {
-                let mut content = gpg_key.content.clone();
-                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-                for (idx, pat) in PATTERNS.iter().enumerate() {
-                    for em in collect_eligible_matches(pat, &content, Some(&gpg_key.path)) {
-                        all_matches.push((idx, em));
-                    }
-                }
-                dedup_overlapping_matches(&mut all_matches);
-                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-                for (pat_idx, em) in all_matches {
-                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
-                    content.replace_range(em.start..em.end, &replacement);
-                }
-                gpg_key.content = content;
-                all_findings.extend(findings);
-            }
+            all_findings.extend(scan_and_redact_field(
+                &mut gpg_key.content,
+                &gpg_key.path,
+                &mut registry,
+            ));
         }
     }
 
@@ -2359,25 +2320,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // `mount_point` is a path, classified as an identifier.
     if let Some(ref mut services) = snapshot.units {
         for drop_in in &mut services.drop_ins {
-            let findings = scan_content(&drop_in.content, &drop_in.path);
-            if !findings.is_empty() {
-                let mut content = drop_in.content.clone();
-                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-                for (idx, pat) in PATTERNS.iter().enumerate() {
-                    for em in collect_eligible_matches(pat, &content, Some(&drop_in.path)) {
-                        all_matches.push((idx, em));
-                    }
-                }
-                dedup_overlapping_matches(&mut all_matches);
-                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-                for (pat_idx, em) in all_matches {
-                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
-                    content.replace_range(em.start..em.end, &replacement);
-                }
-                drop_in.content = content;
-                all_findings.extend(findings);
-            }
+            all_findings.extend(scan_and_redact_field(
+                &mut drop_in.content,
+                &drop_in.path,
+                &mut registry,
+            ));
         }
     }
 
@@ -2459,18 +2406,17 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
     }
 
-    // Scan container env vars for secrets via generic pattern pass.
+    // Scan container env vars for secrets: each entry is its own field,
+    // with its own token numbering.
     if let Some(ref mut containers) = snapshot.containers {
         for container in &mut containers.running_containers {
+            let source_path = format!("container:{}", container.name);
             for env_entry in &mut container.env {
-                let redacted = redact_string(env_entry);
-                if let Cow::Owned(ref new_val) = redacted {
-                    // Collect findings for each pattern match.
-                    let findings =
-                        scan_content(env_entry, &format!("container:{}", container.name));
-                    all_findings.extend(findings);
-                    *env_entry = new_val.clone();
-                }
+                all_findings.extend(scan_and_redact_field(
+                    env_entry,
+                    &source_path,
+                    &mut CounterRegistry::default(),
+                ));
             }
         }
 
@@ -2514,50 +2460,21 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     if let Some(ref mut sched) = snapshot.scheduled_tasks {
         // GeneratedTimerUnit.command fields (cron commands converted to timers)
         for unit in &mut sched.generated_timer_units {
-            let findings = scan_content(&unit.command, &unit.source_path);
-            if !findings.is_empty() {
-                let mut content = unit.command.clone();
-                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-                for (idx, pat) in PATTERNS.iter().enumerate() {
-                    for em in collect_eligible_matches(pat, &content, Some(&unit.source_path)) {
-                        all_matches.push((idx, em));
-                    }
-                }
-                dedup_overlapping_matches(&mut all_matches);
-                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-                for (pat_idx, em) in all_matches {
-                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
-                    content.replace_range(em.start..em.end, &replacement);
-                }
-                unit.command = content;
-                all_findings.extend(findings);
-            }
+            all_findings.extend(scan_and_redact_field(
+                &mut unit.command,
+                &unit.source_path,
+                &mut registry,
+            ));
 
             // GeneratedTimerUnit.service_content — raw unit file text that
             // may contain secrets in ExecStart= or Environment= lines.
             if !unit.service_content.is_empty() {
                 let svc_path = format!("generated:{}.service", unit.name);
-                let findings = scan_content(&unit.service_content, &svc_path);
-                if !findings.is_empty() {
-                    let mut content = unit.service_content.clone();
-                    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-                    for (idx, pat) in PATTERNS.iter().enumerate() {
-                        for em in collect_eligible_matches(pat, &content, Some(&svc_path)) {
-                            all_matches.push((idx, em));
-                        }
-                    }
-                    dedup_overlapping_matches(&mut all_matches);
-                    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-                    for (pat_idx, em) in all_matches {
-                        let kind_label =
-                            format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                        let token = registry.token_for(&kind_label, em.secret(&content));
-                        content.replace_range(em.start..em.end, &token);
-                    }
-                    unit.service_content = content;
-                    all_findings.extend(findings);
-                }
+                all_findings.extend(scan_and_redact_field(
+                    &mut unit.service_content,
+                    &svc_path,
+                    &mut registry,
+                ));
             }
 
             // GeneratedTimerUnit.timer_content — the sibling field of
@@ -2579,25 +2496,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
 
         // AtJob.command fields
         for at_job in &mut sched.at_jobs {
-            let findings = scan_content(&at_job.command, &at_job.file);
-            if !findings.is_empty() {
-                let mut content = at_job.command.clone();
-                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-                for (idx, pat) in PATTERNS.iter().enumerate() {
-                    for em in collect_eligible_matches(pat, &content, Some(&at_job.file)) {
-                        all_matches.push((idx, em));
-                    }
-                }
-                dedup_overlapping_matches(&mut all_matches);
-                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-                for (pat_idx, em) in all_matches {
-                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
-                    content.replace_range(em.start..em.end, &replacement);
-                }
-                at_job.command = content;
-                all_findings.extend(findings);
-            }
+            all_findings.extend(scan_and_redact_field(
+                &mut at_job.command,
+                &at_job.file,
+                &mut registry,
+            ));
         }
 
         // SystemdTimer.exec_start fields
@@ -2607,25 +2510,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             } else {
                 timer.path.clone()
             };
-            let findings = scan_content(&timer.exec_start, &source_path);
-            if !findings.is_empty() {
-                let mut content = timer.exec_start.clone();
-                let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-                for (idx, pat) in PATTERNS.iter().enumerate() {
-                    for em in collect_eligible_matches(pat, &content, Some(&source_path)) {
-                        all_matches.push((idx, em));
-                    }
-                }
-                dedup_overlapping_matches(&mut all_matches);
-                all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-                for (pat_idx, em) in all_matches {
-                    let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                    let replacement = build_replacement(&em, &content, &mut registry, &kind_label);
-                    content.replace_range(em.start..em.end, &replacement);
-                }
-                timer.exec_start = content;
-                all_findings.extend(findings);
-            }
+            all_findings.extend(scan_and_redact_field(
+                &mut timer.exec_start,
+                &source_path,
+                &mut registry,
+            ));
 
             // SystemdTimer.description — the unit's `Description=`,
             // parsed out into its own field. Classified exempt as

@@ -61,10 +61,20 @@ view and sections.
 
 `PATTERNS` matches the PostgreSQL, MongoDB, Redis and JDBC URL forms
 only, so `https://user:pass@host/` passes the generic pass untouched.
-Every place that holds URLs a host can embed a credential in needs a
-dedicated scrub in `redact()`: manifests use `scrub_manifest_auth`, proxy
-lines `mask_proxy_credentials`, and `.repo` files and their Configuration
-rows `scrub_repo_urls`, which applies core's `scrub_repo_credentials`: a
+**Every content-bearing field gets the URL pass.** `scan_and_redact_field`
+is the one pass for a field of host text: pattern edits and URL
+credential edits (`url_credential_edits`), both read off the original
+text and merged by `apply_payload_edits`, as `redact_snapshot_text` does
+for `.env` and compose files. Config file copies, drop-ins, quadlets,
+container environments, generated timers, `at` jobs and sysctl files ran
+the patterns alone, so `HTTPS_PROXY=https://u:secret@host` shipped from
+each into the snapshot, the exports and the image. A new content field
+calls `scan_and_redact_field`, never an inlined pattern loop, and
+`exactly_the_exempt_fields_survive_the_export` plants a keyword-free URL
+password (`SENTINEL-URL-*`) beside each keyword sentinel to prove it. Other
+URL forms have dedicated scrubs in `redact()`: manifests use
+`scrub_manifest_auth`, proxy lines `mask_proxy_credentials`, and `.repo`
+files and their Configuration rows `scrub_repo_urls`, which applies core's `scrub_repo_credentials`: a
 URL begins at each `scheme://`, and its credential runs to the last `@`
 before the first `/` or `?` of its option value, reading on through the
 value's continuation lines. Never cut a value at a comma, `#`, `;`,
