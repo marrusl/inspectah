@@ -4993,11 +4993,13 @@ pub fn render_refine_export(
     // `# Not carried` block and the audit table render, so all three name
     // the same packages. It leads the warnings: there is at most one, and
     // the header's cap then never drops it behind a run of failures.
-    if let Some(notice) = not_carried_notice(snap) {
+    let not_carried = not_carried_notice(snap);
+    let leading = usize::from(not_carried.is_some());
+    if let Some(notice) = not_carried {
         warnings.insert(0, notice);
     }
-    // The machine-state notices follow it, ahead of any failure: the
-    // left-out count and owed steps, then one per `warn` override.
+    // The machine-state notices follow it, ahead of the upload failures:
+    // the left-out count and owed steps, then one per `warn` override.
     let first_failure = warnings
         .iter()
         .position(|w| w.kind() != inspectah_pipeline::export_warning::ExportWarningKind::Notice)
@@ -5016,14 +5018,12 @@ pub fn render_refine_export(
     {
         warnings.insert(first_failure + i, notice);
     }
-    // A failed `rpm -Va` leads the failures, so the header's cap never
-    // drops it behind a run of unproved uploads.
+    // A failed `rpm -Va` follows the not-carried notice, ahead of the
+    // machine-state and repo notices: those have no bound, and the
+    // header's cap would drop it behind them, though it names a
+    // consequence no other entry does. Both lead entries are at most one.
     if let Some(failure) = inspectah_pipeline::render::rpm_verify::rpm_va_failed_notice(snap) {
-        let first_failure = warnings
-            .iter()
-            .position(|w| w.kind() != inspectah_pipeline::export_warning::ExportWarningKind::Notice)
-            .unwrap_or(warnings.len());
-        warnings.insert(first_failure, failure);
+        warnings.insert(leading, failure);
     }
 
     // 2e. Extract payload files from source tarball for unmanaged files

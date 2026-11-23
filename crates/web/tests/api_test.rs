@@ -6193,3 +6193,51 @@ async fn an_instance_row_serves_its_template_configuration_and_data() {
     assert_eq!(row["required_config"], serde_json::json!([]), "{row}");
     assert_eq!(row["data_paths"], serde_json::json!([]), "{row}");
 }
+
+/// A failed `rpm -Va` survives the warnings header's cap: with more
+/// ownerless repo files than the header carries, each one a notice, the
+/// header still names the missing-configuration consequence in full,
+/// once, rather than folding it into "...and N more".
+#[tokio::test]
+async fn export_header_keeps_a_failed_rpm_va_past_a_run_of_repo_notices() {
+    use inspectah_core::types::rpm::{RPM_VA_FAILED_WARNING, RepoFile};
+    /// Comfortably more than the header carries before it summarizes.
+    const OWNERLESS_REPO_FILES: usize = 25;
+
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        repo_files: (0..OWNERLESS_REPO_FILES)
+            .map(|i| RepoFile {
+                path: format!("/etc/yum.repos.d/r{i}.repo"),
+                // No [section] header, so no repo owns it: one notice each.
+                content: format!("baseurl=https://example.com/r{i}\n"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+    snap.warnings.push(Warning {
+        inspector: "rpm".into(),
+        message: RPM_VA_FAILED_WARNING.into(),
+        ..Default::default()
+    });
+    let app = app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    }));
+
+    let (status, headers, _) = post_tarball(&app).await;
+    assert_eq!(status, StatusCode::OK);
+    let header: Vec<serde_json::Value> =
+        serde_json::from_str(headers["x-export-warnings"].to_str().unwrap()).unwrap();
+    let texts: Vec<&str> = header.iter().map(|w| w["text"].as_str().unwrap()).collect();
+    assert!(
+        texts.iter().any(|t| t.ends_with(" more")),
+        "the header must be over its cap for this to test anything: {texts:#?}"
+    );
+    let failed: Vec<&serde_json::Value> = header
+        .iter()
+        .filter(|w| w["text"] == RPM_VA_FAILED_WARNING)
+        .collect();
+    assert_eq!(failed.len(), 1, "{texts:#?}");
+    assert_eq!(failed[0]["kind"], "failure");
+}
