@@ -754,10 +754,10 @@ enum LineOutcome {
     /// Handled. The rewritten line, which may be identical.
     Rewritten(String),
     /// A key matched and routed this line here, and the value that key
-    /// names could not be located. The line is emitted as given, with any
-    /// other value the scrubber did locate on it rewritten, and the
-    /// caller has to say so: this is the state that used to pass in
-    /// silence under a `FullyRedacted` label.
+    /// names could not be located. The line is emitted with every URL on
+    /// it scrubbed ([`located`]), and the caller has to say so: this is
+    /// the state that used to pass in silence under a `FullyRedacted`
+    /// label.
     Unlocatable(String, &'static str),
 }
 
@@ -816,6 +816,14 @@ fn scrub_spans(line: &str, spans: &[std::ops::Range<usize>]) -> String {
 
 /// What a scrubber that located `spans` on `line`, and could not locate
 /// the value of `missed`, returns: nothing routed is [`LineOutcome::NotMine`].
+///
+/// A missed value is still reported, but its line does not ship as
+/// given: every URL on it is scrubbed, located or not
+/// ([`scrub_url_auth`] over the whole line). A value whose quote the line
+/// never closes (`source "https://u:pw@host/\"`) is not located, and
+/// emitting the line unchanged shipped a credential the scrubber had
+/// removed before quoted runs read escapes. Taking the user name of
+/// another URL on a line nothing could parse is the price.
 fn located(
     line: &str,
     routed: bool,
@@ -827,7 +835,7 @@ fn located(
     }
     let out = scrub_spans(line, spans);
     match missed {
-        Some(key) => LineOutcome::Unlocatable(out, key),
+        Some(key) => LineOutcome::Unlocatable(scrub_url_auth(&out), key),
         None => LineOutcome::Rewritten(out),
     }
 }
@@ -3010,6 +3018,41 @@ mod tests {
         assert!(out.unscrubbed.is_empty());
     }
 
+    /// A quoted value its line never closes is not located, and is still
+    /// reported, but the URLs on the line lose their credentials anyway:
+    /// emitting the line as given shipped a password the scrubber had
+    /// removed before quoted runs read escapes. Valid escaped quotes are
+    /// in the two tests above.
+    #[test]
+    fn an_unterminated_quoted_value_still_loses_its_credential() {
+        let cases = [
+            (
+                "Gemfile",
+                r#"source "https://u:regressionpw8812@host/\""#,
+                r#"source "https://REDACTED@host/\""#,
+                GEMFILE_SOURCE_KEY,
+            ),
+            (
+                "package.json",
+                r#"{"registry":"https://u:regressionpw8812@host/\"}"#,
+                r#"{"registry":"https://REDACTED@host/\"}"#,
+                JSON_REGISTRY_KEY,
+            ),
+            (
+                "package-lock.json",
+                r#"{"resolved":"https://u:regressionpw8812@host/x.tgz"#,
+                r#"{"resolved":"https://REDACTED@host/x.tgz"#,
+                JSON_RESOLVED_KEY,
+            ),
+        ];
+        for (filename, input, want, key) in cases {
+            let out = scrub_manifest_auth(filename, input);
+            assert_eq!(out.content, want, "{filename}");
+            assert_eq!(out.unscrubbed.len(), 1, "{filename}: {:?}", out.unscrubbed);
+            assert_eq!(out.unscrubbed[0].key, key, "{filename}");
+        }
+    }
+
     /// A located member is scrubbed even when another member on its line
     /// cannot be located, and that one is still reported.
     #[test]
@@ -3066,6 +3109,11 @@ mod tests {
             assert!(
                 !out.unscrubbed[0].key.contains(CRED),
                 "{label}: the report must not carry the credential it failed to strip"
+            );
+            assert!(
+                !out.content.contains(CRED),
+                "{label}: a URL on the line still ships its credential: {}",
+                out.content
             );
         }
     }
