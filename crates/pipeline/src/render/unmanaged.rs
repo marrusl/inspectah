@@ -200,7 +200,8 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
         // Symlinks are recreated with ln -sf so the image preserves
         // the original link topology. Unknown targets get advisory comments.
         // `mkdir -p` first: no COPY creates a directory that holds only
-        // links, and `ln` does not create its link's parent.
+        // links, and `ln` does not create its link's parent. `--` ends
+        // option parsing, so a target such as `--x` stays an operand.
         for file in &symlinks {
             if file.link_target.is_empty() {
                 lines.push(format!(
@@ -215,7 +216,7 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 ));
             } else {
                 lines.push(format!(
-                    "RUN mkdir -p {} && ln -sf {} {}",
+                    "RUN mkdir -p -- {} && ln -sf -- {} {}",
                     shell_escape(dir),
                     shell_escape(&file.link_target),
                     shell_escape(&file.path)
@@ -718,7 +719,7 @@ mod tests {
         let lines = unmanaged_file_lines(&snap);
         assert!(
             lines.contains(
-                &"RUN mkdir -p '/opt/app/bin' && ln -sf '/opt/app/lib/tool-1.2' '/opt/app/bin/tool'"
+                &"RUN mkdir -p -- '/opt/app/bin' && ln -sf -- '/opt/app/lib/tool-1.2' '/opt/app/bin/tool'"
                     .to_string()
             ),
             "symlink must produce mkdir -p of its directory, then ln -sf, got: {lines:?}"
@@ -744,7 +745,10 @@ mod tests {
             },
         ]);
         let lines = unmanaged_file_lines(&snap);
-        let ln_lines: Vec<_> = lines.iter().filter(|l| l.contains(" && ln -sf ")).collect();
+        let ln_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| l.contains(" && ln -sf -- "))
+            .collect();
         assert_eq!(ln_lines.len(), 2, "each symlink must produce a RUN ln -sf");
     }
 
@@ -876,7 +880,8 @@ mod tests {
         let lines = unmanaged_file_lines(&snap);
         assert!(
             lines.contains(
-                &"RUN mkdir -p '/opt/app' && ln -sf '/srv/app/data' '/opt/app/data'".to_string()
+                &"RUN mkdir -p -- '/opt/app' && ln -sf -- '/srv/app/data' '/opt/app/data'"
+                    .to_string()
             ),
             "got: {lines:?}"
         );
@@ -909,7 +914,7 @@ mod tests {
             "regular file must produce COPY"
         );
         assert!(
-            lines.iter().any(|l| l.contains(" && ln -sf ")),
+            lines.iter().any(|l| l.contains(" && ln -sf -- ")),
             "symlink must produce ln -sf"
         );
     }

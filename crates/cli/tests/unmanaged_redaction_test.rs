@@ -832,23 +832,33 @@ const LONE_LINK: &str = "/opt/tool/bin/run";
 /// The link's own target. On the release check host it is itself a link
 /// to `/usr/bin/actual-tool`, which `readlink -f` recorded instead.
 const LONE_LINK_TARGET: &str = "/usr/local/bin/run-tool";
+/// A second link beside it whose literal target opens with `-`, which
+/// `ln` would read as an option without `--`.
+const DASH_LINK: &str = "/opt/tool/bin/odd";
+const DASH_LINK_TARGET: &str = "--bad-target";
 
 /// A lone unmanaged symlink builds: the Containerfile creates its
 /// directory before `ln` runs, on both export paths, and recreates the
-/// link with the host's own target rather than the end of its chain.
+/// link with the host's own target rather than the end of its chain,
+/// even a target that opens with `-`.
 #[test]
 fn lone_unmanaged_symlink_gets_its_directory_and_own_target() {
     let root = tempfile::tempdir().expect("a host root");
     let host = SysctlHost::new()
         .file(PLAIN_PATH, PLAIN)
         .link(LONE_LINK, LONE_LINK_TARGET)
-        .command(&format!("test -L {LONE_LINK}"), 0, "", "");
+        .command(&format!("test -L {LONE_LINK}"), 0, "", "")
+        .link(DASH_LINK, DASH_LINK_TARGET)
+        .command(&format!("test -L {DASH_LINK}"), 0, "", "");
     let on_disk = root.path().join(&PLAIN_PATH[1..]);
     std::fs::create_dir_all(on_disk.parent().unwrap()).unwrap();
     std::fs::write(on_disk, PLAIN).unwrap();
-    let link_on_disk = root.path().join(&LONE_LINK[1..]);
-    std::fs::create_dir_all(link_on_disk.parent().unwrap()).unwrap();
-    std::os::unix::fs::symlink(LONE_LINK_TARGET, &link_on_disk).unwrap();
+    let links = [(LONE_LINK, LONE_LINK_TARGET), (DASH_LINK, DASH_LINK_TARGET)];
+    for (link, target) in links {
+        let link_on_disk = root.path().join(&link[1..]);
+        std::fs::create_dir_all(link_on_disk.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(target, &link_on_disk).unwrap();
+    }
     let exec = host.build();
 
     let Exported {
@@ -857,15 +867,17 @@ fn lone_unmanaged_symlink_gets_its_directory_and_own_target() {
         session,
         _packed,
     } = export(&exec, root.path(), false);
-    let item = snap
-        .unmanaged_files
-        .as_ref()
-        .expect("a section")
-        .items
-        .iter()
-        .find(|f| f.path == LONE_LINK)
-        .expect("the link is an item");
-    assert_eq!(item.link_target, LONE_LINK_TARGET);
+    for (link, target) in links {
+        let item = snap
+            .unmanaged_files
+            .as_ref()
+            .expect("a section")
+            .items
+            .iter()
+            .find(|f| f.path == link)
+            .expect("the link is an item");
+        assert_eq!(item.link_target, target);
+    }
 
     // Unpacked with plain `tar` rather than `export_session`: that helper
     // uses `inspectah build`'s extractor, which refuses an absolute link
@@ -890,24 +902,26 @@ fn lone_unmanaged_symlink_gets_its_directory_and_own_target() {
         .expect("one top-level directory")
         .unwrap()
         .path();
-    let expected =
-        format!("RUN mkdir -p '/opt/tool/bin' && ln -sf '{LONE_LINK_TARGET}' '{LONE_LINK}'");
     for (via, tree) in [
         ("scan", scan_tree.path()),
         ("refine", refine_root.as_path()),
     ] {
         crate::copy_source_exists_test::assert_every_copy_source_exists(via, tree);
         let containerfile = std::fs::read_to_string(tree.join("Containerfile")).unwrap();
-        assert!(
-            containerfile.lines().any(|l| l == expected),
-            "{via}: no `{expected}` in:\n{containerfile}"
-        );
-        let shipped = tree.join("unmanaged").join(&LONE_LINK[1..]);
-        assert_eq!(
-            std::fs::read_link(&shipped)
-                .unwrap_or_else(|e| panic!("{via}: {LONE_LINK} ships as a link: {e}")),
-            std::path::Path::new(LONE_LINK_TARGET),
-            "{via}"
-        );
+        for (link, target) in links {
+            let expected =
+                format!("RUN mkdir -p -- '/opt/tool/bin' && ln -sf -- '{target}' '{link}'");
+            assert!(
+                containerfile.lines().any(|l| l == expected),
+                "{via}: no `{expected}` in:\n{containerfile}"
+            );
+            let shipped = tree.join("unmanaged").join(&link[1..]);
+            assert_eq!(
+                std::fs::read_link(&shipped)
+                    .unwrap_or_else(|e| panic!("{via}: {link} ships as a link: {e}")),
+                std::path::Path::new(target),
+                "{via}"
+            );
+        }
     }
 }
