@@ -237,13 +237,19 @@ impl<'a> RegularCopy<'a> {
         }
     }
 
-    /// Whether an emitted `COPY` line carries `file`. A directory `COPY`
-    /// is recursive, so it carries every file under the directory, by
-    /// path component: `/opt/app2/x` is not under `/opt/app`.
+    /// Whether an emitted `COPY` line carries `file`, a regular file or a
+    /// symlink. A directory `COPY` is recursive, so it carries everything
+    /// the bundler stages under the directory, by path component:
+    /// `/opt/app2/x` is not under `/opt/app`, and neither is a path that
+    /// climbs out of it with `..`.
     fn carries(&self, file: &UnmanagedFile) -> bool {
         match self {
             Self::Directory(Ok(dir), _) => {
-                std::path::Path::new(&file.path).starts_with(dir.as_str())
+                let path = std::path::Path::new(&file.path);
+                path.starts_with(dir.as_str())
+                    && !path
+                        .components()
+                        .any(|c| c == std::path::Component::ParentDir)
             }
             Self::Directory(Err(_), _) => false,
             Self::Files(files) => files
@@ -251,6 +257,15 @@ impl<'a> RegularCopy<'a> {
                 .any(|(f, copy)| copy.is_ok() && f.path == file.path),
         }
     }
+}
+
+/// Whether any `COPY` line among `copies` carries `file`: its own
+/// `COPY`, or a directory `COPY` of its directory or of an ancestor,
+/// whichever order the lines come in. The ownership count
+/// ([`copied_files`]) and the "not copied" FIXMEs both read this, so a
+/// file is counted exactly when no FIXME says it is not copied.
+fn is_copied(copies: &[DirectoryCopy<'_>], file: &UnmanagedFile) -> bool {
+    copies.iter().any(|d| d.regular.carries(file))
 }
 
 /// One parent directory's image-bound files, as the Containerfile
@@ -314,7 +329,7 @@ pub(crate) fn copied_files(snap: &InspectionSnapshot) -> Vec<&UnmanagedFile> {
     copies
         .iter()
         .flat_map(|d| d.regular.files())
-        .filter(|file| copies.iter().any(|d| d.regular.carries(file)))
+        .filter(|file| is_copied(&copies, file))
         .collect()
 }
 
@@ -350,17 +365,23 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
     lines.extend(super::unmanaged_owners::containerfile_lines(snap));
 
+    // A refused path gets a FIXME only when no other `COPY` carries it:
+    // a directory `COPY` of an ancestor carries a nested file whose own
+    // path it could not name.
+    let copies = directory_copies(&included);
     for DirectoryCopy {
         dir,
         regular,
         symlinks,
-    } in &directory_copies(&included)
+    } in &copies
     {
         match regular {
             RegularCopy::Directory(Ok(path), _) => {
                 let rel = path.as_str().trim_start_matches('/');
                 lines.push(format!("COPY unmanaged/{rel}/ /{rel}/"));
             }
+            RegularCopy::Directory(Err(_), files)
+                if files.iter().all(|f| is_copied(&copies, f)) => {}
             RegularCopy::Directory(Err(why), _) => lines.push(format!(
                 "# FIXME: unmanaged files under {} not copied: the directory path {why}",
                 sanitize_for_comment(dir)
@@ -372,6 +393,7 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
                             let rel = path.as_str().trim_start_matches('/');
                             lines.push(format!("COPY unmanaged/{rel} {path}"));
                         }
+                        Err(_) if is_copied(&copies, file) => {}
                         Err(why) => lines.push(format!(
                             "# FIXME: unmanaged file {} not copied: the path {why}",
                             sanitize_for_comment(&file.path)
@@ -393,6 +415,9 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
                     file.path
                 ));
             } else if let Some(why) = symlink_refusal(file) {
+                if is_copied(&copies, file) {
+                    continue;
+                }
                 lines.push(format!(
                     "# FIXME: unmanaged symlink {} -> {} not recreated: {why}",
                     sanitize_for_comment(&file.path),
@@ -1200,6 +1225,126 @@ mod tests {
             lines.iter().any(|l| l.contains(" && ln -sf -- ")),
             "symlink must produce ln -sf"
         );
+    }
+
+    /// A FIXME says a file, directory or symlink is not copied only when
+    /// no successful `COPY` carries it, by the same decision the ownership
+    /// count reads, so the two never disagree. A directory `COPY` carries
+    /// what lies under it by path component; a refused one carries nothing.
+    #[test]
+    fn a_fixme_names_only_what_no_copy_carries() {
+        let file = |path: &str, uid: u32| UnmanagedFile {
+            path: path.into(),
+            disposition: FindingKind::included(),
+            provenance: inspectah_core::types::nonrpm::ProvenanceSignals {
+                uid,
+                gid: uid,
+                permissions: "0644".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let link = |path: &str, target: &str| UnmanagedFile {
+            file_type: FileType::Symlink,
+            link_target: target.into(),
+            ..file(path, 0)
+        };
+        // (case, items, a substring of each FIXME expected, files counted)
+        let cases: Vec<(&str, Vec<UnmanagedFile>, &[&str], usize)> = vec![
+            (
+                "a nested file an ancestor directory COPY carries",
+                vec![
+                    file("/opt/app/a", 0),
+                    file("/opt/app/b", 0),
+                    file("/opt/app/sub/config file", 1001),
+                ],
+                &[],
+                1,
+            ),
+            (
+                "a nested directory an ancestor directory COPY carries",
+                vec![
+                    file("/opt/app/a", 0),
+                    file("/opt/app/b", 0),
+                    file("/opt/app/my dir/x", 1001),
+                    file("/opt/app/my dir/y", 1001),
+                ],
+                &[],
+                2,
+            ),
+            (
+                "a refused ancestor carries nothing nested",
+                vec![
+                    file("/opt/my app/a", 0),
+                    file("/opt/my app/b", 0),
+                    file("/opt/my app/sub/config file", 1001),
+                ],
+                &[
+                    "files under /opt/my app not copied",
+                    "file /opt/my app/sub/config file not copied",
+                ],
+                0,
+            ),
+            (
+                "a sibling sharing the directory's name prefix",
+                vec![
+                    file("/opt/app/a", 0),
+                    file("/opt/app/b", 0),
+                    file("/opt/app2/config file", 1001),
+                ],
+                &["file /opt/app2/config file not copied"],
+                0,
+            ),
+            (
+                "a path that climbs out of the directory",
+                vec![
+                    file("/opt/app/a", 0),
+                    file("/opt/app/b", 0),
+                    file("/opt/app/../x", 1001),
+                ],
+                &["file /opt/app/../x not copied"],
+                0,
+            ),
+            (
+                "a refused symlink an ancestor directory COPY carries",
+                vec![
+                    file("/opt/app/a", 0),
+                    file("/opt/app/b", 0),
+                    link("/opt/app/sub/current", "v1\nv2"),
+                ],
+                &[],
+                0,
+            ),
+            (
+                "a refused symlink no COPY carries",
+                vec![file("/opt/app/a", 0), link("/opt/app/current", "v1\nv2")],
+                &["symlink /opt/app/current -> "],
+                0,
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (name, items, fixmes, counted) in cases {
+            let lines = unmanaged_file_lines(&test_snapshot_with_unmanaged(items));
+            let got: Vec<&String> = lines.iter().filter(|l| l.starts_with("# FIXME:")).collect();
+            if got.len() != fixmes.len()
+                || !fixmes
+                    .iter()
+                    .all(|want| got.iter().any(|l| l.contains(want)))
+            {
+                wrong.push(format!("{name}: FIXMEs {got:#?}"));
+            }
+            let count = lines
+                .iter()
+                .find_map(|l| {
+                    l.strip_prefix("# ")?
+                        .split_once(" of the files the COPY lines")
+                })
+                .map(|(n, _)| n.to_string());
+            if count != (counted > 0).then(|| counted.to_string()) {
+                wrong.push(format!("{name}: count {count:?}, want {counted}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     fn payload(path: &str, file_type: FileType) -> UnmanagedFile {
