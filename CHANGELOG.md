@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-beta.8] - 2026-11-24
+
 ### Changed
 - **Breaking: `inspectah version` no longer prints the commit or build date**: a release binary prints `inspectah 0.9.0-beta.8`, without the `(commit <hash>, built <date>)` that followed. A release build from a git checkout of any other commit adds its short hash, such as `inspectah 0.9.0-beta.8+g5a4389ce`, and a debug build adds `+dev`. `inspectah --version` prints the same line. Scripts reading the commit or date from this line get neither.
 - **Tarball names are in UTC**: `scan` and `aggregate` name their tarball with the UTC time and a `Z` suffix, such as `rhel9-20261123-070502Z.tar.gz`, instead of the host's local time. The directory inside the tarball follows the same name. Tarballs named the old way still load in `refine` and `aggregate`.
@@ -690,7 +692,8 @@ Final release of the Go implementation before the Rust rewrite.
 
 ---
 
-[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.7...HEAD
+[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.8...HEAD
+[0.9.0-beta.8]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.7...v0.9.0-beta.8
 [0.9.0-beta.7]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.6...v0.9.0-beta.7
 [0.9.0-beta.6]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.5...v0.9.0-beta.6
 [0.9.0-beta.5]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.4...v0.9.0-beta.5
