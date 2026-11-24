@@ -154,7 +154,11 @@ ownership is carried, `render/unmanaged_owners.rs` names each carried
 regular file whose recorded `uid` or `gid` is not 0, or whose recorded
 mode has setuid, setgid or sticky, in the audit report's Software
 section, with a count in the Containerfile's unmanaged block and on the
-scan's stderr. It reads the walk's `stat` record (`provenance`), not the
+scan's stderr. The Containerfile's count takes its files from
+`unmanaged::copied_files`, the grouped `COPY` decisions the renderer
+emits, never a per-file path check: a refused `COPY` leaves a FIXME and
+carries nothing, and a directory `COPY` carries a file whose own path
+would be refused. It reads the walk's `stat` record (`provenance`), not the
 bundled copy, which has already lost the special bits. Directories are
 not named: the walk records files only. A change that starts carrying
 ownership or special bits must shrink or remove this notice in the same

@@ -2,7 +2,9 @@ use inspectah_core::machine_state::{Screened, ScreenedExecutor, payload_credenti
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::destination::Destination;
 use inspectah_core::types::machine_state::MachineStateMember;
-use inspectah_core::types::nonrpm::{FileType, PayloadRedaction, UncheckedPayload, UnmanagedFile};
+use inspectah_core::types::nonrpm::{
+    FileType, PayloadRedaction, UncheckedPayload, UnmanagedFile, UnmanagedFileSection,
+};
 use inspectah_core::types::redaction::{
     Confidence, DetectionMethod, RedactionFinding, RedactionKind, RedactionState,
 };
@@ -200,6 +202,108 @@ fn var_srv_comment_lines(paths: &[&str]) -> Vec<String> {
     lines
 }
 
+/// The included unmanaged files the Containerfile renders: a file under
+/// `/etc/systemd/system`, at the machine-id, or one the bundle could not
+/// check is withheld, and the configuration section names it in a FIXME
+/// (`staged_writes`).
+fn rendered_files(section: &UnmanagedFileSection) -> Vec<&UnmanagedFile> {
+    section
+        .items
+        .iter()
+        .filter(|f| f.disposition.is_included() && unmanaged_file_withheld(f).is_none())
+        .collect()
+}
+
+/// How the Containerfile carries one directory's regular files. Every
+/// path on a `COPY` line is a proved `CopyToken`: `COPY` has no quoting,
+/// and a line terminator in a path would end the instruction and start
+/// one the snapshot chose. A refused path gets a FIXME instead.
+enum RegularCopy<'a> {
+    /// Two or more files: one `COPY` of the directory, which carries them
+    /// all, or the reason its path is refused.
+    Directory(Result<CopyToken, String>, Vec<&'a UnmanagedFile>),
+    /// One file or none: a `COPY` of each, or the reason its path is
+    /// refused.
+    Files(Vec<(&'a UnmanagedFile, Result<CopyToken, String>)>),
+}
+
+impl<'a> RegularCopy<'a> {
+    /// The files an emitted `COPY` line carries.
+    fn carried(&self) -> Vec<&'a UnmanagedFile> {
+        match self {
+            Self::Directory(Ok(_), files) => files.clone(),
+            Self::Directory(Err(_), _) => Vec::new(),
+            Self::Files(files) => files
+                .iter()
+                .filter(|(_, copy)| copy.is_ok())
+                .map(|(file, _)| *file)
+                .collect(),
+        }
+    }
+}
+
+/// One parent directory's image-bound files, as the Containerfile
+/// carries them.
+struct DirectoryCopy<'a> {
+    dir: String,
+    regular: RegularCopy<'a>,
+    symlinks: Vec<&'a UnmanagedFile>,
+}
+
+/// The `COPY` and `ln -sf` decisions for `included`, one per parent
+/// directory in path order. Files under `/srv` are left out: the `/var`
+/// strategy carries them, never a `COPY`.
+fn directory_copies<'a>(included: &[&'a UnmanagedFile]) -> Vec<DirectoryCopy<'a>> {
+    let mut groups: BTreeMap<String, Vec<&UnmanagedFile>> = BTreeMap::new();
+    for file in included
+        .iter()
+        .filter(|f| UnmanagedDestination::of(&f.path) == UnmanagedDestination::Image)
+    {
+        let parent = std::path::Path::new(&file.path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "/".to_string());
+        groups.entry(parent).or_default().push(file);
+    }
+    groups
+        .into_iter()
+        .map(|(dir, files)| {
+            // Separate symlinks from regular files for distinct rendering.
+            let (symlinks, regular): (Vec<_>, Vec<_>) = files
+                .into_iter()
+                .partition(|f| f.file_type == FileType::Symlink);
+            let regular = if regular.len() > 1 {
+                RegularCopy::Directory(copy_path(&dir), regular)
+            } else {
+                RegularCopy::Files(
+                    regular
+                        .into_iter()
+                        .map(|f| (f, copy_path(&f.path)))
+                        .collect(),
+                )
+            };
+            DirectoryCopy {
+                dir,
+                regular,
+                symlinks,
+            }
+        })
+        .collect()
+}
+
+/// The unmanaged files a `COPY` line of the Containerfile carries, by the
+/// decisions [`unmanaged_file_lines`] renders. A file under `/srv`, or
+/// one whose `COPY` is refused, reaches only the export archive.
+pub(crate) fn copied_files(snap: &InspectionSnapshot) -> Vec<&UnmanagedFile> {
+    let Some(section) = &snap.unmanaged_files else {
+        return Vec::new();
+    };
+    directory_copies(&rendered_files(section))
+        .iter()
+        .flat_map(|d| d.regular.carried())
+        .collect()
+}
+
 /// Render Containerfile lines for unmanaged files.
 ///
 /// Groups files by parent directory for readability.
@@ -210,14 +314,7 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
         _ => return Vec::new(),
     };
 
-    // A file under `/etc/systemd/system`, at the machine-id, or one the
-    // bundle could not check is withheld, and the configuration section
-    // names it in a FIXME (`staged_writes`).
-    let included: Vec<&UnmanagedFile> = section
-        .items
-        .iter()
-        .filter(|f| f.disposition.is_included() && unmanaged_file_withheld(f).is_none())
-        .collect();
+    let included = rendered_files(section);
 
     if included.is_empty() {
         return Vec::new();
@@ -239,56 +336,33 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
     lines.extend(super::unmanaged_owners::containerfile_lines(snap));
 
-    // Group by parent directory
-    let mut groups: BTreeMap<String, Vec<&UnmanagedFile>> = BTreeMap::new();
-    for file in included
-        .iter()
-        .filter(|f| UnmanagedDestination::of(&f.path) == UnmanagedDestination::Image)
+    for DirectoryCopy {
+        dir,
+        regular,
+        symlinks,
+    } in &directory_copies(&included)
     {
-        let parent = std::path::Path::new(&file.path)
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "/".to_string());
-        groups.entry(parent).or_default().push(file);
-    }
-
-    for (dir, files) in &groups {
-        // Separate symlinks from regular files for distinct rendering.
-        let symlinks: Vec<&&UnmanagedFile> = files
-            .iter()
-            .filter(|f| f.file_type == FileType::Symlink)
-            .collect();
-        let regular: Vec<&&UnmanagedFile> = files
-            .iter()
-            .filter(|f| f.file_type != FileType::Symlink)
-            .collect();
-
-        // Every path on a COPY line is a proved `CopyToken`: COPY has no
-        // quoting, and a line terminator in a path would end the
-        // instruction and start one the snapshot chose.
-        if regular.len() > 1 {
-            // Directory-level COPY for regular files
-            match copy_path(dir) {
-                Ok(path) => {
-                    let rel = path.as_str().trim_start_matches('/');
-                    lines.push(format!("COPY unmanaged/{rel}/ /{rel}/"));
-                }
-                Err(why) => lines.push(format!(
-                    "# FIXME: unmanaged files under {} not copied: the directory path {why}",
-                    sanitize_for_comment(dir)
-                )),
+        match regular {
+            RegularCopy::Directory(Ok(path), _) => {
+                let rel = path.as_str().trim_start_matches('/');
+                lines.push(format!("COPY unmanaged/{rel}/ /{rel}/"));
             }
-        } else {
-            for file in &regular {
-                match copy_path(&file.path) {
-                    Ok(path) => {
-                        let rel = path.as_str().trim_start_matches('/');
-                        lines.push(format!("COPY unmanaged/{rel} {path}"));
+            RegularCopy::Directory(Err(why), _) => lines.push(format!(
+                "# FIXME: unmanaged files under {} not copied: the directory path {why}",
+                sanitize_for_comment(dir)
+            )),
+            RegularCopy::Files(files) => {
+                for (file, copy) in files {
+                    match copy {
+                        Ok(path) => {
+                            let rel = path.as_str().trim_start_matches('/');
+                            lines.push(format!("COPY unmanaged/{rel} {path}"));
+                        }
+                        Err(why) => lines.push(format!(
+                            "# FIXME: unmanaged file {} not copied: the path {why}",
+                            sanitize_for_comment(&file.path)
+                        )),
                     }
-                    Err(why) => lines.push(format!(
-                        "# FIXME: unmanaged file {} not copied: the path {why}",
-                        sanitize_for_comment(&file.path)
-                    )),
                 }
             }
         }
@@ -298,7 +372,7 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
         // `mkdir -p` first: no COPY creates a directory that holds only
         // links, and `ln` does not create its link's parent. `--` ends
         // option parsing, so a target such as `--x` stays an operand.
-        for file in &symlinks {
+        for file in symlinks {
             if file.link_target.is_empty() {
                 lines.push(format!(
                     "# SYMLINK: {} -> unknown (recreate manually)",

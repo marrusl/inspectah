@@ -16,11 +16,11 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::configtree::unmanaged_file_withheld;
 use super::md_literal::md_code_cell;
-use super::unmanaged::{PAYLOAD_MODE_BITS, UnmanagedDestination};
+use super::unmanaged::{PAYLOAD_MODE_BITS, copied_files};
 use crate::export_warning::ExportWarning;
 
 /// Setuid, setgid and sticky: the mode bits [`PAYLOAD_MODE_BITS`] drops.
@@ -62,9 +62,10 @@ pub struct OwnershipLoss {
     /// The host mode, special bits included; `None` when the scan's
     /// record of it cannot be read.
     pub host_mode: Option<u32>,
-    /// Whether the file is under `/srv`, which the Containerfile does not
-    /// copy: the export alone carries it.
-    pub under_srv: bool,
+    /// Whether a `COPY` line of the Containerfile carries the file. One
+    /// under `/srv`, or one whose `COPY` the Containerfile refuses, only
+    /// the export archive carries.
+    pub copied: bool,
 }
 
 impl OwnershipLoss {
@@ -132,6 +133,10 @@ pub fn ownership_losses(snap: &InspectionSnapshot) -> Vec<OwnershipLoss> {
         return Vec::new();
     };
     let names = AccountNames::of(snap);
+    let copied: HashSet<&str> = copied_files(snap)
+        .into_iter()
+        .map(|f| f.path.as_str())
+        .collect();
     section
         .items
         .iter()
@@ -147,7 +152,7 @@ pub fn ownership_losses(snap: &InspectionSnapshot) -> Vec<OwnershipLoss> {
                 gid: p.gid,
                 group: AccountNames::name(&names.groups, p.gid),
                 host_mode,
-                under_srv: UnmanagedDestination::of(&f.path) == UnmanagedDestination::VarSrv,
+                copied: copied.contains(f.path.as_str()),
             })
         })
         .collect()
@@ -203,21 +208,20 @@ pub(crate) fn audit_lines(snap: &InspectionSnapshot) -> Vec<String> {
     lines
 }
 
-/// The Containerfile comment giving the count of copied files that lose
-/// something, for the unmanaged block. Empty when there is none. Files
-/// under `/srv` are not copied, so they are not counted here.
+/// The Containerfile comment giving the count of files that lose
+/// something and that one of its `COPY` lines carries, for the unmanaged
+/// block. Empty when there is none. A file under `/srv`, or one whose
+/// `COPY` is refused with a FIXME, is not copied, so it is not counted
+/// here.
 pub(crate) fn containerfile_lines(snap: &InspectionSnapshot) -> Vec<String> {
-    let copied = ownership_losses(snap)
-        .iter()
-        .filter(|l| !l.under_srv)
-        .count();
+    let copied = ownership_losses(snap).iter().filter(|l| l.copied).count();
     if copied == 0 {
         return Vec::new();
     }
     vec![
-        format!("# {copied} of the files below had a non-root owner or group, or setuid,"),
-        "# setgid or sticky, on the host. The image gets root:root without those".into(),
-        "# bits; audit-report.md lists each file to fix by hand.".into(),
+        format!("# {copied} of the files the COPY lines below carry had a non-root owner or"),
+        "# group, or setuid, setgid or sticky, on the host. The image gets them as".into(),
+        "# root:root without those bits; audit-report.md lists each to fix by hand.".into(),
     ]
 }
 
@@ -377,7 +381,7 @@ mod tests {
         assert_eq!(ownership_losses(&snap).len(), 3);
         assert_eq!(
             containerfile_lines(&snap)[0],
-            "# 2 of the files below had a non-root owner or group, or setuid,"
+            "# 2 of the files the COPY lines below carry had a non-root owner or"
         );
         assert_eq!(
             ownership_notice(&snap).map(|n| n.to_string()).as_deref(),
@@ -393,6 +397,61 @@ mod tests {
                 .join("\n")
                 .contains("/srv/www/index.html")
         );
+    }
+
+    /// The Containerfile counts a file only when one of its `COPY` lines
+    /// carries it. A refused `COPY` leaves a FIXME, so its files are not
+    /// counted; a directory `COPY` carries a file whose own path would be
+    /// refused. The audit report and the scan's notice name every file.
+    #[test]
+    fn the_containerfile_counts_what_its_copy_lines_carry() {
+        let cases: &[(&str, Vec<UnmanagedFile>, usize)] = &[
+            (
+                "a single-file COPY refused for whitespace",
+                vec![file("/opt/app/config file", 1001, 1001, "0644")],
+                0,
+            ),
+            (
+                "a directory COPY refused for whitespace",
+                vec![
+                    file("/opt/my app/run", 1001, 1001, "0755"),
+                    file("/opt/my app/conf", 0, 1001, "0640"),
+                ],
+                0,
+            ),
+            (
+                "a directory COPY carrying a name refused on its own",
+                vec![
+                    file("/opt/app/config file", 1001, 1001, "0644"),
+                    file("/opt/app/README", 0, 0, "0644"),
+                ],
+                1,
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (name, items, copied) in cases {
+            let snap = snapshot(items.clone());
+            let named = items
+                .iter()
+                .filter(|f| f.provenance.uid != 0 || f.provenance.gid != 0)
+                .count();
+            let lines = containerfile_lines(&snap);
+            let want = (*copied > 0).then(|| {
+                format!(
+                    "# {copied} of the files the COPY lines below carry had a non-root owner or"
+                )
+            });
+            if lines.first() != want.as_ref() {
+                wrong.push(format!("{name}: {:?}", lines.first()));
+            }
+            assert_eq!(ownership_losses(&snap).len(), named, "{name}");
+            assert!(
+                ownership_notice(&snap)
+                    .is_some_and(|n| n.to_string().starts_with(&format!("Notice: {named} "))),
+                "{name}"
+            );
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// The audit report and the Containerfile gain the notice and nothing
