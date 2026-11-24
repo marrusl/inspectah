@@ -1372,3 +1372,145 @@ fn credentialed_unmanaged_link_does_not_ship() {
         );
     }
 }
+
+/// A script the mode test plants beside the `.env` file.
+const SCRIPT_PATH: &str = "/opt/myapp/bin/start.sh";
+const SCRIPT: &str = "#!/bin/sh\nexec /opt/myapp/bin/server\n";
+
+/// The permission bits of each regular `unmanaged/` member of the gzipped
+/// tarball at `path`, keyed by host path.
+fn unmanaged_member_modes(path: &std::path::Path) -> std::collections::BTreeMap<String, u32> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(
+        std::fs::File::open(path).unwrap(),
+    ));
+    archive
+        .entries()
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| entry.header().entry_type() == tar::EntryType::Regular)
+        .filter_map(|entry| {
+            let name = entry.path().unwrap().display().to_string();
+            let (_, rel) = name.split_once("/unmanaged/")?;
+            Some((format!("/{rel}"), entry.header().mode().unwrap()))
+        })
+        .collect()
+}
+
+/// The mode bits of the file at `path`, special bits included.
+fn disk_mode(path: &std::path::Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .ok()
+        .map(|m| m.permissions().mode() & 0o7777)
+}
+
+/// Unmanaged files keep the host's permission bits through the bundle,
+/// the scan tarball, refine's export and `inspectah build`'s extraction,
+/// which is the build context `COPY` reads its mode from: the redacted
+/// 0600 `.env` file stays 0600, the 0755 script keeps its exec bits, a
+/// 0644 file stays 0644, and a withheld 0600 file ships nowhere.
+#[test]
+fn unmanaged_files_keep_the_host_mode_on_both_export_paths() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut latin1 = b"# caf\xe9\nAPI_TOKEN=".to_vec();
+    latin1.extend_from_slice(TOKEN.as_bytes());
+    let planted: [(&str, Vec<u8>, u32); 4] = [
+        (ENV_PATH, env_file().into_bytes(), 0o600),
+        (SCRIPT_PATH, SCRIPT.as_bytes().to_vec(), 0o755),
+        (PLAIN_PATH, PLAIN.as_bytes().to_vec(), 0o644),
+        (LATIN1_ENV, latin1, 0o600),
+    ];
+    let files: Vec<(&str, Vec<u8>)> = planted
+        .iter()
+        .map(|(p, bytes, _)| (*p, bytes.clone()))
+        .collect();
+    let (exec, root) = host_of(&files);
+    for (path, _, mode) in &planted {
+        std::fs::set_permissions(
+            root.path().join(&path[1..]),
+            std::fs::Permissions::from_mode(*mode),
+        )
+        .unwrap();
+    }
+    let Exported {
+        snap,
+        scan_tree,
+        session,
+        _packed,
+    } = export(&exec, root.path(), false);
+    let state = |path: &str| {
+        snap.unmanaged_files
+            .as_ref()
+            .expect("a section")
+            .items
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("{path} is an item"))
+            .payload_redaction
+    };
+    assert_eq!(state(ENV_PATH), PayloadRedaction::Redacted);
+    assert_eq!(
+        state(LATIN1_ENV),
+        PayloadRedaction::Withheld(UncheckedPayload::NotUtf8)
+    );
+
+    let scan_tarball = _packed.path().join("scan.tar.gz");
+    let work = tempfile::tempdir().unwrap();
+    let refine_tarball = work.path().join("export.tar.gz");
+    session
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&refine_tarball)
+        .expect("the export writes");
+
+    let mut table = Vec::new();
+    for (via, tarball) in [("scan", &scan_tarball), ("refine", &refine_tarball)] {
+        let members = unmanaged_member_modes(tarball);
+        let context = work.path().join(format!("{via}-context"));
+        inspectah_pipeline::build::extract::TarballExtractor::new(context.clone())
+            .extract(tarball)
+            .unwrap_or_else(|e| panic!("{via}: the build extracts it: {e}"));
+        let containerfile = std::fs::read_to_string(context.join("Containerfile")).unwrap();
+        for copy in [
+            "COPY unmanaged/opt/myapp/ /opt/myapp/",
+            "COPY unmanaged/opt/myapp/bin/start.sh /opt/myapp/bin/start.sh",
+        ] {
+            assert!(
+                containerfile.lines().any(|l| l == copy),
+                "{via}: no `{copy}` in:\n{containerfile}"
+            );
+        }
+        for (path, _, _) in &planted {
+            let rel = format!("unmanaged/{}", &path[1..]);
+            table.push((
+                *path,
+                via,
+                disk_mode(&scan_tree.path().join(&rel)),
+                members.get(*path).copied(),
+                disk_mode(&context.join(&rel)),
+            ));
+        }
+    }
+    let shown: Vec<String> = table
+        .iter()
+        .map(|(path, via, bundle, member, context)| {
+            let o = |m: &Option<u32>| m.map_or("absent".to_string(), |m| format!("{m:04o}"));
+            format!(
+                "{path} {via}: bundle {} member {} build context {}",
+                o(bundle),
+                o(member),
+                o(context)
+            )
+        })
+        .collect();
+    for (path, via, bundle, member, context) in &table {
+        let host = planted.iter().find(|(p, _, _)| p == path).unwrap().2;
+        let expected = (*path != LATIN1_ENV).then_some(host);
+        assert_eq!(
+            (*bundle, *member, *context),
+            (expected, expected, expected),
+            "{path} via {via}:\n{}",
+            shown.join("\n")
+        );
+    }
+}

@@ -20,6 +20,7 @@ use inspectah_pipeline::render::containerfile::{
 };
 use inspectah_pipeline::render::not_carried::{named_unit_owners, not_carried_notice};
 use inspectah_pipeline::render::repoless::{InstallRepos, PackageRoute, route_for};
+use inspectah_pipeline::render::unmanaged::{PAYLOAD_MODE_BITS, is_unmanaged_payload};
 
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
@@ -4558,6 +4559,15 @@ fn extract_payload_dirs_with_budget(
                         confined_io(e)
                     }
                 })?;
+                // The packer ships an unmanaged payload with this copy's
+                // permission bits, which are the member's.
+                if is_unmanaged_payload(dest_rel.as_path()) {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = entry.header().mode().map_err(tar_error)? & PAYLOAD_MODE_BITS;
+                    outfile
+                        .set_permissions(std::fs::Permissions::from_mode(mode))
+                        .map_err(confined_io)?;
+                }
             }
         }
     }

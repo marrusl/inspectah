@@ -8,6 +8,7 @@ use inspectah_core::types::redaction::{
 };
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use crate::redaction::engine::{
@@ -17,6 +18,23 @@ use crate::redaction::engine::{
 use super::configtree::{unmanaged_file_withheld, validate_path};
 use super::language_packages::sanitize_for_comment;
 use super::safety::{CopyToken, has_line_break_or_control};
+
+/// The export directory unmanaged payloads ship under, which every
+/// unmanaged `COPY` reads from.
+pub const UNMANAGED_DIR: &str = "unmanaged";
+
+/// The mode bits an unmanaged payload keeps from the host: its permission
+/// bits. `COPY` gives the image file the mode of its build-context copy,
+/// so the bundle, both export tarballs and `inspectah build`'s extraction
+/// all carry them. Setuid, setgid and sticky are dropped: a file no
+/// package installs does not gain privilege in the image unreviewed.
+pub const PAYLOAD_MODE_BITS: u32 = 0o777;
+
+/// Whether `rel`, a path relative to an export root, is an unmanaged
+/// payload: below [`UNMANAGED_DIR`], compared by whole components.
+pub fn is_unmanaged_payload(rel: &Path) -> bool {
+    rel.starts_with(UNMANAGED_DIR) && rel != Path::new(UNMANAGED_DIR)
+}
 
 /// Single-quote a path for safe shell interpolation in RUN directives.
 fn shell_escape(s: &str) -> String {
@@ -584,7 +602,7 @@ pub fn bundle_unmanaged_files(
     for i in payloads {
         let item = &mut section.items[i];
         let rel_path = item.path.trim_start_matches('/');
-        let dest = render_dir.join("unmanaged").join(rel_path);
+        let dest = render_dir.join(UNMANAGED_DIR).join(rel_path);
         let source = host_root.join(rel_path);
         if item.file_type == FileType::Symlink {
             // Recreate the link rather than following its target, from
@@ -642,9 +660,13 @@ pub fn bundle_unmanaged_files(
         // The mode `COPY` gives the image file, an executable bit included.
         let mode = std::fs::metadata(&source)
             .with_context(|| format!("failed to read the mode of {}", item.path))?
-            .permissions();
-        std::fs::set_permissions(&dest, mode)
-            .with_context(|| format!("failed to set the mode of {}", item.path))?;
+            .permissions()
+            .mode();
+        std::fs::set_permissions(
+            &dest,
+            std::fs::Permissions::from_mode(mode & PAYLOAD_MODE_BITS),
+        )
+        .with_context(|| format!("failed to set the mode of {}", item.path))?;
     }
     record_late_findings(snap, findings);
     Ok(())
@@ -1268,6 +1290,60 @@ mod tests {
             lines.iter().any(|l| l.contains("REDACTED_* placeholders")),
             "{lines:?}"
         );
+    }
+
+    /// A bundled payload keeps the host's permission bits, redacted or
+    /// not, and drops setuid, setgid and sticky.
+    #[test]
+    fn bundling_keeps_permission_bits_and_drops_special_bits() {
+        use inspectah_core::machine_state::ScreenedExecutor;
+        use std::os::unix::fs::PermissionsExt;
+        let files: &[(&str, &[u8], u32, u32)] = &[
+            (
+                "/opt/app/.env",
+                b"API_TOKEN=supersecretvalue123\n",
+                0o600,
+                0o600,
+            ),
+            (
+                "/opt/app/run.sh",
+                b"#!/bin/sh\nexec /opt/app/run\n",
+                0o755,
+                0o755,
+            ),
+            ("/opt/app/tool", ELF, 0o4755, 0o755),
+            ("/opt/app/shared.ini", b"[a]\nb = 1\n", 0o3664, 0o664),
+        ];
+        let contents: Vec<(&str, &[u8])> = files.iter().map(|(p, b, _, _)| (*p, *b)).collect();
+        let (root, host) = bundle_host(&contents);
+        for (path, _, mode, _) in files {
+            std::fs::set_permissions(
+                root.path().join(&path[1..]),
+                std::fs::Permissions::from_mode(*mode),
+            )
+            .unwrap();
+        }
+        let gate = ScreenedExecutor::new(&host);
+        let mut snap = test_snapshot_with_unmanaged(
+            files
+                .iter()
+                .map(|(p, _, _, _)| payload(p, FileType::DataFile))
+                .collect(),
+        );
+        let render = tempfile::tempdir().unwrap();
+        bundle_unmanaged_files(&mut snap, render.path(), root.path(), &gate).expect("bundles");
+        assert_eq!(
+            redaction_of(&snap, "/opt/app/.env"),
+            PayloadRedaction::Redacted
+        );
+        for (path, _, _, expected) in files {
+            let mode = std::fs::metadata(render.path().join(UNMANAGED_DIR).join(&path[1..]))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777;
+            assert_eq!(mode, *expected, "{path}");
+        }
     }
 
     /// `--no-redaction`: every payload ships as the host had it.

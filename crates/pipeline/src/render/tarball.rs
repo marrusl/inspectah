@@ -5,11 +5,13 @@
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use regex::Regex;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::LazyLock;
 use tar::Header;
 
 use super::configtree::validate_tarball_entry;
+use super::unmanaged::{PAYLOAD_MODE_BITS, is_unmanaged_payload};
 
 /// Regex for unsafe filename characters — replaced during hostname sanitization.
 static UNSAFE_FILENAME_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^\w.-]").unwrap());
@@ -94,8 +96,18 @@ pub fn create_tarball(
             continue;
         }
 
+        // An unmanaged payload keeps the host's permission bits, which
+        // the bundler gave its copy; everything else is written by the
+        // render and ships 0644.
+        let mode = if meta.is_dir() {
+            0o755
+        } else if meta.is_file() && is_unmanaged_payload(Path::new(&rel)) {
+            meta.permissions().mode() & PAYLOAD_MODE_BITS
+        } else {
+            0o644
+        };
         let mut header = Header::new_gnu();
-        header.set_mode(if meta.is_dir() { 0o755 } else { 0o644 });
+        header.set_mode(mode);
         header.set_mtime(
             meta.modified()
                 .ok()
@@ -255,6 +267,62 @@ mod tests {
                 entries.iter().any(|e| e.ends_with(artifact)),
                 "missing always-written artifact: {artifact}. entries: {entries:?}"
             );
+        }
+    }
+
+    /// An unmanaged payload's member keeps its copy's permission bits,
+    /// special bits dropped, and `inspectah build`'s extraction gives the
+    /// build-context file that mode; every other file packs 0644, a
+    /// sibling whose name only starts with `unmanaged` included.
+    #[test]
+    fn unmanaged_payloads_keep_their_permission_bits() {
+        use crate::build::extract::TarballExtractor;
+        use std::os::unix::fs::PermissionsExt;
+        let cases: &[(&str, u32, u32)] = &[
+            ("unmanaged/opt/app/.env", 0o600, 0o600),
+            ("unmanaged/opt/app/bin/run.sh", 0o755, 0o755),
+            ("unmanaged/opt/app/bin/tool", 0o4755, 0o755),
+            ("unmanaged/opt/app/shared", 0o2770, 0o770),
+            ("config/etc/app.conf", 0o600, 0o644),
+            ("unmanaged-notes.txt", 0o600, 0o644),
+        ];
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("output");
+        for (rel, mode, _) in cases {
+            let path = source.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, rel).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(*mode)).unwrap();
+        }
+        let tarball_path = dir.path().join("output.tar.gz");
+        create_tarball(&source, &tarball_path, "host").unwrap();
+
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(
+            std::fs::File::open(&tarball_path).unwrap(),
+        ));
+        let members: std::collections::BTreeMap<String, u32> = archive
+            .entries()
+            .unwrap()
+            .map(|e| e.unwrap())
+            .map(|e| {
+                let name = e.path().unwrap().display().to_string();
+                (name, e.header().mode().unwrap())
+            })
+            .collect();
+        let context = dir.path().join("context");
+        TarballExtractor::new(context.clone())
+            .extract(&tarball_path)
+            .unwrap();
+        for (rel, _, expected) in cases {
+            assert_eq!(members[&format!("host/{rel}")], *expected, "{rel} member");
+            if rel.starts_with("unmanaged/") {
+                let on_disk = std::fs::metadata(context.join(rel))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o7777;
+                assert_eq!(on_disk, *expected, "{rel} in the build context");
+            }
         }
     }
 

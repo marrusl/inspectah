@@ -119,6 +119,35 @@ Two things the guard does **not** cover, deliberately:
   quadlet excluded in refine is not staged again through its config row.
   Any other loss of this kind still needs its own named-file test.
 
+## An unmanaged payload's mode crosses four writers
+
+`COPY` gives the image file the mode of its build-context copy, so an
+unmanaged payload's permission bits have to survive every hop, and until
+2026-11-23 they survived none past the first: every member packed 0644,
+which stripped exec bits from `/opt` scripts and made a 0600 `.env`
+world-readable. The mode is read once, from the host file, and then
+carried, never re-derived:
+
+1. **Captured** by `bundle_unmanaged_files` (`render/unmanaged.rs`), which
+   sets the bundled copy's mode from the host file masked with
+   `PAYLOAD_MODE_BITS` (0o777: setuid, setgid and sticky dropped). The
+   snapshot's `permissions` field is not what ships; it is the walk's
+   `stat` record.
+2. **Packed** by `create_tarball` (`render/tarball.rs`) from the on-disk
+   mode, for regular files under `unmanaged/` only
+   (`is_unmanaged_payload`, compared by component). Everything else the
+   render wrote packs 0644, so a restrictive umask never reaches `config/`.
+3. **Re-staged** by refine's `extract_payload_dirs_with_budget`
+   (`session.rs`), which sets the extracted copy to the member's mode, so
+   its re-pack through step 2 keeps it.
+4. **Applied** by `TarballExtractor::extract` (`build/extract.rs`), which
+   sets the build-context copy to the member's mode for the same paths.
+
+A new writer of `unmanaged/` files carries the mode or the image gets the
+writer's umask. `unmanaged_files_keep_the_host_mode_on_both_export_paths`
+(`crates/cli/tests/unmanaged_redaction_test.rs`) checks every hop on both
+paths.
+
 ## The COPY invariant has two directions and they need different granularity
 
 Learned 2026-11-04 by running mutations against both halves. Getting this

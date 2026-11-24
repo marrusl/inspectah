@@ -15,9 +15,12 @@
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::render::unmanaged::{PAYLOAD_MODE_BITS, is_unmanaged_payload};
 
 /// The kinds of archive entry an extractor will write. Everything else a
 /// tar header can name is refused by [`EntryKind::classify`].
@@ -479,6 +482,12 @@ impl TarballExtractor {
                     }
                     let mut outfile = std::fs::File::create(&dest)?;
                     std::io::copy(&mut entry, &mut outfile)?;
+                    // `COPY` gives the image file this copy's mode, so an
+                    // unmanaged payload keeps the member's permission bits.
+                    if is_unmanaged_payload(&stripped) {
+                        let mode = entry.header().mode()? & PAYLOAD_MODE_BITS;
+                        outfile.set_permissions(std::fs::Permissions::from_mode(mode))?;
+                    }
 
                     // Post-extraction defense-in-depth: canonicalize destination
                     // and verify it remains under the extraction root.
