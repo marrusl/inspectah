@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-**Current version:** v0.9.0-beta.7 (pure Rust, snapshot schema 31)
+**Current version:** v0.9.0-beta.8 (pure Rust, snapshot schema 31)
 
 ## How to read this file
 
