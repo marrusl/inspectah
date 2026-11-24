@@ -7,9 +7,10 @@ use inspectah_core::types::redaction::{
     Confidence, DetectionMethod, RedactionFinding, RedactionKind, RedactionState,
 };
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use crate::redaction::engine::{
     SnapshotText, is_redacted_copy_of, record_late_findings, redact_payload, screen_link_target,
@@ -31,9 +32,23 @@ pub const UNMANAGED_DIR: &str = "unmanaged";
 pub const PAYLOAD_MODE_BITS: u32 = 0o777;
 
 /// Whether `rel`, a path relative to an export root, is an unmanaged
-/// payload: below [`UNMANAGED_DIR`], compared by whole components.
+/// payload: [`UNMANAGED_DIR`] followed by at least one more component,
+/// every one an ordinary name. A path with a root, a leading `.` or any
+/// `..` is never one, so the answer does not rest on the caller having
+/// refused traversal first.
 pub fn is_unmanaged_payload(rel: &Path) -> bool {
-    rel.starts_with(UNMANAGED_DIR) && rel != Path::new(UNMANAGED_DIR)
+    let mut components = rel.components();
+    if components.next() != Some(Component::Normal(OsStr::new(UNMANAGED_DIR))) {
+        return false;
+    }
+    let mut below = false;
+    for component in components {
+        if !matches!(component, Component::Normal(_)) {
+            return false;
+        }
+        below = true;
+    }
+    below
 }
 
 /// Single-quote a path for safe shell interpolation in RUN directives.
@@ -690,6 +705,34 @@ mod tests {
                 total_count,
             }),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn is_unmanaged_payload_needs_ordinary_components_below_the_dir() {
+        let cases: &[(&str, bool)] = &[
+            ("unmanaged/opt/app/run", true),
+            ("unmanaged/opt", true),
+            ("unmanaged//opt/./run", true),
+            ("unmanaged/../config/etc/app.conf", false),
+            ("unmanaged/opt/../../config/etc/app.conf", false),
+            ("unmanaged/..", false),
+            ("unmanaged", false),
+            ("unmanaged/", false),
+            ("./unmanaged/opt", false),
+            ("unmanaged-notes.txt", false),
+            ("unmanaged-notes/opt", false),
+            ("config/unmanaged/opt", false),
+            ("/unmanaged/opt", false),
+            ("/", false),
+            ("", false),
+            // A backslash is an ordinary byte on Linux, never a separator.
+            ("unmanaged\\opt\\run", false),
+            ("unmanaged\\..\\config", false),
+            ("unmanaged/opt\\run", true),
+        ];
+        for (rel, want) in cases {
+            assert_eq!(is_unmanaged_payload(Path::new(rel)), *want, "{rel:?}");
         }
     }
 
