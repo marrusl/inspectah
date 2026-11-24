@@ -628,15 +628,16 @@ const MAX_REDUNDANT_RESCANS_PER_LINE: usize = 4;
 
 #[cfg(test)]
 thread_local! {
-    /// How many bytes the searches of [`collect_eligible_matches`] have
-    /// been asked to read, so a test can hold the search to linear work
-    /// without timing it.
+    /// The search budget [`collect_eligible_matches`] has used, so a test
+    /// can hold its search to linear work without timing it.
     static SEARCHED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Count `bytes` read by one search of [`collect_eligible_matches`] in a
-/// test build: from where it starts to the end of its match, or to the end
-/// of the content when it finds none.
+/// Charge `bytes` to the search budget of [`collect_eligible_matches`] in
+/// a test build. Each search is charged the whole suffix it may read, from
+/// where it starts to the end of the content, hit or miss: a regex can
+/// inspect past the match it returns, so this is a conservative budget,
+/// not a count of bytes actually read.
 fn note_searched_bytes(bytes: usize) {
     #[cfg(test)]
     SEARCHED_BYTES.with(|n| n.set(n.get() + bytes));
@@ -750,14 +751,13 @@ fn collect_eligible_matches(
             pos = line_end;
             continue;
         }
+        note_searched_bytes(content.len() - pos);
         let Some(caps) = pat.regex.captures_at(content, pos) else {
-            note_searched_bytes(content.len() - pos);
             break;
         };
         let Some(whole) = caps.get(0) else {
             break;
         };
-        note_searched_bytes(whole.end() - pos);
         let secret = caps.name(SECRET_GROUP).unwrap_or(whole);
         let nested = whole.start() < read_to && whole.start() < line_end;
         read_to = read_to.max(whole.end());
@@ -4136,29 +4136,34 @@ baseurl = https://cdn.redhat.com
     /// handful of matches kept.
     ///
     /// The bound is on work, not time: a wall-clock limit failed on a
-    /// loaded machine. [`SEARCHED_BYTES`] counts the bytes each search of
-    /// [`collect_eligible_matches`] reads, from where it starts to the end
-    /// of its match. One pass over an input of `L` bytes is `L`. Per
-    /// pattern and line the search makes at most:
+    /// loaded machine. [`SEARCHED_BYTES`] is a conservative search budget:
+    /// every search [`collect_eligible_matches`] starts, hit or miss, is
+    /// charged the whole rest of the input from where it starts, since a
+    /// regex can read past the match it returns. One pass over an input of
+    /// `L` bytes is `L`. Per pattern and line the collector starts at most:
     ///
-    /// - one pass for the match it keeps, whose secret runs to the end of
+    /// - one search for the match it keeps, whose secret runs to the end of
     ///   the line or of the value;
-    /// - [`MAX_REDUNDANT_RESCANS_PER_LINE`] passes for keys nested in that
-    ///   value that add nothing, after which the rest of the line is
+    /// - [`MAX_REDUNDANT_RESCANS_PER_LINE`] searches for keys nested in
+    ///   that value that add nothing, after which the rest of the line is
     ///   replaced without searching;
-    /// - one pass for the search after that, which finds nothing or a
-    ///   match past the ones before.
+    /// - one search after that, which finds nothing or a match past the
+    ///   ones before.
     ///
-    /// So `PASSES_PER_PATTERN` is `MAX_REDUNDANT_RESCANS_PER_LINE + 2`,
-    /// and each call over all patterns reads at most
-    /// `PATTERNS.len() * PASSES_PER_PATTERN * L`. Measured, the worst
-    /// pattern reads `MAX_REDUNDANT_RESCANS_PER_LINE + 1` passes, on the
-    /// last two inputs. Resuming at every secret instead reads one pass
-    /// per key, 15,000 to 32,768 here, so the quadratic search exceeds the
-    /// bound by three orders of magnitude, not by a margin a slow machine
-    /// could cross. The count does not see time spent outside
-    /// [`collect_eligible_matches`]; the kept-match limit bounds what the
-    /// steps after it receive.
+    /// That is today's `4 + 2`, and `PASSES_PER_PATTERN` pins it as the
+    /// literal 6, not as an expression of the production cap: raising the
+    /// cap must come with an explicit decision to raise this budget. Each
+    /// call over all patterns is held to `PATTERNS.len() * 6 * L`.
+    /// Measured, the worst pattern uses 5 passes, on the last two inputs.
+    /// Resuming at every secret instead starts one search per key, 15,000
+    /// to 32,768 here, so the quadratic search exceeds the budget by three
+    /// orders of magnitude, not by a margin a slow machine could cross.
+    ///
+    /// What this proves is narrow: the collector's search work on these
+    /// fixtures. It does not guard regex constant factors, the helper
+    /// scans around the search, allocation, or the steps after the
+    /// collector; the kept-match limit bounds what those steps receive,
+    /// not how long they take.
     ///
     /// The last two values stop before the end of the line, so the keys
     /// inside them are each searched until the per-line bound replaces the
@@ -4167,7 +4172,7 @@ baseurl = https://cdn.redhat.com
     fn test_dense_repeated_keys_redact_in_bounded_time() {
         const COLLECTOR_LIMIT: usize = 256 * 1024;
         const MAX_KEPT: usize = 2;
-        const PASSES_PER_PATTERN: usize = MAX_REDUNDANT_RESCANS_PER_LINE + 2;
+        const PASSES_PER_PATTERN: usize = 6;
         fn searched_bytes<T>(run: impl FnOnce() -> T) -> (T, usize) {
             SEARCHED_BYTES.with(|n| n.set(0));
             let out = run();
