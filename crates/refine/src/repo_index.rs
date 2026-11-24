@@ -4,6 +4,7 @@ use inspectah_core::repo_ownership::{OwnedKind, RepoOwnership, repo_ownership};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::destination::Destination;
 use inspectah_core::types::repo::{self, RepoId, SectionId};
+use inspectah_core::types::rpm::RpmSection;
 
 use crate::types::{RepoProvenance, RepoTier};
 
@@ -43,6 +44,25 @@ pub struct RepoIndex {
     provenance_map: BTreeMap<SectionId, RepoProvenance>,
     /// Sections whose switch cascades to members (`repo::toggleable`).
     toggleable: BTreeSet<SectionId>,
+}
+
+/// The provenance of `section`, the definition dnf uses for it: disabled,
+/// or verified when it names a source and every local key it names is
+/// captured (a key the scan rejected is not), or else incomplete.
+fn provenance_of(section: &repo::RepoSectionDef, rpm: &RpmSection) -> RepoProvenance {
+    if !section.enabled {
+        RepoProvenance::Disabled
+    } else if section.has_source
+        && section.local_keys().all(|p| {
+            rpm.gpg_keys
+                .iter()
+                .any(|k| k.rejected.is_none() && k.is_key_named_by(p))
+        })
+    {
+        RepoProvenance::Verified
+    } else {
+        RepoProvenance::Incomplete
+    }
 }
 
 /// A section that keeps an entry for an excluded owner (§ 6.1 of the repo
@@ -87,14 +107,6 @@ impl RepoIndex {
                     .push(dest.as_str().to_owned());
             }
         }
-        // Every exact spelling any file defines.
-        let spellings: BTreeSet<SectionId> = rpm
-            .repo_files
-            .iter()
-            .flat_map(|f| repo::parse_repo_sections(&f.content))
-            .map(|sec| sec.id)
-            .collect();
-
         // 2. Map packages by source_repo. RepoId folds ASCII case, so a
         // package's recorded spelling (e.g. dnf repoquery's "AppStream")
         // matches a section header of any case (e.g. "appstream") without
@@ -110,37 +122,22 @@ impl RepoIndex {
         }
 
         // 3. Compute provenance for every section id, from the definition
-        // dnf uses on the host (`effective_definition`: the first file in
+        // dnf uses on the host (`effective_sections`: the first file in
         // dnf's read order), never from the order of `repo_files`, which is
         // the host's `read_dir` order. Each exact spelling is its own repo.
-        // A key the scan rejected is not captured.
-        let files = || {
-            rpm.repo_files
-                .iter()
-                .map(|f| (f.path.as_str(), f.content.as_str()))
-        };
+        // Each file is parsed once and every section looked up: asking
+        // `effective_definition` per section re-parses every file each
+        // time, which is quadratic in a subscribed host's `redhat.repo`.
+        let effective = repo::effective_sections(rpm.repo_files.iter().flat_map(|f| {
+            repo::parse_repo_sections(&f.content)
+                .into_iter()
+                .map(move |sec| (f.path.as_str(), f.content.as_str(), sec))
+        }));
         let mut provenance_map: BTreeMap<SectionId, RepoProvenance> = BTreeMap::new();
         let mut toggleable: BTreeSet<SectionId> = BTreeSet::new();
-        for spelling in spellings {
-            let Some(section) =
-                repo::effective_definition(files(), &RepoId::new(spelling.as_str()))
-            else {
-                continue;
-            };
-            let prov = if !section.enabled {
-                RepoProvenance::Disabled
-            } else if section.has_source
-                && section.local_keys().all(|p| {
-                    rpm.gpg_keys
-                        .iter()
-                        .any(|k| k.rejected.is_none() && k.is_key_named_by(p))
-                })
-            {
-                RepoProvenance::Verified
-            } else {
-                RepoProvenance::Incomplete
-            };
-            if repo::toggleable(files(), spelling.as_str()) {
+        for (spelling, (_, section)) in effective {
+            let prov = provenance_of(&section, rpm);
+            if repo::toggleable_definition(spelling.as_str(), &section) {
                 toggleable.insert(spelling.clone());
             }
             provenance_map.insert(spelling, prov);
@@ -428,5 +425,91 @@ mod tests {
         );
         // Should be recognized as distro
         assert!(RepoIndex::is_distro_repo("appstream"));
+    }
+
+    /// The index reads each section's effective definition from one parse
+    /// of each file. Pinned against the per-section lookup it replaced,
+    /// `effective_definition` and `toggleable` asked once per spelling, on
+    /// duplicate ids across files listed out of dnf's read order, case
+    /// variants, a distro repo and a section redaction changed.
+    #[test]
+    fn index_matches_per_section_lookup() {
+        use inspectah_core::snapshot::InspectionSnapshot;
+        use inspectah_core::types::rpm::{RepoFile, RpmSection};
+
+        let file = |path: &str, content: &str| RepoFile {
+            path: format!("/etc/yum.repos.d/{path}"),
+            content: content.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
+        let mut redacted = file(
+            "scrubbed.repo",
+            "[scrubbed]\nbaseurl=\nenabled=1\n[dup]\nbaseurl=https://s.example/\nenabled=1\n",
+        );
+        redacted.redaction_changed = [SectionId::new("scrubbed")].into_iter().collect();
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            repo_files: vec![
+                // Listed after `b.repo` in dnf's read order, before it here.
+                file(
+                    "z.repo",
+                    "[dup]\nbaseurl=https://z.example/\nenabled=1\n[SITE]\nbaseurl=https://Z.example/\nenabled=1\n",
+                ),
+                file(
+                    "b.repo",
+                    "[dup]\nbaseurl=https://b.example/\nenabled=0\n[site]\nbaseurl=https://b.example/\nenabled=1\ngpgkey=file:///etc/pki/rpm-gpg/missing\n[baseos]\nbaseurl=https://d.example/\n",
+                ),
+                redacted,
+                file(
+                    "site.repo",
+                    "[Site]\nenabled=0\n[keyless]\nmirrorlist=https://m.example/\n",
+                ),
+            ],
+            ..Default::default()
+        });
+        let rpm = snap.rpm.as_ref().expect("an rpm section");
+        let files = || {
+            rpm.repo_files
+                .iter()
+                .map(|f| (f.path.as_str(), f.content.as_str()))
+        };
+        let index = RepoIndex::build(&snap);
+
+        let mut provenance = BTreeMap::new();
+        let mut toggleable = BTreeSet::new();
+        let spellings: BTreeSet<SectionId> = files()
+            .flat_map(|(_, content)| repo::parse_repo_sections(content))
+            .map(|sec| sec.id)
+            .collect();
+        for spelling in spellings {
+            let section = repo::effective_definition(files(), &RepoId::new(spelling.as_str()))
+                .expect("a defined spelling has a definition");
+            if repo::toggleable(files(), spelling.as_str()) {
+                toggleable.insert(spelling.clone());
+            }
+            provenance.insert(spelling, provenance_of(&section, rpm));
+        }
+
+        assert_eq!(index.provenance_map, provenance);
+        assert_eq!(index.toggleable, toggleable);
+        // The fixture reaches each answer the rules can give.
+        let prov = |id: &str| index.provenance_map[&SectionId::new(id)];
+        assert_eq!(
+            prov("dup"),
+            RepoProvenance::Disabled,
+            "b.repo is read first"
+        );
+        assert_eq!(prov("Site"), RepoProvenance::Disabled);
+        assert_eq!(
+            prov("site"),
+            RepoProvenance::Incomplete,
+            "its key is missing"
+        );
+        assert_eq!(prov("SITE"), RepoProvenance::Verified);
+        assert_eq!(prov("scrubbed"), RepoProvenance::Incomplete);
+        assert!(index.toggleable.contains(&SectionId::new("SITE")));
+        assert!(!index.toggleable.contains(&SectionId::new("baseos")));
+        assert_eq!(index.provenance_map.len(), 7);
     }
 }

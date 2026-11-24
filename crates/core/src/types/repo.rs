@@ -873,8 +873,15 @@ fn first_in_read_order<'a>(
 /// holds) is enabled. A repo that is not toggleable can still have a
 /// carriage-only switch for the files and keys it owns.
 pub fn toggleable<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>, repo: &str) -> bool {
-    !matches!(repo_tier(repo), RepoTier::Distro)
-        && effective_definition(files, &RepoId::new(repo)).is_some_and(|def| def.enabled)
+    effective_definition(files, &RepoId::new(repo))
+        .is_some_and(|def| toggleable_definition(repo, &def))
+}
+
+/// [`toggleable`] for a caller that already holds `repo`'s effective
+/// definition `def`, such as one entry of [`effective_sections`]: not a
+/// distro repo, and `def` is enabled.
+pub fn toggleable_definition(repo: &str, def: &RepoSectionDef) -> bool {
+    !matches!(repo_tier(repo), RepoTier::Distro) && def.enabled
 }
 
 #[cfg(test)]

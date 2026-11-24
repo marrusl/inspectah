@@ -6376,18 +6376,30 @@ const REPO_PARSES_PER_OP_BUDGET: usize = 16;
 /// `redhat.repo`.
 const LARGE_REPO_SECTIONS: usize = 500;
 
-/// Sections in the custom repo file the export stages. Small, because
-/// building the session costs time in each section of every file.
+/// Sections in the custom repo file the export stages.
 const STAGED_REPO_SECTIONS: usize = 10;
 
-/// One refine operation stays within a fixed number of repo file parses
-/// however many sections the host's repo files hold.
-#[tokio::test(flavor = "current_thread")]
-async fn one_refine_op_parses_repo_files_within_a_fixed_budget() {
-    use inspectah_core::types::repo::{RepoAttribution, RepoId, parse_count};
-    use inspectah_core::types::rpm::RepoFile;
+/// Repo file parses building a refine session may make, on a host with
+/// two 500-section repo files.
+///
+/// Measured at 30 on 2026-11-23: several passes over the files each parse
+/// every file once, a fixed number whatever the sections. The budget adds
+/// a third for margin, like the per-operation one. Looking each section's
+/// definition up by re-parsing every file, as the session's repo index
+/// did through beta.8 (0.6 s of a release build's 1 s startup on a
+/// subscribed RHEL 9 host), measured 4030 parses here. Counting parses,
+/// not time, keeps the test deterministic.
+const REPO_PARSES_PER_STARTUP_BUDGET: usize = 40;
 
-    let repo_file = |name: &str, prefix: &str, sections: usize, default: bool| RepoFile {
+/// A repo file of `sections` sections named `<prefix>-<i>`, every other
+/// one enabled, for the parse budget tests.
+fn budget_repo_file(
+    name: &str,
+    prefix: &str,
+    sections: usize,
+    default: bool,
+) -> inspectah_core::types::rpm::RepoFile {
+    inspectah_core::types::rpm::RepoFile {
         path: format!("/etc/yum.repos.d/{name}"),
         content: (0..sections)
             .map(|i| {
@@ -6400,7 +6412,41 @@ async fn one_refine_op_parses_repo_files_within_a_fixed_budget() {
         is_default_repo: default,
         disposition: FindingKind::included(),
         ..Default::default()
-    };
+    }
+}
+
+/// Building a refine session stays within a fixed number of repo file
+/// parses however many sections the host's repo files hold.
+#[test]
+fn refine_startup_parses_repo_files_within_a_fixed_budget() {
+    use inspectah_core::types::repo::parse_count;
+
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        repo_files: vec![
+            budget_repo_file("redhat.repo", "rh", LARGE_REPO_SECTIONS, true),
+            budget_repo_file("custom.repo", "custom", LARGE_REPO_SECTIONS, false),
+        ],
+        ..Default::default()
+    });
+
+    parse_count::reset();
+    let _session = RefineSession::new(snap);
+    let parses = parse_count::get();
+
+    assert!(
+        parses <= REPO_PARSES_PER_STARTUP_BUDGET,
+        "building the session parsed repo files {parses} times, over the \
+         budget of {REPO_PARSES_PER_STARTUP_BUDGET}"
+    );
+}
+
+/// One refine operation stays within a fixed number of repo file parses
+/// however many sections the host's repo files hold.
+#[tokio::test(flavor = "current_thread")]
+async fn one_refine_op_parses_repo_files_within_a_fixed_budget() {
+    use inspectah_core::types::repo::{RepoAttribution, RepoId, parse_count};
+
     let package = |name: &str, repo: &str| PackageEntry {
         name: name.into(),
         version: "1".into(),
@@ -6423,8 +6469,8 @@ async fn one_refine_op_parses_repo_files_within_a_fixed_budget() {
             package("from-gone", "gone"),
         ],
         repo_files: vec![
-            repo_file("redhat.repo", "rh", LARGE_REPO_SECTIONS, true),
-            repo_file("custom.repo", "custom", STAGED_REPO_SECTIONS, false),
+            budget_repo_file("redhat.repo", "rh", LARGE_REPO_SECTIONS, true),
+            budget_repo_file("custom.repo", "custom", STAGED_REPO_SECTIONS, false),
         ],
         ..Default::default()
     });
