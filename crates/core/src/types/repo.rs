@@ -872,16 +872,26 @@ fn first_in_read_order<'a>(
 /// among `files` (`(path, content)`, every `.repo` file the snapshot
 /// holds) is enabled. A repo that is not toggleable can still have a
 /// carriage-only switch for the files and keys it owns.
+///
+/// A distro repo is answered from its id alone, before any file is
+/// parsed: callers ask this of every candidate repo, distro ids among
+/// them, and resolving a definition parses every file.
 pub fn toggleable<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>, repo: &str) -> bool {
-    effective_definition(files, &RepoId::new(repo))
-        .is_some_and(|def| toggleable_definition(repo, &def))
+    !is_distro(repo)
+        && effective_definition(files, &RepoId::new(repo))
+            .is_some_and(|def| toggleable_definition(repo, &def))
 }
 
 /// [`toggleable`] for a caller that already holds `repo`'s effective
 /// definition `def`, such as one entry of [`effective_sections`]: not a
 /// distro repo, and `def` is enabled.
 pub fn toggleable_definition(repo: &str, def: &RepoSectionDef) -> bool {
-    !matches!(repo_tier(repo), RepoTier::Distro) && def.enabled
+    !is_distro(repo) && def.enabled
+}
+
+/// Whether `repo` is a distro repo, whose switch never cascades.
+fn is_distro(repo: &str) -> bool {
+    matches!(repo_tier(repo), RepoTier::Distro)
 }
 
 #[cfg(test)]
@@ -912,6 +922,40 @@ mod tests {
         );
         // Case-insensitive
         assert_eq!(repo_tier("RHEL-9-for-x86_64-BaseOS-rpms"), RepoTier::Distro);
+    }
+
+    /// A distro id is answered without parsing a repo file, in its short
+    /// and long forms, even when an enabled section defines it; a
+    /// non-distro id still parses each file once.
+    #[test]
+    fn toggleable_answers_a_distro_id_without_parsing() {
+        let files = [
+            (
+                "/etc/yum.repos.d/redhat.repo",
+                "[rhel-9-for-x86_64-baseos-rpms]\nenabled=1\nbaseurl=https://example.invalid/b\n\
+                 [rhel-9-for-x86_64-appstream-rpms]\nenabled=1\nbaseurl=https://example.invalid/a\n",
+            ),
+            (
+                "/etc/yum.repos.d/site.repo",
+                "[baseos]\nenabled=1\nbaseurl=https://example.invalid/s\n\
+                 [appstream]\nenabled=1\nbaseurl=https://example.invalid/t\n\
+                 [epel]\nenabled=1\nbaseurl=https://example.invalid/e\n",
+            ),
+        ];
+        for id in [
+            "baseos",
+            "appstream",
+            "AppStream",
+            "rhel-9-for-x86_64-baseos-rpms",
+            "rhel-9-for-x86_64-appstream-rpms",
+        ] {
+            parse_count::reset();
+            assert!(!toggleable(files, id), "{id}");
+            assert_eq!(parse_count::get(), 0, "{id} parsed a repo file");
+        }
+        parse_count::reset();
+        assert!(toggleable(files, "epel"));
+        assert_eq!(parse_count::get(), files.len());
     }
 
     #[test]
