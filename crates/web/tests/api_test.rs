@@ -6200,7 +6200,7 @@ async fn an_instance_row_serves_its_template_configuration_and_data() {
 /// once, rather than folding it into "...and N more".
 #[tokio::test]
 async fn export_header_keeps_a_failed_rpm_va_past_a_run_of_repo_notices() {
-    use inspectah_core::types::rpm::{RPM_VA_FAILED_WARNING, RepoFile};
+    use inspectah_core::types::rpm::{RPM_VA_FAILED_WARNING, RepoFile, rpm_va_failed_warning};
     /// Comfortably more than the header carries before it summarizes.
     const OWNERLESS_REPO_FILES: usize = 25;
 
@@ -6216,11 +6216,7 @@ async fn export_header_keeps_a_failed_rpm_va_past_a_run_of_repo_notices() {
             .collect(),
         ..Default::default()
     });
-    snap.warnings.push(Warning {
-        inspector: "rpm".into(),
-        message: RPM_VA_FAILED_WARNING.into(),
-        ..Default::default()
-    });
+    snap.warnings.push(rpm_va_failed_warning());
     let app = app(Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
     }));

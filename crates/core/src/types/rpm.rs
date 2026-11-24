@@ -1,6 +1,7 @@
 use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
 use super::repo::{RepoAttribution, RepoId};
+use super::warnings::{WARNING_CODE_KEY, Warning};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,12 +9,33 @@ use std::collections::{BTreeMap, BTreeSet};
 /// it exits with neither a clean verify (0) nor a report of modified
 /// files (1 with output), is killed, or cannot run. With no verification,
 /// no RPM-owned file reads as modified, so the configuration section
-/// leaves every modified one out. The export notice that repeats it on
-/// stderr and in refine finds it by this exact text.
+/// leaves every modified one out. The text is for display only: the export
+/// notice that repeats it on stderr and in refine finds the warning by
+/// [`RPM_VA_FAILED_CODE`] (see [`is_rpm_va_failed_warning`]).
 pub const RPM_VA_FAILED_WARNING: &str = "rpm -Va did not finish, so inspectah could not tell \
      which RPM-owned files were modified: modified RPM-owned configuration files may be \
      missing from the output. Run rpm -Va on the host to see why it failed, check the \
      exported configuration against the host, fix the cause and re-scan.";
+
+/// The stable code of the failed `rpm -Va` warning, stored in
+/// [`Warning::extra`] under [`WARNING_CODE_KEY`] so rewording
+/// [`RPM_VA_FAILED_WARNING`] cannot break the consumers that find it.
+pub const RPM_VA_FAILED_CODE: &str = "rpm_va_failed";
+
+/// The snapshot warning the rpm collector records when `rpm -Va` failed.
+pub fn rpm_va_failed_warning() -> Warning {
+    Warning {
+        inspector: "rpm".into(),
+        message: RPM_VA_FAILED_WARNING.into(),
+        extra: [(WARNING_CODE_KEY.into(), RPM_VA_FAILED_CODE.into())].into(),
+        ..Default::default()
+    }
+}
+
+/// Whether `warning` is the failed `rpm -Va` warning, by its code.
+pub fn is_rpm_va_failed_warning(warning: &Warning) -> bool {
+    warning.code() == Some(RPM_VA_FAILED_CODE)
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

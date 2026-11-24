@@ -551,11 +551,7 @@ impl Inspector for RpmInspector {
         // A package-mode host where `rpm -Va` failed: the config section
         // sees no modified RPM-owned file, so say what may be missing.
         if matches!(ctx.source_system, SourceSystem::PackageBased { .. }) && supp.rpm_va.is_none() {
-            warnings.push(Warning {
-                inspector: "rpm".into(),
-                message: inspectah_core::types::rpm::RPM_VA_FAILED_WARNING.into(),
-                ..Default::default()
-            });
+            warnings.push(inspectah_core::types::rpm::rpm_va_failed_warning());
         }
         warnings.extend(supp.gpg_key_warnings);
         let left_out = supp.left_out;
@@ -1834,7 +1830,7 @@ mod tests {
                 !output
                     .warnings
                     .iter()
-                    .any(|w| w.message == inspectah_core::types::rpm::RPM_VA_FAILED_WARNING),
+                    .any(inspectah_core::types::rpm::is_rpm_va_failed_warning),
                 "a skipped rpm -Va is not a failed one"
             );
         } else {
@@ -5479,7 +5475,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
             let failed: Vec<&Warning> = output
                 .warnings
                 .iter()
-                .filter(|w| w.message == inspectah_core::types::rpm::RPM_VA_FAILED_WARNING)
+                .filter(|w| inspectah_core::types::rpm::is_rpm_va_failed_warning(w))
                 .collect();
             assert_eq!(failed.len(), usize::from(case.warns), "{}", case.name);
             if let Some(w) = failed.first() {

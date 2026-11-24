@@ -1555,13 +1555,9 @@ mod tests {
     /// words, which say what may be missing and what to do.
     #[test]
     fn a_failed_rpm_va_is_listed_under_warnings() {
-        use inspectah_core::types::rpm::RPM_VA_FAILED_WARNING;
+        use inspectah_core::types::rpm::{RPM_VA_FAILED_WARNING, rpm_va_failed_warning};
         let snap = InspectionSnapshot {
-            warnings: vec![inspectah_core::types::warnings::Warning {
-                inspector: "rpm".into(),
-                message: RPM_VA_FAILED_WARNING.into(),
-                ..Default::default()
-            }],
+            warnings: vec![rpm_va_failed_warning()],
             ..Default::default()
         };
         let md = render_audit(&snap);

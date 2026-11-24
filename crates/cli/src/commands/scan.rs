@@ -2328,16 +2328,10 @@ VARIANT_ID="workstation"
     #[test]
     fn inspect_only_prints_a_failed_rpm_va_once_on_stderr() {
         use crate::progress::{Mode, Verbosity};
-        use inspectah_core::types::rpm::RPM_VA_FAILED_WARNING;
+        use inspectah_core::types::rpm::{RPM_VA_FAILED_WARNING, rpm_va_failed_warning};
 
         let mut failed = inspectah_core::snapshot::InspectionSnapshot::new();
-        failed
-            .warnings
-            .push(inspectah_core::types::warnings::Warning {
-                inspector: "rpm".into(),
-                message: RPM_VA_FAILED_WARNING.into(),
-                ..Default::default()
-            });
+        failed.warnings.push(rpm_va_failed_warning());
         let clean = inspectah_core::snapshot::InspectionSnapshot::new();
         let tmp = tempfile::tempdir().unwrap();
 

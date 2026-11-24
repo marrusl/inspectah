@@ -23,3 +23,15 @@ pub struct Warning {
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
 }
+
+/// The `extra` key holding a warning's stable machine code, for warnings
+/// a consumer must find again. The message is prose for people and may be
+/// reworded; the code is what consumers match on.
+pub const WARNING_CODE_KEY: &str = "code";
+
+impl Warning {
+    /// This warning's stable machine code, if it carries one.
+    pub fn code(&self) -> Option<&str> {
+        self.extra.get(WARNING_CODE_KEY)?.as_str()
+    }
+}

@@ -6424,14 +6424,9 @@ mod tests {
 
     #[test]
     fn a_failed_rpm_va_reaches_the_export_warnings_once() {
-        use inspectah_core::types::rpm::RPM_VA_FAILED_WARNING;
+        use inspectah_core::types::rpm::{RPM_VA_FAILED_WARNING, rpm_va_failed_warning};
         let mut snap = test_snapshot();
-        snap.warnings
-            .push(inspectah_core::types::warnings::Warning {
-                inspector: "rpm".into(),
-                message: RPM_VA_FAILED_WARNING.into(),
-                ..Default::default()
-            });
+        snap.warnings.push(rpm_va_failed_warning());
         let tmpdir = tempfile::tempdir().unwrap();
         let warnings = render_refine_export(
             &snap,
