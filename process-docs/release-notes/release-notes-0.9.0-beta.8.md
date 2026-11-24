@@ -1,5 +1,125 @@
 # Release Notes: v0.9.0-beta.8
 
+## What's new in v0.9.0-beta.8
+
+This release closes the remaining gaps in credential redaction and makes
+unmanaged files behave better in the image. Every credential on a line is
+masked, URL passwords are caught in host text, and passwords with spaces are
+masked whole. Unmanaged files keep their host permission bits, the audit report
+names the ones that lose their owner, and the Containerfile no longer reports
+copied files and links as missing. Refine is fast again on hosts with large
+repo files, a failed `rpm -Va` is now a warning, and `inspectah version` no
+longer prints the commit or build date. The snapshot schema is still 31.
+
+### Breaking changes
+
+inspectah has no backwards-compatibility promise before 1.0.
+
+- **`inspectah version` no longer prints the commit or build date.** A release
+  binary prints `inspectah 0.9.0-beta.8`, without the `(commit <hash>, built
+  <date>)` that followed. A release build from a git checkout of any other
+  commit adds its short hash, such as `inspectah 0.9.0-beta.8+g5a4389ce`, and a
+  debug build adds `+dev`. `inspectah --version` prints the same line. Scripts
+  that read the commit or date from this line get neither.
+
+### Security and secret redaction
+
+- **Every URL credential on a line is redacted.** A second `user:password@` or
+  token URL on one line, a second `proxy_password=` value, a password after an
+  empty user name (`https://:pw@host`) and a token before a password
+  (`https://<token>:x-oauth-basic@host`) used to ship raw into the snapshot, the
+  exports and the image. Each is now masked and reported as its own finding. A
+  URL password holding an `@` is masked whole, in PostgreSQL, MongoDB, Redis and
+  compose URLs too.
+- **URL passwords in host text are redacted.** A credential in a URL with no
+  keyword nearby, such as `HTTPS_PROXY=https://user:secret@proxy`, is now masked
+  in config files, drop-ins, quadlets, container environments, timers, sysctl,
+  kernel arguments, mounts, Flatpak remotes, proxy lines, manifests, firewall
+  rules, `/etc/hosts`, sudoers, SELinux file contexts and unmanaged symlink
+  targets. A kernel argument holding one is named as owed. Such a symlink is left
+  out, with a `FIXME`.
+- **Every credential on a language-package manifest line is redacted.** A
+  compact `package-lock.json` or `package.json` with several `resolved` or
+  `registry` members, a requirements line with several index options, a Gemfile
+  line with several sources, comma-joined URLs, and a JSON value with an escaped
+  quote before the credential kept credentials raw in the snapshot and exports.
+- **Passwords with spaces are redacted whole.** A quoted Wi-Fi `psk`, a
+  `password=` or `proxy_password=` value that runs to the end of its line in an
+  INI-style file, a quoted `proxy_password`, and a quoted manifest URL holding an
+  escaped quote kept their text after the first space or quote. Each is now
+  masked to the end of its value.
+
+### Refine
+
+- **Refine is fast again on hosts with large repo files.** On a subscribed RHEL 9
+  host, whose `redhat.repo` holds about 500 sections, each refine operation,
+  refine startup and the export download took around 13 s. An operation or
+  download now takes under a second, and startup measured about 0.4 s median on
+  macOS using a snapshot of that host.
+- **Refine says why unmanaged files make an export sensitive.** When redacted or
+  left-out unmanaged files were the only sensitive content, an export without
+  the acknowledgment was refused with an empty `sensitivity_summary`, and the
+  export's warnings left out the line the scan prints about them. The summary now
+  lists each count, and the export warnings carry the scan's notice.
+
+### Unmanaged files, ownership and the Containerfile
+
+- **Unmanaged files keep their mode in the image.** With `--include-unmanaged`,
+  bundled files shipped as 0644, so scripts under `/opt` lost their exec bits and
+  0600 files became world-readable. Both tarballs and `inspectah build` now keep
+  the host's permission bits, dropping setuid, setgid and sticky. Re-scan to get
+  the host modes.
+- **The audit report names unmanaged files that lose their owner or special
+  bits.** Unmanaged files are still carried as `root:root`, and setuid, setgid
+  and sticky are dropped. The audit report now lists each file whose host owner
+  or group was not root, or that had one of those bits, with its host owner,
+  group and mode, so you can fix it by hand. The Containerfile and the scan's
+  output give the count.
+- **The Containerfile no longer says a copied unmanaged file was not copied.**
+  When a directory `COPY` such as `COPY unmanaged/opt/app/ /opt/app/` carried a
+  nested file or directory whose own path holds a space, the Containerfile still
+  printed a `FIXME` saying it was not copied, and an unmanaged symlink it carried
+  got a `FIXME` saying it was not recreated. A `FIXME` now appears only for what
+  no `COPY` line carries.
+- **An unmanaged symlink to a directory no longer gains a stray link inside that
+  directory.** When a directory `COPY` had already put a link such as
+  `/opt/app/current -> v2` in place, the Containerfile's `ln -sf` for it followed
+  the link and created `/opt/app/v2/v2`. A link that a `COPY` carries now gets no
+  `ln` line, and every other link is recreated with `ln -sfn`, which replaces a
+  link already at that path, such as one the base image ships.
+- **The Containerfile no longer asks you to recreate an unmanaged symlink the
+  export carries.** When the scan could not read a link's target but bundling
+  could, the link shipped correctly and the Containerfile still printed
+  `# SYMLINK: ... -> unknown (recreate manually)`. The snapshot now records the
+  target bundling read, so a link a `COPY` carries gets no comment and any other
+  link gets an `ln -sfn` line.
+
+### Reports and scan output
+
+- **A failed `rpm -Va` is a warning, not a silent loss.** When `rpm -Va` fails,
+  is killed or cannot run, modified configuration files used to be left out with
+  no warning. The scan now prints a warning on stderr, the audit and HTML reports
+  list it under Warnings, and the refine export shows it. Check the exported
+  configuration against the host, fix what stopped `rpm -Va` and re-scan.
+- **The audit report and refine no longer say first boot recreates the NVMe host
+  id.** The RHEL 9 bootc base image ships its own `/etc/nvme/hostnqn` and
+  `hostid`, so every machine built from it shares one NVMe host identity. The row
+  for those files, in the audit report and in refine's machine-state block, now
+  says so and how to give each machine its own.
+- **The `tmpfiles.d` account notice covers quoted lines, the HTML report and
+  refine.** A carried line with a quoted or escaped path or owner is now named
+  when its user or group is missing from the image, and the notice appears in
+  `audit-report.html` and refine's Configuration Files section as well as the
+  Containerfile and `audit-report.md`.
+- **The audit report lists Non-RPM Software in a stable order.** Methods with the
+  same count, such as `git repo` and `gem system` with one item each, came out in
+  a different order on each run, so two reports of the same snapshot differed.
+  Equal counts are now listed by method name.
+- **Tarball names are in UTC.** `scan` and `aggregate` name their tarball with
+  the UTC time and a `Z` suffix, such as `rhel9-20261123-070502Z.tar.gz`, instead
+  of the host's local time. The directory inside the tarball follows the same
+  name. Tarballs named the old way still load in `refine` and `aggregate`.
+
 ### Known limitations
 
 These have workarounds and are planned for a later release.
@@ -24,3 +144,17 @@ These have workarounds and are planned for a later release.
 - **NVMe host ids on RHEL 9 bootc images**: the base image bakes in `/etc/nvme/hostnqn` and `hostid` and nothing regenerates them, so every machine built from it shares one NVMe host identity. The audit report and refine now say so, but the machine-state count still lists them as recreated without operator action. Delete both files in the Containerfile or write new ones at provisioning.
 - **`tmpfiles.d` lines owned by a skipped account**: a carried line whose user or group the image does not create is still skipped at boot, now with a notice in every report. Its directory may not be created at all, because the line still counts as backing it. Create the account, change the owner in the Containerfile, or create the directory yourself.
 - **`/srv` mount units**: a mount unit for `/srv` is carried under its original name with an advisory, not rewritten. `/srv` is a symlink into `/var` on the bootc base images, so rename the unit to `var-srv.mount` and set `Where=/var/srv`.
+
+### Schema version
+
+Schema version is **31**, unchanged from v0.9.0-beta.7. Snapshots from
+v0.9.0-beta.7 still load.
+
+### Binaries
+
+Pre-built binaries for 3 platforms:
+- `inspectah-darwin-arm64` -- macOS on Apple Silicon
+- `inspectah-linux-arm64-bin` -- Linux on ARM64 (static musl binary)
+- `inspectah-linux-amd64` -- Linux on x86_64 (static musl binary)
+
+**Full changelog:** https://github.com/marrusl/inspectah/compare/v0.9.0-beta.7...v0.9.0-beta.8
