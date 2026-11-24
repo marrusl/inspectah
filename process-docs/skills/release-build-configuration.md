@@ -44,7 +44,8 @@ version = "0.8.6-beta.3"
 ```
 
 All crates inherit this via `version.workspace = true`. The `build.rs`
-in `crates/cli/` injects git commit hash and build date at compile time.
+in `crates/cli/` adds `+g<short hash>` to the version line unless HEAD
+carries the release tag.
 See `process-docs/skills/build-rs-version-metadata.md` for details.
 
 ## Workspace Members

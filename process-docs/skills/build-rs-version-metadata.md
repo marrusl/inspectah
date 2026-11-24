@@ -1,42 +1,72 @@
-# Build-time version metadata via build.rs
+# Build-time version line via build.rs
 
 ## Context
-The CLI crate (`crates/cli/`) needs to display the git commit hash and build
-date at runtime. Cargo does not expose these natively.
+`inspectah version` and `inspectah --version` print one line whose form
+says what kind of build the binary is. Cargo knows only the package
+version, so `crates/cli/build.rs` works out the rest from git and emits it
+as `INSPECTAH_VERSION`.
+
+| Build | `INSPECTAH_VERSION` | Printed line |
+|---|---|---|
+| Release profile, HEAD carries the tag `v<version>` | `<version>` | `inspectah 0.9.0-beta.8` |
+| Release profile, any other commit | `<version>+g<short hash>` | `inspectah 0.9.0-beta.8+g5a4389ce` |
+| Release profile, no git (source tarball, RPM) | `<version>` | `inspectah 0.9.0-beta.8` |
+| Debug or test | `<version>+dev` | `inspectah 0.9.0-beta.8+dev` |
+
+The suffix is semver build metadata. A bare version is the claim "built
+from the release tag", and the release workflow relies on it (see
+`release-process.md` § Binary verification).
 
 ## Mechanism
-A `build.rs` in the **binary crate** (`crates/cli/build.rs`) emits
-`cargo:rustc-env` directives that set `INSPECTAH_COMMIT` and `INSPECTAH_DATE`
-at compile time. Source code consumes these via `env!()` (compile-time
-guaranteed) or `option_env!()` (optional fallback).
-
-## Key details
-
 - **build.rs lives in the binary crate**, not the workspace root. Only the
   crate that declares `[[bin]]` runs its build script for the final binary.
-- **`env!()` in `concat!()`** works for building `&'static str` constants
-  usable in clap's `#[command(version = ...)]` derive attribute. `format!()`
-  returns `String`, which clap's derive macro rejects (needs `&'static str`).
-- **Release builds only embed real values.** build.rs reads `PROFILE`
-  (`release` for any profile that inherits from release). In release builds
-  it runs `git` and `date` and emits `cargo:rerun-if-changed` for
-  `../../.git/HEAD` and `../../.git/refs/` (relative to the crate's
-  build.rs), so commits, checkouts and rebases trigger a rebuild.
-- **Debug and test builds carry `dev` for both values** (the `DEV_METADATA`
-  constant) and emit only `cargo:rerun-if-changed=build.rs`. Watching `.git`
-  in dev builds rebuilt cli far too often: in a linked worktree `.git` is a
-  file, so `../../.git/HEAD` never exists and cargo reran the script on
-  every invocation; in the main checkout every commit moved `.git/refs` and
-  rebuilt cli once per commit (about 17 to 20 s, measured 2026-11-19). So
-  `--version` on a debug binary prints `(commit dev, built dev)`.
-- **The date is `dev` too in debug builds.** A real date would need the
-  script to rerun on every build, or go stale for the life of `target/`;
-  either defeats the point.
-- The `date` command uses `-u` for UTC output in `+%Y-%m-%d` format. This
-  is portable across macOS and Linux.
+- **`VERSION_LINE` in `crates/cli/src/commands/version.rs`** is
+  `concat!("inspectah ", env!("INSPECTAH_VERSION"))`; `inspectah version`
+  prints it. clap's `version = env!("INSPECTAH_VERSION")` in `main.rs`
+  makes `--version` print the same line, since clap prefixes the command
+  name. A test compares the two. `concat!()` and `env!()` give the
+  `&'static str` clap's derive needs; `format!()` would not compile there.
+- **"Tagged" means `git tag --points-at <HEAD>` lists `v<CARGO_PKG_VERSION>`.**
+  No environment variable is involved, so a local build and a CI build of
+  the same commit agree. HEAD is resolved once with `git rev-parse --verify
+  HEAD`, and the tag check and the short hash both use that id, so they
+  cannot name different commits.
+- **Not `git describe`.** Between the version bump and the tag it names the
+  previous tag while Cargo names the new version.
 
-## Gotcha
-If you use `option_env!()` instead of `env!()`, the values default to `None`
-when build.rs doesn't run (e.g., if cargo caching skips it). Using `env!()`
-makes it a hard compile error if the env var is missing, which is the right
-behavior for a build script that always runs.
+## Rerun triggers
+A release build emits `rerun-if-changed` for three paths that
+`git rev-parse --path-format=absolute --git-path <p>` resolves: `HEAD`,
+`refs` and `packed-refs`. `--git-path` is what makes this work in a linked
+worktree, where `.git` is a file: `HEAD` is in the worktree's own git dir,
+`refs` and `packed-refs` in the common one. Cargo scans a watched directory
+recursively, so creating or deleting a tag under `refs/tags`, or a commit
+moving a branch, reruns the script. Measured 2026-11-23 in a linked
+worktree: `git tag v<version>` on HEAD made the next release build rerun the
+script and print the bare version, `git tag -d` brought the `+g` form
+back, and a build with nothing changed stayed `Fresh`.
+
+A watched path that does not exist makes cargo rerun on every build, so
+`packed-refs` is watched only when present. A tag that lands only in
+`packed-refs` when that file did not exist at the last build is missed;
+`touch crates/cli/build.rs` forces the rerun.
+
+## Debug builds read no git
+Debug and test builds emit `<version>+dev` and watch only `build.rs`.
+Watching `.git` in dev builds rebuilt cli far too often: in a linked
+worktree the old `../../.git/HEAD` watch never existed, so cargo reran the
+script on every invocation; in the main checkout every commit moved
+`.git/refs` and rebuilt cli once per commit (about 17 to 20 s, measured
+2026-11-19). A test pins the `+dev` value.
+
+## Gotchas
+- **No build date.** The line used to carry one. A real date in dev
+  builds would need a rerun on every build or go stale, and in release
+  builds it added nothing the tag or hash does not say.
+- **A build with no git prints the bare version.** The RPMs build from a
+  `git archive` tarball with no `.git`, from the tag, so bare is right for
+  them; any other tarball build also prints bare. If the tarball is
+  unpacked inside some other git checkout, git finds that repository
+  instead, and the hash names its HEAD.
+- **Use `env!()`, not `option_env!()`.** A missing variable is then a
+  compile error rather than a silent empty version.

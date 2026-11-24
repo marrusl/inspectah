@@ -22,7 +22,7 @@ Usage: inspectah [OPTIONS] [COMMAND]
 | `build`   | Build a bootc container image from an inspectah tarball |
 | `refine`  | Interactively refine scan output and re-render       |
 | `aggregate`   | Combine multiple host scan tarballs into an aggregate snapshot |
-| `version` | Print version, commit, and build date                |
+| `version` | Print the version                                    |
 | `help`    | Print this message or the help of the given subcommand(s) |
 
 ### Global Options
@@ -358,7 +358,7 @@ inspectah build snapshot.tar.gz --tag my-bootc-image:v1 -- --no-cache --platform
 
 ## inspectah version
 
-Print version, commit SHA, and build date.
+Print the version.
 
 ```
 Usage: inspectah version [OPTIONS]

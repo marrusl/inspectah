@@ -116,7 +116,7 @@ Use `--output <dir>` to get an unpacked directory instead of a tarball.
 | `refine` | Interactively refine scan output and re-render artifacts |
 | `aggregate` | Aggregate and manage aggregate-wide migration snapshots |
 | `build` | Build a bootc container image from an inspectah tarball |
-| `version` | Print version, commit, and build date |
+| `version` | Print the version |
 
 For full command-line reference, see the [CLI documentation](https://marrusl.github.io/inspectah/reference/cli.html).
 

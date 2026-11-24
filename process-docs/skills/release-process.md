@@ -129,56 +129,75 @@ The workflow checks what shipped, not what was intended:
   version and the RPM spec version (tilde form) agree. A tag on the
   wrong commit fails in seconds.
 - **Each build leg** runs its own binary's `inspectah version` and
-  requires `inspectah <Cargo.toml version> (commit <git rev-parse --short
-  HEAD>, built ...)`. On Linux it requires `file` to report a static
+  `inspectah --version` through `scripts/check-version-stamp.sh run`.
+  A leg of a tag build requires exactly `inspectah <Cargo.toml version>`;
+  any other leg (push to `main`, a rehearsal from `main`) requires
+  `inspectah <version>+g<git rev-parse --short HEAD>`. On Linux it requires
+  `file` to report a static
   binary (`statically linked` or `static-pie linked`; both are static).
   It requires the binary to contain `index.html` and every content-hashed
   `index-*` name in the freshly built `crates/web/ui/dist/assets`, which
   confirms the frontend is inside the artifact.
-- **The publish job** reads the commit stamp from the bytes of all three
-  binaries (the Linux ones cannot run on its runner), requires exactly
-  one stamp per binary, requires it to be the tag commit with the tag's
-  version, and writes the three SHA-256 digests to the run summary.
+- **The publish job** checks the bytes of all three binaries (the Linux
+  ones cannot run on its runner) with `scripts/check-version-stamp.sh
+  bytes`: each must embed `inspectah <tag version>` and no
+  `inspectah <tag version>+...` form. It writes the three SHA-256 digests
+  to the run summary.
 
 Every check fails the run with an `::error::` line naming the binary and
 what was wrong. Nothing is staged on a workstation any more, so the old
 trap of a skipped copy leaving the previous release's binary under the
 right name cannot happen.
 
+**Test a change to these checks locally.** The workflows run only on a
+push, but the script runs anywhere, from the checkout the binary was built
+from. `scripts/tests/check-version-stamp-test.sh` covers it with stand-in
+binaries, and CI runs that test. Against real binaries:
+
+```bash
+cargo build -p inspectah-cli --release
+scripts/check-version-stamp.sh run target/release/inspectah untagged
+```
+
+A tagged build needs a tag `v<version>` on HEAD, and tags are shared by
+every worktree of the clone, so do it on a detached scratch commit that
+bumps the version to something no real tag uses (`0.0.0-scratch.1`), and
+`git tag -d` the tag afterwards. Never push either.
+
 To spot-check a draft by hand, download its assets and read the stamps
-without running them. Expect one distinct line per binary (its count
-may be above 1), identical across all three:
+without running them:
 
 ```bash
 gh release download v<version> -D /tmp/inspectah-v<version>
-cd /tmp/inspectah-v<version>
 for f in inspectah-darwin-arm64 inspectah-linux-amd64 inspectah-linux-arm64-bin; do
-  echo "== $f"
-  LC_ALL=C grep -aoE '[0-9][^ ]* \(commit [0-9a-f]+, built [0-9-]+\)' "$f" | sort | uniq -c
+  scripts/check-version-stamp.sh bytes "/tmp/inspectah-v<version>/$f" <version>
 done
 ```
 
-Always use `grep -o` or `grep -c` on these binaries: they embed long
+Always use `grep -o` or
+`grep -q` on these binaries if you grep them yourself: they embed long
 unbroken runs of text, and an unanchored `grep` dumps kilobytes per match.
 
-### The embedded commit hash is the tag commit
+### A bare version line means the tag commit
 
-`crates/cli/build.rs` stamps release builds with `git rev-parse --short
-HEAD`, and `inspectah version` prints it:
+`crates/cli/build.rs` prints the bare version only when HEAD carries the
+tag `v<version>` (see `build-rs-version-metadata.md`):
 
 ```
-inspectah 0.9.0-beta.2 (commit c52b02bd, built 2026-08-16)
+inspectah 0.9.0-beta.8
 ```
 
 CI checks out the tag, so HEAD is the tag commit and all three binaries
-carry the same stamp. The publish job refuses a binary stamped with
-anything else. The build date is not compared, since legs can straddle
-midnight UTC.
+print the bare line. A binary built from any other commit carries
+`+g<short hash>`, and the publish job refuses it. A binary built from the
+tag commit is the only kind that passes, so the check still proves each
+binary came from the tagged tree, without comparing hashes.
 
-Releases up to v0.9.0-beta.6 were built by hand from a HEAD above the
-tag, after the release-notes commit, so their stamps name a later commit
-than the tag (v0.9.0-beta.4: tag `802fdd11`, stamp `9f918710`). That is
-expected for those binaries, not a defect to chase.
+Up to v0.9.0-beta.7 the line was `inspectah <version> (commit <hash>,
+built <date>)`. Releases up to v0.9.0-beta.6 were built by hand from a HEAD
+above the tag, after the release-notes commit, so their stamps name a later
+commit than the tag (v0.9.0-beta.4: tag `802fdd11`, stamp `9f918710`).
+That is expected for those binaries, not a defect to chase.
 
 ## Pre-commit checks
 
