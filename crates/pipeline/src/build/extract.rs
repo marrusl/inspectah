@@ -470,21 +470,29 @@ impl TarballExtractor {
                 }
             }
 
-            // Extract the entry to disk.
-            let dest = self.extract_dir.join(&stripped);
+            // Extract the entry to disk. No ancestor may be a symlink on
+            // disk: one aliasing `unmanaged` would let a payload's mode
+            // land on a path outside it.
+            let dest_rel = confined_rel(&stripped_str).map_err(|v| anyhow::anyhow!("{v}"))?;
+            let cannot = || format!("cannot extract {path_str}");
+            create_confined_dir(&self.extract_dir, dest_rel.parent()).with_context(cannot)?;
+            let dest = self.extract_dir.join(dest_rel.as_path());
             match entry_type {
                 tar::EntryType::Directory => {
-                    std::fs::create_dir_all(&dest)?;
+                    create_confined_dir(&self.extract_dir, dest_rel).with_context(cannot)?;
                 }
                 tar::EntryType::Regular | tar::EntryType::GNUSparse => {
-                    if let Some(parent) = dest.parent() {
-                        std::fs::create_dir_all(parent)?;
-                    }
-                    let mut outfile = std::fs::File::create(&dest)?;
+                    // `create_new` refuses an existing leaf, including a
+                    // symlink, rather than following it.
+                    let mut outfile = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&dest)
+                        .with_context(cannot)?;
                     std::io::copy(&mut entry, &mut outfile)?;
                     // `COPY` gives the image file this copy's mode, so an
                     // unmanaged payload keeps the member's permission bits.
-                    if is_unmanaged_payload(&stripped) {
+                    if is_unmanaged_payload(dest_rel.as_path()) {
                         let mode = entry.header().mode()? & PAYLOAD_MODE_BITS;
                         outfile.set_permissions(std::fs::Permissions::from_mode(mode))?;
                     }
@@ -510,11 +518,8 @@ impl TarballExtractor {
                 }
                 tar::EntryType::Symlink => {
                     if let Some(link) = entry.link_name()?.map(|p| p.to_path_buf()) {
-                        if let Some(parent) = dest.parent() {
-                            std::fs::create_dir_all(parent)?;
-                        }
                         #[cfg(unix)]
-                        std::os::unix::fs::symlink(&link, &dest)?;
+                        std::os::unix::fs::symlink(&link, &dest).with_context(cannot)?;
                     }
                 }
                 _ => {}
@@ -850,6 +855,173 @@ mod tests {
         let extractor = TarballExtractor::new(tmp.path().join("out"));
         let result = extractor.extract(&tarball_path);
         assert!(result.is_ok(), "duplicate directories should be allowed");
+    }
+
+    /// One archive member for [`build_tarball`]: path, type, contents or
+    /// link target, mode.
+    type Member<'a> = (&'a str, tar::EntryType, &'a str, u32);
+
+    fn build_tarball(path: &Path, members: &[Member<'_>]) {
+        let mut builder = tar::Builder::new(Vec::new());
+        for &(name, entry_type, data, mode) in members {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(entry_type);
+            header.set_path(name).unwrap();
+            header.set_mode(mode);
+            if entry_type == tar::EntryType::Symlink {
+                header.set_link_name(data).unwrap();
+                header.set_size(0);
+                header.set_cksum();
+                builder.append(&header, std::io::empty()).unwrap();
+            } else {
+                header.set_size(data.len() as u64);
+                header.set_cksum();
+                builder.append(&header, data.as_bytes()).unwrap();
+            }
+        }
+        let tar_bytes = builder.into_inner().unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&tar_bytes).unwrap();
+        std::fs::write(path, gz.finish().unwrap()).unwrap();
+    }
+
+    const VICTIM: &str = "config/example";
+    const ORIGINAL: &str = "original contents";
+    const VICTIM_MODE: u32 = 0o644;
+
+    /// An extraction root holding a `config/example` the archive must not
+    /// reach.
+    fn root_with_victim(tmp: &Path) -> PathBuf {
+        let out = tmp.join("out");
+        std::fs::create_dir_all(out.join("config")).unwrap();
+        std::fs::write(out.join(VICTIM), ORIGINAL).unwrap();
+        std::fs::set_permissions(
+            out.join(VICTIM),
+            std::fs::Permissions::from_mode(VICTIM_MODE),
+        )
+        .unwrap();
+        out
+    }
+
+    fn assert_victim_untouched(out: &Path) {
+        assert_eq!(std::fs::read_to_string(out.join(VICTIM)).unwrap(), ORIGINAL);
+        let mode = std::fs::metadata(out.join(VICTIM))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, VICTIM_MODE);
+    }
+
+    #[test]
+    fn a_symlinked_ancestor_is_not_written_through() {
+        // `unmanaged` aliases the root, so the lexical `unmanaged/` test
+        // passes for a path that lands on `config/example`.
+        let tmp = tempfile::tempdir().unwrap();
+        let out = root_with_victim(tmp.path());
+        let tarball = tmp.path().join("alias.tar.gz");
+        build_tarball(
+            &tarball,
+            &[
+                ("prefix/unmanaged", tar::EntryType::Symlink, ".", 0o777),
+                (
+                    "prefix/unmanaged/config/example",
+                    tar::EntryType::Regular,
+                    "PWNED",
+                    0o777,
+                ),
+            ],
+        );
+        let result = TarballExtractor::new(out.clone())
+            .extract(&tarball)
+            .map(drop);
+        assert!(result.is_err(), "symlinked ancestor was written through");
+        assert_victim_untouched(&out);
+
+        // With no victim there yet, nothing new appears outside either.
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("out");
+        let tarball = tmp.path().join("fresh.tar.gz");
+        build_tarball(
+            &tarball,
+            &[
+                ("prefix/unmanaged", tar::EntryType::Symlink, ".", 0o777),
+                (
+                    "prefix/unmanaged/config/planted",
+                    tar::EntryType::Regular,
+                    "PWNED",
+                    0o777,
+                ),
+            ],
+        );
+        assert!(
+            TarballExtractor::new(out.clone())
+                .extract(&tarball)
+                .is_err()
+        );
+        assert!(
+            !out.join("config").exists(),
+            "a file was planted via the alias"
+        );
+    }
+
+    #[test]
+    fn a_symlink_already_at_the_leaf_is_not_written_through() {
+        // No entry names the link, so the seen set cannot refuse it; only
+        // opening the leaf exclusively does.
+        let tmp = tempfile::tempdir().unwrap();
+        let out = root_with_victim(tmp.path());
+        std::fs::create_dir(out.join("unmanaged")).unwrap();
+        std::os::unix::fs::symlink("../config/example", out.join("unmanaged/x")).unwrap();
+        let tarball = tmp.path().join("leaf.tar.gz");
+        build_tarball(
+            &tarball,
+            &[(
+                "prefix/unmanaged/x",
+                tar::EntryType::Regular,
+                "PWNED",
+                0o777,
+            )],
+        );
+        let result = TarballExtractor::new(out.clone())
+            .extract(&tarball)
+            .map(drop);
+        assert!(result.is_err(), "symlinked leaf was written through");
+        assert_victim_untouched(&out);
+    }
+
+    #[test]
+    fn an_unmanaged_payload_keeps_its_permission_bits_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("out");
+        let tarball = tmp.path().join("modes.tar.gz");
+        build_tarball(
+            &tarball,
+            &[
+                (
+                    "prefix/unmanaged/opt/run",
+                    tar::EntryType::Regular,
+                    "x",
+                    0o4755,
+                ),
+                (
+                    "prefix/config/etc/app.conf",
+                    tar::EntryType::Regular,
+                    "x",
+                    0o777,
+                ),
+            ],
+        );
+        TarballExtractor::new(out.clone())
+            .extract(&tarball)
+            .unwrap();
+        let mode = |rel: &str| {
+            std::fs::metadata(out.join(rel))
+                .unwrap()
+                .permissions()
+                .mode()
+        };
+        assert_eq!(mode("unmanaged/opt/run") & 0o7777, 0o755);
+        assert_ne!(mode("config/etc/app.conf") & 0o777, 0o777);
     }
 
     #[test]
