@@ -94,6 +94,7 @@ printf 'xx\0inspectah 1.2.3-beta.3\nUsage\0yy' > "$WORK/bytes-other"
 printf 'xx\0inspectah 1.2.3-beta.40\nUsage\0yy' > "$WORK/bytes-longer"
 printf 'xx\0inspectah 1.2.3-beta.4 (commit %s, built 2026-11-23)Usage\0yy' "$HASH" > "$WORK/bytes-old"
 printf 'xx\0inspectah 1.2.3-beta.4Usage\0yy' > "$WORK/bytes-unterminated"
+printf 'xx\0inspectah 1.2.3-beta.4' > "$WORK/bytes-eof"
 
 expect 0 "bytes accepts the bare version" bytes "$WORK/bytes-tagged" 1.2.3-beta.4
 expect 1 "bytes rejects a +g stamp" bytes "$WORK/bytes-untagged" 1.2.3-beta.4
@@ -102,6 +103,7 @@ expect 1 "bytes rejects another version" bytes "$WORK/bytes-other" 1.2.3-beta.4
 expect 1 "bytes rejects a longer version the expected one prefixes" bytes "$WORK/bytes-longer" 1.2.3-beta.4
 expect 1 "bytes rejects the old commit and date line" bytes "$WORK/bytes-old" 1.2.3-beta.4
 expect 1 "bytes rejects a version line with no newline after it" bytes "$WORK/bytes-unterminated" 1.2.3-beta.4
+expect 1 "bytes rejects EOF without a newline" bytes "$WORK/bytes-eof" 1.2.3-beta.4
 expect 1 "bytes rejects a missing binary" bytes "$WORK/absent" 1.2.3-beta.4
 
 echo "${passes} passed, ${failures} failed"

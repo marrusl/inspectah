@@ -30,7 +30,9 @@ than that, in two cases:
   `concat!("inspectah ", env!("INSPECTAH_VERSION"), "\n")`; `inspectah
   version` prints it. The newline is in the constant on purpose: the binary
   then stores the line with a terminator, and `check-version-stamp.sh
-  bytes` anchors on it. Without it the version runs straight into the next
+  bytes` requires that byte. It searches with perl, not grep: grep's `$`
+  also matches at end of input, so a file ending in the bare version with
+  no newline would pass. Without the newline the version runs straight into the next
   string literal, so `inspectah 0.9.0-beta.4` would also match a
   `0.9.0-beta.40` binary. clap's `version = env!("INSPECTAH_VERSION")` in `main.rs`
   makes `--version` print the same line, since clap prefixes the command

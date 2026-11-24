@@ -56,18 +56,21 @@ case "$mode" in
         ;;
     bytes)
         version=$3
-        # Always -q or -o on a binary: an unanchored grep prints kilobytes
-        # of the surrounding bytes per match.
         # The line is preceded by other string data with no separator, so
-        # only its end is anchored: `$` is the newline stored with it. The
-        # version is escaped for a basic regular expression.
-        version_re=$(printf '%s' "$version" | sed 's/[.[\*^$]/\\&/g')
-        LC_ALL=C grep -qa -- "inspectah ${version_re}\$" "$bin" \
+        # only its end can be checked: the newline byte stored with it.
+        # grep cannot check that byte, since its `$` also matches at end of
+        # input, so perl searches the raw bytes for the literal string,
+        # newline included. The version is passed in the environment, not
+        # interpolated into the program.
+        STAMP_LINE="inspectah ${version}" perl -0777 -ne \
+            '$found ||= index($_, "$ENV{STAMP_LINE}\n") >= 0; END { $? = $found ? 0 : 1 }' "$bin" \
             || error "${bin} does not embed the line 'inspectah ${version}'"
         # Other code embeds `inspectah <version>` too (the redaction engine's
         # `redacted_by`), and a future line printing it would end in a
         # newline as well. The `+` form appears only in an untagged or debug
         # build's version line, so rejecting it keeps such a build failing.
+        # Always -q on a binary: grep would print kilobytes of the
+        # surrounding bytes per match.
         if LC_ALL=C grep -qaF -- "inspectah ${version}+" "$bin"; then
             error "${bin} embeds 'inspectah ${version}+...', the stamp of an untagged or debug build"
         fi
