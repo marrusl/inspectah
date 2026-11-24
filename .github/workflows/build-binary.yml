@@ -78,28 +78,22 @@ jobs:
         run: cargo build -p inspectah-cli --release --target ${{ matrix.target }}
 
       # Every leg runs on its own architecture, so each binary can report its
-      # own version. Checks what shipped, not what was intended: the version,
-      # the commit stamp, static linking on Linux, and the embedded UI.
+      # own version. Checks what shipped, not what was intended: the version
+      # line, static linking on Linux, and the embedded UI.
       - name: Verify binary
         shell: bash
         env:
           BIN: target/${{ matrix.target }}/release/inspectah
           UI_ASSETS: crates/web/ui/dist/assets
+          # The caller's ref: a tag when release.yml builds a release.
+          REF_TYPE: ${{ github.ref_type }}
         run: |
           set -euo pipefail
 
-          VERSION=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' Cargo.toml | head -1)
-          # crates/cli/build.rs stamps the same command's output.
-          COMMIT=$(git rev-parse --short HEAD)
-          OUT=$("$BIN" version)
-          echo "$OUT"
-          case "$OUT" in
-            "inspectah ${VERSION} (commit ${COMMIT}, built "*) ;;
-            *)
-              echo "::error::expected 'inspectah ${VERSION} (commit ${COMMIT}, ...', got '${OUT}'" >&2
-              exit 1
-              ;;
-          esac
+          # crates/cli/build.rs prints the bare version only for a build of
+          # the tag v<version>, and <version>+g<short hash> otherwise.
+          if [ "$REF_TYPE" = "tag" ]; then FORM=tagged; else FORM=untagged; fi
+          scripts/check-version-stamp.sh run "$BIN" "$FORM"
 
           if [ "$RUNNER_OS" = "Linux" ]; then
             # Rust musl targets link static-pie, which file(1) reports as

@@ -52,6 +52,9 @@ jobs:
       - name: Check that unsetting INSPECTAH_SKIP_UI reruns the UI build
         if: ${{ !cancelled() }}
         run: scripts/tests/web-build-skip-ui-test.sh
+      - name: Test the release version check
+        if: ${{ !cancelled() }}
+        run: scripts/tests/check-version-stamp-test.sh
       - name: Check tracked tarballs
         if: ${{ !cancelled() }}
         run: scripts/check-sensitive-tarballs.sh --tracked

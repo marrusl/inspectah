@@ -32,7 +32,6 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.check.outputs.version }}
-      commit: ${{ steps.check.outputs.commit }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -57,7 +56,6 @@ jobs:
             exit 1
           fi
           echo "version=${CARGO_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   build:
     needs: preflight
@@ -78,50 +76,32 @@ jobs:
       GH_REPO: ${{ github.repository }}
       TAG: ${{ github.ref_name }}
       VERSION: ${{ needs.preflight.outputs.version }}
-      COMMIT: ${{ needs.preflight.outputs.commit }}
       # Must match the asset names in build-binary.yml.
       ASSETS: inspectah-darwin-arm64 inspectah-linux-amd64 inspectah-linux-arm64-bin
       DRAFT_NOTES: "Draft created by the release workflow. Replace this text with the release notes when publishing."
     steps:
+      # For scripts/check-version-stamp.sh only.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: inspectah-*
           path: dist
           merge-multiple: true
 
-      # Each build leg checked its own binary. This checks the three agree:
-      # same version, and all stamped with the tag's commit. The build date
-      # is left out of the comparison because legs can straddle midnight UTC.
+      # Each build leg checked its own binary. This checks all three carry
+      # the bare `inspectah <tag version>`, which crates/cli/build.rs stamps
+      # only when the commit built carries the tag, so it proves each was
+      # built from the tagged tree. The binaries are not all runnable here,
+      # so the script reads the stamp from the bytes.
       - name: Verify the three binaries agree
         working-directory: dist
         run: |
           set -euo pipefail
           for f in $ASSETS; do
-            if [ ! -s "$f" ]; then
-              echo "::error::${f} is missing or empty" >&2
-              exit 1
-            fi
-            # The CLI's long version string, from crates/cli/src/main.rs, is
-            # "<version> (commit <hash>, built <date>)". The binaries are not
-            # all runnable here, so read the stamp from the bytes.
-            stamps=$(LC_ALL=C grep -aoE '\(commit [0-9a-f]+, built ' "$f" | sort -u)
-            if [ "$(printf '%s\n' "$stamps" | grep -c .)" -ne 1 ]; then
-              echo "::error::${f} does not carry exactly one commit stamp: ${stamps}" >&2
-              exit 1
-            fi
-            stamp_commit=$(printf '%s' "$stamps" | sed -n 's/^(commit \([0-9a-f]*\),.*/\1/p')
-            case "$COMMIT" in
-              "$stamp_commit"*) ;;
-              *)
-                echo "::error::${f} is stamped ${stamp_commit}, not the tag commit ${COMMIT}" >&2
-                exit 1
-                ;;
-            esac
-            if ! LC_ALL=C grep -qaF "${VERSION} (commit ${stamp_commit}, built " "$f"; then
-              echo "::error::${f} is not version ${VERSION}" >&2
-              exit 1
-            fi
-            echo "${f}: ${VERSION} (commit ${stamp_commit})"
+            ../scripts/check-version-stamp.sh bytes "$f" "$VERSION"
           done
           sha256sum $ASSETS | tee SHA256SUMS
 
