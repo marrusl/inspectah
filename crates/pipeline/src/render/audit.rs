@@ -1522,6 +1522,8 @@ fn render_software_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) 
         lines.extend(var_srv.iter().map(|p| format!("- {}", md_code(p))));
         lines.push(String::new());
     }
+
+    lines.extend(super::unmanaged_owners::audit_lines(snap));
 }
 
 /// Render Secrets section (secrets, subscription).

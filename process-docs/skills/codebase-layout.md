@@ -136,6 +136,7 @@ Artifact generators invoked after triage decisions finalized:
 - `unit_plan.rs`: `plan_units`, every `systemctl` line for a collected unit and the default target, checked against `staged_writes` (see `service-omission-model.md`); `declined_line`, the one source of a declined command's text; `mount_advisory_lines` for mount findings; `manual_link_lines`, `undetermined_install_lines` and `also_advisory_lines` for link findings and rule 7; `unit_state_lines` writes the `# === Systemd Unit State ===` section
 - `language_packages.rs` — Tier 1 pip/npm/gem Containerfile rendering
 - `unmanaged.rs`: Tier 2 unmanaged file COPY directives and symlink `ln -sf`; `bundle_unmanaged_files`, which copies the payloads into the scan tarball after the read gate checks each again
+- `unmanaged_owners.rs`: carried unmanaged files whose host owner, group or setuid, setgid or sticky bit the export drops, for the audit report's rows, the Containerfile's count line and the scan's notice
 - `repoless.rs`: package routing (`route_for`, with the routes an export lost in `InstallRepos::lost_route`), repo-less install planning for the combined local and disabled-repo install, and the scan tarball's cached RPM writer
 - `rpm_verify.rs`: `rpm_va_failed_notice`, the export warning for a snapshot whose `rpm -Va` failed, repeating the collector's `RPM_VA_FAILED_WARNING` on scan stderr and in the refine export
 - `safety.rs` — Safety checks and destructive-action warnings

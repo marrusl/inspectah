@@ -237,6 +237,7 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
             .push("# Credentials in some were replaced with REDACTED_* placeholders before".into());
         lines.push("# bundling: secrets-review.md says how to supply the real values.".into());
     }
+    lines.extend(super::unmanaged_owners::containerfile_lines(snap));
 
     // Group by parent directory
     let mut groups: BTreeMap<String, Vec<&UnmanagedFile>> = BTreeMap::new();

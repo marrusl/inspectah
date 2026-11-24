@@ -44,6 +44,7 @@ pub mod repo_owned;
 pub mod repoless;
 pub mod rpm_verify;
 pub mod unmanaged;
+pub mod unmanaged_owners;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::{RenderContext, RenderError};

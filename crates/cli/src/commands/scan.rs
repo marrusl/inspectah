@@ -941,6 +941,11 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
             {
                 eprintln!("{notice}");
             }
+            if let Some(notice) =
+                inspectah_pipeline::render::unmanaged_owners::ownership_notice(&snapshot)
+            {
+                eprintln!("{notice}");
+            }
             // The machine-state notice follows: enum text and a count.
             for notice in inspectah_pipeline::render::machine_state::export_notices(&snapshot) {
                 eprintln!("{notice}");

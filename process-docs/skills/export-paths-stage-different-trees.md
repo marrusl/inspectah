@@ -148,6 +148,18 @@ writer's umask. `unmanaged_files_keep_the_host_mode_on_both_export_paths`
 (`crates/cli/tests/unmanaged_redaction_test.rs`) checks every hop on both
 paths.
 
+Ownership crosses none of the four: every member packs as uid 0, and no
+`COPY` has `--chown`, so every payload is `root:root` in the image. Until
+ownership is carried, `render/unmanaged_owners.rs` names each carried
+regular file whose recorded `uid` or `gid` is not 0, or whose recorded
+mode has setuid, setgid or sticky, in the audit report's Software
+section, with a count in the Containerfile's unmanaged block and on the
+scan's stderr. It reads the walk's `stat` record (`provenance`), not the
+bundled copy, which has already lost the special bits. Directories are
+not named: the walk records files only. A change that starts carrying
+ownership or special bits must shrink or remove this notice in the same
+commit, or it reports a loss that no longer happens.
+
 ## The COPY invariant has two directions and they need different granularity
 
 Learned 2026-11-04 by running mutations against both halves. Getting this
