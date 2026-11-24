@@ -228,16 +228,27 @@ enum RegularCopy<'a> {
 }
 
 impl<'a> RegularCopy<'a> {
-    /// The files an emitted `COPY` line carries.
-    fn carried(&self) -> Vec<&'a UnmanagedFile> {
+    /// The directory's regular files, whether or not a `COPY` carries
+    /// them.
+    fn files(&self) -> Vec<&'a UnmanagedFile> {
         match self {
-            Self::Directory(Ok(_), files) => files.clone(),
-            Self::Directory(Err(_), _) => Vec::new(),
+            Self::Directory(_, files) => files.clone(),
+            Self::Files(files) => files.iter().map(|(file, _)| *file).collect(),
+        }
+    }
+
+    /// Whether an emitted `COPY` line carries `file`. A directory `COPY`
+    /// is recursive, so it carries every file under the directory, by
+    /// path component: `/opt/app2/x` is not under `/opt/app`.
+    fn carries(&self, file: &UnmanagedFile) -> bool {
+        match self {
+            Self::Directory(Ok(dir), _) => {
+                std::path::Path::new(&file.path).starts_with(dir.as_str())
+            }
+            Self::Directory(Err(_), _) => false,
             Self::Files(files) => files
                 .iter()
-                .filter(|(_, copy)| copy.is_ok())
-                .map(|(file, _)| *file)
-                .collect(),
+                .any(|(f, copy)| copy.is_ok() && f.path == file.path),
         }
     }
 }
@@ -292,15 +303,18 @@ fn directory_copies<'a>(included: &[&'a UnmanagedFile]) -> Vec<DirectoryCopy<'a>
 }
 
 /// The unmanaged files a `COPY` line of the Containerfile carries, by the
-/// decisions [`unmanaged_file_lines`] renders. A file under `/srv`, or
-/// one whose `COPY` is refused, reaches only the export archive.
+/// decisions [`unmanaged_file_lines`] renders: a file's own `COPY`, or a
+/// directory `COPY` of it or of an ancestor. A file under `/srv`, or one
+/// no emitted `COPY` covers, reaches only the export archive.
 pub(crate) fn copied_files(snap: &InspectionSnapshot) -> Vec<&UnmanagedFile> {
     let Some(section) = &snap.unmanaged_files else {
         return Vec::new();
     };
-    directory_copies(&rendered_files(section))
+    let copies = directory_copies(&rendered_files(section));
+    copies
         .iter()
-        .flat_map(|d| d.regular.carried())
+        .flat_map(|d| d.regular.files())
+        .filter(|file| copies.iter().any(|d| d.regular.carries(file)))
         .collect()
 }
 

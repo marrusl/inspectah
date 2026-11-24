@@ -427,6 +427,43 @@ mod tests {
                 ],
                 1,
             ),
+            (
+                "an ancestor directory COPY carrying a nested file refused on its own",
+                vec![
+                    file("/opt/app/a", 0, 0, "0644"),
+                    file("/opt/app/b", 0, 0, "0644"),
+                    file("/opt/app/sub/config file", 1001, 1001, "0644"),
+                ],
+                1,
+            ),
+            (
+                "an ancestor directory COPY carrying a refused nested directory",
+                vec![
+                    file("/opt/app/a", 0, 0, "0644"),
+                    file("/opt/app/b", 0, 0, "0644"),
+                    file("/opt/app/my dir/x", 1001, 1001, "0644"),
+                    file("/opt/app/my dir/y", 1001, 1001, "0644"),
+                ],
+                2,
+            ),
+            (
+                "a refused ancestor directory COPY carries nothing nested",
+                vec![
+                    file("/opt/my app/a", 0, 0, "0644"),
+                    file("/opt/my app/b", 0, 0, "0644"),
+                    file("/opt/my app/sub/config", 1001, 1001, "0644"),
+                ],
+                0,
+            ),
+            (
+                "a directory COPY does not carry a sibling sharing its name prefix",
+                vec![
+                    file("/opt/app/a", 0, 0, "0644"),
+                    file("/opt/app/b", 0, 0, "0644"),
+                    file("/opt/app2/config file", 1001, 1001, "0644"),
+                ],
+                0,
+            ),
         ];
         let mut wrong = Vec::new();
         for (name, items, copied) in cases {
