@@ -84,17 +84,24 @@ expect 1 "run untagged rejects another commit's hash" run "$WORK/stale" untagged
 expect 1 "run rejects --version differing from version" run "$WORK/mismatch" tagged
 expect 1 "run rejects a missing binary" run "$WORK/absent" tagged
 
-# Byte files: the stamp sits among other bytes with no separator, as string
-# literals do in a binary's read-only data.
-printf 'xx\0inspectah 1.2.3-beta.4Usage: inspectah\0yy' > "$WORK/bytes-tagged"
-printf 'xx\0inspectah 1.2.3-beta.4+g%sUsage\0yy' "$HASH" > "$WORK/bytes-untagged"
-printf 'xx\0inspectah 1.2.3-beta.4+devUsage\0yy' > "$WORK/bytes-dev"
-printf 'xx\0inspectah 1.2.3-beta.3Usage\0yy' > "$WORK/bytes-other"
+# Byte files: the version line sits among other bytes with no separator, as
+# string literals do in a binary's read-only data. The binary stores it with
+# its trailing newline, which is what delimits the version.
+printf 'xx\0inspectah 1.2.3-beta.4\nUsage: inspectah\0yy' > "$WORK/bytes-tagged"
+printf 'xx\0inspectah 1.2.3-beta.4+g%s\nUsage\0yy' "$HASH" > "$WORK/bytes-untagged"
+printf 'xx\0inspectah 1.2.3-beta.4+dev\nUsage\0yy' > "$WORK/bytes-dev"
+printf 'xx\0inspectah 1.2.3-beta.3\nUsage\0yy' > "$WORK/bytes-other"
+printf 'xx\0inspectah 1.2.3-beta.40\nUsage\0yy' > "$WORK/bytes-longer"
+printf 'xx\0inspectah 1.2.3-beta.4 (commit %s, built 2026-11-23)Usage\0yy' "$HASH" > "$WORK/bytes-old"
+printf 'xx\0inspectah 1.2.3-beta.4Usage\0yy' > "$WORK/bytes-unterminated"
 
 expect 0 "bytes accepts the bare version" bytes "$WORK/bytes-tagged" 1.2.3-beta.4
 expect 1 "bytes rejects a +g stamp" bytes "$WORK/bytes-untagged" 1.2.3-beta.4
 expect 1 "bytes rejects a debug +dev stamp" bytes "$WORK/bytes-dev" 1.2.3-beta.4
 expect 1 "bytes rejects another version" bytes "$WORK/bytes-other" 1.2.3-beta.4
+expect 1 "bytes rejects a longer version the expected one prefixes" bytes "$WORK/bytes-longer" 1.2.3-beta.4
+expect 1 "bytes rejects the old commit and date line" bytes "$WORK/bytes-old" 1.2.3-beta.4
+expect 1 "bytes rejects a version line with no newline after it" bytes "$WORK/bytes-unterminated" 1.2.3-beta.4
 expect 1 "bytes rejects a missing binary" bytes "$WORK/absent" 1.2.3-beta.4
 
 echo "${passes} passed, ${failures} failed"

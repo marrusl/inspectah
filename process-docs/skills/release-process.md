@@ -140,8 +140,10 @@ The workflow checks what shipped, not what was intended:
   confirms the frontend is inside the artifact.
 - **The publish job** checks the bytes of all three binaries (the Linux
   ones cannot run on its runner) with `scripts/check-version-stamp.sh
-  bytes`: each must embed `inspectah <tag version>` and no
-  `inspectah <tag version>+...` form. It writes the three SHA-256 digests
+  bytes`: each must embed the line `inspectah <tag version>` ending in
+  its newline, and no `inspectah <tag version>+...` form. A longer
+  version, a `+` suffix and the old `(commit ..., built ...)` line all
+  fail. It writes the three SHA-256 digests
   to the run summary.
 
 Every check fails the run with an `::error::` line naming the binary and

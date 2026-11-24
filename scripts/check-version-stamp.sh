@@ -12,9 +12,11 @@
 #
 #   check-version-stamp.sh bytes <binary> <version>
 #       For a binary built for another platform, which cannot run here: reads
-#       the stamp from its bytes. It must embed `inspectah <version>` and no
-#       `inspectah <version>+...` form, which only a build of the release tag
-#       satisfies.
+#       the stamp from its bytes. It must embed the line `inspectah <version>`
+#       with its newline, as crates/cli/src/commands/version.rs stores it, and
+#       no `inspectah <version>+...` form. Only a build of the release tag
+#       satisfies both: a longer version, a `+` suffix or the old
+#       `(commit ..., built ...)` line does not end at the newline.
 #
 # Failures print an `::error::` line naming the binary and exit 1.
 # Written for bash 3.2 (macOS /bin/bash).
@@ -55,10 +57,16 @@ case "$mode" in
         version=$3
         # Always -q or -o on a binary: an unanchored grep prints kilobytes
         # of the surrounding bytes per match.
-        LC_ALL=C grep -qaF -- "inspectah ${version}" "$bin" \
-            || error "${bin} does not embed 'inspectah ${version}'"
-        # The stamp is followed by other string data with no separator, so
-        # only the `+` that starts build metadata is matched, not what follows.
+        # The line is preceded by other string data with no separator, so
+        # only its end is anchored: `$` is the newline stored with it. The
+        # version is escaped for a basic regular expression.
+        version_re=$(printf '%s' "$version" | sed 's/[.[\*^$]/\\&/g')
+        LC_ALL=C grep -qa -- "inspectah ${version_re}\$" "$bin" \
+            || error "${bin} does not embed the line 'inspectah ${version}'"
+        # Other code embeds `inspectah <version>` too (the redaction engine's
+        # `redacted_by`), and a future line printing it would end in a
+        # newline as well. The `+` form appears only in an untagged or debug
+        # build's version line, so rejecting it keeps such a build failing.
         if LC_ALL=C grep -qaF -- "inspectah ${version}+" "$bin"; then
             error "${bin} embeds 'inspectah ${version}+...', the stamp of an untagged or debug build"
         fi

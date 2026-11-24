@@ -4,12 +4,16 @@
 //! bare package version for a build of its release tag, `<version>+g<hash>`
 //! for any other release build, and `<version>+dev` for debug builds.
 
-/// The line `inspectah version` prints. `inspectah --version` prints the
-/// same line, because clap joins the command name and `INSPECTAH_VERSION`.
-pub const VERSION_LINE: &str = concat!("inspectah ", env!("INSPECTAH_VERSION"));
+/// The line `inspectah version` prints, newline included. `inspectah
+/// --version` prints the same line, because clap joins the command name and
+/// `INSPECTAH_VERSION`. The newline is part of the constant so the binary
+/// stores the line with a terminator: `scripts/check-version-stamp.sh bytes`
+/// looks for `inspectah <version>` followed by that newline, which a longer
+/// version or a line with more after the version does not match.
+pub const VERSION_LINE: &str = concat!("inspectah ", env!("INSPECTAH_VERSION"), "\n");
 
 pub fn print_version() {
-    println!("{VERSION_LINE}");
+    print!("{VERSION_LINE}");
 }
 
 #[cfg(test)]
@@ -33,10 +37,7 @@ mod tests {
 
     #[test]
     fn dash_dash_version_prints_the_same_line() {
-        assert_eq!(
-            crate::Cli::command().render_version(),
-            format!("{VERSION_LINE}\n")
-        );
+        assert_eq!(crate::Cli::command().render_version(), VERSION_LINE);
     }
 
     #[cfg(debug_assertions)]

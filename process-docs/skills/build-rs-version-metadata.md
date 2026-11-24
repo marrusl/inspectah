@@ -21,8 +21,12 @@ from the release tag", and the release workflow relies on it (see
 - **build.rs lives in the binary crate**, not the workspace root. Only the
   crate that declares `[[bin]]` runs its build script for the final binary.
 - **`VERSION_LINE` in `crates/cli/src/commands/version.rs`** is
-  `concat!("inspectah ", env!("INSPECTAH_VERSION"))`; `inspectah version`
-  prints it. clap's `version = env!("INSPECTAH_VERSION")` in `main.rs`
+  `concat!("inspectah ", env!("INSPECTAH_VERSION"), "\n")`; `inspectah
+  version` prints it. The newline is in the constant on purpose: the binary
+  then stores the line with a terminator, and `check-version-stamp.sh
+  bytes` anchors on it. Without it the version runs straight into the next
+  string literal, so `inspectah 0.9.0-beta.4` would also match a
+  `0.9.0-beta.40` binary. clap's `version = env!("INSPECTAH_VERSION")` in `main.rs`
   makes `--version` print the same line, since clap prefixes the command
   name. A test compares the two. `concat!()` and `env!()` give the
   `&'static str` clap's derive needs; `format!()` would not compile there.
