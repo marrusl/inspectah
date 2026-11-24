@@ -929,36 +929,7 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
             if verbosity == crate::progress::Verbosity::Quiet {
                 print_quiet_footer(scan_start.elapsed(), &end_state, sensitivity.as_deref());
             }
-            // After the summary, in every verbosity: quiet hides progress,
-            // not results. stderr only, so nothing reaches stdout. The
-            // notice points at the tarball's audit report and
-            // Containerfile, so only this branch, which wrote them, prints it.
-            if let Some(notice) = not_carried_notice(&snapshot) {
-                eprintln!("{notice}");
-            }
-            if let Some(notice) =
-                inspectah_pipeline::render::unmanaged::unmanaged_redaction_notice(&snapshot)
-            {
-                eprintln!("{notice}");
-            }
-            if let Some(notice) =
-                inspectah_pipeline::render::unmanaged_owners::ownership_notice(&snapshot)
-            {
-                eprintln!("{notice}");
-            }
-            // The machine-state notice follows: enum text and a count.
-            for notice in inspectah_pipeline::render::machine_state::export_notices(&snapshot) {
-                eprintln!("{notice}");
-            }
-            // The repo notices: an entry no copied repo file names. A scan or an
-            // aggregate has no refine exclusion, so no shared-file notice.
-            for notice in inspectah_pipeline::render::repo_owned::export_notices(
-                &snapshot,
-                &inspectah_pipeline::render::configtree::staged_writes(&snapshot),
-                &Default::default(),
-            ) {
-                eprintln!("{notice}");
-            }
+            print_export_notices(&snapshot, &mut std::io::stderr());
             print_collection_notices(&snapshot, &mut std::io::stderr());
             Ok(outcome)
         }
@@ -1012,6 +983,43 @@ fn finish_inspect_only(
     }
     print_collection_notices(snapshot, stderr);
     Ok(())
+}
+
+/// Print, after the summary, the notices about what the tarball's export
+/// changed or left out. In every verbosity: quiet hides progress, not
+/// results. The scan passes its stderr, so nothing reaches stdout. The
+/// notices point at the tarball's audit report and Containerfile, so only
+/// the scan branch that wrote them prints them.
+fn print_export_notices(
+    snapshot: &inspectah_core::snapshot::InspectionSnapshot,
+    stderr: &mut dyn std::io::Write,
+) {
+    // Stderr is where a write failure would be reported, so there is
+    // nowhere left to report one: each write's result is dropped.
+    if let Some(notice) = not_carried_notice(snapshot) {
+        let _ = writeln!(stderr, "{notice}");
+    }
+    if let Some(notice) =
+        inspectah_pipeline::render::unmanaged::unmanaged_redaction_notice(snapshot)
+    {
+        let _ = writeln!(stderr, "{notice}");
+    }
+    if let Some(notice) = inspectah_pipeline::render::unmanaged_owners::ownership_notice(snapshot) {
+        let _ = writeln!(stderr, "{notice}");
+    }
+    // The machine-state notice follows: enum text and a count.
+    for notice in inspectah_pipeline::render::machine_state::export_notices(snapshot) {
+        let _ = writeln!(stderr, "{notice}");
+    }
+    // The repo notices: an entry no copied repo file names. A scan or an
+    // aggregate has no refine exclusion, so no shared-file notice.
+    for notice in inspectah_pipeline::render::repo_owned::export_notices(
+        snapshot,
+        &inspectah_pipeline::render::configtree::staged_writes(snapshot),
+        &Default::default(),
+    ) {
+        let _ = writeln!(stderr, "{notice}");
+    }
 }
 
 /// Print, after the summary, the collection warnings a scan repeats on
@@ -2374,6 +2382,89 @@ VARIANT_ID="workstation"
                     assert!(parsed.is_object(), "{case}");
                 }
             }
+        }
+    }
+
+    /// A tarball scan names on stderr, after the summary, the carried
+    /// unmanaged files that lose their owner or special bits, by count,
+    /// right after the unmanaged redaction notice; with no such file it
+    /// prints no ownership line. The scan passes these lines its stderr.
+    #[test]
+    fn the_ownership_notice_follows_the_redaction_notice() {
+        use inspectah_core::types::finding::FindingKind;
+        use inspectah_core::types::nonrpm::{
+            PayloadRedaction, ProvenanceSignals, UnmanagedFile, UnmanagedFileSection,
+        };
+
+        let file = |path: &str, uid: u32, redaction: PayloadRedaction| UnmanagedFile {
+            path: path.into(),
+            provenance: ProvenanceSignals {
+                uid,
+                permissions: "0644".into(),
+                ..Default::default()
+            },
+            disposition: FindingKind::included(),
+            payload_redaction: redaction,
+            ..Default::default()
+        };
+        let snapshot = |items: Vec<UnmanagedFile>| {
+            let mut snap = inspectah_core::snapshot::InspectionSnapshot::new();
+            snap.unmanaged_files = Some(UnmanagedFileSection {
+                items,
+                ..Default::default()
+            });
+            snap
+        };
+        let redacted = "Notice: 1 unmanaged file redacted before bundling; see secrets-review.md.";
+        let owners = |n: &str| {
+            format!(
+                "Notice: {n} carried as root:root without the host's owner, group or \
+                 setuid, setgid or sticky bits; see audit-report.md."
+            )
+        };
+        let cases: Vec<(
+            &str,
+            inspectah_core::snapshot::InspectionSnapshot,
+            Vec<String>,
+        )> = vec![
+            (
+                "two qualify, one redacted",
+                snapshot(vec![
+                    file("/opt/app/env", 1001, PayloadRedaction::Redacted),
+                    file("/opt/app/run", 1001, PayloadRedaction::default()),
+                    file("/opt/app/README", 0, PayloadRedaction::default()),
+                ]),
+                vec![redacted.into(), owners("2 unmanaged files are")],
+            ),
+            (
+                "one qualifies, none redacted",
+                snapshot(vec![file(
+                    "/opt/app/run",
+                    1001,
+                    PayloadRedaction::default(),
+                )]),
+                vec![owners("1 unmanaged file is")],
+            ),
+            (
+                "none qualifies, one redacted",
+                snapshot(vec![file("/opt/app/env", 0, PayloadRedaction::Redacted)]),
+                vec![redacted.into()],
+            ),
+            (
+                "none qualifies",
+                snapshot(vec![file(
+                    "/opt/app/README",
+                    0,
+                    PayloadRedaction::default(),
+                )]),
+                vec![],
+            ),
+        ];
+        for (name, snap, expected) in cases {
+            let mut err = Vec::new();
+            print_export_notices(&snap, &mut err);
+            let err = String::from_utf8(err).unwrap();
+            assert_eq!(err.lines().collect::<Vec<_>>(), expected, "{name}");
         }
     }
 }
