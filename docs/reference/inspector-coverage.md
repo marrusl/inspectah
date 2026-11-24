@@ -410,7 +410,7 @@ Binaries are reported as `readelf (<language>)` (High) or `file scan` (Low), and
 | Mutable | `stat -c %Z /etc/machine-id` (fallback: install time of the `filesystem` package) | Whether the file changed after the system was installed |
 | Service working dir | `grep -rh WorkingDirectory=` over `/etc/systemd/system` and `/usr/lib/systemd/system` | Whether the path is under a service's `WorkingDirectory` |
 
-Symlinks are detected without following and preserved as tar symlink entries. In the Containerfile, symlinks render as `RUN ln -sf` directives rather than COPY.
+Symlinks are detected without following and preserved as tar symlink entries. In the Containerfile, a symlink under a directory that a `COPY` carries arrives with that `COPY`; any other symlink renders as a `RUN ln -sfn` directive.
 
 ---
 

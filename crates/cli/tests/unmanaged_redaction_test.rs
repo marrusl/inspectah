@@ -1215,7 +1215,7 @@ fn lone_unmanaged_symlink_gets_its_directory_and_own_target() {
         let containerfile = std::fs::read_to_string(tree.join("Containerfile")).unwrap();
         for (link, target) in links {
             let expected =
-                format!("RUN mkdir -p -- '/opt/tool/bin' && ln -sf -- '{target}' '{link}'");
+                format!("RUN mkdir -p -- '/opt/tool/bin' && ln -sfn -- '{target}' '{link}'");
             assert!(
                 containerfile.lines().any(|l| l == expected),
                 "{via}: no `{expected}` in:\n{containerfile}"
@@ -1343,7 +1343,7 @@ fn credentialed_unmanaged_link_does_not_ship() {
                 .any(|l| l.contains("ln -sf") && l.contains(CRED_LINK)),
             "{via}: {CRED_LINK} recreated in:\n{containerfile}"
         );
-        let control = format!("ln -sf -- '{LONE_LINK_TARGET}' '{LONE_LINK}'");
+        let control = format!("ln -sfn -- '{LONE_LINK_TARGET}' '{LONE_LINK}'");
         assert!(containerfile.contains(&control), "{via}:\n{containerfile}");
         assert!(
             std::fs::symlink_metadata(tree.join("unmanaged").join(&CRED_LINK[1..])).is_err(),

@@ -161,7 +161,16 @@ and a directory `COPY` carries a file whose own path would be refused,
 along with anything else under it by path component. The "not copied"
 FIXMEs read the same decision (`unmanaged::is_copied`), so a FIXME is
 emitted only for a path no successful `COPY` carries, nested files,
-directories and symlinks under a carried ancestor included. It reads the walk's `stat` record (`provenance`), not the
+directories and symlinks under a carried ancestor included. The `ln`
+lines read it too: a symlink a `COPY` carries gets no `ln` line, since
+the `COPY` already recreates it with its recorded target, and every `ln`
+the renderer emits is `ln -sfn`. Without `-n`, `ln -sf` onto an existing
+symlink to a directory follows it and creates the link inside that
+directory (`current -> v2` becomes `v2/v2 -> v2`), in GNU and BSD `ln`
+alike; `a_rendered_ln_replaces_a_link_to_a_directory_instead_of_following_it`
+runs the rendered command to check. A real directory at the destination
+still gets the link inside it; `-T` would fail the build instead, but is
+GNU only. The ownership count reads the walk's `stat` record (`provenance`), not the
 bundled copy, which has already lost the special bits. Directories are
 not named: the walk records files only. A change that starts carrying
 ownership or special bits must shrink or remove this notice in the same

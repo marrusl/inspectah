@@ -236,11 +236,14 @@ whether to include it:
 Regular files under `/opt` and `/usr/local` render as `COPY`
 directives. When a directory holds more than one regular file, the
 renderer emits one `COPY` for the whole directory; when it holds exactly
-one, the `COPY` names that file. Symlinks render as a `RUN` line
-instead of `COPY`: it creates the link's directory with `mkdir -p`, then
-recreates the link with `ln -sf`. The link keeps the target the host
-gives (`readlink`, not `readlink -f`), so a relative or chained link
-stays as it is on the host:
+one, the `COPY` names that file. A symlink under a directory that a
+`COPY` carries arrives with that `COPY`. Any other symlink renders as a
+`RUN` line: it creates the link's directory with `mkdir -p`, then
+recreates the link with `ln -sfn`, which replaces a link already at that
+path rather than following it into the directory it points at. Either
+way the link keeps the target the host gives (`readlink`, not
+`readlink -f`), so a relative or chained link stays as it is on the
+host:
 
 ```dockerfile
 # === Unmanaged files (no package manager provenance) ===
@@ -248,19 +251,18 @@ stays as it is on the host:
 # no upstream update path and must be manually maintained.
 COPY unmanaged/opt/legacy-app/requirements.txt /opt/legacy-app/requirements.txt
 COPY unmanaged/opt/myapp/ /opt/myapp/
-RUN mkdir -p -- '/opt/myapp' && ln -sf -- '/usr/lib64/myapp' '/opt/myapp/lib'
 COPY unmanaged/usr/local/bin/ /usr/local/bin/
-RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/pm2/bin/pm2-runtime' '/usr/local/bin/pm2-runtime'
-RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/typescript/bin/tsc' '/usr/local/bin/tsc'
-RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/pm2/bin/pm2' '/usr/local/bin/pm2'
-RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/pm2/bin/pm2-dev' '/usr/local/bin/pm2-dev'
-RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/pm2/bin/pm2-docker' '/usr/local/bin/pm2-docker'
-RUN mkdir -p -- '/usr/local/bin' && ln -sf -- '/usr/local/lib/node_modules/@angular/cli/bin/ng.js' '/usr/local/bin/ng'
 ```
 
 *Sample output from a RHEL 9.8 test host. Command: `sudo inspectah scan
---include-unmanaged`. The symlink lines are rewritten to the current
-renderer's format; the rest is as captured.*
+--include-unmanaged`. The host's symlinks, such as `/opt/myapp/lib` and
+the `pm2` and `tsc` links in `/usr/local/bin`, sit in those two copied
+directories, so their `COPY` lines carry them.* A link in a directory
+no `COPY` carries renders as, for example:
+
+```dockerfile
+RUN mkdir -p -- '/opt/tool/bin' && ln -sfn -- '/usr/local/bin/run-tool' '/opt/tool/bin/run'
+```
 
 When redaction replaced credentials in any included file, the section
 adds a two-line comment after its header saying so and pointing to

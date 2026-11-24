@@ -66,7 +66,7 @@ fn copy_path(path: &str) -> Result<CopyToken, String> {
     CopyToken::parse(path).map_err(|e| e.to_string())
 }
 
-/// Why `ln -sf` cannot be emitted for a symlink, if it cannot. Both
+/// Why `ln -sfn` cannot be emitted for a symlink, if it cannot. Both
 /// operands are single-quoted, which keeps every byte but a line break
 /// inert to the shell, and a line break inside the quotes still ends the
 /// Containerfile instruction. The link path must also pass
@@ -262,8 +262,10 @@ impl<'a> RegularCopy<'a> {
 /// Whether any `COPY` line among `copies` carries `file`: its own
 /// `COPY`, or a directory `COPY` of its directory or of an ancestor,
 /// whichever order the lines come in. The ownership count
-/// ([`copied_files`]) and the "not copied" FIXMEs both read this, so a
-/// file is counted exactly when no FIXME says it is not copied.
+/// ([`copied_files`]), the "not copied" FIXMEs and the symlink `ln` lines
+/// all read this, so a file is counted exactly when no FIXME says it is
+/// not copied, and a symlink gets an `ln` line only when no `COPY`
+/// recreates it.
 fn is_copied(copies: &[DirectoryCopy<'_>], file: &UnmanagedFile) -> bool {
     copies.iter().any(|d| d.regular.carries(file))
 }
@@ -276,7 +278,7 @@ struct DirectoryCopy<'a> {
     symlinks: Vec<&'a UnmanagedFile>,
 }
 
-/// The `COPY` and `ln -sf` decisions for `included`, one per parent
+/// The `COPY` and `ln -sfn` decisions for `included`, one per parent
 /// directory in path order. Files under `/srv` are left out: the `/var`
 /// strategy carries them, never a `COPY`.
 fn directory_copies<'a>(included: &[&'a UnmanagedFile]) -> Vec<DirectoryCopy<'a>> {
@@ -403,21 +405,28 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
             }
         }
 
-        // Symlinks are recreated with ln -sf so the image preserves
-        // the original link topology. Unknown targets get advisory comments.
-        // `mkdir -p` first: no COPY creates a directory that holds only
-        // links, and `ln` does not create its link's parent. `--` ends
-        // option parsing, so a target such as `--x` stays an operand.
+        // Symlinks no COPY carries are recreated with `ln -sfn` so the
+        // image preserves the original link topology. Unknown targets get
+        // advisory comments. `mkdir -p` first: no COPY creates a directory
+        // that holds only links, and `ln` does not create its link's
+        // parent. `--` ends option parsing, so a target such as `--x`
+        // stays an operand. `-n` replaces a destination that is already a
+        // symlink to a directory, such as one the base image ships, where
+        // plain `-f` follows it and creates the link inside that
+        // directory. A real directory at the destination still gets the
+        // link inside it; the base images ship `/opt` and `/usr/local`
+        // empty, so only an earlier step of the build could put one there.
         for file in symlinks {
             if file.link_target.is_empty() {
                 lines.push(format!(
                     "# SYMLINK: {} -> unknown (recreate manually)",
                     file.path
                 ));
+            } else if is_copied(&copies, file) {
+                // The `COPY` that carries it recreates the link with its
+                // recorded target. An `ln` after it would follow the link
+                // if it points at a directory.
             } else if let Some(why) = symlink_refusal(file) {
-                if is_copied(&copies, file) {
-                    continue;
-                }
                 lines.push(format!(
                     "# FIXME: unmanaged symlink {} -> {} not recreated: {why}",
                     sanitize_for_comment(&file.path),
@@ -425,7 +434,7 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 ));
             } else {
                 lines.push(format!(
-                    "RUN mkdir -p -- {} && ln -sf -- {} {}",
+                    "RUN mkdir -p -- {} && ln -sfn -- {} {}",
                     shell_escape(dir),
                     shell_escape(&file.link_target),
                     shell_escape(&file.path)
@@ -1016,7 +1025,7 @@ mod tests {
     }
 
     #[test]
-    fn symlinks_render_as_ln_sf() {
+    fn symlinks_render_as_ln_sfn() {
         let snap = test_snapshot_with_unmanaged(vec![UnmanagedFile {
             path: "/opt/app/bin/tool".into(),
             file_type: FileType::Symlink,
@@ -1027,10 +1036,10 @@ mod tests {
         let lines = unmanaged_file_lines(&snap);
         assert!(
             lines.contains(
-                &"RUN mkdir -p -- '/opt/app/bin' && ln -sf -- '/opt/app/lib/tool-1.2' '/opt/app/bin/tool'"
+                &"RUN mkdir -p -- '/opt/app/bin' && ln -sfn -- '/opt/app/lib/tool-1.2' '/opt/app/bin/tool'"
                     .to_string()
             ),
-            "symlink must produce mkdir -p of its directory, then ln -sf, got: {lines:?}"
+            "symlink must produce mkdir -p of its directory, then ln -sfn, got: {lines:?}"
         );
     }
 
@@ -1055,14 +1064,14 @@ mod tests {
         let lines = unmanaged_file_lines(&snap);
         let ln_lines: Vec<_> = lines
             .iter()
-            .filter(|l| l.contains(" && ln -sf -- "))
+            .filter(|l| l.contains(" && ln -sfn -- "))
             .collect();
-        assert_eq!(ln_lines.len(), 2, "each symlink must produce a RUN ln -sf");
+        assert_eq!(ln_lines.len(), 2, "each symlink must produce a RUN ln -sfn");
     }
 
     /// `/srv` resolves into `/var/srv` on the bootc target family, so a
     /// finding there gets the `/var` strategy note instead of `COPY` or
-    /// `ln -sf`, while `/opt` beside it still copies.
+    /// `ln -sfn`, while `/opt` beside it still copies.
     #[test]
     fn srv_findings_route_to_var_strategy_not_copy() {
         let snap = test_snapshot_with_unmanaged(vec![
@@ -1175,7 +1184,7 @@ mod tests {
     }
 
     /// An `/opt` symlink may point into `/srv`; it is still an image path
-    /// and keeps its `ln -sf`, and no `/var` strategy note is emitted.
+    /// and keeps its `ln -sfn`, and no `/var` strategy note is emitted.
     #[test]
     fn opt_symlink_targeting_srv_is_still_recreated() {
         let snap = test_snapshot_with_unmanaged(vec![UnmanagedFile {
@@ -1188,7 +1197,7 @@ mod tests {
         let lines = unmanaged_file_lines(&snap);
         assert!(
             lines.contains(
-                &"RUN mkdir -p -- '/opt/app' && ln -sf -- '/srv/app/data' '/opt/app/data'"
+                &"RUN mkdir -p -- '/opt/app' && ln -sfn -- '/srv/app/data' '/opt/app/data'"
                     .to_string()
             ),
             "got: {lines:?}"
@@ -1222,9 +1231,152 @@ mod tests {
             "regular file must produce COPY"
         );
         assert!(
-            lines.iter().any(|l| l.contains(" && ln -sf -- ")),
-            "symlink must produce ln -sf"
+            lines.iter().any(|l| l.contains(" && ln -sfn -- ")),
+            "symlink must produce ln -sfn"
         );
+    }
+
+    /// A symlink a `COPY` line carries gets no `ln` line: the `COPY`
+    /// already recreates it with its recorded target, by the same decision
+    /// the ownership count and the FIXMEs read. Any other link gets
+    /// `ln -sfn`, and a link with no recorded target keeps its comment.
+    #[test]
+    fn a_symlink_gets_an_ln_line_only_when_no_copy_carries_it() {
+        let file = |path: &str| payload(path, FileType::DataFile);
+        // (case, items, the symlink lines expected, in order)
+        let cases: Vec<(&str, Vec<UnmanagedFile>, &[&str])> = vec![
+            (
+                "a link in a directory a COPY carries",
+                vec![
+                    file("/opt/app/a"),
+                    file("/opt/app/b"),
+                    link("/opt/app/current", "v2"),
+                ],
+                &[],
+            ),
+            (
+                "a link under an ancestor a COPY carries",
+                vec![
+                    file("/opt/app/a"),
+                    file("/opt/app/b"),
+                    link("/opt/app/sub/current", "v2"),
+                ],
+                &[],
+            ),
+            (
+                "a link no COPY carries",
+                vec![file("/opt/app/a"), link("/opt/app/current", "v2")],
+                &["RUN mkdir -p -- '/opt/app' && ln -sfn -- 'v2' '/opt/app/current'"],
+            ),
+            (
+                "a link under a refused ancestor",
+                vec![
+                    file("/opt/my app/a"),
+                    file("/opt/my app/b"),
+                    link("/opt/my app/sub/current", "v2"),
+                ],
+                &["RUN mkdir -p -- '/opt/my app/sub' && ln -sfn -- 'v2' '/opt/my app/sub/current'"],
+            ),
+            (
+                "a link beside a carried directory sharing its name prefix",
+                vec![
+                    file("/opt/app/a"),
+                    file("/opt/app/b"),
+                    link("/opt/app2/current", "v2"),
+                ],
+                &["RUN mkdir -p -- '/opt/app2' && ln -sfn -- 'v2' '/opt/app2/current'"],
+            ),
+            (
+                "a link with no recorded target under a carried directory",
+                vec![
+                    file("/opt/app/a"),
+                    file("/opt/app/b"),
+                    link("/opt/app/current", ""),
+                ],
+                &["# SYMLINK: /opt/app/current -> unknown (recreate manually)"],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (name, items, want) in cases {
+            let lines = unmanaged_file_lines(&test_snapshot_with_unmanaged(items));
+            let got: Vec<&str> = lines
+                .iter()
+                .map(String::as_str)
+                .filter(|l| {
+                    l.contains(" ln ") || l.starts_with("# SYMLINK:") || l.contains("symlink")
+                })
+                .collect();
+            if got != want {
+                wrong.push(format!("{name}: {got:#?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// The rendered `ln` line, run against a tree where `current -> v2`
+    /// already sits beside a populated `v2/`, leaves `current` pointing at
+    /// `v2` and puts nothing inside `v2/`. Without `-n`, `ln` follows a
+    /// destination symlink to a directory and creates `v2/v2`. The link
+    /// is there first either because a directory `COPY` carried it or
+    /// because the base image ships it. Runs the line's own command under
+    /// `sh`, with its absolute paths moved under a temporary root.
+    #[cfg(unix)]
+    #[test]
+    fn a_rendered_ln_replaces_a_link_to_a_directory_instead_of_following_it() {
+        let file = |path: &str| payload(path, FileType::DataFile);
+        // (case, items, `ln` lines expected)
+        let cases: Vec<(&str, Vec<UnmanagedFile>, usize)> = vec![
+            (
+                "a directory COPY carries the link",
+                vec![
+                    file("/opt/app/README"),
+                    file("/opt/app/VERSION"),
+                    file("/opt/app/v2/run"),
+                    link("/opt/app/current", "v2"),
+                ],
+                0,
+            ),
+            (
+                "no COPY carries the link and the base image ships it",
+                vec![file("/opt/app/v2/run"), link("/opt/app/current", "v2")],
+                1,
+            ),
+        ];
+        for (name, items, want_ln) in cases {
+            let root = tempfile::tempdir().expect("a root");
+            let root_str = root.path().to_str().expect("a UTF-8 root");
+            assert!(!root_str.contains('\''), "{root_str}");
+            let app = root.path().join("opt/app");
+            std::fs::create_dir_all(app.join("v2")).unwrap();
+            std::fs::write(app.join("v2/run"), "run").unwrap();
+            std::os::unix::fs::symlink("v2", app.join("current")).unwrap();
+
+            let lines = unmanaged_file_lines(&test_snapshot_with_unmanaged(items));
+            let commands: Vec<String> = lines
+                .iter()
+                .filter_map(|l| l.strip_prefix("RUN "))
+                .filter(|c| c.contains(" ln "))
+                .map(|c| c.replace("'/", &format!("'{root_str}/")))
+                .collect();
+            for command in &commands {
+                let out = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(command)
+                    .output()
+                    .expect("sh runs");
+                assert!(out.status.success(), "{name}: {command}: {out:?}");
+            }
+            assert!(
+                std::fs::symlink_metadata(app.join("v2/v2")).is_err(),
+                "{name}: {commands:?} created v2/v2"
+            );
+            assert_eq!(
+                std::fs::read_link(app.join("current")).expect("current is a link"),
+                std::path::Path::new("v2"),
+                "{name}"
+            );
+            assert_eq!(commands.len(), want_ln, "{name}: {commands:?}");
+        }
     }
 
     /// A FIXME says a file, directory or symlink is not copied only when
@@ -1524,7 +1676,7 @@ mod tests {
                 "{path}: recreated in:\n{containerfile}"
             );
         }
-        assert!(containerfile.contains("ln -sf -- '/usr/local/bin/run-tool' '/opt/tool/bin/run'"));
+        assert!(containerfile.contains("ln -sfn -- '/usr/local/bin/run-tool' '/opt/tool/bin/run'"));
 
         // `--no-redaction` keeps the targets, as it keeps every payload.
         let mut raw = test_snapshot_with_unmanaged(items());

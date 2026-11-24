@@ -29,7 +29,7 @@ Which proof depends on how the format reads the value:
 |---|---|---|---|
 | Containerfile `COPY` argument (unmanaged path, config root) | path | `CopyToken`: no line break, control, whitespace, `\`, `$`, `*`, `?` or `[` | `render::safety` |
 | Staged path under `config/`, `drop-ins/`, `env-files/` | relative path | `validate_path`: no NUL, line break, control, `..` or leading `/` | `render::configtree` |
-| Containerfile `RUN mkdir -p -- '<parent>' && ln -sf -- '<target>' '<path>'` | path, target | `validate_path` on the path, `has_line_break_or_control` on the target, then single-quoted after `--`, since a literal target may open with `-` | `render::unmanaged` |
+| Containerfile `RUN mkdir -p -- '<parent>' && ln -sfn -- '<target>' '<path>'` | path, target | `validate_path` on the path, `has_line_break_or_control` on the target, then single-quoted after `--`, since a literal target may open with `-` | `render::unmanaged` |
 | Containerfile `FROM` | image reference | `BareWord::parse_image_ref` | `render::safety` |
 | Containerfile `dnf group install "<name>"` | group name | `double_quoted_word_refusal`, then `operand_refusal` | `render::safety` |
 | Containerfile `RUN` operand (`dnf install`, `dnf module enable`, `dnf versionlock add`, `setsebool`, `systemctl enable`/`disable`/`mask`, `rpm --import`) | package name, module name, stream and profiles, versionlock pattern, boolean name and value, unit name | `shell_operand_refusal`: `sanitize_shell_value`, then `operand_refusal` (no leading `-` or `#`) | `render::safety` |

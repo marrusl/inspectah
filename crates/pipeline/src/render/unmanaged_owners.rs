@@ -11,8 +11,8 @@
 //! the audit report.
 //!
 //! Only regular files are named. A symlink's mode is meaningless and the
-//! export recreates it with `ln -sf`; a directory's owner and mode are
-//! not recorded by the scan, which records files only.
+//! export recreates it with `COPY` or `ln -sfn`; a directory's owner and
+//! mode are not recorded by the scan, which records files only.
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};

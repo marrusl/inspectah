@@ -271,7 +271,7 @@ fn copy_lines_render_benign_paths() {
         "{out}"
     );
     assert!(
-        out.contains("RUN mkdir -p -- '/opt/app' && ln -sf -- '../app-1.2' '/opt/app/current'"),
+        out.contains("RUN mkdir -p -- '/opt/app' && ln -sfn -- '../app-1.2' '/opt/app/current'"),
         "{out}"
     );
     let out = materialized_containerfile(&with_config_file("/etc/app/app.conf"));
