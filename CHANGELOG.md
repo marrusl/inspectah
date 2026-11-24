@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The audit report and refine no longer say first boot recreates the NVMe host id**: the RHEL 9 bootc base image ships its own `/etc/nvme/hostnqn` and `hostid`, so every machine built from it shares one NVMe host identity. The row for those files, in the audit report and in refine's machine-state block, now says so and how to give each machine its own.
 - **Refine says why unmanaged files make an export sensitive**: when redacted or left-out unmanaged files were the only sensitive content, an export without the acknowledgment was refused with an empty `sensitivity_summary`, and the refine export's warnings left out the line the scan prints about them. The summary now lists each count, and the export warnings carry the scan's notice. The scan labels that line `Notice:` instead of `Note:`, like its other notices.
 - **The `tmpfiles.d` account notice covers quoted lines, the HTML report and refine**: a carried line with a quoted or escaped path or owner is now named when its user or group is missing from the image, and the notice now appears in `audit-report.html` and refine's Configuration Files section as well as the Containerfile and `audit-report.md`.
+- **The audit report lists Non-RPM Software in a stable order**: methods with the same count, such as `git repo` and `gem system` with one item each, came out in a different order on each run, so two reports of the same snapshot differed. Equal counts are now listed by method name.
 
 ## [0.9.0-beta.7] - 2026-11-23
 

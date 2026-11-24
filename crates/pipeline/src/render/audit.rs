@@ -1482,7 +1482,10 @@ fn render_software_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) 
                         .or_insert(0) += 1;
                 }
                 let mut methods: Vec<_> = by_method.into_iter().collect();
-                methods.sort_by_key(|b| std::cmp::Reverse(b.1));
+                // Highest count first, then by method name: the map's
+                // iteration order is random, so equal counts need a tie
+                // break or the report differs from run to run.
+                methods.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
                 lines.push(format!("#### Items ({item_count})"));
                 lines.push(String::new());
                 for (method, count) in &methods {
@@ -1549,6 +1552,43 @@ mod tests {
             packages: HashMap::new(),
             extracted_at: "2026-05-18T14:32:00Z".into(),
         }
+    }
+
+    /// The Non-RPM Software tally lists equal counts by method name, so
+    /// the same items render identically whatever their order and however
+    /// the counting map iterates.
+    #[test]
+    fn non_rpm_tally_breaks_count_ties_by_method() {
+        use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+        let item = |method: &str| NonRpmItem {
+            method: method.into(),
+            ..Default::default()
+        };
+        let methods = ["readelf (go)", "pip", "gem system", "git repo", "pip"];
+        let render = |order: &[&str]| {
+            render_audit(&InspectionSnapshot {
+                non_rpm_software: Some(NonRpmSoftwareSection {
+                    items: order.iter().map(|m| item(m)).collect(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        };
+        let forward = render(&methods);
+        let mut reversed = methods;
+        reversed.reverse();
+        for _ in 0..8 {
+            assert_eq!(render(&reversed), forward);
+        }
+        let tally = forward
+            .split("#### Items (5)\n\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\n\n").next())
+            .expect("an Items tally");
+        assert_eq!(
+            tally.trim_end(),
+            "- pip: 2\n- gem system: 1\n- git repo: 1\n- readelf (go): 1"
+        );
     }
 
     /// A failed `rpm -Va` is listed once under Warnings, in the collector's
