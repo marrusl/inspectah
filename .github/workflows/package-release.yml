@@ -283,7 +283,7 @@ jobs:
           if [ "$rc" -eq "$COPR_BUILD_FAILED_EXIT" ]; then
             echo "::error::the COPR build failed; its log is linked from https://copr.fedorainfracloud.org/coprs/${COPR_PROJECT}/builds/" >&2
           else
-            echo "::error::copr-cli could not submit the build (exit ${rc}). If the log above mentions the token or login, it has expired: the token lasts 180 days, so generate a new one at https://copr.fedorainfracloud.org/api/ and replace the COPR_CONFIG secret." >&2
+            echo "::error::copr-cli failed while submitting or watching the build (exit ${rc}). The build may already be submitted: check https://copr.fedorainfracloud.org/coprs/${COPR_PROJECT}/builds/ before re-running. Only if the log above shows an authentication or token error has the token expired: it lasts 180 days, so generate a new one at https://copr.fedorainfracloud.org/api/ and replace the COPR_CONFIG secret." >&2
           fi
           exit "$rc"
 
