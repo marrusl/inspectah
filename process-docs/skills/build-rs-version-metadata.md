@@ -50,10 +50,22 @@ worktree: `git tag v<version>` on HEAD made the next release build rerun the
 script and print the bare version, `git tag -d` brought the `+g` form
 back, and a build with nothing changed stayed `Fresh`.
 
-A watched path that does not exist makes cargo rerun on every build, so
-`packed-refs` is watched only when present. A tag that lands only in
-`packed-refs` when that file did not exist at the last build is missed;
-`touch crates/cli/build.rs` forces the rerun.
+`packed-refs` is watched even when it does not exist, so a tag that first
+appears in a newly created `packed-refs` still reruns the script. The cost:
+cargo treats a missing watched path as changed (`cargo build -v` says "the
+file `packed-refs` is missing"), so until the file exists every release
+build reruns the script and recompiles cli. A clone, `git gc` or `git
+pack-refs` creates it, and a CI build runs cargo once, so in practice only
+a fresh `git init` pays. `refs` is a directory and cannot cover this: it
+does not contain `packed-refs`, and watching the whole git dir would rerun
+on every index or object write.
+
+`scripts/tests/cli-build-version-test.sh` copies `build.rs` into a
+throwaway crate in a throwaway repository with no `packed-refs`, then
+changes only `packed-refs` between release builds: created with the
+matching tag, a different tag, the matching tag again, no tag. Each step
+must flip the printed version. It runs in CI (`rust-ci.yml`), not in the
+pre-commit hook.
 
 ## Debug builds read no git
 Debug and test builds emit `<version>+dev` and watch only `build.rs`.

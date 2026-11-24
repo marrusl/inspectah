@@ -16,6 +16,7 @@ on:
       - 'crates/web/ui/e2e/**'
       - 'crates/web/ui/playwright.config.ts'
       - 'crates/web/build.rs'
+      - 'crates/cli/build.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -55,6 +56,9 @@ jobs:
       - name: Test the release version check
         if: ${{ !cancelled() }}
         run: scripts/tests/check-version-stamp-test.sh
+      - name: Check that a tag in packed-refs reruns the cli build script
+        if: ${{ !cancelled() }}
+        run: scripts/tests/cli-build-version-test.sh
       - name: Check tracked tarballs
         if: ${{ !cancelled() }}
         run: scripts/check-sensitive-tarballs.sh --tracked

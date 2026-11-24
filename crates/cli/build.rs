@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::process::Command;
 
 /// Build metadata appended to the version in non-release builds.
@@ -45,9 +44,13 @@ fn release_version(version: &str) -> String {
 
 /// Rerun when HEAD moves or a tag is created or deleted. `--git-path` finds
 /// the files in a linked worktree too, where `.git` is a file: HEAD is in
-/// the worktree's own git dir and refs live in the common one. A path that
-/// does not exist would make cargo rerun on every build, so `packed-refs`
-/// is watched only when present.
+/// the worktree's own git dir and refs live in the common one.
+///
+/// `packed-refs` is watched even when it does not exist yet, so a tag that
+/// first appears in a newly created `packed-refs` still reruns the script.
+/// Cargo treats a missing watched path as changed, so until the file exists
+/// every release build reruns the script and rebuilds cli. A clone or any
+/// `git gc` or `git pack-refs` creates it.
 fn watch_git_refs() {
     let Some(paths) = git(&[
         "rev-parse",
@@ -61,7 +64,7 @@ fn watch_git_refs() {
     ]) else {
         return;
     };
-    for path in paths.lines().filter(|p| Path::new(p).exists()) {
+    for path in paths.lines() {
         println!("cargo:rerun-if-changed={path}");
     }
 }
