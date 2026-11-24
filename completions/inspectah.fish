@@ -32,7 +32,7 @@ complete -c inspectah -n "__fish_inspectah_needs_command" -f -a "scan" -d 'Scan 
 complete -c inspectah -n "__fish_inspectah_needs_command" -f -a "refine" -d 'Interactively refine scan output and re-render'
 complete -c inspectah -n "__fish_inspectah_needs_command" -f -a "aggregate" -d 'Combine multiple host scan tarballs into an aggregate snapshot'
 complete -c inspectah -n "__fish_inspectah_needs_command" -f -a "build" -d 'Build a bootc container image from an inspectah tarball snapshot'
-complete -c inspectah -n "__fish_inspectah_needs_command" -f -a "version" -d 'Print version, commit, and build date'
+complete -c inspectah -n "__fish_inspectah_needs_command" -f -a "version" -d 'Print the version'
 complete -c inspectah -n "__fish_inspectah_needs_command" -f -a "completions" -d 'Generate shell completions'
 complete -c inspectah -n "__fish_inspectah_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c inspectah -n "__fish_inspectah_using_subcommand scan" -s o -l output -d 'Output file path (tarball) or directory (with --inspect-only)' -r -F
@@ -82,6 +82,6 @@ complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish
 complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "refine" -d 'Interactively refine scan output and re-render'
 complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "aggregate" -d 'Combine multiple host scan tarballs into an aggregate snapshot'
 complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "build" -d 'Build a bootc container image from an inspectah tarball snapshot'
-complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "version" -d 'Print version, commit, and build date'
+complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "version" -d 'Print the version'
 complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "completions" -d 'Generate shell completions'
 complete -c inspectah -n "__fish_inspectah_using_subcommand help; and not __fish_seen_subcommand_from scan refine aggregate build version completions help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'

@@ -175,7 +175,7 @@ _inspectah_commands() {
 'refine:Interactively refine scan output and re-render' \
 'aggregate:Combine multiple host scan tarballs into an aggregate snapshot' \
 'build:Build a bootc container image from an inspectah tarball snapshot' \
-'version:Print version, commit, and build date' \
+'version:Print the version' \
 'completions:Generate shell completions' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -203,7 +203,7 @@ _inspectah__subcmd__help_commands() {
 'refine:Interactively refine scan output and re-render' \
 'aggregate:Combine multiple host scan tarballs into an aggregate snapshot' \
 'build:Build a bootc container image from an inspectah tarball snapshot' \
-'version:Print version, commit, and build date' \
+'version:Print the version' \
 'completions:Generate shell completions' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
