@@ -6358,3 +6358,94 @@ async fn export_header_repeats_the_unmanaged_notice_past_a_run_of_repo_notices()
     assert_eq!(notices.len(), 1, "{texts:#?}");
     assert_eq!(notices[0]["kind"], "notice");
 }
+
+/// Repo file parses one refine operation may make, end to end: the
+/// `/api/op` handler applying a package `SetInclude` and building the view
+/// it returns, on a host whose `redhat.repo` holds 500 sections.
+///
+/// Measured at 12 on 2026-11-23: the operation builds `InstallRepos` a
+/// few times, and each build parses the host's two repo files once. The
+/// budget adds a third for margin, so an extra build or two per operation
+/// still passes, while it stays far below what a regression costs: putting
+/// the beta.7 per-candidate parse back into routing (which made each
+/// operation on a subscribed RHEL 9 host take about 13 s) measured 3078
+/// parses here. Counting parses, not time, keeps the test deterministic.
+const REPO_PARSES_PER_OP_BUDGET: usize = 16;
+
+/// Sections in each large repo file, about a subscribed RHEL 9 host's
+/// `redhat.repo`.
+const LARGE_REPO_SECTIONS: usize = 500;
+
+/// Sections in the custom repo file the export stages. Small, because
+/// building the session costs time in each section of every file.
+const STAGED_REPO_SECTIONS: usize = 10;
+
+/// One refine operation stays within a fixed number of repo file parses
+/// however many sections the host's repo files hold.
+#[tokio::test(flavor = "current_thread")]
+async fn one_refine_op_parses_repo_files_within_a_fixed_budget() {
+    use inspectah_core::types::repo::{RepoAttribution, RepoId, parse_count};
+    use inspectah_core::types::rpm::RepoFile;
+
+    let repo_file = |name: &str, prefix: &str, sections: usize, default: bool| RepoFile {
+        path: format!("/etc/yum.repos.d/{name}"),
+        content: (0..sections)
+            .map(|i| {
+                format!(
+                    "[{prefix}-{i}]\nbaseurl=https://cdn.example/{i}\nenabled={}\n",
+                    i % 2
+                )
+            })
+            .collect(),
+        is_default_repo: default,
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    let package = |name: &str, repo: &str| PackageEntry {
+        name: name.into(),
+        version: "1".into(),
+        release: "1.el9".into(),
+        arch: "x86_64".into(),
+        state: PackageState::Added,
+        source_repo: repo.into(),
+        repo_attribution: RepoAttribution::Exact {
+            id: RepoId::new(repo),
+        },
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            package("from-rh", "rh-1"),
+            package("from-rh-disabled", "rh-2"),
+            package("from-custom", "custom-3"),
+            package("from-gone", "gone"),
+        ],
+        repo_files: vec![
+            repo_file("redhat.repo", "rh", LARGE_REPO_SECTIONS, true),
+            repo_file("custom.repo", "custom", STAGED_REPO_SECTIONS, false),
+        ],
+        ..Default::default()
+    });
+    // Building the session parses too; only the operation is counted.
+    let app = app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    }));
+
+    // A current-thread runtime runs the handler on this thread, so the
+    // thread-local counter sees every parse it makes.
+    parse_count::reset();
+    set_package_include(&app, "from-rh", "x86_64", false).await;
+    let parses = parse_count::get();
+
+    assert!(
+        parses > 0,
+        "the operation must reach repo routing to test anything"
+    );
+    assert!(
+        parses <= REPO_PARSES_PER_OP_BUDGET,
+        "one operation parsed repo files {parses} times, over the budget of \
+         {REPO_PARSES_PER_OP_BUDGET}"
+    );
+}

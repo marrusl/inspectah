@@ -21,6 +21,9 @@ tempfile.workspace = true
 regex = "1"
 
 [dev-dependencies]
+# Counts repo file parses, so a test can bound the parses one refine
+# operation makes. A dev-dependency feature, so release builds never see it.
+inspectah-core = { path = "../core", features = ["test-support"] }
 tempfile.workspace = true
 # `#[tokio::test]` and the upload tests' timeouts need the macros and the
 # timer, which the shipped feature list leaves out.
