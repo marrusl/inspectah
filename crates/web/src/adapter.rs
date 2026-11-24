@@ -588,6 +588,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         not_carried_packages: decisions.not_carried.clone(),
         not_carried_notice: decisions.not_carried_notice.clone(),
         tmpfiles_missing_owners: decisions.tmpfiles_missing_owners.clone(),
+        tmpfiles_owner_remedy: (!decisions.tmpfiles_missing_owners.is_empty())
+            .then(inspectah_pipeline::render::tmpfiles_accounts::remedy_text),
         session_is_sensitive: decisions.is_sensitive,
         language_packages,
         unmanaged_files,
@@ -648,6 +650,7 @@ pub fn machine_state_rows(snap: &InspectionSnapshot) -> Vec<MachineStateRowDto> 
                 mode: row.mode.map(|m| format!("{m:04o}")),
                 size: row.size,
                 notice: row.member.notice().into(),
+                member_notice: inspectah_pipeline::render::machine_state::member_notice(row.member),
                 item_id: (override_level != OverrideLevel::Never).then(|| ItemId::Config {
                     path: row.path.to_string(),
                 }),

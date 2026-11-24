@@ -1,12 +1,11 @@
 /**
  * The tmpfiles.d owner notice in Configuration Files: the carried lines
  * whose user or group the image lacks, as `tmpfiles_missing_owners`
- * sends them, with the remedy the audit reports print.
+ * sends them, with the remedy `tmpfiles_owner_remedy` sends.
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { MainContent } from "../MainContent";
-import { TMPFILES_OWNER_REMEDY } from "../TmpfilesOwnerNotice";
 import type { TmpfilesMissingOwner, ViewResponse } from "../../api/types";
 import { emptyView } from "../../test-utils/emptyView";
 
@@ -29,6 +28,9 @@ const GROUP_ONLY: TmpfilesMissingOwner = {
   group: "appgroup",
 };
 
+/** Not the real remedy: the banner shows whatever text it is sent. */
+const REMEDY = "Remedy text from the server.";
+
 function renderConfig(view: ViewResponse) {
   render(
     <MainContent
@@ -49,6 +51,7 @@ describe("tmpfiles.d owner notice", () => {
     renderConfig({
       ...emptyView(),
       tmpfiles_missing_owners: [BOTH, GROUP_ONLY],
+      tmpfiles_owner_remedy: REMEDY,
     });
     const notice = screen.getByTestId("tmpfiles-owner-notice");
     expect(notice).toHaveTextContent(
@@ -59,7 +62,15 @@ describe("tmpfiles.d owner notice", () => {
       "/etc/tmpfiles.d/appone.conf: /var/lib/appone/cache needs user appuser, group appgroup",
       "/etc/tmpfiles.d/apptwo.conf: /var/lib/app two needs group appgroup",
     ]);
-    expect(notice).toHaveTextContent(TMPFILES_OWNER_REMEDY);
+    expect(within(notice).getByTestId("tmpfiles-owner-remedy")).toHaveTextContent(
+      REMEDY,
+    );
+  });
+
+  it("shows no remedy paragraph when the server sends none", () => {
+    renderConfig({ ...emptyView(), tmpfiles_missing_owners: [BOTH] });
+    const notice = screen.getByTestId("tmpfiles-owner-notice");
+    expect(within(notice).queryByTestId("tmpfiles-owner-remedy")).toBeNull();
   });
 
   it("renders nothing when the field is absent", () => {

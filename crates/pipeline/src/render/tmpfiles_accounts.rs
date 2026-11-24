@@ -46,7 +46,7 @@ const REMEDY: [&str; 3] = [
     "systemd-tmpfiles-setup.service still reports success.",
 ];
 
-/// [`REMEDY`] as one paragraph, for the audit reports.
+/// [`REMEDY`] as one paragraph, for the audit reports and refine's view.
 pub fn remedy_text() -> String {
     REMEDY.join(" ")
 }

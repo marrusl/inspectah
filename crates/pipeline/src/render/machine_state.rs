@@ -327,8 +327,8 @@ pub fn audit_table(snap: &InspectionSnapshot) -> Vec<String> {
         };
         let notice = if row.included {
             "included in the image by override".to_string()
-        } else if row.member == MachineStateMember::Carriable(CarriableMember::NvmeHostId) {
-            NVME_HOST_ID_NOTICE.to_string()
+        } else if let Some(text) = member_notice(row.member) {
+            text.to_string()
         } else {
             notice_text(row.member.notice())
         };
@@ -353,6 +353,14 @@ pub fn audit_table(snap: &InspectionSnapshot) -> Vec<String> {
 }
 
 /// A notice as one line of prose.
+/// The member's own notice, in place of its [`ProvisioningNotice`]'s
+/// generic line, when that line is wrong for it. The audit report prints
+/// it and refine's view sends it, so the two say the same.
+pub fn member_notice(member: MachineStateMember) -> Option<&'static str> {
+    (member == MachineStateMember::Carriable(CarriableMember::NvmeHostId))
+        .then_some(NVME_HOST_ID_NOTICE)
+}
+
 pub fn notice_text(notice: ProvisioningNotice) -> String {
     use inspectah_core::types::machine_state::RecreatedBy;
     match notice {

@@ -708,6 +708,10 @@ pub struct ViewResponse {
     /// them. Empty when absent.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tmpfiles_missing_owners: Vec<MissingOwner>,
+    /// What the operator does about `tmpfiles_missing_owners`, in the
+    /// audit reports' words. Absent exactly when those rows are.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tmpfiles_owner_remedy: Option<String>,
     pub session_is_sensitive: bool,
     /// Language package environments (Tier 1 non-RPM). Empty when absent.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -730,7 +734,7 @@ pub struct ViewResponse {
 }
 
 /// One machine-state row. The UI takes the control from `override`, the
-/// notice line from `notice` and the metadata line from
+/// notice line from `member_notice` when present and otherwise `notice`, and the metadata line from
 /// `content_captured`, `mode` and `size`; it never derives a member's
 /// treatment from its path, member or reason.
 #[derive(Serialize, Clone, Debug)]
@@ -749,6 +753,11 @@ pub struct MachineStateRowDto {
     /// Withheld rows only.
     pub size: Option<u64>,
     pub notice: ProvisioningNoticeDto,
+    /// The member's own notice, which replaces `notice`'s generic line, in
+    /// the audit report's words. Absent for every member whose generic
+    /// line holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_notice: Option<&'static str>,
     /// The `SetInclude` target. Absent exactly when `override` is `never`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item_id: Option<ItemId>,

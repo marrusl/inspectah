@@ -2,24 +2,17 @@ import { Alert } from "@patternfly/react-core";
 import type { TmpfilesMissingOwner } from "../api/types";
 
 /**
- * What the operator does about a named line. Mirrors `REMEDY` in
- * `crates/pipeline/src/render/tmpfiles_accounts.rs`, which the
- * Containerfile and both audit reports print, so refine says the same.
- */
-export const TMPFILES_OWNER_REMEDY =
-  "Create each missing user or group (useradd in refine) or provision it, so " +
-  "its line can run. Otherwise systemd-tmpfiles skips the line, and " +
-  "systemd-tmpfiles-setup.service still reports success.";
-
-/**
  * The carried tmpfiles.d lines that name an account the image does not
- * create, shown in Configuration Files as the audit reports show them.
- * Renders nothing when there are none.
+ * create, shown in Configuration Files as the audit reports show them,
+ * with the remedy the server sends in the reports' words. Renders nothing
+ * when there are none.
  */
 export function TmpfilesOwnerNotice({
   rows,
+  remedy,
 }: {
   rows: TmpfilesMissingOwner[] | undefined;
+  remedy: string | undefined;
 }) {
   if (!rows || rows.length === 0) return null;
   return (
@@ -51,7 +44,7 @@ export function TmpfilesOwnerNotice({
           </li>
         ))}
       </ul>
-      <p>{TMPFILES_OWNER_REMEDY}</p>
+      {remedy && <p data-testid="tmpfiles-owner-remedy">{remedy}</p>}
     </Alert>
   );
 }

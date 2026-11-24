@@ -222,3 +222,41 @@ async fn fleet_class_rows_and_key_edits_are_refused_over_http() {
     )
     .await;
 }
+
+/// The NVMe host id row carries its own notice, the audit report's text,
+/// in place of its member's generic first-boot line; a member whose
+/// generic line holds carries none.
+#[tokio::test]
+async fn the_nvme_host_id_row_carries_the_audit_reports_notice() {
+    use inspectah_core::types::machine_state::{CarriableMember, MachineStateMember};
+    const HOSTNQN: &str = "/etc/nvme/hostnqn";
+    let snap = scan_with(
+        SysctlHost::new()
+            .rpm_owned(IQN, "iscsi-initiator-utils")
+            .rpm_va("S.5....T.", IQN)
+            .file(IQN, "InitiatorName=iqn.1994-05.com.redhat:api\n")
+            .rpm_owned(HOSTNQN, "nvme-cli")
+            .rpm_va("S.5....T.", HOSTNQN)
+            .file(HOSTNQN, "nqn.2014-08.org.nvmexpress:uuid:api\n"),
+        inspectors(),
+    );
+    let (_, view) = send(&app(snap), "GET", "/api/view", None).await;
+    let row = |path: &str| {
+        view["machine_state"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["path"] == path)
+            .unwrap_or_else(|| panic!("a view row for {path}: {view}"))
+            .clone()
+    };
+    let expected = inspectah_pipeline::render::machine_state::member_notice(
+        MachineStateMember::Carriable(CarriableMember::NvmeHostId),
+    )
+    .expect("the NVMe host id member has its own notice");
+    let nvme = row(HOSTNQN);
+    assert_eq!(nvme["member_notice"], expected, "{nvme}");
+    assert!(!expected.contains("first boot"), "{expected}");
+    let iqn = row(IQN);
+    assert!(iqn.get("member_notice").is_none(), "{iqn}");
+}

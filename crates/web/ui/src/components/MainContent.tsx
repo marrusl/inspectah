@@ -1002,7 +1002,10 @@ export function MainContent({
             }
           />
         )}
-        <TmpfilesOwnerNotice rows={viewData?.tmpfiles_missing_owners} />
+        <TmpfilesOwnerNotice
+          rows={viewData?.tmpfiles_missing_owners}
+          remedy={viewData?.tmpfiles_owner_remedy}
+        />
         {decisionArea}
         {/* At the foot of the section whatever the list area shows. */}
         <MachineStateGroup

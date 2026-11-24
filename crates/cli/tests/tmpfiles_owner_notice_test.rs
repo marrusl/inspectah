@@ -156,7 +156,8 @@ fn both_exports(
 }
 
 /// Refine's decision data for `snap`: the rows it names, checked to be
-/// the rows the web view sends the client.
+/// the rows the web view sends the client, with the audit report's remedy
+/// exactly when there are rows.
 fn refine_rows(snap: &InspectionSnapshot) -> Vec<MissingOwner> {
     let session = session(snap);
     let rows = session.decisions().tmpfiles_missing_owners.clone();
@@ -167,6 +168,16 @@ fn refine_rows(snap: &InspectionSnapshot) -> Vec<MissingOwner> {
         .map(|v| serde_json::from_value(v.clone()).expect("rows deserialize"))
         .unwrap_or_default();
     assert_eq!(rows, sent, "the web view carries refine's rows");
+    let remedy = view.get("tmpfiles_owner_remedy");
+    if rows.is_empty() {
+        assert!(remedy.is_none(), "no rows, no remedy: {remedy:?}");
+    } else {
+        assert_eq!(
+            remedy.and_then(serde_json::Value::as_str),
+            Some(AUDIT_REMEDY),
+            "the web view carries the audit report's remedy"
+        );
+    }
     rows
 }
 
@@ -330,6 +341,7 @@ fn a_user_the_image_creates_is_not_named_on_either_export_path() {
         "audit-report.html",
     );
     assert!(!html.contains(HTML_HEADING));
+    assert!(refine_rows(&with_useradd(scanned_host(), "appuser")).is_empty());
 }
 
 /// A quoted path holds whitespace, so splitting on whitespace alone reads

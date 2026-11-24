@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MachineStateGroup, NVME_HOST_ID_LINE } from "../MachineStateGroup";
+import { MachineStateGroup } from "../MachineStateGroup";
 import type { MachineStateRowDto, ViewResponse } from "../../api/types";
 
 const FIXTURES = import.meta.glob<{ default: ViewResponse }>(
@@ -146,18 +146,34 @@ describe("MachineStateGroup", () => {
     expect(rowEl(TUNED)).toHaveTextContent("Not needed in the image");
   });
 
-  it("does not say first boot recreates the NVMe host id", async () => {
+  it("shows a member's own notice in place of the generic line", async () => {
     // The recorded scan has no NVMe files; the member shares the iSCSI
     // name's class and first-boot notice, so derive its row from that one.
     const nvme: MachineStateRowDto = {
       ...row(VIEW.machine_state, IQN),
       path: NVME_HOSTNQN,
       member: "nvme_host_id",
+      member_notice: "the member's own notice, from the server",
     };
     expect(nvme.notice).toEqual({ kind: "automatic", by: "first_boot" });
     await renderExpanded([...VIEW.machine_state, nvme]);
     expect(rowEl(NVME_HOSTNQN)).not.toHaveTextContent("first boot");
-    expect(rowEl(NVME_HOSTNQN)).toHaveTextContent(NVME_HOST_ID_LINE);
+    expect(rowEl(NVME_HOSTNQN)).toHaveTextContent(
+      "The member's own notice, from the server",
+    );
+    expect(rowEl(SSH_KEY)).toHaveTextContent("Recreated at first boot");
+  });
+
+  it("shows the generic line when no member notice is sent", async () => {
+    // No member id is special in the client: without `member_notice`,
+    // the NVMe row reads as its notice says.
+    const nvme: MachineStateRowDto = {
+      ...row(VIEW.machine_state, IQN),
+      path: NVME_HOSTNQN,
+      member: "nvme_host_id",
+    };
+    await renderExpanded([...VIEW.machine_state, nvme]);
+    expect(rowEl(NVME_HOSTNQN)).toHaveTextContent("Recreated at first boot");
     expect(rowEl(SSH_KEY)).toHaveTextContent("Recreated at first boot");
   });
 

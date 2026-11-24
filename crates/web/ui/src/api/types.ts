@@ -48,8 +48,8 @@ export type CarriableMember =
 
 /**
  * Rust: MachineStateMember, a flat snake_case string whichever enum holds
- * it. Display only: the UI never derives a row's treatment from it, and
- * reads it only to replace `nvme_host_id`'s notice text.
+ * it. Display only: the UI never derives a row's treatment or text
+ * from it.
  */
 export type MachineStateMember =
   | "machine_id"
@@ -90,8 +90,9 @@ export type ProvisioningNoticeDto =
 
 /**
  * One machine-state row (Rust: `MachineStateRowDto`). The control comes
- * from `override`, the notice line from `notice`, the metadata line from
- * `content_captured`, `mode` and `size`.
+ * from `override`, the notice line from `member_notice` when present and
+ * otherwise `notice`, the metadata line from `content_captured`, `mode`
+ * and `size`.
  */
 export interface MachineStateRowDto {
   path: string;
@@ -107,6 +108,12 @@ export interface MachineStateRowDto {
   /** Withheld rows only. */
   size: number | null;
   notice: ProvisioningNoticeDto;
+  /**
+   * The member's own notice, which replaces `notice`'s generic line, in
+   * the audit report's words (lower case first). Absent for every member
+   * whose generic line holds.
+   */
+  member_notice?: string;
   /** The `SetInclude` target. Absent exactly when `override` is `never`. */
   item_id?: ItemIdConfig;
 }
@@ -1124,6 +1131,11 @@ export interface ViewResponse extends RefinedView {
    * them. Absent when there are none.
    */
   tmpfiles_missing_owners?: TmpfilesMissingOwner[];
+  /**
+   * What the operator does about `tmpfiles_missing_owners`, in the audit
+   * reports' words. Absent exactly when those rows are.
+   */
+  tmpfiles_owner_remedy?: string;
   /**
    * One row per machine-state class row, sorted by path. Class rows are in
    * no other list. Always present.
