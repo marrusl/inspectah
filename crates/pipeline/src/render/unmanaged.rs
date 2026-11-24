@@ -732,7 +732,10 @@ fn unchecked_finding(path: &str, reason: UncheckedPayload) -> RedactionFinding {
 /// Symlinks are recreated as symlinks, not followed, so nothing outside
 /// the scan roots is copied through one. Unless the snapshot is raw, one
 /// whose target holds a credential is withheld instead
-/// ([`screen_link_target`]).
+/// ([`screen_link_target`]). A link the walk recorded no target for is
+/// read again here, and a target that read finds is screened the same way
+/// and then recorded in `snap`, so the Containerfile names the link this
+/// stages instead of asking for it to be recreated by hand.
 ///
 /// Every included regular file is first asked of the scan's read gate
 /// again, through the walk's own check
@@ -824,6 +827,11 @@ pub fn bundle_unmanaged_files(
                 findings.push(finding);
                 continue;
             }
+            // A target only the fallback read is recorded as a scanned one
+            // is, so the snapshot, and the Containerfile rendered from it
+            // after this, describe the link staged here. The renderer's
+            // `ln` refusals then apply to it as to any recorded target.
+            item.link_target.clone_from(&target);
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("failed to create dir for {}", dest.display()))?;
@@ -1287,7 +1295,7 @@ mod tests {
                 &["RUN mkdir -p -- '/opt/app2' && ln -sfn -- 'v2' '/opt/app2/current'"],
             ),
             (
-                "a link with no recorded target under a carried directory",
+                "a link no read found a target for, under a carried directory",
                 vec![
                     file("/opt/app/a"),
                     file("/opt/app/b"),
@@ -1692,6 +1700,101 @@ mod tests {
             );
             assert_eq!(redaction_of(&raw, path), PayloadRedaction::Unchanged);
         }
+    }
+
+    /// A link the walk recorded no target for, whose target the bundler
+    /// reads from disk, is recorded with that target, so the snapshot and
+    /// the Containerfile describe the link the export stages: no "recreate
+    /// manually" advice for a link a directory `COPY` carries, and an `ln`
+    /// line with the recovered target for one no `COPY` carries. The
+    /// advice stays when nothing can be read, and a recovered target that
+    /// holds a credential is withheld as a recorded one is.
+    #[test]
+    fn bundling_records_the_link_target_it_recovers() {
+        use inspectah_core::machine_state::ScreenedExecutor;
+        const LINK: &str = "/opt/app/current";
+        const SECRET: &str = "linkpw4471";
+        const CREDENTIAL: &str = "https://u:linkpw4471@host.example/repo";
+        const PEERS: &[(&str, &[u8])] = &[("/opt/app/a", b"a\n"), ("/opt/app/b", b"b\n")];
+        // (case, the link's target on disk, whether two regular peers sit
+        // beside it, the Containerfile lines naming the link, by prefix).
+        // The bundler stages and records the target on disk unless it
+        // holds the credential.
+        let cases: Vec<(&str, Option<&str>, bool, &[&str])> = vec![
+            (
+                "recovered, a directory COPY carries it",
+                Some("v2"),
+                true,
+                &[],
+            ),
+            (
+                "recovered, no COPY carries it",
+                Some("v2"),
+                false,
+                &["RUN mkdir -p -- '/opt/app' && ln -sfn -- 'v2' '/opt/app/current'"],
+            ),
+            (
+                "nothing to recover",
+                None,
+                true,
+                &["# SYMLINK: /opt/app/current -> unknown (recreate manually)"],
+            ),
+            (
+                "recovered, withheld for a credential",
+                Some(CREDENTIAL),
+                true,
+                &["# FIXME:"],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (name, on_disk, with_peers, want_lines) in cases {
+            let peers = if with_peers { PEERS } else { &[] };
+            let want_target = on_disk.filter(|t| *t != CREDENTIAL).unwrap_or_default();
+            let (root, host) = bundle_host(peers);
+            if let Some(target) = on_disk {
+                std::fs::create_dir_all(root.path().join("opt/app")).unwrap();
+                std::os::unix::fs::symlink(target, root.path().join(&LINK[1..])).unwrap();
+            }
+            let gate = ScreenedExecutor::new(&host);
+            let mut items: Vec<UnmanagedFile> = peers
+                .iter()
+                .map(|(path, _)| payload(path, FileType::DataFile))
+                .collect();
+            items.push(link(LINK, ""));
+            let mut snap = test_snapshot_with_unmanaged(items);
+            let render = tempfile::tempdir().expect("a render directory");
+            bundle_unmanaged_files(&mut snap, render.path(), root.path(), &gate)
+                .expect("bundling succeeds");
+
+            let staged = std::fs::read_link(render.path().join("unmanaged").join(&LINK[1..]))
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if staged != want_target {
+                wrong.push(format!("{name}: staged {staged:?}"));
+            }
+            let recorded = snap.unmanaged_files.as_ref().unwrap().items.last().unwrap();
+            let withheld = on_disk == Some(CREDENTIAL);
+            if withheld {
+                if recorded.payload_redaction != PayloadRedaction::LinkTargetCredential {
+                    wrong.push(format!("{name}: {:?}", recorded.payload_redaction));
+                }
+            } else if recorded.link_target != want_target {
+                wrong.push(format!("{name}: recorded {:?}", recorded.link_target));
+            }
+            let json = serde_json::to_string(&snap).unwrap();
+            let containerfile =
+                super::super::containerfile::render_containerfile(&snap, None, None);
+            if json.contains(SECRET) || containerfile.contains(SECRET) {
+                wrong.push(format!("{name}: the credential ships"));
+            }
+            let got: Vec<&str> = containerfile.lines().filter(|l| l.contains(LINK)).collect();
+            if got.len() != want_lines.len()
+                || got.iter().zip(want_lines).any(|(g, w)| !g.starts_with(w))
+            {
+                wrong.push(format!("{name}: {got:#?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// The start of an x86-64 ELF executable: its 64-byte header, the first

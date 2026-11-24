@@ -164,7 +164,13 @@ emitted only for a path no successful `COPY` carries, nested files,
 directories and symlinks under a carried ancestor included. The `ln`
 lines read it too: a symlink a `COPY` carries gets no `ln` line, since
 the `COPY` already recreates it with its recorded target, and every `ln`
-the renderer emits is `ln -sfn`. Without `-n`, `ln -sf` onto an existing
+the renderer emits is `ln -sfn`. The recorded target is the walk's
+`readlink`, or, when that came back empty, the bundler's own `read_link`
+of the link, which the bundler writes back to `link_target` after
+`screen_link_target` and before `render_all`. The scan export renders
+after bundling, and refine and `aggregate` render from the snapshot the
+scan tarball carries, so all three see the recovered target; only a link
+neither read could resolve gets the "recreate manually" comment. Without `-n`, `ln -sf` onto an existing
 symlink to a directory follows it and creates the link inside that
 directory (`current -> v2` becomes `v2/v2 -> v2`), in GNU and BSD `ln`
 alike; `a_rendered_ln_replaces_a_link_to_a_directory_instead_of_following_it`
