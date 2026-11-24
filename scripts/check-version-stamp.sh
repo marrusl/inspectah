@@ -14,9 +14,10 @@
 #       For a binary built for another platform, which cannot run here: reads
 #       the stamp from its bytes. It must embed the line `inspectah <version>`
 #       with its newline, as crates/cli/src/commands/version.rs stores it, and
-#       no `inspectah <version>+...` form. Only a build of the release tag
-#       satisfies both: a longer version, a `+` suffix or the old
-#       `(commit ..., built ...)` line does not end at the newline.
+#       no `inspectah <version>+...` form. Of builds from a git checkout,
+#       only a build of the release tag satisfies both: a longer version, a
+#       `+` suffix or the old `(commit ..., built ...)` line does not end at
+#       the newline. A build with no git metadata also prints the bare line.
 #
 # Failures print an `::error::` line naming the binary and exit 1.
 # Written for bash 3.2 (macOS /bin/bash).

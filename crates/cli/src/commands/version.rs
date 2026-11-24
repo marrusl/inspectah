@@ -1,8 +1,9 @@
 //! `inspectah version` subcommand: prints the version line.
 //!
 //! `INSPECTAH_VERSION` is set by `crates/cli/build.rs` at compile time: the
-//! bare package version for a build of its release tag, `<version>+g<hash>`
-//! for any other release build, and `<version>+dev` for debug builds.
+//! bare package version for a release build of its release tag or of a tree
+//! with no git metadata, `<version>+g<hash>` for a release build of any other
+//! commit, and `<version>+dev` for debug builds.
 
 /// The line `inspectah version` prints, newline included. `inspectah
 /// --version` prints the same line, because clap joins the command name and

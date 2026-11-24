@@ -180,20 +180,28 @@ Always use `grep -o` or
 `grep -q` on these binaries if you grep them yourself: they embed long
 unbroken runs of text, and an unanchored `grep` dumps kilobytes per match.
 
-### A bare version line means the tag commit
+### A bare version line from CI means the tag commit
 
-`crates/cli/build.rs` prints the bare version only when HEAD carries the
-tag `v<version>` (see `build-rs-version-metadata.md`):
+In a git checkout, `crates/cli/build.rs` prints the bare version only when
+HEAD carries the tag `v<version>` (see `build-rs-version-metadata.md`):
 
 ```
 inspectah 0.9.0-beta.8
 ```
 
 CI checks out the tag, so HEAD is the tag commit and all three binaries
-print the bare line. A binary built from any other commit carries
-`+g<short hash>`, and the publish job refuses it. A binary built from the
-tag commit is the only kind that passes, so the check still proves each
-binary came from the tagged tree, without comparing hashes.
+print the bare line. A binary built from any other commit of a checkout
+carries `+g<short hash>`, and the publish job refuses it. So for the three
+binaries the workflow builds, the check shows each came from the tag
+commit, without comparing hashes.
+
+A bare line does not prove that in general:
+
+- **A dirty checkout at the tag prints the bare version.** Uncommitted
+  changes are not looked at. CI builds a clean checkout.
+- **A build without git metadata prints the bare version**, whatever
+  commit its source came from: a `git archive` tarball such as the one
+  COPR builds from its HEAD, or an SRPM rebuild.
 
 Up to v0.9.0-beta.7 the line was `inspectah <version> (commit <hash>,
 built <date>)`. Releases up to v0.9.0-beta.6 were built by hand from a HEAD

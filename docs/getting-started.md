@@ -82,7 +82,7 @@ inspectah version
 ```
 
 You should see the version, such as `inspectah 0.9.0-beta.8`. A binary built
-from an untagged commit adds its commit hash, such as
+from a git checkout of an untagged commit adds its commit hash, such as
 `inspectah 0.9.0-beta.8+g5a4389ce`.
 
 ## How inspectah works

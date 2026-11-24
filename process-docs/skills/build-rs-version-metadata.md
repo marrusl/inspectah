@@ -10,12 +10,18 @@ as `INSPECTAH_VERSION`.
 |---|---|---|
 | Release profile, HEAD carries the tag `v<version>` | `<version>` | `inspectah 0.9.0-beta.8` |
 | Release profile, any other commit | `<version>+g<short hash>` | `inspectah 0.9.0-beta.8+g5a4389ce` |
-| Release profile, no git (source tarball, RPM) | `<version>` | `inspectah 0.9.0-beta.8` |
+| Release profile, no git metadata (source tarball, SRPM, COPR) | `<version>` | `inspectah 0.9.0-beta.8` |
 | Debug or test | `<version>+dev` | `inspectah 0.9.0-beta.8+dev` |
 
-The suffix is semver build metadata. A bare version is the claim "built
-from the release tag", and the release workflow relies on it (see
-`release-process.md` § Binary verification).
+The suffix is semver build metadata. A bare version from a git checkout
+means HEAD carried the release tag, and the release workflow relies on that
+(see `release-process.md` § Binary verification). It does not mean more
+than that, in two cases:
+
+- **Uncommitted changes are ignored.** A dirty checkout at the tag prints
+  the bare version, and a dirty untagged checkout prints HEAD's hash.
+- **A build without git metadata prints the bare version**, whatever
+  commit the source came from. See the Gotchas.
 
 ## Mechanism
 - **build.rs lives in the binary crate**, not the workspace root. Only the
@@ -79,10 +85,14 @@ script on every invocation; in the main checkout every commit moved
 - **No build date.** The line used to carry one. A real date in dev
   builds would need a rerun on every build or go stale, and in release
   builds it added nothing the tag or hash does not say.
-- **A build with no git prints the bare version.** The RPMs build from a
-  `git archive` tarball with no `.git`, from the tag, so bare is right for
-  them; any other tarball build also prints bare. If the tarball is
-  unpacked inside some other git checkout, git finds that repository
-  instead, and the hash names its HEAD.
+- **A build with no git metadata prints the bare version.** When `git
+  rev-parse HEAD` fails for any reason (no `.git`, no `git` binary), the
+  script returns the bare version. The RPMs build from a `git archive`
+  tarball with no `.git`. `package-release.yml` makes it from the tag
+  checkout; COPR runs `.copr/Makefile`, which archives whatever HEAD COPR
+  checked out, tagged or not; an SRPM rebuild uses the tarball inside it.
+  All of them print the bare version. If the tarball is unpacked inside
+  some other git checkout, git finds that repository instead, and the hash
+  names its HEAD.
 - **Use `env!()`, not `option_env!()`.** A missing variable is then a
   compile error rather than a silent empty version.
