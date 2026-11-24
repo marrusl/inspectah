@@ -43,6 +43,13 @@ back). `render_refine_export` in `crates/refine/src/session.rs` returns:
 - `rpm_va_failed_notice` (`crates/pipeline/src/render/rpm_verify.rs`):
   one failure, right after the not-carried notice, when the scan's
   `rpm -Va` failed and modified RPM-owned configuration may be missing.
+- `unmanaged_redaction_notice` (`crates/pipeline/src/render/unmanaged.rs`):
+  one notice, right after the failed `rpm -Va`, when included unmanaged
+  payloads were redacted before bundling or are left out (not checkable
+  for credentials, or a symlink whose target holds one). The scan prints
+  the same entry, and its clauses, `unmanaged_redaction_reasons`, are
+  the 428 `sensitivity_summary` entries for those payloads, so the
+  refusal, the header and the scan's line cannot drift.
 - `not_verified_warning` (`session.rs`): one failure per included package that claimed
   a staged upload the export could not prove. Its `name.arch` is
   sanitized and cut to `NOT_VERIFIED_ID_MAX` (128) bytes.
@@ -52,7 +59,7 @@ ever drop failures behind it. The same rule places any other entry the
 cap must never drop: an entry of which there is at most one goes ahead
 of every list with no bound, such as the machine-state and repo notices,
 which take one entry per override or per ownerless repo file. The failed
-`rpm -Va` sits there for that reason; placing it first among failures
+`rpm -Va` and the unmanaged redaction notice sit there for that reason; placing it first among failures
 was not enough, since twenty repo notices push it into the tail.
 `export_header_keeps_a_failed_rpm_va_past_a_run_of_repo_notices` in
 `crates/web/tests/api_test.rs` pins it through the real route.

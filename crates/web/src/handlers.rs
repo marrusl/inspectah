@@ -718,6 +718,9 @@ fn build_sensitivity_summary(snap: &InspectionSnapshot) -> serde_json::Value {
     if snap.sensitive_snapshot {
         reasons.push("snapshot contains sensitive data".to_string());
     }
+    // The same clauses the scan's unmanaged notice and the export header
+    // carry, which `RefineSession::is_sensitive` counts as sensitive.
+    reasons.extend(inspectah_pipeline::render::unmanaged::unmanaged_redaction_reasons(snap));
     if let Some(ug) = &snap.users_groups {
         for user in &ug.users {
             let name = user

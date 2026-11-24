@@ -936,7 +936,9 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
             if let Some(notice) = not_carried_notice(&snapshot) {
                 eprintln!("{notice}");
             }
-            if let Some(notice) = unmanaged_redaction_notice(&snapshot) {
+            if let Some(notice) =
+                inspectah_pipeline::render::unmanaged::unmanaged_redaction_notice(&snapshot)
+            {
                 eprintln!("{notice}");
             }
             // The machine-state notice follows: enum text and a count.
@@ -1180,49 +1182,6 @@ fn build_sensitivity_notice(
     }
 
     Some(lines.join("\n"))
-}
-
-/// The line that says the unmanaged bundle ships redacted copies, or
-/// leaves out files redaction could not check, by count, pointing at
-/// `secrets-review.md`; `None` when every payload shipped as read.
-fn unmanaged_redaction_notice(
-    snapshot: &inspectah_core::snapshot::InspectionSnapshot,
-) -> Option<String> {
-    use inspectah_core::types::nonrpm::PayloadRedaction;
-    let items = snapshot.unmanaged_files.as_ref().map(|s| &s.items)?;
-    let files = |n: usize| if n == 1 { "file" } else { "files" };
-    let redacted = items
-        .iter()
-        .filter(|f| f.payload_redaction == PayloadRedaction::Redacted)
-        .count();
-    let withheld = items
-        .iter()
-        .filter(|f| f.payload_redaction.withheld().is_some())
-        .count();
-    let links = items
-        .iter()
-        .filter(|f| f.payload_redaction == PayloadRedaction::LinkTargetCredential)
-        .count();
-    let mut parts = Vec::new();
-    if redacted > 0 {
-        parts.push(format!(
-            "{redacted} unmanaged {} redacted before bundling",
-            files(redacted)
-        ));
-    }
-    if withheld > 0 {
-        parts.push(format!(
-            "{withheld} unmanaged {} left out, not checkable for credentials",
-            files(withheld)
-        ));
-    }
-    if links > 0 {
-        let noun = if links == 1 { "symlink" } else { "symlinks" };
-        parts.push(format!(
-            "{links} unmanaged {noun} left out, the target holding a credential"
-        ));
-    }
-    (!parts.is_empty()).then(|| format!("Note: {}; see secrets-review.md.", parts.join("; ")))
 }
 
 /// Print a minimal footer for `--quiet` mode (Null renderer swallows finalize).

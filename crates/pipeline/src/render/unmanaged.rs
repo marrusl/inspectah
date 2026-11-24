@@ -12,6 +12,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path};
 
+use crate::export_warning::ExportWarning;
 use crate::redaction::engine::{
     SnapshotText, is_redacted_copy_of, record_late_findings, redact_payload, screen_link_target,
 };
@@ -121,6 +122,67 @@ pub fn included_var_srv_paths(snap: &InspectionSnapshot) -> Vec<&str> {
         })
         .map(|f| f.path.as_str())
         .collect()
+}
+
+/// One clause per kind of included unmanaged payload redaction changed
+/// or the export leaves out, each with its count: the copies holding
+/// placeholders, the files redaction could not check, and the symlinks
+/// whose target held a credential. Empty when every included payload
+/// ships as read.
+///
+/// The bundler records redaction only on the files it bundles, which are
+/// the included ones, and a refine export carries only included files,
+/// so both the scan and the export count those. The refine route's
+/// sensitivity summary lists these clauses, and
+/// [`unmanaged_redaction_notice`] joins them, so the 428 reason, the
+/// scan's line and the export header say the same thing.
+pub fn unmanaged_redaction_reasons(snap: &InspectionSnapshot) -> Vec<String> {
+    let included: Vec<&UnmanagedFile> = snap
+        .unmanaged_files
+        .iter()
+        .flat_map(|s| &s.items)
+        .filter(|f| f.disposition.is_included())
+        .collect();
+    let count = |pred: fn(PayloadRedaction) -> bool| {
+        included
+            .iter()
+            .filter(|f| pred(f.payload_redaction))
+            .count()
+    };
+    let files = |n: usize| if n == 1 { "file" } else { "files" };
+    let redacted = count(|r| r == PayloadRedaction::Redacted);
+    let withheld = count(|r| r.withheld().is_some());
+    let links = count(|r| r == PayloadRedaction::LinkTargetCredential);
+    let mut reasons = Vec::new();
+    if redacted > 0 {
+        reasons.push(format!(
+            "{redacted} unmanaged {} redacted before bundling",
+            files(redacted)
+        ));
+    }
+    if withheld > 0 {
+        reasons.push(format!(
+            "{withheld} unmanaged {} left out, not checkable for credentials",
+            files(withheld)
+        ));
+    }
+    if links > 0 {
+        let noun = if links == 1 { "symlink" } else { "symlinks" };
+        reasons.push(format!(
+            "{links} unmanaged {noun} left out, the target holding a credential"
+        ));
+    }
+    reasons
+}
+
+/// The notice that the unmanaged payloads ship redacted copies, or leave
+/// out files, by count, pointing at `secrets-review.md`; `None` when every
+/// included payload ships as read. `inspectah scan` prints it after the
+/// tarball is written and a refine export carries it in its warnings.
+pub fn unmanaged_redaction_notice(snap: &InspectionSnapshot) -> Option<ExportWarning> {
+    let reasons = unmanaged_redaction_reasons(snap);
+    (!reasons.is_empty())
+        .then(|| ExportWarning::notice(format!("{}; see secrets-review.md.", reasons.join("; "))))
 }
 
 /// Comment block that replaces `COPY` for `/srv` findings.
@@ -705,6 +767,61 @@ mod tests {
                 total_count,
             }),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_redaction_notice_counts_included_payloads_only() {
+        let file = |path: &str, redaction, included: bool| UnmanagedFile {
+            path: path.into(),
+            disposition: if included {
+                FindingKind::included()
+            } else {
+                FindingKind::excluded()
+            },
+            payload_redaction: redaction,
+            ..Default::default()
+        };
+        let cases: Vec<(Vec<UnmanagedFile>, Option<&str>)> = vec![
+            (
+                vec![file("/opt/a", PayloadRedaction::Unchanged, true)],
+                None,
+            ),
+            (
+                vec![file("/opt/a", PayloadRedaction::Redacted, false)],
+                None,
+            ),
+            (
+                vec![
+                    file("/opt/a", PayloadRedaction::Redacted, true),
+                    file("/opt/b", PayloadRedaction::Redacted, true),
+                    file(
+                        "/opt/c",
+                        PayloadRedaction::Withheld(UncheckedPayload::TooLarge),
+                        true,
+                    ),
+                    file("/opt/d", PayloadRedaction::Redacted, false),
+                ],
+                Some(
+                    "2 unmanaged files redacted before bundling; 1 unmanaged file left out, \
+                     not checkable for credentials; see secrets-review.md.",
+                ),
+            ),
+            (
+                vec![file("/opt/l", PayloadRedaction::LinkTargetCredential, true)],
+                Some(
+                    "1 unmanaged symlink left out, the target holding a credential; \
+                     see secrets-review.md.",
+                ),
+            ),
+        ];
+        for (items, want) in cases {
+            let snap = test_snapshot_with_unmanaged(items);
+            let notice = unmanaged_redaction_notice(&snap);
+            assert_eq!(notice.as_ref().map(ExportWarning::text), want);
+            if let Some(n) = notice {
+                assert_eq!(n.kind(), crate::export_warning::ExportWarningKind::Notice);
+            }
         }
     }
 

@@ -6241,3 +6241,124 @@ async fn export_header_keeps_a_failed_rpm_va_past_a_run_of_repo_notices() {
     assert_eq!(failed.len(), 1, "{texts:#?}");
     assert_eq!(failed[0]["kind"], "failure");
 }
+
+/// A session sensitive only for its unmanaged payloads: two redacted
+/// copies, one excluded redacted copy that does not count, one file
+/// redaction could not check, and `ownerless` repo files that each add a
+/// header notice.
+fn unmanaged_redaction_app(ownerless: usize) -> axum::Router {
+    use inspectah_core::types::nonrpm::{
+        PayloadRedaction, UncheckedPayload, UnmanagedFile, UnmanagedFileSection,
+    };
+    use inspectah_core::types::rpm::RepoFile;
+    let file = |path: &str, payload_redaction, disposition| UnmanagedFile {
+        path: path.into(),
+        size: 16,
+        disposition,
+        payload_redaction,
+        ..Default::default()
+    };
+    let items = vec![
+        file(
+            "/opt/app/app.env",
+            PayloadRedaction::Redacted,
+            FindingKind::included(),
+        ),
+        file(
+            "/opt/app/compose.yaml",
+            PayloadRedaction::Redacted,
+            FindingKind::included(),
+        ),
+        file(
+            "/opt/app/old.env",
+            PayloadRedaction::Redacted,
+            FindingKind::excluded(),
+        ),
+        file(
+            "/opt/app/big.conf",
+            PayloadRedaction::Withheld(UncheckedPayload::TooLarge),
+            FindingKind::included(),
+        ),
+    ];
+    let mut snap = InspectionSnapshot::new();
+    snap.unmanaged_files = Some(UnmanagedFileSection {
+        total_count: items.len(),
+        total_size: 64,
+        items,
+        usr_entries: Vec::new(),
+        withheld: Vec::new(),
+    });
+    snap.rpm = Some(RpmSection {
+        repo_files: (0..ownerless)
+            .map(|i| RepoFile {
+                path: format!("/etc/yum.repos.d/r{i}.repo"),
+                // No [section] header, so no repo owns it: one notice each.
+                content: format!("baseurl=https://example.com/r{i}\n"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+    assert!(
+        !snap.sensitive_snapshot,
+        "only the payloads may make it sensitive"
+    );
+    app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    }))
+}
+
+/// The unmanaged clauses for [`unmanaged_redaction_app`], as the scan
+/// prints them: the excluded copy is not counted.
+const UNMANAGED_REASONS: [&str; 2] = [
+    "2 unmanaged files redacted before bundling",
+    "1 unmanaged file left out, not checkable for credentials",
+];
+
+/// A session whose only sensitive content is redacted or withheld
+/// unmanaged payloads is refused with a 428 that says so, rather than an
+/// empty `sensitivity_summary`.
+#[tokio::test]
+async fn an_unmanaged_only_sensitive_export_names_its_payloads_in_the_428() {
+    let app = unmanaged_redaction_app(0);
+    let (status, _, body) = post_tarball(&app).await;
+    assert_eq!(status, StatusCode::PRECONDITION_REQUIRED);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["sensitivity_summary"],
+        serde_json::json!(UNMANAGED_REASONS),
+        "{json}"
+    );
+}
+
+/// The acknowledged export repeats the scan's unmanaged notice, as a
+/// notice, and keeps it past more repo notices than the header carries.
+#[tokio::test]
+async fn export_header_repeats_the_unmanaged_notice_past_a_run_of_repo_notices() {
+    /// Comfortably more than the header carries before it summarizes.
+    const OWNERLESS_REPO_FILES: usize = 25;
+    let app = unmanaged_redaction_app(OWNERLESS_REPO_FILES);
+    let generation = view(&app).await["generation"].as_u64().unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/tarball")
+        .header("content-type", "application/json")
+        .header("x-ack-sensitive", "true")
+        .body(Body::from(
+            serde_json::json!({ "generation": generation }).to_string(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let header: Vec<serde_json::Value> =
+        serde_json::from_str(response.headers()["x-export-warnings"].to_str().unwrap()).unwrap();
+    let texts: Vec<&str> = header.iter().map(|w| w["text"].as_str().unwrap()).collect();
+    assert!(
+        texts.iter().any(|t| t.ends_with(" more")),
+        "the header must be over its cap for this to test anything: {texts:#?}"
+    );
+    let want = format!("{}; see secrets-review.md.", UNMANAGED_REASONS.join("; "));
+    let notices: Vec<&serde_json::Value> = header.iter().filter(|w| w["text"] == want).collect();
+    assert_eq!(notices.len(), 1, "{texts:#?}");
+    assert_eq!(notices[0]["kind"], "notice");
+}

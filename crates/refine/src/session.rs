@@ -5032,8 +5032,15 @@ pub fn render_refine_export(
     // machine-state and repo notices: those have no bound, and the
     // header's cap would drop it behind them, though it names a
     // consequence no other entry does. Both lead entries are at most one.
-    if let Some(failure) = inspectah_pipeline::render::rpm_verify::rpm_va_failed_notice(snap) {
+    let rpm_va = inspectah_pipeline::render::rpm_verify::rpm_va_failed_notice(snap);
+    let after_rpm_va = leading + usize::from(rpm_va.is_some());
+    if let Some(failure) = rpm_va {
         warnings.insert(leading, failure);
+    }
+    // The unmanaged redaction notice, the line the scan prints, follows
+    // for the same reason: there is at most one, so the cap never drops it.
+    if let Some(notice) = inspectah_pipeline::render::unmanaged::unmanaged_redaction_notice(snap) {
+        warnings.insert(after_rpm_va, notice);
     }
 
     // 2e. Extract payload files from source tarball for unmanaged files
