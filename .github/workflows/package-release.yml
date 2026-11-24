@@ -211,6 +211,82 @@ jobs:
               core.info(`attached ${file}`);
             }
 
+  # Release runs only, for the same reason as attach-packages: a manual run
+  # must not ship, and a COPR build publishes to every user who has the repo
+  # enabled.
+  #
+  # COPR used to build from a GitHub webhook. COPR's handler starts builds
+  # only from push and tag-create payloads, so a webhook limited to release
+  # events never builds, and tag-create also fires on every new branch. This
+  # job is how a published release, and nothing else, reaches COPR.
+  #
+  # It uploads the SRPM build-srpm already made, so COPR rebuilds the same
+  # source the release's RPMs came from. It checks nothing out and runs
+  # nothing it receives; COPR_CONFIG exists only here. It waits for the COPR
+  # build so this job's result is the build's result. Which chroots build is
+  # set on the COPR project, not here.
+  copr-build:
+    needs: build-srpm
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    # The artifact download authenticates with the runner's own token, not
+    # GITHUB_TOKEN, so this job needs no grant.
+    permissions: {}
+    env:
+      COPR_PROJECT: mrussell/inspectah
+    steps:
+      - name: Receive the SRPM
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: srpm
+
+      - name: Install copr-cli
+        run: dnf install -y copr-cli
+
+      # The secret holds the whole [copr-cli] block from
+      # https://copr.fedorainfracloud.org/api/. The token in it expires 180
+      # days after it is generated.
+      - name: Write the COPR config
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "$COPR_CONFIG" ]; then
+            echo "::error::The COPR_CONFIG repository secret is not set. Paste the [copr-cli] block from https://copr.fedorainfracloud.org/api/ into it." >&2
+            exit 1
+          fi
+          umask 077
+          mkdir -p ~/.config
+          printf '%s\n' "$COPR_CONFIG" > ~/.config/copr
+
+      # Exactly one SRPM, or the upload would build whatever else came along.
+      # copr-cli checks the credentials before it uploads anything and exits
+      # 4 when a build it watched failed; any other failure is the request
+      # itself, most often an expired token.
+      - name: Build in COPR
+        env:
+          COPR_BUILD_FAILED_EXIT: "4"
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          srpms=(*.src.rpm)
+          if [ "${#srpms[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one SRPM, found ${#srpms[@]}: ${srpms[*]}" >&2
+            exit 1
+          fi
+          rc=0
+          copr-cli build "$COPR_PROJECT" "${srpms[0]}" || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            exit 0
+          fi
+          if [ "$rc" -eq "$COPR_BUILD_FAILED_EXIT" ]; then
+            echo "::error::the COPR build failed; its log is linked from https://copr.fedorainfracloud.org/coprs/${COPR_PROJECT}/builds/" >&2
+          else
+            echo "::error::copr-cli could not submit the build (exit ${rc}). If the log above mentions the token or login, it has expired: the token lasts 180 days, so generate a new one at https://copr.fedorainfracloud.org/api/ and replace the COPR_CONFIG secret." >&2
+          fi
+          exit "$rc"
+
   # Release runs only. These two jobs push to the tap's main branch, and a
   # manual test run must not. Their tag references are left on the release
   # payload deliberately: they never run without one.

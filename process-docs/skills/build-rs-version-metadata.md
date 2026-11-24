@@ -91,8 +91,8 @@ script on every invocation; in the main checkout every commit moved
   rev-parse HEAD` fails for any reason (no `.git`, no `git` binary), the
   script returns the bare version. The RPMs build from a `git archive`
   tarball with no `.git`. `package-release.yml` makes it from the tag
-  checkout; COPR runs `.copr/Makefile`, which archives whatever HEAD COPR
-  checked out, tagged or not; an SRPM rebuild uses the tarball inside it.
+  checkout with `.copr/Makefile`, and COPR rebuilds that same SRPM; an
+  SRPM rebuild uses the tarball inside it.
   All of them print the bare version. If the tarball is unpacked inside
   some other git checkout, git finds that repository instead, and the hash
   names its HEAD.

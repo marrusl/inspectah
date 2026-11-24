@@ -201,7 +201,7 @@ A bare line does not prove that in general:
   changes are not looked at. CI builds a clean checkout.
 - **A build without git metadata prints the bare version**, whatever
   commit its source came from: a `git archive` tarball such as the one
-  COPR builds from its HEAD, or an SRPM rebuild.
+  `.copr/Makefile` builds, or an SRPM rebuild.
 
 Up to v0.9.0-beta.7 the line was `inspectah <version> (commit <hash>,
 built <date>)`. Releases up to v0.9.0-beta.6 were built by hand from a HEAD
@@ -328,8 +328,9 @@ gh release edit v<version> --draft=false \
   --notes-file process-docs/release-notes/release-notes-<version>.md
 ```
 
-Publishing fires `package-release.yml`, which attaches the SRPM and RPMs
-and updates the Homebrew tap (see "Homebrew formula"). Mark's whole part
+Publishing fires `package-release.yml`, which attaches the SRPM and RPMs,
+submits the COPR build (see "COPR") and updates the Homebrew tap (see
+"Homebrew formula"). Mark's whole part
 of a release is: tag, push, check the `Release` run went green, publish
 the draft, check the `Package release` run went green.
 
@@ -402,6 +403,26 @@ all `isPrerelease: false`, five releases of consistent practice.
 **Expiry condition: once 1.0 ships, betas go back to pre-release**
 (`--prerelease` on the `gh release edit`), because a stable release then
 exists to hold the home page and a beta no longer needs to.
+
+## COPR
+
+`mrussell/inspectah` on COPR builds only when a release is published. The
+`copr-build` job in `package-release.yml` uploads the SRPM that
+`build-srpm` made from the tag with `copr-cli build`, waits for the
+build, and fails if COPR's build fails. The chroots are the COPR
+project's own settings; the job does not pass `-r`.
+
+- **Not a webhook.** COPR's GitHub webhook handler starts builds only
+  from push and tag-create payloads. A release payload has neither commits
+  nor a `ref_type`, so a webhook set to release events builds nothing, and
+  tag-create also fires on every new branch. Keep the GitHub webhook
+  removed, or webhook rebuilds disabled on the package; with either one
+  back, every push builds again.
+- **Credentials.** The `COPR_CONFIG` repository secret holds the whole
+  `[copr-cli]` block from <https://copr.fedorainfracloud.org/api/>. The
+  token in it expires 180 days after it is generated. An expired token
+  fails the job at submission, before anything is uploaded; generate a
+  new one and replace the secret, then re-run `copr-build`.
 
 ## Homebrew formula
 
@@ -553,9 +574,10 @@ If the tap is already at the release by then, the re-run stops at
   `gh workflow run package-release.yml --ref main -f tag=v<version>`. The
   workflow definition comes from `--ref`; the source tree comes from the
   tag. A manual run builds and verifies but touches nothing outside the
-  runner: the `attach-packages` job and both tap jobs are guarded to
-  `github.event_name == 'release'`, so a test run cannot overwrite a
-  published release's assets or push to the tap. The built packages come
+  runner: the `attach-packages` job, the `copr-build` job and both tap
+  jobs are guarded to `github.event_name == 'release'`, so a test run
+  cannot overwrite a published release's assets, build in COPR or push to
+  the tap. The built packages come
   back as workflow artifacts (`srpm`, `rpm-fedora`, `rpm-el9`,
   `rpm-el10`), so a green run leaves something to inspect.
 
