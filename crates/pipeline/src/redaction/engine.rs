@@ -626,6 +626,24 @@ fn line_break_at_or_after(content: &str, pos: usize) -> usize {
 /// pattern would have, but never leaves a byte one would have taken.
 const MAX_REDUNDANT_RESCANS_PER_LINE: usize = 4;
 
+#[cfg(test)]
+thread_local! {
+    /// How many bytes the searches of [`collect_eligible_matches`] have
+    /// been asked to read, so a test can hold the search to linear work
+    /// without timing it.
+    static SEARCHED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count `bytes` read by one search of [`collect_eligible_matches`] in a
+/// test build: from where it starts to the end of its match, or to the end
+/// of the content when it finds none.
+fn note_searched_bytes(bytes: usize) {
+    #[cfg(test)]
+    SEARCHED_BYTES.with(|n| n.set(n.get() + bytes));
+    #[cfg(not(test))]
+    let _ = bytes;
+}
+
 /// Collect regex matches from `content` for a single `pat`, filtering out:
 /// - Matches on comment lines (`#`, plus `;` / `//` where `path` uses them;
 ///   none on the kernel command line)
@@ -733,11 +751,13 @@ fn collect_eligible_matches(
             continue;
         }
         let Some(caps) = pat.regex.captures_at(content, pos) else {
+            note_searched_bytes(content.len() - pos);
             break;
         };
         let Some(whole) = caps.get(0) else {
             break;
         };
+        note_searched_bytes(whole.end() - pos);
         let secret = caps.name(SECRET_GROUP).unwrap_or(whole);
         let nested = whole.start() < read_to && whole.start() < line_end;
         read_to = read_to.max(whole.end());
@@ -4110,14 +4130,35 @@ baseurl = https://cdn.redhat.com
     /// Keys packed into one value make every key's secret the rest of the
     /// line, so resuming the search at each secret found thousands of
     /// matches and copied each one's text: about 3.5 GiB for
-    /// `password=password=...x` under the collector's 256 KiB limit. Each
-    /// input here is under that limit and must come out fully redacted, by
-    /// `redact_string()` and by `redact()`, with a handful of matches kept
-    /// and within a time bound. Unbounded, the first input took minutes in
-    /// a release build. Bounded, each input takes about a second in a debug
-    /// build, nearly all of it the regex crate's capture search over the
-    /// one long match; the limit leaves room for a loaded machine running
-    /// the suite in parallel.
+    /// `password=password=...x` under the collector's 256 KiB limit (fixed
+    /// in fa7a0d75). Each input here is under that limit and must come out
+    /// fully redacted, by `redact_string()` and by `redact()`, with a
+    /// handful of matches kept.
+    ///
+    /// The bound is on work, not time: a wall-clock limit failed on a
+    /// loaded machine. [`SEARCHED_BYTES`] counts the bytes each search of
+    /// [`collect_eligible_matches`] reads, from where it starts to the end
+    /// of its match. One pass over an input of `L` bytes is `L`. Per
+    /// pattern and line the search makes at most:
+    ///
+    /// - one pass for the match it keeps, whose secret runs to the end of
+    ///   the line or of the value;
+    /// - [`MAX_REDUNDANT_RESCANS_PER_LINE`] passes for keys nested in that
+    ///   value that add nothing, after which the rest of the line is
+    ///   replaced without searching;
+    /// - one pass for the search after that, which finds nothing or a
+    ///   match past the ones before.
+    ///
+    /// So `PASSES_PER_PATTERN` is `MAX_REDUNDANT_RESCANS_PER_LINE + 2`,
+    /// and each call over all patterns reads at most
+    /// `PATTERNS.len() * PASSES_PER_PATTERN * L`. Measured, the worst
+    /// pattern reads `MAX_REDUNDANT_RESCANS_PER_LINE + 1` passes, on the
+    /// last two inputs. Resuming at every secret instead reads one pass
+    /// per key, 15,000 to 32,768 here, so the quadratic search exceeds the
+    /// bound by three orders of magnitude, not by a margin a slow machine
+    /// could cross. The count does not see time spent outside
+    /// [`collect_eligible_matches`]; the kept-match limit bounds what the
+    /// steps after it receive.
     ///
     /// The last two values stop before the end of the line, so the keys
     /// inside them are each searched until the per-line bound replaces the
@@ -4125,8 +4166,13 @@ baseurl = https://cdn.redhat.com
     #[test]
     fn test_dense_repeated_keys_redact_in_bounded_time() {
         const COLLECTOR_LIMIT: usize = 256 * 1024;
-        const TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
         const MAX_KEPT: usize = 2;
+        const PASSES_PER_PATTERN: usize = MAX_REDUNDANT_RESCANS_PER_LINE + 2;
+        fn searched_bytes<T>(run: impl FnOnce() -> T) -> (T, usize) {
+            SEARCHED_BYTES.with(|n| n.set(0));
+            let out = run();
+            (out, SEARCHED_BYTES.with(|n| n.get()))
+        }
         let cases = [
             (
                 "password=".repeat(29_000) + "x",
@@ -4166,18 +4212,27 @@ baseurl = https://cdn.redhat.com
                 "{name}: {} bytes",
                 input.len()
             );
-            let started = std::time::Instant::now();
+            let per_pattern = PASSES_PER_PATTERN * input.len();
+            let per_call = PATTERNS.len() * per_pattern;
 
-            let kept: usize = PATTERNS
-                .iter()
-                .map(|pat| collect_eligible_matches(pat, &input, None).len())
-                .sum();
+            let mut kept = 0;
+            for (idx, pat) in PATTERNS.iter().enumerate() {
+                let (found, read) = searched_bytes(|| collect_eligible_matches(pat, &input, None));
+                assert!(
+                    read <= per_pattern,
+                    "{name}: pattern {idx} read {read} bytes, bound {per_pattern}"
+                );
+                kept += found.len();
+            }
             assert!(kept <= MAX_KEPT, "{name}: kept {kept} matches");
 
-            assert_eq!(redact_string(&input), want, "{name}");
+            let (redacted, read) = searched_bytes(|| redact_string(&input));
+            assert!(read <= per_call, "{name}: redact_string read {read} bytes");
+            assert_eq!(redacted, want, "{name}");
 
             let mut snap = config_snapshot("/etc/app/app.conf", &input);
-            redact(&mut snap, &RedactOptions::default());
+            let ((), read) = searched_bytes(|| redact(&mut snap, &RedactOptions::default()));
+            assert!(read <= per_call, "{name}: redact read {read} bytes");
             assert_eq!(
                 snap.config.as_ref().unwrap().files[0].content,
                 want,
@@ -4189,9 +4244,6 @@ baseurl = https://cdn.redhat.com
                 snap.redaction_state,
                 Some(RedactionState::FullyRedacted { .. })
             ));
-
-            let elapsed = started.elapsed();
-            assert!(elapsed < TIME_LIMIT, "{name}: took {elapsed:?}");
         }
     }
 
