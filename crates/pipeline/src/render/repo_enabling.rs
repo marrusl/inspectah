@@ -22,7 +22,7 @@
 //! the state the renderer and the refine view both read:
 //! [`repo_enabling_export`] is the only thing that decides which.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use inspectah_core::repo_ownership::{OwnedKind, repo_ownership};
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -206,12 +206,51 @@ fn first_restoring(
     restored: impl Fn(&InspectionSnapshot) -> bool,
 ) -> Option<Restore> {
     let rpm = snap.rpm.as_ref()?;
+    let sections = RepoSections::of(rpm);
     let mut tried: BTreeSet<String> = BTreeSet::new();
     candidates
         .into_iter()
         .filter(|repo| tried.insert(repo.clone()))
-        .filter_map(|repo| control(rpm, &repo).map(|cascades| Restore { repo, cascades }))
+        .filter_map(|repo| {
+            control(rpm, &sections, &repo).map(|cascades| Restore { repo, cascades })
+        })
         .find(|restore| toggle_restores(snap, &restore.repo, &restored))
+}
+
+/// Every section the snapshot's repo files define, each file parsed once,
+/// with the definition the host's dnf uses for each exact spelling
+/// ([`repo::effective_sections`]). [`control`] asks this for every
+/// candidate and every owner section; asking [`repo::toggleable`] per
+/// section re-parses every file each time, which is quadratic in a large
+/// file such as a subscribed host's `redhat.repo`.
+struct RepoSections<'a> {
+    effective: BTreeMap<SectionId, (&'a str, RepoSectionDef)>,
+}
+
+impl<'a> RepoSections<'a> {
+    fn of(rpm: &'a RpmSection) -> Self {
+        Self {
+            effective: repo::effective_sections(rpm.repo_files.iter().flat_map(|f| {
+                parse_repo_sections(&f.content)
+                    .into_iter()
+                    .map(move |sec| (f.path.as_str(), f.content.as_str(), sec))
+            })),
+        }
+    }
+
+    /// Every exact spelling any repo file defines.
+    fn spellings(&self) -> impl Iterator<Item = &str> {
+        self.effective.keys().map(SectionId::as_str)
+    }
+
+    /// [`repo::toggleable`] over these sections: the section spelled as
+    /// [`section_spelling`] picks for `repo`, judged by core's
+    /// [`repo::toggleable_definition`].
+    fn toggleable(&self, repo: &str) -> bool {
+        section_spelling(self.spellings(), repo)
+            .and_then(|spelling| self.effective.get(&SectionId::new(spelling)))
+            .is_some_and(|(_, def)| repo::toggleable_definition(repo, def))
+    }
 }
 
 /// Whether dnf can install a package by name from `sec`, the definition
@@ -230,8 +269,8 @@ pub(crate) fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDe
 
 /// The switch refine gives `repo` that can bring back what it owns, if
 /// any: `Some(true)` for a full switch, which also cascades to its
-/// packages (core's [`repo::toggleable`] over the snapshot's repo files),
-/// `Some(false)` for a carriage-only one. The repo ownership spec's § 5.2,
+/// packages (core's [`repo::toggleable`] over the snapshot's repo files,
+/// read from `sections`), `Some(false)` for a carriage-only one. The repo ownership spec's § 5.2,
 /// both clauses, as refine's `RepoState` computes them:
 ///
 /// 1. a repo that is not toggleable has a carriage-only switch when it
@@ -241,13 +280,8 @@ pub(crate) fn serves(rpm: &RpmSection, repos: &InstallRepos, sec: &RepoSectionDe
 /// 2. and also when it owns a carriable entry that no owner with a full
 ///    switch or a switch from the first clause owns, such as a file whose
 ///    every section the host disabled.
-fn control(rpm: &RpmSection, repo: &str) -> Option<bool> {
-    let files = || {
-        rpm.repo_files
-            .iter()
-            .map(|f| (f.path.as_str(), f.content.as_str()))
-    };
-    if repo::toggleable(files(), repo) {
+fn control(rpm: &RpmSection, sections: &RepoSections<'_>, repo: &str) -> Option<bool> {
+    if sections.toggleable(repo) {
         return Some(true);
     }
     let ownership = repo_ownership(rpm);
@@ -268,17 +302,13 @@ fn control(rpm: &RpmSection, repo: &str) -> Option<bool> {
             .cloned()
             .collect()
     };
-    let spellings: Vec<String> = files()
-        .flat_map(|(_, content)| parse_repo_sections(content))
-        .map(|sec| sec.id.as_str().to_owned())
-        .collect();
     let attributed: BTreeSet<&str> = rpm
         .packages_added
         .iter()
-        .filter_map(|p| section_spelling(spellings.iter().map(String::as_str), &p.source_repo))
+        .filter_map(|p| section_spelling(sections.spellings(), &p.source_repo))
         .collect();
     let first_clause = |section: &SectionId| {
-        repo::toggleable(files(), section.as_str())
+        sections.toggleable(section.as_str())
             || (!carriable_owned(section).is_empty()
                 && (attributed.contains(section.as_str())
                     || ownership
@@ -540,5 +570,105 @@ mod tests {
             repo_enabling_export(rpm, &InstallRepos::of(&snap), &pkg),
             RepoEnablingExport::Served
         ));
+    }
+
+    fn repo_file(path: &str, content: &str) -> RepoFile {
+        RepoFile {
+            path: path.into(),
+            content: content.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }
+    }
+
+    /// The parse-once lookup answers as core's per-section
+    /// `repo::toggleable` does: an id defined in two files takes the
+    /// definition dnf reads first, whichever order the snapshot lists
+    /// them in; a case variant stands in only when it is the one any file
+    /// defines; a distro id never cascades.
+    #[test]
+    fn repo_sections_toggleable_matches_the_per_section_lookup() {
+        let rpm = RpmSection {
+            repo_files: vec![
+                repo_file(
+                    "/etc/yum.repos.d/b.repo",
+                    "[dup]\nenabled=1\n[epel]\nenabled=0\n[mixed]\nenabled=1\n\
+                     [late]\nenabled=1\n[off]\nenabled=0\n",
+                ),
+                repo_file(
+                    "/etc/yum.repos.d/a.repo",
+                    "[dup]\nenabled=0\n[epel]\nenabled=1\n[Site]\nenabled=1\n\
+                     [baseos]\nenabled=1\n[Mixed]\nenabled=1\n",
+                ),
+            ],
+            ..Default::default()
+        };
+        let files: Vec<(&str, &str)> = rpm
+            .repo_files
+            .iter()
+            .map(|f| (f.path.as_str(), f.content.as_str()))
+            .collect();
+        let sections = RepoSections::of(&rpm);
+        let ids = [
+            "dup",
+            "DUP",
+            "epel",
+            "EPEL",
+            "Site",
+            "site",
+            "SITE",
+            "baseos",
+            "BaseOS",
+            "rhel-9-for-x86_64-baseos-rpms",
+            "Mixed",
+            "mixed",
+            "MIXED",
+            "late",
+            "off",
+            "missing",
+        ];
+        for id in ids {
+            assert_eq!(
+                sections.toggleable(id),
+                repo::toggleable(files.iter().copied(), id),
+                "{id}"
+            );
+        }
+        // The fixture exercises both answers, not one.
+        assert!(sections.toggleable("epel") && !sections.toggleable("dup"));
+        let parsed: BTreeSet<String> = files
+            .iter()
+            .flat_map(|(_, content)| parse_repo_sections(content))
+            .map(|sec| sec.id.as_str().to_owned())
+            .collect();
+        let spellings: BTreeSet<String> = sections.spellings().map(str::to_owned).collect();
+        assert_eq!(spellings, parsed);
+    }
+
+    /// `control` parses each repo file a fixed number of times, however
+    /// many sections own a file: asking `repo::toggleable` once per owner
+    /// section re-parsed every file per section. Every section here is
+    /// disabled, so the carriage-only clause asks about each owner of the
+    /// file before it finds the file orphaned.
+    #[test]
+    fn control_parses_repo_files_a_fixed_number_of_times() {
+        for sections in [10, 200] {
+            let content: String = (0..sections)
+                .map(|i| format!("[s{i}]\nenabled=0\nbaseurl=https://example.invalid/{i}\n"))
+                .collect();
+            let rpm = RpmSection {
+                repo_files: vec![repo_file("/etc/yum.repos.d/vendor.repo", &content)],
+                ..Default::default()
+            };
+            inspectah_core::types::repo::parse_count::reset();
+            let index = RepoSections::of(&rpm);
+            assert_eq!(control(&rpm, &index, "s0"), Some(false), "{sections}");
+            // One parse for the sections, one for the ownership map.
+            assert_eq!(
+                inspectah_core::types::repo::parse_count::get(),
+                2,
+                "{sections} sections"
+            );
+        }
     }
 }

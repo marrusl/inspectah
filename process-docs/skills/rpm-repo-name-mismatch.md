@@ -292,16 +292,22 @@ of the two questions that ask it. Never resolve an id by walking
   the upload control.
 
 - **Resolve many sections from one parse.** A question asked for every
-  section, such as the route-loss decision over every spelling the
-  snapshot defines, parses each file once and looks each section up in
-  `effective_sections`, the same read-order rule as
-  `effective_section_in` for all sections at once. Calling
-  `effective_section_in` or `effective_definition` per section re-parses
-  every file each time: quadratic in a large file. A subscribed RHEL 9.8
-  host's `redhat.repo` holds about 500 sections, and refine spent about
-  13 s per operation there (beta.7). The routing test
-  `routing_parses_each_repo_file_once` counts parsed sections to hold
-  this.
+  section, or for each candidate or owner section in a loop, parses each
+  file once and looks each section up in `effective_sections`, the same
+  read-order rule as `effective_section_in` for all sections at once.
+  Calling `effective_section_in`, `effective_definition` or `toggleable`
+  per section re-parses every file each time: quadratic in a large file.
+  A subscribed RHEL 9.8 host's `redhat.repo` holds about 500 sections,
+  and refine spent about 13 s per operation there (beta.7). Whether a
+  switch cascades then comes from `toggleable_definition` on the looked-up
+  definition, so the cascade rule stays in core; refine's `RepoIndex` and
+  the renderer's recovery advice (`RepoSections` in `repo_enabling.rs`,
+  built once per restore search) both do this. `toggleable` itself answers
+  a distro id before parsing anything. Hold each with a count from core's
+  `parse_count` (the `test-support` feature): the routing test
+  `routing_parses_each_repo_file_once`, refine's startup and operation
+  budgets in `crates/web/tests/api_test.rs`, and
+  `control_parses_repo_files_a_fixed_number_of_times`.
 
 Both are exact-first and case-aware. dnf keys repos by exact spelling,
 so `[ab]` and `[AB]` are two repos, in one file or in two;
