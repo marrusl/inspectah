@@ -87,7 +87,7 @@ Adopted as requirements:
 2. **Record owner and group names at scan time,** not only numbers. The snapshot cannot map a system uid back to a name later.
 3. **`chown` by name in a `RUN` after the users block,** not `COPY --chown`. The build fails when a name does not resolve.
 4. **An account the image lacks is created at the host's id,** before any `chown` that names it.
-5. **setuid and setgid carry only when owner and group also carry;** never on a `root:root` fallback; never on a group- or world-writable file.
+5. **setuid and setgid carry only when owner and group also carry,** by root, by name or by number; never on a `root:root` fallback; never on a group- or world-writable file.
 6. **Mode, owner, group and the fallback land together.**
 7. **A redacted file keeps the host's mode.**
 8. **A fleet build never ships a mode wider than any contributing host** for the same content without a flag.
@@ -656,10 +656,10 @@ Owner bits handed to `root` grant nothing root does not have. Group bits handed 
 
 `chown` by root clears setuid and setgid on Linux (`chown(2)`, *recalled*), so special bits are restored by the `chmod` after the `chown`, never through the staged mode. The staged mode stays `& 0o777` (`PAYLOAD_MODE_BITS` is unchanged), and a special bit reaches the image only on a line the resolver wrote after carrying ownership.
 
-- **setuid and setgid on a regular file** carry only when both subjects are `Root` or `ByName` and the image mode is neither group- nor world-writable (rule 5, decision 13.1). `Root` counts: a `4755 root:root` helper under `/opt` carries. A `ByNumber` subject does not: the image cannot prove which account provisioning, or a directory, puts at that number, so a setuid binary there would run as whoever lands on it. A dropped bit is a row.
+- **setuid and setgid on a regular file** carry only when both subjects are `Root` or `ByName` and the image mode is neither group- nor world-writable (rule 5, decision 13.1). `Root` counts: a `4755 root:root` helper under `/opt` carries. A `ByNumber` subject counts too (decision 13.1): the bit is kept, a stern warning row is emitted, and the file is listed in the audit report with its path, mode, uid:gid and the account name recorded at scan. The warning reads: "This file is setuid or setgid and owned by a number. The bit only does what the host intended if provisioning creates the account at that uid and gid; otherwise it runs as whoever holds that number. Confirm the fixed-id check (R11) on your install path." A dropped bit (a fallback owner or group, or a group- or world-writable mode) is a row.
 - **Sticky** on a regular file has no effect on Linux and is dropped.
 - **setgid on a directory** carries unless its group falls back; it governs group inheritance, not privilege. **Sticky on a directory** always carries: it narrows, and dropping it from a shared writable directory is the risky direction.
-- Every carried setuid or setgid file is listed in the audit report, setuid-root first.
+- Every carried setuid or setgid file is listed in the audit report, setuid-root first; numerically owned ones are listed with the account name recorded at scan.
 
 ### 5.6 `/var` directories
 
@@ -702,7 +702,7 @@ Decision: an account a carried tmpfiles.d line names and the image lacks gets th
 - accounts the accounts block creates, pinned at the host's ids, with each one's shell and primary group;
 - accounts provisioning must create, with uid **and** gid (`ByNumber { via: Provisioning }`), and directory accounts placed by number;
 - `sysusers.d` overrides the build writes;
-- setuid and setgid files carried (setuid-root first) and dropped;
+- setuid and setgid files carried (setuid-root first) and dropped, with a stern warning row on each one carried under a numeric owner or group;
 - world-writable paths, clamped under `/etc` or carried elsewhere;
 - paths with ACLs or file capabilities that are not carried, or that the check could not run;
 - under `Image`: that local users are in the image, which is not recommended for production, and, with `preserve`, that their hashes are in an image layer.
@@ -755,7 +755,7 @@ Under § 0, provisioning is the normal production path for local users, and `ByN
 - Files owned by a local user get a numeric `chown`, both subjects resolved separately.
 - The build guards each number in both directions and in both namespaces (§ 5.3), so an image that already uses the uid, the gid or the name differently stops.
 - The required-accounts list names each account with its uid and gid.
-- setuid and setgid on these files are dropped with a row (§ 5.5).
+- setuid and setgid on these files are kept, with a stern warning row and an audit report listing (§ 5.5, decision 13.1); the bit does what the host intended only if provisioning creates the account at the host's uid and gid, which R11 gates.
 
 **R11 is a gate.** Whether the image builder's blueprint and Anaconda's kickstart create the account at the fixed uid **and** its primary group at the fixed gid is *recalled* as yes, not checked. It runs before the resolver task lands (§ 14). If either does not, implementation stops and decision 13.5 goes back to Mark.
 
@@ -790,7 +790,7 @@ Table-driven, over collector-produced snapshots from the mock executor unless st
 | T4 | `stat` fails on a file and on a directory | `Unknown`; `root:root 0600` and `0700`; rows; never `0644` |
 | T5 | Orphan uid 4242 owner, group `appgrp` (system) | `chown -h root:appgrp`, special bits cleared, row |
 | T6 | `/opt/app/bin/helper 4750 appsvc:appgrp`, both system | `chmod 4750` after the `chown`; setuid listed |
-| T7 | `4777` file; a setuid file whose owner falls back; a setuid file owned by a local user | special bits stripped in all three; rows |
+| T7 | `4777` file; a setuid file whose owner falls back; a setuid file owned by a local user | special bits stripped on the first two, with rows; the third keeps its bit, with a stern warning row and an audit listing (path, mode, uid:gid, account name) |
 | T8 | `/etc/foo.conf 0666`; `/etc/drop 0777` directory; `/etc/spool 1777` directory; `/opt/foo 0666` | snapshot `clamp` `0664`, `0775`, `1775` with `host.mode` unchanged; image modes match; `/opt/foo` carried `0666`; rows |
 | T9 | Redacted `/etc/app.conf 0640 root:app` | staged `0640` |
 | T10 | `/var/lib/pgsql 0700 postgres` with leaf `data` | two `d` lines, parent first |
@@ -882,7 +882,7 @@ Still open:
 
 All taken by Mark Russell on 2026-11-25.
 
-1. **setuid and setgid on files:** carry by default when owner and group carry, listed in the audit report (Mark Russell, 2026-11-25). An include would be a new refine control and adds size; rejected. Under rule 5, "carry" means `Root` or `ByName` (§ 5.5).
+1. **setuid and setgid on files:** carry by default whenever owner and group carry, whether by root, by name or by number; on a numerically owned file the bits are kept, a stern warning row is emitted, and every such file is listed in the audit report with its path, mode, uid:gid and the account name recorded at scan (Mark Russell, 2026-11-25). Rejected: an include, which would be a new refine control and adds size; dropping the bits on numeric owners, which would make `useradd` the only way to replicate the host exactly.
 2. **World-writable under `/etc`:** clamp `o+w`, with a row, for files and directories alike; carry and flag elsewhere (Mark Russell, 2026-11-25). Carry-and-flag everywhere was rejected for `/etc`.
 3. **Fleet ownership:** content-only variant key, with ownership resolved separately across the winning hosts (narrowest mode, flagged when wider than a host), as § 6 (Mark Russell, 2026-11-25). Ownership in the key was rejected.
 4. **Local users:** every local user always goes into the kickstart and blueprint, and none is removed from them. One section switch, `LocalUserDelivery`, optionally creates all of them in the Containerfile too, for testing and with a "not recommended for production" warning; never per user (Mark Russell, 2026-11-25). Lands first as its own change (§ 0). Rejected: the per-user Containerfile strategy, the per-user include on a single host, and the scan promoting a user that carried files need to `useradd`.
