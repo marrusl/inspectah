@@ -5,10 +5,10 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-25 |
-| Status | Proposed. Goes first in 0.9.1-beta.1, ahead of the aggregate convergence spec, because it is more fundamental (Mark Russell, 2026-11-25). § 6 is the field list the convergence spec takes as input. Every choice not backed by a recorded decision is listed in § 13 for Mark. |
+| Status | Proposed. Goes first in 0.9.1-beta.1, ahead of the aggregate convergence spec, because it is more fundamental (Mark Russell, 2026-11-25). § 6 is the field list the convergence spec takes as input. The nine choices this spec raised are decided and recorded in § 13. |
 | Release | 0.9.1-beta.1. The schema and the `/etc` part land before convergence code. |
 | Scope | Owner, group and mode of every carried `/etc` configuration file, carried unmanaged file and directory, and `/var` directory the export provisions: what the scan records, the snapshot types, one ownership resolver, account creation, the Containerfile lines, both export paths, notices, the fleet field list, tests. |
-| Decisions it implements | Ownership is preserved; one resolver for `/etc` and unmanaged content; provisioning-time accounts are handled and the operator is told which accounts the image requires (Mark Russell, 2026-11-23). `/etc` first; mode is not fixed alone (Mark Russell, 2026-11-23). A carried tmpfiles.d line that names an account the image lacks gets the account created (Mark Russell, 2026-11-25). Classification lives in scan through one core defaults module; refine applies only user edits; an unedited export equals the tarball (Mark Russell, 2026-11-24). Variant identity stays byte-identical content (Mark Russell, 2026-11-24). |
+| Decisions it implements | Ownership is preserved; one resolver for `/etc` and unmanaged content; provisioning-time accounts are handled and the operator is told which accounts the image requires (Mark Russell, 2026-11-23). `/etc` first; mode is not fixed alone (Mark Russell, 2026-11-23). A carried tmpfiles.d line that names an account the image lacks gets the account created (Mark Russell, 2026-11-25). Classification lives in scan through one core defaults module; refine applies only user edits; an unedited export equals the tarball (Mark Russell, 2026-11-24). Variant identity stays byte-identical content (Mark Russell, 2026-11-24). The nine design choices in § 13 (Mark Russell, 2026-11-25). |
 | Backlog items | Closes `inspectah-carried-files-lose-owner-and-group`, `inspectah-tmpfiles-line-owned-by-a-skipped-user-is-silently-skipped` and `inspectah-var-parent-dirs-lose-their-ownership` (inspectah-team `workflow/backlog/inspectah/open/`). Leaves `inspectah-storage-ownership-rows-report-var-directories-the-image-already-reproduces` open (§ 5.6). |
 | Inputs | A security consult on carried ownership, 2026-11-25, read-only at `4b520879`. Its eight rules are § 2.1. A bootc consult, 2026-11-25, read against ostree `3d72f1d`, bootc `b88f28b` and buildah `4bf2012`. Its answers are § 12 and its rules § 2.2. |
 | Verified | Code citations read at `59a068fa` (2026-11-25). Line numbers are a convenience; the symbol name is the identifier. Nothing was built or booted for this spec. Claims marked *inferred* or *recalled* were not checked; § 10.2 names the build or booted host that checks them. |
@@ -182,7 +182,7 @@ After every inspector has run, a pass in `finalize_cross_inspector` collects eac
 Per Mark's rule, the scan decides defaults and refine applies only the operator's edits. Two ownership defaults go into the core defaults module, beside the machine-state table:
 
 1. **A local account the export needs.** A user in the users inspector's range, on the default `skip` strategy and included, that owns or is the group of a carried path, or that a carried tmpfiles.d line names, is set to `useradd` by the scan, with the reason on the row: "carried files need this account: N files, M tmpfiles lines". This is decision 6 (create the account) applied through the users block that already creates local accounts at their host ids, with home handling from the users block spec. Refine shows the reason and lets the operator set the user back to `skip`, which is the provisioning case (§ 8). Decision 13.4.
-2. **World-writable regular files under `/etc`.** If Mark picks the clamp (decision 13.2), the scan records the clamp as the default on the entry's ownership outcome with its reason; refine displays it. No other mode change is a default.
+2. **World-writable regular files under `/etc`.** Per decision 13.2 (the clamp), the scan records the clamp as the default on the entry's ownership outcome with its reason; refine displays it. No other mode change is a default.
 
 Neither default is recomputed in refine. A user edit that changes what the resolver can prove (excluding a user, excluding a package) changes the render's result, which is a consequence of the edit, not a reclassification.
 
@@ -312,7 +312,7 @@ A path whose owner or group cannot be carried keeps the half that can and falls 
 
 Owner bits handed to `root` grant nothing root does not have. Group bits handed to `root` are cleared, because the host granted them to a group that is not in the image. Other bits are kept: they were granted to everyone on the host, so keeping them does not widen. Every fallback is a row in the notice (§ 5.8) with its cause.
 
-World-writable regular files: under `/etc`, decision 13.2 (recommended: clamp `o+w`, with a row). Elsewhere they carry, with a row.
+World-writable regular files: under `/etc`, decision 13.2 (clamp `o+w`, with a row). Elsewhere they carry, with a row.
 
 ### 5.5 Special bits
 
@@ -369,11 +369,11 @@ The aggregate merge must consider exactly these new or changed fields:
 5. `UserGroupSection.owner_accounts` and `owner_groups`, keyed by name
 6. The users default reason the scan writes (§ 4.3), and the `useradd` strategy it sets
 7. The ACL and capability path lists (§ 4.4): union, notice only
-8. If decision 13.2 is the clamp: the clamp default on the entry
+8. The decision 13.2 clamp default on the entry
 
 Questions the convergence spec answers with these fields:
 
-- **Decision for Mark (13.3):** is ownership part of the variant key, or is it resolved separately for the winning variant? Mark already decided variant identity is byte-identical content (2026-11-24), so the recommendation is: content-only key, and ownership resolved across the hosts that hold the winner. Owner and group: the most prevalent pair among them. Mode: the bitwise AND of those hosts' modes, so it is never wider than any of them. When the hosts disagree on owner or group, or when a host outside the winner's pair had a narrower mode, refine flags the row and the audit report lists it (rule 8). The alternative, ownership in the key, shows mode-only differences as variants and still needs the rule-8 flag, because the most prevalent variant can be the wider one.
+- **Ownership and the variant key (decision 13.3):** ownership is not part of the variant key, which stays byte-identical content (Mark Russell, 2026-11-24); it is resolved across the hosts that hold the winner. Owner and group: the most prevalent pair among them. Mode: the bitwise AND of those hosts' modes, so it is never wider than any of them. When the hosts disagree on owner or group, or when a host outside the winner's pair had a narrower mode, refine flags the row and the audit report lists it (rule 8). The rejected alternative, ownership in the key, shows mode-only differences as variants and still needs the rule-8 flag, because the most prevalent variant can be the wider one.
 - **An account with different ids on different hosts** (`chrony` 992 here, 994 there, normal for dynamically allocated system ids): `chown` and the `d` lines by name are unaffected. Creation and the `sysusers.d` mirror (§ 5.3) pin one id: recommended, the most prevalent, with the others listed. The pin matters more than it did: hosts at another id keep their `/var` data at their own number, and nothing on bootc remaps it, so the list is what tells the operator which hosts need a one-time `chown` of their data.
 - **Unknown ownership on some hosts:** the hosts with `Recorded` decide; a path `Unknown` on every host falls back.
 - **Users:** Mark's leaning keeps users out of convergence. The scan's `useradd` default (§ 4.3) is per host; the merge needs a rule for a user defaulted on some hosts and not others. Recommended: `useradd` when any host's carried files need it.
@@ -461,7 +461,7 @@ Each left out with its cost:
 - **File capabilities (`security.capability`).** A binary under `/opt` with `cap_net_bind_service` loses it and fails, or an operator re-adds setuid as a workaround. Breakage, not a leak. Noticed (§ 4.4), carried later.
 - **Kickstart and blueprint user selection.** Unchanged; the users block spec owns it.
 - **Remapping data at a host's old id.** When the base image holds an account at a different id from the source host, or a fleet pins one id across hosts that had several (§ 6), files under `/var` keep the host's number. Nothing on bootc remaps owners. The `d` lines fix the directories themselves at boot; the data inside is listed, not changed.
-- **Auditing host modes.** A host misconfiguration ships, except the `/etc` world-writable clamp if decision 13.2 takes it.
+- **Auditing host modes.** A host misconfiguration ships, except the `/etc` world-writable clamp (decision 13.2).
 
 ## 12. bootc questions
 
@@ -477,17 +477,19 @@ Still open:
 
 - **Q6.** Does a tmpfiles.d `d` line correct the owner and mode of a directory that already exists? *Recalled* as yes, not read today; § 5.6 relies on it to correct a `/var` directory on every boot. R8 checks it.
 
-## 13. Decisions for Mark
+## 13. Decisions
 
-1. **setuid and setgid on files:** carry by default when owner and group carry, listed in the audit report, or list and require an include? Recommend: carry by default. An include is a new refine control and adds size.
-2. **World-writable files under `/etc`:** clamp `o+w` with a row, or carry and flag? Recommend: clamp under `/etc`, carry and flag elsewhere.
-3. **Fleet ownership:** content-only variant key with ownership resolved separately (narrowest mode, flagged when wider than a host), or ownership in the key? Recommend: content-only, as § 6.
-4. **A local `skip` user that carried files or tmpfiles lines need:** the scan defaults it to `useradd` with the reason? Recommend: yes; it applies decision 6 through the existing users block.
-5. **An operator who keeps such a user on `skip`:** numeric `chown` with a guard and a required-accounts row, or fall back to `root:root`? Recommend: numeric.
-6. **An account id already taken in the image by another name:** stop the build, or let `useradd` pick an id? Recommend: stop, as the users block does for groups.
-7. **ACLs and file capabilities:** detect and notice now, carry later? Recommend: notice now.
-8. **System accounts the image lacks:** create them with `useradd` at the host's id in an accounts block before packages, mirrored in a `sysusers.d` line with the same id (§ 5.3), or create them after the users block and let any carried package allocate its own id first? Recommend: before packages, with the mirror. It is bootc's documented pinning pattern, keeps the lint quiet, and is the only option that stops a rebuild from renumbering an account. The cost is that inspectah, not the package, picks the id of a package-created account; the host's id is the one the carried files already use. `systemd-sysusers` alone is not an option: it silently takes another id when the requested one is used (§ 12 Q3).
-9. **`/var` parent directories:** fold the dedup fix in? Recommend: yes, § 5.6.
+All nine taken as put forward (Mark Russell, 2026-11-25).
+
+1. **setuid and setgid on files:** carry by default when owner and group carry, listed in the audit report (Mark Russell, 2026-11-25). An include would be a new refine control and adds size; rejected.
+2. **World-writable files under `/etc`:** clamp `o+w` with a row under `/etc`; carry and flag elsewhere (Mark Russell, 2026-11-25). Carry-and-flag everywhere was rejected for `/etc`.
+3. **Fleet ownership:** content-only variant key, with ownership resolved separately across the winning hosts (narrowest mode, flagged when wider than a host), as § 6 (Mark Russell, 2026-11-25). Ownership in the key was rejected.
+4. **A local `skip` user that carried files or tmpfiles lines need:** the scan defaults it to `useradd` with the reason (Mark Russell, 2026-11-25). It applies decision 6 through the existing users block.
+5. **An operator who keeps such a user on `skip`:** numeric `chown` with a guard and a required-accounts row (Mark Russell, 2026-11-25). Falling back to `root:root` was rejected.
+6. **An account id already taken in the image by another name:** stop the build, as the users block does for groups (Mark Russell, 2026-11-25). Letting `useradd` pick an id was rejected.
+7. **ACLs and file capabilities:** detect and notice now, carry later (Mark Russell, 2026-11-25).
+8. **System accounts the image lacks:** created with `useradd` at the host's id in an accounts block before packages, mirrored in a `sysusers.d` line with the same id (§ 5.3) (Mark Russell, 2026-11-25). It is bootc's documented pinning pattern, keeps the lint quiet, and is the only option that stops a rebuild from renumbering an account. The cost is that inspectah, not the package, picks the id of a package-created account; the host's id is the one the carried files already use. Creating them after the users block was rejected, and `systemd-sysusers` alone is not an option: it silently takes another id when the requested one is used (§ 12 Q3).
+9. **`/var` parent directories:** the dedup fix is folded in, § 5.6 (Mark Russell, 2026-11-25).
 
 ## 14. Size
 
