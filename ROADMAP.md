@@ -54,13 +54,6 @@ project. The August presentation plan is superseded.
 User-facing documentation refresh ahead of 1.0. Scope needs to be
 re-drafted.
 
-### Sysctl Source File Preservation
-
-Rendering collapses every sysctl override into one generated file
-instead of mirroring the admin's source layout, which can move a key's
-position in `sysctl.d` lexical ordering. The ordering consequence is
-reasoned, not yet measured, and measuring it is the first step.
-
 ### Secrets Safety Net
 
 Guardrails against accidental credential exposure in inspectah output.
