@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-25 |
-| Status | Proposed. Goes first in 0.9.1-beta.1, ahead of the aggregate convergence spec, because it is more fundamental (Mark Russell, 2026-11-25). § 0 is a separate small change that lands before the rest (Mark Russell, 2026-11-25). § 6 is the field list the convergence spec takes as input. Decisions are recorded in § 13. |
+| Status | Approved. Passed review 2026-11-25. Goes first in 0.9.1-beta.1, ahead of the aggregate convergence spec, because it is more fundamental (Mark Russell, 2026-11-25). § 0 is a separate small change that lands before the rest (Mark Russell, 2026-11-25). § 6 is the field list the convergence spec takes as input. Decisions are recorded in § 13. |
 | Release | 0.9.1-beta.1, in three landings: § 0, then the schema and the scan (§§ 3 and 4), then the render and both exports (§ 5). All before convergence code. |
 | Scope | Owner, group and mode of every carried `/etc` file, carried unmanaged file and directory, and `/var` directory the export provisions: what the scan records, the snapshot types, one ownership resolver, account creation, the Containerfile sequence, both export paths, notices, the fleet field list, tests. § 0 replaces the per-user Containerfile strategy with one delivery switch for local users. |
 | Decisions it implements | Ownership is preserved; one resolver for `/etc` and unmanaged content; provisioning-time accounts are handled and the operator is told which accounts the image requires (Mark Russell, 2026-11-23). `/etc` first; mode is not fixed alone (Mark Russell, 2026-11-23). A carried tmpfiles.d line that names an account the image lacks gets the account (Mark Russell, 2026-11-25). Classification lives in scan through one core defaults module; refine applies only user edits; an unedited export equals the tarball (Mark Russell, 2026-11-24). Variant identity stays byte-identical content (Mark Russell, 2026-11-24). The ten decisions in § 13 (Mark Russell, 2026-11-25). |
@@ -838,7 +838,7 @@ Decision: an account a carried tmpfiles.d line names and the image lacks gets th
 - paths with ACLs or file capabilities that are not carried, and each root (and, in an aggregate, host) where the check could not run;
 - under `Image`: that local users are in the image, which is not recommended for production, and, with `preserve`, that their hashes are in an image layer.
 
-Host-supplied text in a row (`Unnamed.host_name`, paths, ACL and capability lists) is escaped on every report surface; only counts reach the Containerfile.
+Host-supplied text in a row (`Unnamed.host_name`, `SysusersFile::Refused.host_name`, paths, ACL and capability lists) is escaped on every report surface; only counts reach the Containerfile.
 
 Each surface that lists ownership also says, once, how it behaves after deployment:
 
