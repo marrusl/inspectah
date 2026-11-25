@@ -10,8 +10,8 @@
 | Scope | Owner, group and mode of every carried `/etc` configuration file, carried unmanaged file and directory, and `/var` directory the export provisions: what the scan records, the snapshot types, one ownership resolver, account creation, the Containerfile lines, both export paths, notices, the fleet field list, tests. |
 | Decisions it implements | Ownership is preserved; one resolver for `/etc` and unmanaged content; provisioning-time accounts are handled and the operator is told which accounts the image requires (Mark Russell, 2026-11-23). `/etc` first; mode is not fixed alone (Mark Russell, 2026-11-23). A carried tmpfiles.d line that names an account the image lacks gets the account created (Mark Russell, 2026-11-25). Classification lives in scan through one core defaults module; refine applies only user edits; an unedited export equals the tarball (Mark Russell, 2026-11-24). Variant identity stays byte-identical content (Mark Russell, 2026-11-24). |
 | Backlog items | Closes `inspectah-carried-files-lose-owner-and-group`, `inspectah-tmpfiles-line-owned-by-a-skipped-user-is-silently-skipped` and `inspectah-var-parent-dirs-lose-their-ownership` (inspectah-team `workflow/backlog/inspectah/open/`). Leaves `inspectah-storage-ownership-rows-report-var-directories-the-image-already-reproduces` open (§ 5.6). |
-| Inputs | A security consult on carried ownership, 2026-11-25, read-only at `4b520879`. Its eight rules are § 2. A bootc consult on the `/etc` 3-way merge is open in parallel; its questions are § 12 with placeholders. |
-| Verified | Code citations read at `59a068fa` (2026-11-25). Line numbers are a convenience; the symbol name is the identifier. Nothing was built or booted for this spec. Claims marked *inferred* or *recalled* were not checked; § 10.2 names the build that checks them. |
+| Inputs | A security consult on carried ownership, 2026-11-25, read-only at `4b520879`. Its eight rules are § 2.1. A bootc consult, 2026-11-25, read against ostree `3d72f1d`, bootc `b88f28b` and buildah `4bf2012`. Its answers are § 12 and its rules § 2.2. |
+| Verified | Code citations read at `59a068fa` (2026-11-25). Line numbers are a convenience; the symbol name is the identifier. Nothing was built or booted for this spec. Claims marked *inferred* or *recalled* were not checked; § 10.2 names the build or booted host that checks them. |
 
 **No code, documentation, or CHANGELOG entry was written to produce this file.**
 
@@ -33,7 +33,7 @@ Every carried file and directory lands in the image owned by `root:root`, and ev
 - No `chown` or `--chown` appears under `crates/pipeline/src/render`. The only ownership-like line is the SSSD `chmod 0600` (`sssd_mode_lines`, `crates/pipeline/src/render/containerfile.rs:1792`).
 - `render/tarball.rs:99-108` packs directories `0755`, unmanaged payloads with `PAYLOAD_MODE_BITS` (`0o777`, so setuid, setgid and sticky are dropped), and everything else `0644`. `build/extract.rs:494-498` keeps a member's mode only for unmanaged payloads.
 - The config tree is copied as whole directories (`COPY config/<root>/ /<root>/`, `containerfile.rs:1727`). Whether a directory `COPY` onto an existing image directory such as `/etc/sudoers.d` (`0750` on the base) resets its mode to the member's `0755` is not checked; § 10.2 R3 checks it.
-- The Containerfile's order is packages, config (`:205-209`), unit state (`:211-216`), non-RPM (`:218-223`), containers, users (`:238-244`). Any `chown` by name must follow the users block.
+- The Containerfile's order is packages, config (`:205-209`), unit state (`:211-216`), non-RPM (`:218-223`), containers, users (`:238-244`). Any `chown` by name must follow the users block, and an account pinned against package allocation must precede the packages (§ 5.3).
 
 **Interim state.** beta.8 names the loss: `render/unmanaged_owners.rs` lists every carried unmanaged file whose host owner or group was not root or that had a special bit, and the scan prints the count. `render/tmpfiles_accounts.rs` names every carried tmpfiles.d line whose account the image will not have. Both are notices; this spec replaces them with the fix.
 
@@ -41,7 +41,9 @@ Every carried file and directory lands in the image owned by `root:root`, and ev
 
 ## 2. Rules this spec carries
 
-From the security consult, adopted as requirements:
+### 2.1 From the security consult
+
+Adopted as requirements:
 
 1. **Never widen a carried mode.** The image mode is the host mode or narrower. No path in the renderer defaults a carried file to `0644`. An unknown mode fails closed.
 2. **Record owner and group names at scan time,** not only numbers. The snapshot cannot map a system uid back to a name later.
@@ -51,6 +53,17 @@ From the security consult, adopted as requirements:
 6. **Mode, owner, group and the fallback land together.**
 7. **A redacted file keeps the host's mode.**
 8. **A fleet build never ships a mode wider than any contributing host** for the same content without a flag.
+
+### 2.2 From the bootc consult
+
+Adopted as requirements; the evidence is § 12.
+
+9. **Ownership in the image must be right the first time.** An owner, group or mode change on a deployed host makes that `/etc` file locally modified, and from then on no later image change to it arrives. The export says so wherever it reports ownership (§ 5.8).
+10. **Pin every account the image creates for carried content at the host's id:** created before any package install that could allocate it, mirrored in a `sysusers.d` line with the same id, and the build stops if the id is taken (§ 5.3).
+11. **`/var` ownership and mode reach the host as tmpfiles.d `d` lines by name, never as image content** (§ 5.6). Image content under `/var` is applied once, at install.
+12. **Carry no SELinux labels** (§ 11).
+
+Rule 3 holds with a sharper reason: `COPY --chown=<name>` reads only the image's `/etc/passwd` and `/etc/group`, so it fails the build for any account the RHEL bootc bases keep in `/usr/lib/group`.
 
 Trust assumptions, stated once: the host's owner and mode are taken as intended, not audited, so a host misconfiguration ships (except as § 5.4 clamps it); names resolve in the build image, so the image's account database is trusted for name to id; `stat` runs as root at scan time, and a file changed afterwards is not re-checked.
 
@@ -221,7 +234,7 @@ Resolution order for each named owner and group:
 1. **The users block creates it** (`ContainerfileUserPlan` accepted it): by name.
 2. **A local user on `skip` that the operator kept there:** provisioned at install by the export's own kickstart or blueprint, which already write the host `--uid`/`uid =` (`render/users.rs:191-200`, `:308-317`). By number, with a guard (§ 5.3). Decision 13.5.
 3. **A local user the operator excluded:** fallback, `AccountExcluded`.
-4. **Any other name** (a system account): the ownership block makes sure it exists (§ 5.3), then by name. A carried package that creates it, the base image, or `KNOWN_PACKAGE_ACCOUNTS` (`containerfile.rs:2487`) need no special case: the guard finds the account and does nothing.
+4. **Any other name** (a system account): the accounts block creates it at the host's id before packages unless the base image already has it (§ 5.3), then by name. A carried package that would create it needs no special case: its scriptlet finds the account present and leaves it, so the id is the host's, not whatever the build would allocate. An account the base already holds (`/usr/lib/passwd`, `/usr/lib/group`) is the base vendor's to pin; the guard finds it and does nothing.
 5. **`Unnamed`, or `Unknown` ownership:** fallback.
 
 ### 5.2 Mode: staged, not commanded
@@ -234,33 +247,48 @@ A file's permission bits (`mode & 0o777`) reach the image through the staged tre
 - **Directories** stay `0755` in the tarball. A recorded `CarriedDirectory` gets an explicit `chown` and `chmod` in the ownership block, which also covers an existing base directory a `COPY` may have reset (§ 10.2 R3).
 - **Redacted files** are written with the host's mode (rule 7). Redaction changes content, never metadata.
 
-### 5.3 The ownership block
+### 5.3 The accounts block and the ownership block
 
-A new section, 8b, right after the users block (`containerfile.rs:238-244`), so every `useradd` the users block writes is already done. It has two parts.
+Two new blocks. The accounts block runs before packages so no package scriptlet allocates an id first; the ownership block runs after the users block, so every account any block creates exists before a `chown` names it.
 
-**Accounts.** For each system account that a `ByName` placement names and the users block does not create, from `owner_groups` and `owner_accounts`, in that order:
+**Accounts block.** Immediately before the packages block. For each system account that a `ByName` placement or a carried tmpfiles.d line names and the users block does not create, from `owner_groups` and `owner_accounts`, groups first:
 
 ```dockerfile
-# Accounts carried files need. Each keeps the source host's id; the
-# build stops if the image already uses the id for another account.
+# Accounts carried files need, pinned at the source host's ids so a
+# rebuild cannot renumber them. The build stops if the image already
+# uses an id for another account.
+COPY config/usr/lib/sysusers.d/inspectah-accounts.conf /usr/lib/sysusers.d/inspectah-accounts.conf
 RUN getent group appsvc >/dev/null || groupadd -r -g 985 appsvc \
  && getent passwd appsvc >/dev/null \
     || useradd -r -M -u 985 -g appsvc -d /var/lib/appsvc -s /sbin/nologin appsvc
 ```
 
-The `getent ... || ...` idiom is the users block spec's: `getent` goes through NSS and sees `/usr/lib/passwd` and `/usr/lib/group`, and `groupadd` and `useradd` refuse an id another account holds (exit 4), which stops the build (rule 4). The users block spec's message wrapper around a refused `groupadd` is reused, so the stop names the account and the id. Decision 13.6. Home and shell are the host's, validated as `ExportPath`; an invalid one falls back to `/` and `/sbin/nologin`. `bootc container lint` warns about accounts in `/etc/passwd` that no `sysusers.d` entry declares; the users block accepted that warning, and this block shares it. Whether system accounts belong in a `sysusers.d` fragment instead is decision 13.8 and bootc question Q3.
+- **Before packages.** A carried package that creates the account (`bind` and `named`) finds it present and leaves it, so the image holds the host's id rather than whatever the build allocates. An id allocated by the build can change on a later rebuild, and nothing on bootc remaps owners when it does (§ 12 Q2).
+- **The guard.** `getent` goes through NSS and sees `/usr/lib/passwd` and `/usr/lib/group`, so an account the base already holds is left alone and `chown` by name resolves to the base's id. That account is the base vendor's to pin.
+- **A taken id stops the build.** `groupadd -g` and `useradd -u` refuse an id another account holds (exit 4). The users block spec's message wrapper around a refused `groupadd` is reused, so the stop names the account and the id. Decision 13.6.
+- **Home and shell** are the host's, validated as `ExportPath`; an invalid one falls back to `/` and `/sbin/nologin`.
+- **`sysusers.d` mirror.** `config/usr/lib/sysusers.d/inspectah-accounts.conf` declares every account this block creates, and every local user the scan defaulted to `useradd` for carried content (§ 4.3), with the same ids:
 
-A **`ByNumber`** account gets a guard instead of a creation:
+  ```
+  g appsvc 985
+  u appsvc 985:985 - /var/lib/appsvc /sbin/nologin
+  ```
+
+  This keeps `bootc container lint`'s `sysusers` warning quiet for these accounts, and puts an account back at boot on a host whose locally modified `/etc/passwd` lacks it, which a later image adding the account would otherwise never reach. Every field is a proved token. `useradd` in the build, not `systemd-sysusers`, creates the account: `systemd-sysusers` silently takes another id when the requested one is used, which would break rule 10. Decision 13.8.
+
+A **`ByNumber`** account gets a guard in the ownership block instead of a creation:
 
 ```dockerfile
 RUN ! getent passwd 1001 >/dev/null || [ "$(getent passwd 1001 | cut -d: -f1)" = appuser ] \
  || { echo "uid 1001 (appuser, created at install) is taken in the image" >&2; exit 1; }
 ```
 
-**Ownership.** One `RUN`, `chown` lines grouped by owner and group, then directory `chmod` lines, then special-bit `chmod` lines:
+**Ownership block.** Section 8b, right after the users block (`containerfile.rs:238-244`). One `RUN`, `chown` lines grouped by owner and group, then directory `chmod` lines, then special-bit `chmod` lines:
 
 ```dockerfile
-# Owner, group and special bits from the source host.
+# Owner, group and special bits from the source host. Fix ownership
+# here and rebuild: a chown on a deployed host freezes that /etc file
+# against every later image.
 RUN chown root:named /etc/named.conf /etc/rndc.key \
  && chown appsvc:appsvc /etc/appsvc/ /etc/appsvc/secret.conf /opt/appsvc/ \
  && chown 1001:1001 /opt/tools/report.sh \
@@ -269,6 +297,8 @@ RUN chown root:named /etc/named.conf /etc/rndc.key \
 ```
 
 `chown` fails the build when a name does not resolve, which is rule 3's failure with no extra code: the message is `chown`'s own and names the account. No `chown` line exists for a `Root` placement. Paths are `ExportPath`s; a path the token set refuses gets a `# FIXME:` line and a fallback row, as other blocks do.
+
+Every carried path the ownership block names is image content: `/etc` (whose image copy becomes the `/usr/etc` default the merge compares against), and `/opt` and `/usr/local`, which are real image directories on both RHEL bootc bases (`BASE_IMAGE_DIRECTORIES`, `render/selinux.rs`). Unmanaged findings under `/srv`, a link into `/var` on both bases, are routed to the `/var` strategy and never copied (`included_var_srv_paths`, `render/unmanaged.rs`), so the resolver plans nothing for them.
 
 ### 5.4 Fallbacks
 
@@ -280,7 +310,7 @@ A path whose owner or group cannot be carried keeps the half that can and falls 
 | Owner is an orphan id, refused name, or excluded account | `root` for the owner | host bits, special bits cleared |
 | Group is an orphan id, refused name, or excluded account | `root` for the group | host bits with the group bits cleared, special bits cleared |
 
-Owner bits handed to `root` grant nothing root does not have. Group bits handed to `root` are cleared, because the host granted them to a group that is not in the image. Other bits are kept: they were granted to everyone on the host, so keeping them does not widen. Every fallback is a row in the notice (§ 5.7) with its cause.
+Owner bits handed to `root` grant nothing root does not have. Group bits handed to `root` are cleared, because the host granted them to a group that is not in the image. Other bits are kept: they were granted to everyone on the host, so keeping them does not widen. Every fallback is a row in the notice (§ 5.8) with its cause.
 
 World-writable regular files: under `/etc`, decision 13.2 (recommended: clamp `o+w`, with a row). Elsewhere they carry, with a row.
 
@@ -298,7 +328,9 @@ World-writable regular files: under `/etc`, decision 13.2 (recommended: clamp `o
 
 **Parents.** The dedup in `discover_var_directories` (`storage.rs:225-227`) changes from "drop a proper prefix of another path" to "drop a proper prefix of another path whose ownership is `0755 root:root`". A parent that departs is kept as its own `VarDirectory`, gets its own `d` line in `inspectah-var.conf` before its leaf's (the fragment is sorted by path), and so `/var/lib/pgsql 0700 postgres:postgres` survives. This is the cheaper of the two fixes the backlog item names, it uses the same `Ownership` type, and it is a tmpfiles line, not a `chown`. Folded in.
 
-**Accounts.** The owner and group a `d` line names go through the same resolver. tmpfiles resolves names at boot, so `ByName` and `ByNumber` both work there; a fallback writes the line with `root` for that half, as § 5.4 says.
+**Lines, not content.** `VarDirectory.ownership` reaches the host only through `d` lines in `/usr/lib/tmpfiles.d/inspectah-var.conf`, which inspectah already writes for provisioned directories. bootc unpacks image content under `/var` only at install and never on upgrade, so ownership carried as content would reach a host once and never be corrected; a `d` line is applied every boot. The one place the renderer still writes `/var` content goes: a provisioned directory with no recorded mode gets `RUN mkdir -p` today (`mkdir_line`, `containerfile.rs:2761`). Under this spec its ownership is `Unknown`, and it gets a `d` line with § 5.4's `stat`-failed fallback, `0700 root root`, and a fallback row. Lines are `d` only: `Z` would recursively chown application data, which a migration tool has no business doing.
+
+**Accounts, by name.** The owner and group a `d` line names go through the same resolver, and every placement writes names. tmpfiles resolves a name at boot to the host's current id, so a `d` line by name also survives a renumbered account. `ByName` accounts exist in the image (§ 5.3) and `ByNumber` accounts exist by first boot because provisioning created them, so both are named. `resolve_tmpfiles_ownership`'s numeric cases (a name available but not guaranteed, or no name) go: the resolver either guarantees the account or falls back, and a fallback writes `root` for that half with the bits § 5.4 gives.
 
 **Not closed here.** The Storage view's rows for carried directories whose ownership departs from a fixed `0755 root:root` are a presentation question waiting on the Storage section's purpose. Keeping departing parents adds rows of the same kind. That item stays open.
 
@@ -317,10 +349,12 @@ Decision 6: an account a carried tmpfiles.d line names and the image lacks is cr
 `render/unmanaged_owners.rs` and its scan stderr line are replaced by one ownership notice built from the plan, in the audit report, the HTML report, refine's export warnings (`x-export-warnings`, which today does not carry the beta.8 notice) and `inspectah scan`'s stderr count:
 
 - paths that fell back, with the host owner, group and mode and the cause;
-- accounts the image creates (§ 5.3) and accounts provisioning must create, with uid and gid (`ByNumber`);
+- accounts the image creates (§ 5.3), pinned at the host's ids, and accounts provisioning must create, with uid and gid (`ByNumber`);
 - carried setuid and setgid files;
 - world-writable files, clamped or carried;
 - paths with ACLs or file capabilities that are not carried (§ 4.4).
+
+Each surface that lists ownership also says, once, how it behaves after deployment: the image's ownership of an `/etc` file is the default every later image updates; a host where someone changes that file's owner, group or mode keeps its own copy, content included, and takes no later image change to it, with no warning. So a wrong owner or a fallback is fixed in the Containerfile and rebuilt before deployment, not with `chown` on hosts. This is why fallbacks are listed before the first build rather than left to the operator to find.
 
 The Containerfile carries one comment line with the counts, pointing at the audit report. Refine shows a carried row's host ownership as read-only detail; the user strategy row shows the reason § 4.3 wrote.
 
@@ -340,7 +374,7 @@ The aggregate merge must consider exactly these new or changed fields:
 Questions the convergence spec answers with these fields:
 
 - **Decision for Mark (13.3):** is ownership part of the variant key, or is it resolved separately for the winning variant? Mark already decided variant identity is byte-identical content (2026-11-24), so the recommendation is: content-only key, and ownership resolved across the hosts that hold the winner. Owner and group: the most prevalent pair among them. Mode: the bitwise AND of those hosts' modes, so it is never wider than any of them. When the hosts disagree on owner or group, or when a host outside the winner's pair had a narrower mode, refine flags the row and the audit report lists it (rule 8). The alternative, ownership in the key, shows mode-only differences as variants and still needs the rule-8 flag, because the most prevalent variant can be the wider one.
-- **An account with different ids on different hosts** (`chrony` 992 here, 994 there, normal for dynamically allocated system ids): `chown` by name is unaffected. Creation (§ 5.3) needs one id: recommended, the most prevalent, with the others listed.
+- **An account with different ids on different hosts** (`chrony` 992 here, 994 there, normal for dynamically allocated system ids): `chown` and the `d` lines by name are unaffected. Creation and the `sysusers.d` mirror (§ 5.3) pin one id: recommended, the most prevalent, with the others listed. The pin matters more than it did: hosts at another id keep their `/var` data at their own number, and nothing on bootc remaps it, so the list is what tells the operator which hosts need a one-time `chown` of their data.
 - **Unknown ownership on some hosts:** the hosts with `Recorded` decide; a path `Unknown` on every host falls back.
 - **Users:** Mark's leaning keeps users out of convergence. The scan's `useradd` default (§ 4.3) is per host; the merge needs a rule for a user defaulted on some hosts and not others. Recommended: `useradd` when any host's carried files need it.
 
@@ -363,8 +397,8 @@ The alternative, falling back to `root:root` with a notice for a kept `skip`, is
 
 - `**Breaking:**` schema 32; re-scan earlier snapshots.
 - Fixed: carried `/etc` files keep their mode, owner and group; carried unmanaged files and directories keep owner, group and special bits; `/var` parent directories keep their ownership; tmpfiles.d lines whose account the image lacks get the account.
-- Changed: the beta.8 ownership notice becomes the fallback notice.
-- Skills: `export-paths-stage-different-trees` (every staged file's mode now carried, both paths), `bootc-base-groups-and-users` (system account creation), `cross-inspector-shadow-passes` is unaffected. A new `carried-file-ownership` skill holds the resolver order, the `chown`-clears-setuid ordering and the fallback table.
+- Changed: the beta.8 ownership notice becomes the fallback notice. System accounts that own carried files are created at the source host's ids before packages and declared in `/usr/lib/sysusers.d/inspectah-accounts.conf`. `/var` directory lines name accounts, never numbers, and a `/var` directory with no recorded mode gets a tmpfiles.d line instead of `RUN mkdir`.
+- Skills: `export-paths-stage-different-trees` (every staged file's mode now carried, both paths), `bootc-base-groups-and-users` (system account creation before packages, the `sysusers.d` mirror, `COPY --chown` failing on `/usr/lib/group` accounts), `cross-inspector-shadow-passes` is unaffected. A new `carried-file-ownership` skill holds the resolver order, the `chown`-clears-setuid ordering, the fallback table, and the 3-way merge rule that a metadata change on a host freezes the file.
 - User docs: the known-limitations entries beta.8 added are removed.
 
 ## 10. Testing
@@ -391,10 +425,13 @@ Table-driven, over collector-produced snapshots from the mock executor unless st
 | T14 | SSSD name `jdoe@ad.example.com` owning a file | `Unnamed { host_name: Some(..) }`, fallback |
 | T15 | User set back to `skip` | `ByNumber`, guard line, required-accounts row |
 | T16 | `extract.rs` keeps a `0600` config member's mode; the refine download does too | both `0600` |
+| T17 | T2's `appsvc`, created by a carried `bind`-style package too | accounts block before the packages block; `sysusers.d` lines `g appsvc 985` and `u appsvc 985:985`; ids equal the `useradd` line's |
+| T18 | `/var/lib/app 0750 appsvc:appsvc` and a `/var` directory with `Unknown` ownership | `d /var/lib/app 0750 appsvc appsvc -`, by name; `d <path> 0700 root root -` and a fallback row; no `RUN mkdir` |
+| T19 | Audit report, HTML report, export warnings | each carries the after-deployment line (§ 5.8) once |
 
-### 10.2 Real-host check
+### 10.2 Real-host checks
 
-Scan a driftify-prepared rhel9 and rhel10 VM with fixtures for each case, build the generated Containerfile with `podman build` on each release's `rhel-bootc` base, and check ownership with `stat` inside the built image:
+Two kinds of host. **Builds:** scan a driftify-prepared rhel9 and rhel10 VM with fixtures for each case, build the generated Containerfile with `podman build` on each release's `rhel-bootc` base, and check ownership with `stat` inside the built image. **Booted:** R13 to R15 run on a booted rhel9 and rhel10 bootc host and settle what the bootc consult read from source or inferred.
 
 | # | Checks |
 |---|---|
@@ -405,11 +442,14 @@ Scan a driftify-prepared rhel9 and rhel10 VM with fixtures for each case, build 
 | R5 | T6: setuid survives; confirms `chown` clears it when the order is reversed |
 | R6 | T4 and T5 fallbacks |
 | R7 | T11: `systemd-tmpfiles --create` in the built image exits 0 and the directory is owned by `appuser` |
-| R8 | T10: `/var/lib/pgsql` parent and leaf after `systemd-tmpfiles --create` |
-| R9 | `COPY --chown=<name>` for a group only in `/usr/lib/group` fails while `RUN chown` succeeds (confirms rule 3's mechanism) |
+| R8 | T10 and T18: `/var/lib/pgsql` parent and leaf after `systemd-tmpfiles --create`; then `chown root:root` the parent and re-run: the `d` line restores the owner and mode of an existing directory (*recalled*, Q6) |
+| R9 | A local build with `COPY --chown=root:cdrom` on each base (`cdrom` is only in `/usr/lib/group`) fails with "looking up UID/GID", while `RUN chown root:cdrom` succeeds (Q3) |
 | R10 | An account id the image already uses: the build stops with the message |
 | R11 | T15 with the export's blueprint through BIB on one release: the installed system's account has the host uid |
-| R12 | `bootc container lint` result recorded for the ownership block |
+| R12 | `bootc container lint` on T17's image: no `sysusers` warning for `appsvc`, and no `/var` tmpfiles warning from inspectah's lines |
+| R13 | Booted: `chown root:wheel /etc/chrony.conf; ostree admin config-diff \| grep chrony` shows `M chrony.conf` (Q1) |
+| R14 | Booted: `grep -c . /etc/passwd /usr/lib/passwd`; the `passwd` and `group` lines in `/etc/nsswitch.conf`; `getent passwd chrony` (Q3: users split like groups, and NSS answers for `/usr/lib` accounts) |
+| R15 | Booted: `ls -ld /opt /usr/local /srv /root /home` (Q5: re-confirms the layout `BASE_IMAGE_DIRECTORIES` and `BASE_VAR_SYMLINKS` record) |
 
 ## 11. Non-goals
 
@@ -417,18 +457,25 @@ Each left out with its cost:
 
 - **ACLs.** A `setfacl` grant to a service account is lost and the file falls back to its mode bits. Usually narrower, so it breaks rather than leaks, except a default ACL on a directory. Noticed (§ 4.4), not carried.
 - **Extended attributes (`user.*`).** No security effect. Not detected.
-- **SELinux labels.** The image relabels from policy, so a label set with `chcon` is lost; `semanage fcontext` rules belong to the SELinux inspector. Low.
+- **SELinux labels.** Not carried, by rule. ostree's merge ignores extended attributes, labels included, so a label-only change on a host neither persists across an update nor marks the file modified, and image labels come from the image's policy. A label set with `chcon` is lost; `semanage fcontext` rules belong to the SELinux inspector. Low.
 - **File capabilities (`security.capability`).** A binary under `/opt` with `cap_net_bind_service` loses it and fails, or an operator re-adds setuid as a workaround. Breakage, not a leak. Noticed (§ 4.4), carried later.
 - **Kickstart and blueprint user selection.** Unchanged; the users block spec owns it.
+- **Remapping data at a host's old id.** When the base image holds an account at a different id from the source host, or a fleet pins one id across hosts that had several (§ 6), files under `/var` keep the host's number. Nothing on bootc remaps owners. The `d` lines fix the directories themselves at boot; the data inside is listed, not changed.
 - **Auditing host modes.** A host misconfiguration ships, except the `/etc` world-writable clamp if decision 13.2 takes it.
 
-## 12. Open bootc questions
+## 12. bootc questions
 
-A bootc consult is answering these in parallel. Answers land here before the plan.
+Answered by the bootc consult, read against ostree `3d72f1d`, bootc `b88f28b` and buildah `4bf2012` (2026-11-25). Each answer says whether it was read in source or inferred, and which § 10.2 check confirms it on a host.
 
-- **Q1.** On bootc, does an `/etc` file whose owner, group or mode differs from the image's count as locally modified in the 3-way merge, so that a later image change to that file never reaches deployed hosts? *Answer: pending.*
-- **Q2.** Does an image update that renumbers a system account (a different dynamic id in the new image) leave `/etc` files owned by the old number on deployed hosts? *Answer: pending.*
-- **Q3.** For a system account the image lacks, is a `/usr/lib/sysusers.d` fragment, applied at build with `systemd-sysusers` so `chown` can resolve it, better than `useradd` in the Containerfile? What does `systemd-sysusers` do when the requested id is taken? *Raised by this spec. Answer: pending.*
+- **Q1. Does an owner, group or mode change alone make an `/etc` file locally modified?** Yes, read in source, high confidence. ostree's merge (`merge_configuration_from`, `src/libostree/ostree-sysroot-deploy.c`) diffs the old image default in `/usr/etc` against the running `/etc` with a checksum whose header holds uid, gid and mode; the composefs backend's merge (`crates/etc-merge`) compares the same three. It is not a true 3-way merge: the modified file wins whole, so the new image's content and metadata for that path are dropped. A host that never touches a file follows every later image, ownership fixes included; a host `chown` freezes it with no warning. A rebuilt image that `chown`s by name also heals unmodified files after a renumbering (*inferred*). Drives rule 9 and § 5.8. R13 confirms.
+- **Q2. Does renumbering leave files at the old number?** Yes: neither bootc nor ostree remaps owners, and `/var` is never touched on upgrade (read in source, high confidence). An account in `/etc/passwd`, which is almost always locally modified, keeps its old number on the host while new image content carries the new one; an account in `/usr/lib/passwd` moves with the image and strands `/var` data and modified `/etc` files; a `sysusers.d` account with no fixed id can differ per host. The fix, rule 10 and § 5.3, follows bootc's documented pinning pattern (medium confidence that it is the complete fix).
+- **Q3. Where do accounts live on the RHEL bootc bases, and how do the build instructions resolve them?** Groups: six in `/etc/group`, the rest in `/usr/lib/group` through nss-altfiles, measured on 9.8 and 10.2 by the users block spec. Users: the same split is *inferred*; R14 measures it. `RUN chown <name>` resolves through NSS and so finds altfiles accounts (*inferred*, consistent with the measured `groupadd` behaviour; R9 and R14). `COPY --chown=<name>` does not: buildah's lookup reads only the image's `/etc/passwd` and `/etc/group`, and the step fails the build with "looking up UID/GID" (read in source, high). On `sysusers.d` at build: `systemd-sysusers` silently takes another id when the requested one is used, so it cannot enforce rule 10; `useradd` creates and a `sysusers.d` line mirrors (§ 5.3).
+- **Q4. Does `/var` content in the image reach deployed hosts?** Only at install, like a `VOLUME`; upgrades never apply it (read in bootc's `bootc-filesystem.7.md`, high). `bootc container lint` warns on `/var` content with no tmpfiles.d entry. Drives rule 11 and § 5.6. R8 and R12 check the lines.
+- **Q5. Are SELinux labels part of the merge, and where do `/opt` and `/usr/local` live?** ostree's merge ignores labels on purpose (read in source, high), so none are carried (rule 12, § 11). `/opt` and `/usr/local` are real image directories and `/srv`, `/home`, `/root` and `/mnt` are links into `/var` on both RHEL bootc bases: inspectah's own measurement, recorded in `BASE_IMAGE_DIRECTORIES` and `BASE_VAR_SYMLINKS` (`render/selinux.rs`). So setuid files under `/opt` and `/usr/local` are image content, follow every image, and sit in the composefs metadata. R15 re-confirms.
+
+Still open:
+
+- **Q6.** Does a tmpfiles.d `d` line correct the owner and mode of a directory that already exists? *Recalled* as yes, not read today; § 5.6 relies on it to correct a `/var` directory on every boot. R8 checks it.
 
 ## 13. Decisions for Mark
 
@@ -439,9 +486,9 @@ A bootc consult is answering these in parallel. Answers land here before the pla
 5. **An operator who keeps such a user on `skip`:** numeric `chown` with a guard and a required-accounts row, or fall back to `root:root`? Recommend: numeric.
 6. **An account id already taken in the image by another name:** stop the build, or let `useradd` pick an id? Recommend: stop, as the users block does for groups.
 7. **ACLs and file capabilities:** detect and notice now, carry later? Recommend: notice now.
-8. **System accounts the image lacks:** `useradd` guard lines now, or a `sysusers.d` fragment? Recommend: guard lines now, revisit on Q3's answer.
+8. **System accounts the image lacks:** create them with `useradd` at the host's id in an accounts block before packages, mirrored in a `sysusers.d` line with the same id (§ 5.3), or create them after the users block and let any carried package allocate its own id first? Recommend: before packages, with the mirror. It is bootc's documented pinning pattern, keeps the lint quiet, and is the only option that stops a rebuild from renumbering an account. The cost is that inspectah, not the package, picks the id of a package-created account; the host's id is the one the carried files already use. `systemd-sysusers` alone is not an option: it silently takes another id when the requested one is used (§ 12 Q3).
 9. **`/var` parent directories:** fold the dedup fix in? Recommend: yes, § 5.6.
 
 ## 14. Size
 
-About 15 plan tasks across `core` (types, `AccountName` move, schema, defaults), `collect` (executor metadata, `HostAccounts`, config, unmanaged and storage collectors, finalize pass, ACL and capability detection), `pipeline` (resolver, ownership block, tarball, extractor, notices, tmpfiles accounts, report), `refine` (export staging, export warnings), `web` (row detail, strategy reason) and `cli` (scan stderr). Still L, at its top end. Decision 13.1 as an include, or a `sysusers.d` design under 13.8, would push it toward XL.
+About 17 plan tasks across `core` (types, `AccountName` move, schema, defaults), `collect` (executor metadata, `HostAccounts`, config, unmanaged and storage collectors, finalize pass, ACL and capability detection), `pipeline` (resolver, accounts block before packages and the `sysusers.d` fragment, ownership block, `/var` `d` lines by name replacing `resolve_tmpfiles_ownership`'s numeric cases and `mkdir_line`, tarball, extractor, notices, tmpfiles accounts, report), `refine` (export staging, export warnings), `web` (row detail, strategy reason) and `cli` (scan stderr). Up from 15: the bootc answers added the pinned accounts block with its mirror and the `/var` line rewrite. Still L, at its very top; decision 13.1 as an include would make it XL.
