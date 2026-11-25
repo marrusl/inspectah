@@ -5531,15 +5531,15 @@ async fn a_continued_mount_source_is_nowhere_in_the_view_response() {
 }
 
 /// Two aggregate variants at one unit path, the selected one with content
-/// and the alternative zero-length. The projection's `config_withheld`
-/// lists one entry per included row at the path; the view puts each on
-/// an included row at that path and never on an excluded one. Excluding
-/// the path (which reaches the first variant) leaves the zero-length
-/// alternative as the one included row, and only it carries `withheld`.
+/// and the alternative zero-length, both included as loaded. The include
+/// is the path's and sits on the selected variant alone, so the view has
+/// one included row and the projection's `config_withheld` lists nothing
+/// for it. Selecting the zero-length alternative moves the include to it,
+/// and only that row carries `withheld`; the excluded row never does.
 #[test]
 fn withheld_lands_on_the_included_variant_rows_only() {
     use inspectah_core::types::aggregate::VariantSelection;
-    use inspectah_refine::types::{ItemId, RefinementOp};
+    use inspectah_refine::types::{ContentHash, ItemId, RefinementOp};
     const PATH: &str = "/etc/systemd/system/variant.service";
     let variant = |content: &str, selection| ConfigFileEntry {
         path: PATH.into(),
@@ -5560,7 +5560,7 @@ fn withheld_lands_on_the_included_variant_rows_only() {
     });
     let mut session = RefineSession::new(snap);
     // (content, included, withheld) per config row, in view order.
-    let rows = |session: &RefineSession| -> Vec<(String, bool, Option<serde_json::Value>)> {
+    let rows = |session: &RefineSession| -> Vec<(String, bool, bool)> {
         let json = serde_json::to_value(inspectah_web::adapter::build_web_view(session))
             .expect("the view serializes");
         json["config_files"]
@@ -5571,43 +5571,52 @@ fn withheld_lands_on_the_included_variant_rows_only() {
                 (
                     c["entry"]["content"].as_str().expect("content").to_owned(),
                     c["entry"]["disposition"]["include"] == true,
-                    c.get("withheld").cloned(),
+                    c.get("withheld").is_some_and(|w| !w.is_null()),
                 )
             })
             .collect()
     };
+    let listed = |session: &RefineSession| -> Vec<serde_json::Value> {
+        session
+            .decisions()
+            .config_withheld
+            .iter()
+            .filter(|c| c.path == PATH)
+            .map(|c| serde_json::to_value(&c.withheld).expect("serializes"))
+            .collect()
+    };
 
-    let both = rows(&session);
-    assert!(both.iter().all(|(_, included, _)| *included), "{both:?}");
-    let listed: Vec<serde_json::Value> = session
-        .decisions()
-        .config_withheld
-        .iter()
-        .filter(|c| c.path == PATH)
-        .map(|c| serde_json::to_value(&c.withheld).expect("serializes"))
-        .collect();
-    let carried: Vec<serde_json::Value> = both.iter().filter_map(|(_, _, w)| w.clone()).collect();
-    assert_eq!(listed.len(), 2, "both included variants offer the file");
-    assert_eq!(carried, listed);
+    let loaded = rows(&session);
+    assert_eq!(
+        loaded
+            .iter()
+            .map(|(content, included, w)| (content.as_str(), *included, *w))
+            .collect::<Vec<_>>(),
+        [("[Unit]\n", true, false), ("", false, false)],
+        "{loaded:?}"
+    );
+    assert!(
+        listed(&session).is_empty(),
+        "one content offered, none withheld"
+    );
 
     session
-        .apply(RefinementOp::SetInclude {
+        .apply(RefinementOp::SelectVariant {
             item_id: ItemId::Config { path: PATH.into() },
-            include: false,
+            target: ContentHash::from_content(b""),
         })
-        .expect("the config row toggles");
+        .expect("the alternative is selectable");
     let one = rows(&session);
     assert_eq!(
         one.iter()
-            .map(|(content, included, w)| (content.as_str(), *included, w.is_some()))
+            .map(|(content, included, w)| (content.as_str(), *included, *w))
             .collect::<Vec<_>>(),
         [("[Unit]\n", false, false), ("", true, true)],
         "{one:?}"
     );
-    assert_eq!(
-        one[1].2.as_ref().expect("withheld")["why"],
-        "ZeroLengthUnitFile"
-    );
+    let withheld = listed(&session);
+    assert_eq!(withheld.len(), 1, "{withheld:?}");
+    assert_eq!(withheld[0]["why"], "ZeroLengthUnitFile");
 }
 
 /// Plan review focus 1 at the web response: an escaped instance name, the

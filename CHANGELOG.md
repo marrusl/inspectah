@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Choosing a variant in fleet refine changes the exported file**: for a configuration file, drop-in or quadlet whose content differs across hosts, picking another variant and including the path still exported the most common one, and refine showed the chosen variant as excluded. The export now carries the variant you pick. Picking a second language environment at one path no longer keeps the first included.
+
 ## [0.9.0-beta.8] - 2026-11-24
 
 ### Changed

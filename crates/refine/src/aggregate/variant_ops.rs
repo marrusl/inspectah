@@ -789,14 +789,18 @@ fn materialize_language_env_variants(
             continue;
         }
 
+        // Selecting a language environment is what includes it (there is
+        // no path toggle for this kind), so the choice is exclusive: the
+        // selected variant is included and every other one at the path is
+        // excluded, or two environments would both reach the Containerfile.
         if let Some(selected_hash) = state.selected.get(path) {
             for &idx in &variants {
-                if let Some(key) = nrs.items[idx].content_variant_key()
-                    && let Ok(hash) = ContentHash::new(key.into_owned())
-                    && hash == *selected_hash
-                {
-                    nrs.items[idx].disposition = FindingKind::included();
-                }
+                let is_selected = nrs.items[idx]
+                    .content_variant_key()
+                    .and_then(|key| ContentHash::new(key.into_owned()).ok())
+                    .is_some_and(|hash| hash == *selected_hash);
+                let item = &mut nrs.items[idx];
+                item.disposition = item.disposition.with_include(is_selected);
             }
         }
     }
@@ -843,6 +847,97 @@ fn materialize_unmanaged_file_variants(
                     };
                 }
             }
+        }
+    }
+}
+
+/// Give each multi-variant path one disposition, carried by its selected
+/// variant.
+///
+/// A path's include is a decision about the path: `SetInclude` sets it on
+/// every variant there, and a unit toggle cascades to every drop-in
+/// variant. Which content ships is the selection's decision. So after
+/// replay, a path is included when any variant at it is, and then only
+/// the `Selected` variant carries that include; every `Alternative` is
+/// excluded. The renderer reads dispositions alone, so the shipped file is
+/// always the selected one, and a path never offers two included contents
+/// (which the stager would withhold as a conflict).
+///
+/// Covers every kind with a `variant_selection` field: config files,
+/// drop-ins, quadlets, compose files and unmanaged files. Language
+/// environments carry no such field; their selection includes them
+/// directly (`materialize_language_env_variants`). A path with a single
+/// entry, or with no `Selected` entry (a single-host snapshot), is left
+/// as it is.
+pub fn carry_path_include(snap: &mut InspectionSnapshot) {
+    if let Some(config) = snap.config.as_mut() {
+        carry_include(
+            &mut config.files,
+            |e| &e.path,
+            |e| e.variant_selection,
+            |e| &mut e.disposition,
+        );
+    }
+    if let Some(units) = snap.units.as_mut() {
+        carry_include(
+            &mut units.drop_ins,
+            |e| &e.path,
+            |e| e.variant_selection,
+            |e| &mut e.disposition,
+        );
+    }
+    if let Some(containers) = snap.containers.as_mut() {
+        carry_include(
+            &mut containers.quadlet_units,
+            |e| &e.path,
+            |e| e.variant_selection,
+            |e| &mut e.disposition,
+        );
+        carry_include(
+            &mut containers.compose_files,
+            |e| &e.path,
+            |e| e.variant_selection,
+            |e| &mut e.disposition,
+        );
+    }
+    if let Some(unmanaged) = snap.unmanaged_files.as_mut() {
+        carry_include(
+            &mut unmanaged.items,
+            |e| &e.path,
+            |e| e.variant_selection,
+            |e| &mut e.disposition,
+        );
+    }
+}
+
+/// [`carry_path_include`] over one section's rows.
+fn carry_include<T>(
+    rows: &mut [T],
+    path: fn(&T) -> &str,
+    selection: fn(&T) -> VariantSelection,
+    disposition: fn(&mut T) -> &mut FindingKind,
+) {
+    let mut by_path: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (idx, row) in rows.iter().enumerate() {
+        by_path.entry(path(row)).or_default().push(idx);
+    }
+    let groups: Vec<Vec<usize>> = by_path
+        .into_values()
+        .filter(|idxs| idxs.len() > 1)
+        .collect();
+    for idxs in groups {
+        let Some(&selected) = idxs
+            .iter()
+            .find(|&&i| selection(&rows[i]) == VariantSelection::Selected)
+        else {
+            continue;
+        };
+        let path_included = idxs
+            .iter()
+            .any(|&i| disposition(&mut rows[i]).is_included());
+        for &i in &idxs {
+            let d = disposition(&mut rows[i]);
+            *d = d.with_include(path_included && i == selected);
         }
     }
 }
@@ -921,6 +1016,54 @@ mod tests {
             items[1].disposition.is_included(),
             "selected variant should have include=true"
         );
+    }
+
+    /// Selecting one language environment, then another at the same path,
+    /// leaves only the second included: selection is the include for this
+    /// kind, so two environments never both reach the Containerfile.
+    #[test]
+    fn select_variant_language_env_is_exclusive() {
+        let env = |version: &str| NonRpmItem {
+            path: "/opt/app/venv".into(),
+            method: "pip list".into(),
+            disposition: FindingKind::excluded(),
+            packages: vec![LanguagePackage {
+                name: "requests".into(),
+                version: version.into(),
+                pinned: false,
+            }],
+            ..Default::default()
+        };
+        let hash = |item: &NonRpmItem| {
+            ContentHash::new(item.content_variant_key().expect("key").into_owned()).expect("hex")
+        };
+        let (a, b) = (env("2.28.0"), env("2.31.0"));
+        let (hash_a, hash_b) = (hash(&a), hash(&b));
+        let mut snap = InspectionSnapshot {
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![a, b],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let item_id = ItemId::LanguageEnv {
+            ecosystem: "pip".into(),
+            path: "/opt/app/venv".into(),
+        };
+        let mut state = VariantProjectionState::default();
+        apply_select(&mut state, &item_id, &hash_a);
+        apply_select(&mut state, &item_id, &hash_b);
+        materialize_variants(&mut snap, &state);
+
+        let included: Vec<bool> = snap
+            .non_rpm_software
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.disposition.is_included())
+            .collect();
+        assert_eq!(included, vec![false, true]);
     }
 
     /// SelectVariant on an unmanaged-file item sets `variant_selection`

@@ -901,9 +901,7 @@ fn generated_name_collisions(
 ///    entry is offered at the destination, the repo file, GPG key or
 ///    firewall zone offer yields to it: the included config entry's
 ///    content is the write. On a fleet aggregate that is the variant whose
-///    entry is included, which is not always the selected one: refine's
-///    `SelectVariant` sets only `variant_selection`, and `SetInclude` on
-///    the path includes the first-ranked entry.
+///    entry is included, which refine keeps to the selected one.
 /// 5. Two cron units of one name (one cron file with two entries) offer
 ///    one destination twice: the last one is the write, as the stager has
 ///    always written them.

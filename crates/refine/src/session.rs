@@ -308,6 +308,22 @@ fn rpm_dispositions(snapshot: &InspectionSnapshot) -> Vec<FindingKind> {
         .collect()
 }
 
+/// Whether the config path is included: any entry at it, since on a fleet
+/// aggregate the include sits on the selected variant, which need not be
+/// the first entry (`variant_ops::carry_path_include`). `None` when no
+/// entry has the path.
+fn config_path_included(snapshot: &InspectionSnapshot, path: &str) -> Option<bool> {
+    let mut entries = snapshot
+        .config
+        .as_ref()?
+        .files
+        .iter()
+        .filter(|e| e.path == path)
+        .peekable();
+    entries.peek()?;
+    Some(entries.any(|e| e.disposition.is_included()))
+}
+
 /// Why `item_id` names a withheld machine-state file, when it does: a
 /// `config.withheld` or `unmanaged_files.withheld` path. Such a row has no
 /// content to carry, so including it is refused.
@@ -2695,12 +2711,12 @@ impl RefineSession {
     /// `include` already equals `include`; nothing to say otherwise.
     fn check_machine_state_noop(&self, path: &str, include: bool) -> Result<(), RefineError> {
         let projected = self.project_snapshot();
-        let held = projected
+        let is_machine_state = projected
             .config
             .as_ref()
             .and_then(|c| c.files.iter().find(|e| e.path == path))
-            .filter(|e| e.disposition.is_machine_state())
-            .is_some_and(|e| e.disposition.is_included() == include);
+            .is_some_and(|e| e.disposition.is_machine_state());
+        let held = is_machine_state && config_path_included(&projected, path) == Some(include);
         if held {
             let state = if include { "included" } else { "left out" };
             return Err(RefineError::NoopTarget(format!(
@@ -2724,12 +2740,7 @@ impl RefineSession {
                     })
                     .map(|e| e.disposition.is_included() == *include)
                     .unwrap_or(false),
-                ItemId::Config { path } => projected
-                    .config
-                    .as_ref()
-                    .and_then(|c| c.files.iter().find(|e| e.path == *path))
-                    .map(|e| e.disposition.is_included() == *include)
-                    .unwrap_or(false),
+                ItemId::Config { path } => config_path_included(&projected, path) == Some(*include),
                 // ItemId::Group and ItemId::Repo are handled by
                 // `check_group_noop`/`check_repo_noop`, called from `apply`
                 // before this idempotency shortcut: a no-op on either is
@@ -3029,23 +3040,27 @@ impl RefineSession {
                                     pkg.disposition = FindingKind::from_bool(*include);
                                 }
                             }
+                            // Every variant at the path: the include is the
+                            // path's, and `carry_path_include` hands it to
+                            // the selected variant after replay.
                             ItemId::Config { path } => {
-                                if let Some(ref mut config) = snap.config
-                                    && let Some(entry) =
-                                        config.files.iter_mut().find(|e| e.path == *path)
-                                {
-                                    // `with_include`, not `from_bool`: the op may
-                                    // be a stale `SetInclude` replayed by
-                                    // `resume_from` from a session autosaved
-                                    // before advisory toggles were refused, and
-                                    // `resume_from` does not re-validate per op.
-                                    // `from_bool` would rewrite a modernization
-                                    // or cross-tree-symlink finding as
-                                    // actionable-included, and the export reads
-                                    // this projection — so the flagged file would
-                                    // be copied into the image. Config is the only
-                                    // toggleable item kind that carries advisories.
-                                    entry.disposition = entry.disposition.with_include(*include);
+                                if let Some(ref mut config) = snap.config {
+                                    for entry in config.files.iter_mut().filter(|e| e.path == *path)
+                                    {
+                                        // `with_include`, not `from_bool`: the op may
+                                        // be a stale `SetInclude` replayed by
+                                        // `resume_from` from a session autosaved
+                                        // before advisory toggles were refused, and
+                                        // `resume_from` does not re-validate per op.
+                                        // `from_bool` would rewrite a modernization
+                                        // or cross-tree-symlink finding as
+                                        // actionable-included, and the export reads
+                                        // this projection — so the flagged file would
+                                        // be copied into the image. Config is the only
+                                        // toggleable item kind that carries advisories.
+                                        entry.disposition =
+                                            entry.disposition.with_include(*include);
+                                    }
                                 }
                             }
                             ItemId::Repo { path: section_id } => {
@@ -3091,21 +3106,23 @@ impl RefineSession {
                                 }
                             }
                             ItemId::DropIn { path } => {
-                                if let Some(ref mut services) = snap.units
-                                    && let Some(dropin) =
-                                        services.drop_ins.iter_mut().find(|d| d.path == *path)
-                                {
-                                    dropin.disposition = FindingKind::from_bool(*include);
+                                if let Some(ref mut services) = snap.units {
+                                    for dropin in
+                                        services.drop_ins.iter_mut().filter(|d| d.path == *path)
+                                    {
+                                        dropin.disposition = FindingKind::from_bool(*include);
+                                    }
                                 }
                             }
                             ItemId::Quadlet { path } => {
-                                if let Some(ref mut containers) = snap.containers
-                                    && let Some(quadlet) = containers
+                                if let Some(ref mut containers) = snap.containers {
+                                    for quadlet in containers
                                         .quadlet_units
                                         .iter_mut()
-                                        .find(|q| q.path == *path)
-                                {
-                                    quadlet.disposition = FindingKind::from_bool(*include);
+                                        .filter(|q| q.path == *path)
+                                    {
+                                        quadlet.disposition = FindingKind::from_bool(*include);
+                                    }
                                 }
                             }
                             ItemId::Flatpak {
@@ -3329,6 +3346,9 @@ impl RefineSession {
 
         // Materialize variant projection state into the snapshot
         variant_ops::materialize_variants(&mut snap, &variant_state);
+        // One included variant per path, the selected one: the renderer
+        // reads dispositions, not `variant_selection`.
+        variant_ops::carry_path_include(&mut snap);
 
         // If refine-time ops introduced sensitivity (e.g. NewPassword),
         // upgrade the snapshot's redaction_state and sensitive_snapshot flag.

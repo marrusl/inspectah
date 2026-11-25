@@ -1262,3 +1262,198 @@ fn discard_variant_compose_rejected() {
         "error should mention Compose: {err_msg}"
     );
 }
+
+// ===========================================================================
+// Selection decides what ships
+// ===========================================================================
+
+/// The variant kinds whose include is toggled per path.
+#[derive(Debug, Clone, Copy)]
+enum ShippedKind {
+    Config,
+    DropIn,
+    Quadlet,
+}
+
+/// The order the user picks a variant and includes the path in.
+#[derive(Debug, Clone, Copy)]
+enum PickOrder {
+    SelectThenInclude,
+    IncludeThenSelect,
+}
+
+impl ShippedKind {
+    fn path(self) -> &'static str {
+        match self {
+            Self::Config => "/etc/sysctl.d/99-fleet.conf",
+            Self::DropIn => "/etc/systemd/system/test.service.d/override.conf",
+            Self::Quadlet => "/etc/containers/systemd/test.container",
+        }
+    }
+
+    fn snapshot(self, a: &str, b: &str) -> InspectionSnapshot {
+        let path = self.path();
+        match self {
+            Self::Config => make_variant_snapshot(path, a, 3, b, 2),
+            Self::DropIn => make_dropin_variant_snapshot(path, a, 3, b, 2),
+            Self::Quadlet => make_quadlet_variant_snapshot(path, a, 3, b, 2),
+        }
+    }
+
+    fn item_id(self) -> ItemId {
+        let path = self.path().to_string();
+        match self {
+            Self::Config => ItemId::Config { path },
+            Self::DropIn => ItemId::DropIn { path },
+            Self::Quadlet => ItemId::Quadlet { path },
+        }
+    }
+
+    /// Every entry at the path as (content, selection, included).
+    fn rows(self, snap: &InspectionSnapshot) -> Vec<(String, VariantSelection, bool)> {
+        let path = self.path();
+        match self {
+            Self::Config => variants_for_path(snap, path)
+                .into_iter()
+                .map(|e| (e.content, e.variant_selection, e.disposition.is_included()))
+                .collect(),
+            Self::DropIn => dropins_for_path(snap, path)
+                .into_iter()
+                .map(|e| (e.content, e.variant_selection, e.disposition.is_included()))
+                .collect(),
+            Self::Quadlet => quadlets_for_path(snap, path)
+                .into_iter()
+                .map(|e| (e.content, e.variant_selection, e.disposition.is_included()))
+                .collect(),
+        }
+    }
+}
+
+/// Pick variant B (not the merge's winner) and include the path, in
+/// either order: the export ships B and only B, and the row the view
+/// shows (the Selected entry) is the included one.
+#[test]
+fn selected_variant_is_the_one_the_export_ships() {
+    use inspectah_pipeline::render::configtree::{Destination, staged_writes};
+
+    let content_a = "winner = a\n";
+    let content_b = "chosen = b\n";
+    for kind in [
+        ShippedKind::Config,
+        ShippedKind::DropIn,
+        ShippedKind::Quadlet,
+    ] {
+        for order in [PickOrder::SelectThenInclude, PickOrder::IncludeThenSelect] {
+            let case = format!("{kind:?} {order:?}");
+            let mut session = RefineSession::new(kind.snapshot(content_a, content_b));
+            let select = RefinementOp::SelectVariant {
+                item_id: kind.item_id(),
+                target: ContentHash::from_content(content_b.as_bytes()),
+            };
+            let include = RefinementOp::SetInclude {
+                item_id: kind.item_id(),
+                include: true,
+            };
+            let ops = match order {
+                PickOrder::SelectThenInclude => [select, include],
+                PickOrder::IncludeThenSelect => [include, select],
+            };
+            for op in ops {
+                session.apply(op).expect(&case);
+            }
+
+            let projected = session.snapshot_projected();
+            let rows = kind.rows(&projected);
+            let included: Vec<_> = rows.iter().filter(|r| r.2).collect();
+            assert_eq!(
+                included.len(),
+                1,
+                "{case}: exactly one variant included: {rows:?}"
+            );
+            assert_eq!(included[0].0, content_b, "{case}: B is included: {rows:?}");
+            assert_eq!(
+                included[0].1,
+                VariantSelection::Selected,
+                "{case}: the included variant is the Selected one: {rows:?}"
+            );
+
+            // Quadlets are written by unit name, not through the staged
+            // config tree; the projection above is what that writer reads.
+            if !matches!(kind, ShippedKind::Quadlet) {
+                let dest = Destination::new(kind.path()).expect("valid destination");
+                let staged = staged_writes(&projected);
+                let write = staged
+                    .writes
+                    .get(&dest)
+                    .unwrap_or_else(|| panic!("{case}: nothing written at {dest:?}: {staged:?}"));
+                assert_eq!(write.content, content_b, "{case}: shipped content");
+            }
+        }
+    }
+}
+
+/// Including then switching back to the winner moves the include back:
+/// a path never carries two included variants.
+#[test]
+fn reselecting_the_winner_moves_the_include_back() {
+    let content_a = "winner = a\n";
+    let content_b = "chosen = b\n";
+    for kind in [
+        ShippedKind::Config,
+        ShippedKind::DropIn,
+        ShippedKind::Quadlet,
+    ] {
+        let mut session = RefineSession::new(kind.snapshot(content_a, content_b));
+        for target in [content_b, content_a] {
+            session
+                .apply(RefinementOp::SelectVariant {
+                    item_id: kind.item_id(),
+                    target: ContentHash::from_content(target.as_bytes()),
+                })
+                .unwrap();
+            if target == content_b {
+                session
+                    .apply(RefinementOp::SetInclude {
+                        item_id: kind.item_id(),
+                        include: true,
+                    })
+                    .unwrap();
+            }
+        }
+        let rows = kind.rows(&session.snapshot_projected());
+        let included: Vec<_> = rows.iter().filter(|r| r.2).map(|r| &r.0).collect();
+        assert_eq!(included, vec![content_a], "{kind:?}: {rows:?}");
+    }
+}
+
+/// Excluding the path excludes every variant, whichever is selected.
+#[test]
+fn excluding_the_path_excludes_every_variant() {
+    let content_a = "winner = a\n";
+    let content_b = "chosen = b\n";
+    for kind in [
+        ShippedKind::Config,
+        ShippedKind::DropIn,
+        ShippedKind::Quadlet,
+    ] {
+        let mut session = RefineSession::new(kind.snapshot(content_a, content_b));
+        for op in [
+            RefinementOp::SetInclude {
+                item_id: kind.item_id(),
+                include: true,
+            },
+            RefinementOp::SelectVariant {
+                item_id: kind.item_id(),
+                target: ContentHash::from_content(content_b.as_bytes()),
+            },
+            RefinementOp::SetInclude {
+                item_id: kind.item_id(),
+                include: false,
+            },
+        ] {
+            session.apply(op).unwrap();
+        }
+        let rows = kind.rows(&session.snapshot_projected());
+        assert!(rows.iter().all(|r| !r.2), "{kind:?}: {rows:?}");
+    }
+}
