@@ -40,7 +40,13 @@ So every writer of a variant-kind disposition sets the **path**:
 
 Language environments have no `variant_selection` field and no include
 toggle in the projection: selecting one includes it and excludes every
-other environment at the path (`materialize_language_env_variants`).
+other variant of the same environment (`materialize_language_env_variants`).
+A language environment's identity is **ecosystem plus path**, the merge's
+`identity_key`, not the path alone: an npm and a gem environment in one
+directory are separate items. Their selections live in
+`VariantProjectionState::selected_language_env`, keyed by that identity,
+and `validate_select` matches the same identity. Keying them by path lets
+one ecosystem's selection exclude, or overwrite, the other's.
 
 Single-host snapshots have one entry per path (`Only`), so the pass leaves
 them alone. A group with no `Selected` entry is also left alone.

@@ -18,6 +18,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::QuadletUnit;
+use inspectah_core::types::nonrpm::NonRpmItem;
 use inspectah_core::types::units::SystemdDropIn;
 
 use crate::types::{ContentHash, ItemId, RefineError};
@@ -31,6 +32,28 @@ pub struct VariantProjectionState {
     pub discarded: HashMap<String, HashSet<ContentHash>>,
     /// selected[path] = content hash of the selected variant (if overridden)
     pub selected: HashMap<String, ContentHash>,
+    /// selected_language_env[identity] = content hash of the selected
+    /// language environment. Keyed by the environment's merge identity
+    /// (ecosystem plus path, see `language_env_identity`), not by path:
+    /// an npm and a gem environment in one directory are separate items
+    /// with independent selections.
+    pub selected_language_env: HashMap<String, ContentHash>,
+}
+
+/// The identity of a language environment: its ecosystem plus its path,
+/// spelled as the aggregate merge spells it
+/// (`AggregateMergeable::identity_key` for a `NonRpmItem`).
+fn language_env_identity(ecosystem: &str, path: &str) -> String {
+    format!("{ecosystem}:{path}")
+}
+
+/// Whether `item` is a variant of the language environment `identity`.
+///
+/// Uses the merge's own identity key, so selection groups variants
+/// exactly as the merge did.
+fn is_language_env_variant(item: &NonRpmItem, identity: &str) -> bool {
+    use inspectah_core::aggregate::merge::AggregateMergeable;
+    !item.path.is_empty() && !item.method.is_empty() && item.identity_key() == identity
 }
 
 /// Extract the path from an ItemId for variant-capable item kinds.
@@ -52,9 +75,14 @@ pub fn item_path(item_id: &ItemId) -> Option<&str> {
 
 /// Apply a SelectVariant op to the projection state.
 ///
-/// Records which variant hash should be Selected for the given path.
+/// Records which variant hash should be Selected for the given path, or,
+/// for a language environment, for its ecosystem at that path.
 pub fn apply_select(state: &mut VariantProjectionState, item_id: &ItemId, target: &ContentHash) {
-    if let Some(path) = item_path(item_id) {
+    if let ItemId::LanguageEnv { ecosystem, path } = item_id {
+        state
+            .selected_language_env
+            .insert(language_env_identity(ecosystem, path), target.clone());
+    } else if let Some(path) = item_path(item_id) {
         state.selected.insert(path.to_string(), target.clone());
     }
 }
@@ -202,11 +230,17 @@ pub fn validate_select(
             .as_ref()
             .map(|c| c.compose_files.iter().any(|e| e.path == path))
             .unwrap_or(false),
-        ItemId::LanguageEnv { .. } => snap
-            .non_rpm_software
-            .as_ref()
-            .map(|nrs| nrs.items.iter().any(|e| e.path == path))
-            .unwrap_or(false),
+        ItemId::LanguageEnv { ecosystem, .. } => {
+            let identity = language_env_identity(ecosystem, path);
+            snap.non_rpm_software
+                .as_ref()
+                .map(|nrs| {
+                    nrs.items
+                        .iter()
+                        .any(|e| is_language_env_variant(e, &identity))
+                })
+                .unwrap_or(false)
+        }
         ItemId::UnmanagedFile { .. } => snap
             .unmanaged_files
             .as_ref()
@@ -261,16 +295,18 @@ pub fn validate_select(
                 })
             })
             .unwrap_or(false),
-        ItemId::LanguageEnv { .. } => {
+        ItemId::LanguageEnv { ecosystem, .. } => {
             // LanguageEnv variant key is computed from method+packages
             // (via AggregateMergeable::content_variant_key). We compare
-            // the target hash against computed variant keys.
+            // the target hash against computed variant keys of the
+            // environment's own ecosystem at this path.
             use inspectah_core::aggregate::merge::AggregateMergeable;
+            let identity = language_env_identity(ecosystem, path);
             snap.non_rpm_software
                 .as_ref()
                 .map(|nrs| {
                     nrs.items.iter().any(|e| {
-                        e.path == path
+                        is_language_env_variant(e, &identity)
                             && e.content_variant_key()
                                 .and_then(|k| ContentHash::new(k.into_owned()).ok())
                                 .map(|h| h == *target)
@@ -416,7 +452,7 @@ pub fn materialize_variants(snap: &mut InspectionSnapshot, state: &VariantProjec
     affected_paths.extend(state.discarded.keys().cloned());
     affected_paths.extend(state.selected.keys().cloned());
 
-    if affected_paths.is_empty() {
+    if affected_paths.is_empty() && state.selected_language_env.is_empty() {
         return;
     }
 
@@ -432,8 +468,8 @@ pub fn materialize_variants(snap: &mut InspectionSnapshot, state: &VariantProjec
     // --- Compose section (select-only, no user variants or discards) ---
     materialize_compose_variants(snap, state, &affected_paths);
 
-    // --- LanguageEnv section (select-only) ---
-    materialize_language_env_variants(snap, state, &affected_paths);
+    // --- LanguageEnv section (select-only, keyed by ecosystem plus path) ---
+    materialize_language_env_variants(snap, state);
 
     // --- UnmanagedFile section (select-only) ---
     materialize_unmanaged_file_variants(snap, state, &affected_paths);
@@ -755,12 +791,13 @@ fn materialize_compose_variants(
 /// Materialize variant state for the language environment section (select-only).
 ///
 /// LanguageEnv items are structured carriers (package lists) — no user
-/// variants or discards. Only applies selection flags based on `state.selected`.
-/// Variant keys are computed via `AggregateMergeable::content_variant_key`.
+/// variants or discards. Only applies selection flags based on
+/// `state.selected_language_env`, whose key is the environment's identity
+/// (ecosystem plus path). Variant keys are computed via
+/// `AggregateMergeable::content_variant_key`.
 fn materialize_language_env_variants(
     snap: &mut InspectionSnapshot,
     state: &VariantProjectionState,
-    affected_paths: &HashSet<String>,
 ) {
     use inspectah_core::aggregate::merge::AggregateMergeable;
 
@@ -768,40 +805,37 @@ fn materialize_language_env_variants(
         return;
     };
 
-    for path in affected_paths {
+    for (identity, selected_hash) in &state.selected_language_env {
         let variants: Vec<usize> = nrs
             .items
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.path == *path && !e.method.is_empty())
+            .filter(|(_, e)| is_language_env_variant(e, identity))
             .map(|(i, _)| i)
             .collect();
-
-        if variants.is_empty() {
-            continue;
-        }
 
         // LanguageEnv items don't have a variant_selection field on NonRpmItem,
         // so selection is tracked via the aggregate prevalence metadata.
         // The UI uses the selected hash to highlight the chosen variant.
-        if variants.len() == 1 {
-            // Single variant — no selection needed (implicitly Only)
+        // A single variant needs no selection (implicitly Only).
+        if variants.len() < 2 {
             continue;
         }
 
         // Selecting a language environment is what includes it (there is
-        // no path toggle for this kind), so the choice is exclusive: the
-        // selected variant is included and every other one at the path is
-        // excluded, or two environments would both reach the Containerfile.
-        if let Some(selected_hash) = state.selected.get(path) {
-            for &idx in &variants {
-                let is_selected = nrs.items[idx]
-                    .content_variant_key()
-                    .and_then(|key| ContentHash::new(key.into_owned()).ok())
-                    .is_some_and(|hash| hash == *selected_hash);
-                let item = &mut nrs.items[idx];
-                item.disposition = item.disposition.with_include(is_selected);
-            }
+        // no path toggle for this kind), so the choice is exclusive within
+        // the environment: the selected variant is included and every other
+        // variant of the same ecosystem at the path is excluded, or two
+        // environments would both reach the Containerfile. Another
+        // ecosystem at the same path is a separate environment and keeps
+        // its own disposition.
+        for &idx in &variants {
+            let is_selected = nrs.items[idx]
+                .content_variant_key()
+                .and_then(|key| ContentHash::new(key.into_owned()).ok())
+                .is_some_and(|hash| hash == *selected_hash);
+            let item = &mut nrs.items[idx];
+            item.disposition = item.disposition.with_include(is_selected);
         }
     }
 }
@@ -1018,52 +1052,71 @@ mod tests {
         );
     }
 
-    /// Selecting one language environment, then another at the same path,
-    /// leaves only the second included: selection is the include for this
-    /// kind, so two environments never both reach the Containerfile.
+    /// Selection is the include for a language environment, so it is
+    /// exclusive within one environment identity (ecosystem plus path): the
+    /// previously included alternative is excluded. An environment of
+    /// another ecosystem at the same path is a separate identity, and its
+    /// own selection survives replay alongside the first.
     #[test]
-    fn select_variant_language_env_is_exclusive() {
-        let env = |version: &str| NonRpmItem {
-            path: "/opt/app/venv".into(),
-            method: "pip list".into(),
-            disposition: FindingKind::excluded(),
+    fn language_selection_is_exclusive_within_each_ecosystem() {
+        let env = |method: &str, version: &str, included: bool| NonRpmItem {
+            path: "opt/app".into(),
+            method: method.into(),
+            disposition: FindingKind::from_bool(included),
             packages: vec![LanguagePackage {
-                name: "requests".into(),
+                name: "example".into(),
                 version: version.into(),
                 pinned: false,
             }],
             ..Default::default()
         };
         let hash = |item: &NonRpmItem| {
-            ContentHash::new(item.content_variant_key().expect("key").into_owned()).expect("hex")
+            ContentHash::new(item.content_variant_key().unwrap().into_owned()).unwrap()
         };
-        let (a, b) = (env("2.28.0"), env("2.31.0"));
-        let (hash_a, hash_b) = (hash(&a), hash(&b));
-        let mut snap = InspectionSnapshot {
+        let items = vec![
+            env("npm lockfile", "1", true),
+            env("npm lockfile", "2", false),
+            env("gem lockfile", "1", true),
+            env("gem lockfile", "2", false),
+        ];
+        let npm_b = hash(&items[1]);
+        let gem_b = hash(&items[3]);
+        let base = InspectionSnapshot {
             non_rpm_software: Some(NonRpmSoftwareSection {
-                items: vec![a, b],
+                items,
                 ..Default::default()
             }),
             ..Default::default()
         };
-        let item_id = ItemId::LanguageEnv {
-            ecosystem: "pip".into(),
-            path: "/opt/app/venv".into(),
-        };
         let mut state = VariantProjectionState::default();
-        apply_select(&mut state, &item_id, &hash_a);
-        apply_select(&mut state, &item_id, &hash_b);
-        materialize_variants(&mut snap, &state);
 
-        let included: Vec<bool> = snap
-            .non_rpm_software
-            .as_ref()
-            .unwrap()
-            .items
-            .iter()
-            .map(|i| i.disposition.is_included())
-            .collect();
-        assert_eq!(included, vec![false, true]);
+        for (ecosystem, target, expected) in [
+            ("npm", npm_b, vec![false, true, true, false]),
+            ("gem", gem_b, vec![false, true, false, true]),
+        ] {
+            apply_select(
+                &mut state,
+                &ItemId::LanguageEnv {
+                    ecosystem: ecosystem.into(),
+                    path: "opt/app".into(),
+                },
+                &target,
+            );
+
+            // Match session replay: project from the original snapshot.
+            let mut projected = base.clone();
+            materialize_variants(&mut projected, &state);
+            let actual: Vec<bool> = projected
+                .non_rpm_software
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .map(|item| item.disposition.is_included())
+                .collect();
+
+            assert_eq!(actual, expected, "after selecting {ecosystem}");
+        }
     }
 
     /// SelectVariant on an unmanaged-file item sets `variant_selection`
@@ -1108,6 +1161,7 @@ mod tests {
         apply_select(&mut state, &item_id, &target_hash);
 
         materialize_variants(&mut snap, &state);
+        carry_path_include(&mut snap);
 
         let items = &snap.unmanaged_files.as_ref().unwrap().items;
         assert_eq!(items.len(), 2);
@@ -1123,5 +1177,8 @@ mod tests {
             VariantSelection::Selected,
             "selected variant should be Selected"
         );
+        // The path's include moves to the selected variant alone.
+        let included: Vec<bool> = items.iter().map(|i| i.disposition.is_included()).collect();
+        assert_eq!(included, vec![false, true]);
     }
 }

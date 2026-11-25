@@ -1113,6 +1113,13 @@ fn select_variant_compose_works() {
             .variant_selection,
         VariantSelection::Alternative,
     );
+    // The path's include moves to the selected variant alone.
+    let included: Vec<_> = variants
+        .iter()
+        .filter(|v| v.disposition.is_included())
+        .map(|v| v.images[0].image.as_str())
+        .collect();
+    assert_eq!(included, ["nginx:1.25"]);
 }
 
 #[test]
